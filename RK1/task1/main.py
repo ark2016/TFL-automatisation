@@ -36,7 +36,8 @@ if __name__ == "__main__":
 
     # Каноническая перенумерация состояний
     canonical_dfa = canonical_renumbering(dfa)
-    print(canonical_dfa.to_regex())
+    print(f"DFA = {canonical_dfa.to_regex()}")
+    print(f"NFA = {nfa.to_regex()}")
     # Визуализация DFA
     visualize_dfa(canonical_dfa, "dfa_visualization")
 
