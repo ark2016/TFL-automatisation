@@ -1,13 +1,16 @@
 from pyformlang.regular_expression import Regex
-from pyformlang.finite_automaton import DeterministicFiniteAutomaton, State, Symbol
+from pyformlang.finite_automaton import DeterministicFiniteAutomaton, State, Symbol, EpsilonNFA
 
-def regex_to_dfa(regex_str: str) -> DeterministicFiniteAutomaton:
+def regex_to_nfa(regex_str: str) -> EpsilonNFA:
     # Создание объекта Regex
     regex = Regex(regex_str)
 
     # Преобразование регулярного выражения в конечный автомат
     nfa = regex.to_epsilon_nfa()
 
+    return nfa
+
+def nfa_to_dfa(nfa: EpsilonNFA) -> DeterministicFiniteAutomaton:
     # Преобразование NFA в DFA
     dfa = nfa.minimize()
 
