@@ -1,5 +1,5 @@
 from pyformlang.regular_expression import Regex
-from pyformlang.finite_automaton import DeterministicFiniteAutomaton
+from pyformlang.finite_automaton import DeterministicFiniteAutomaton, State, Symbol
 
 def regex_to_dfa(regex_str: str) -> DeterministicFiniteAutomaton:
     # Создание объекта Regex
@@ -12,3 +12,28 @@ def regex_to_dfa(regex_str: str) -> DeterministicFiniteAutomaton:
     dfa = nfa.minimize()
 
     return dfa
+
+def canonical_renumbering(dfa: DeterministicFiniteAutomaton) -> DeterministicFiniteAutomaton:
+    # Создание нового DFA с канонической перенумерацией состояний
+    new_states = {state: State(i) for i, state in enumerate(dfa.states)}
+    new_start_state = new_states[dfa.start_state]
+    new_final_states = {new_states[state] for state in dfa.final_states}
+
+    new_dfa = DeterministicFiniteAutomaton(
+        states=set(new_states.values()),
+        input_symbols=dfa.symbols,
+        start_state=new_start_state,
+        final_states=new_final_states
+    )
+
+    # Добавление переходов
+    for state, transitions in dfa.to_dict().items():
+        new_state = new_states[state]
+        for symbol, next_states in transitions.items():
+            if isinstance(next_states, set):
+                for next_state in next_states:
+                    new_dfa.add_transition(new_state, Symbol(symbol), new_states[next_state])
+            else:
+                new_dfa.add_transition(new_state, Symbol(symbol), new_states[next_states])
+
+    return new_dfa

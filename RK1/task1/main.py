@@ -1,4 +1,4 @@
-from regex_to_automaton import regex_to_dfa
+from regex_to_automaton import regex_to_dfa, canonical_renumbering
 from visualize_automaton import visualize_dfa
 
 if __name__ == "__main__":
@@ -8,5 +8,8 @@ if __name__ == "__main__":
     # Преобразование регулярного выражения в DFA
     dfa = regex_to_dfa(regex_str)
 
+    # Каноническая перенумерация состояний
+    canonical_dfa = canonical_renumbering(dfa)
+
     # Визуализация DFA
-    visualize_dfa(dfa, "dfa_visualization")
+    visualize_dfa(canonical_dfa, "dfa_visualization")

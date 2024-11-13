@@ -19,9 +19,9 @@ def visualize_dfa(dfa: DeterministicFiniteAutomaton, name: str):
     # Добавляем переходы
     for from_state, to_dict in dfa.to_dict().items():
         for symbol, to_state in to_dict.items():
-            if type(to_state) == set:
-                for to_state1 in to_dict:
-                    dot.edge(str(from_state), str(to_state1), label=str(symbol))
+            if isinstance(to_state, set):
+                for next_state in to_state:
+                    dot.edge(str(from_state), str(next_state), label=str(symbol))
             else:
                 dot.edge(str(from_state), str(to_state), label=str(symbol))
 
