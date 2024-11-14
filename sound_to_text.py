@@ -21,7 +21,7 @@ def read_text_file(file_path):
 
 
 audio_path = './downloads/tfl_2024_rk1_prep.mp3'
-output_text_path = './downloads/tfl_2024_rk1_prep.txt'
+output_text_path = 'downloads/tfl_2024_rk1_prep_raw.txt'
 
 # transcribe_audio(audio_path, output_text_path)
 
