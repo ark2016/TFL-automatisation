@@ -889,6 +889,9 @@ def dfa_to_regex(dfa: DFA) -> str:
         Для всех пар (q_i, q_j) обновляем:
         R(q_i, q_j) := R(q_i, q_j) | R(q_i, q_rip) · R(q_rip, q_rip)* · R(q_rip, q_j)
 
+    Оптимизация: dead states (не лежащие на пути start -> accept) исключаются
+    первыми, что предотвращает экспоненциальный рост промежуточных регулярок.
+
     Args:
         dfa: DFA для преобразования
 
@@ -896,38 +899,79 @@ def dfa_to_regex(dfa: DFA) -> str:
         str: Регулярное выражение для языка L(dfa)
     """
     if not dfa.states:
-        return "∅"
+        return "{}"
 
     if not dfa.accept_states:
-        return "∅"
+        return "{}"
 
     # Специальный случай: только начальное состояние и оно принимающее
     if len(dfa.states) == 1 and dfa.start_state in dfa.accept_states:
-        # Проверяем самопетли
         loops = []
         for symbol in sorted(dfa.alphabet):
             if dfa.get_transition(dfa.start_state, symbol) == dfa.start_state:
                 loops.append(symbol)
         if not loops:
-            return "ε"
+            return "eps"
         elif len(loops) == 1:
             return f"{loops[0]}*"
         else:
             return f"({'+'.join(loops)})*"
 
-    # Строим матрицу переходов R[i][j] = регулярка для перехода i → j
+    # --- Оптимизация: определяем порядок исключения состояний ---
+    # Сначала исключаем dead states (не ведущие к accept) — они дают None
+    # и не раздувают промежуточные регулярки.
+
+    # 1. Находим состояния, из которых достижим accept (обратный BFS)
+    reverse_adj: Dict[int, Set[int]] = {s: set() for s in dfa.states}
+    for (src, sym), dst in dfa.transitions.items():
+        if dst is not None:
+            reverse_adj[dst].add(src)
+
+    can_reach_accept: Set[int] = set()
+    queue_back = list(dfa.accept_states)
+    can_reach_accept.update(dfa.accept_states)
+    while queue_back:
+        s = queue_back.pop()
+        for prev in reverse_adj.get(s, set()):
+            if prev not in can_reach_accept:
+                can_reach_accept.add(prev)
+                queue_back.append(prev)
+
+    # 2. Находим состояния, достижимые из start (прямой BFS)
+    reachable_from_start: Set[int] = set()
+    queue_fwd = [dfa.start_state]
+    reachable_from_start.add(dfa.start_state)
+    while queue_fwd:
+        s = queue_fwd.pop()
+        for sym in dfa.alphabet:
+            nxt = dfa.get_transition(s, sym)
+            if nxt is not None and nxt not in reachable_from_start:
+                reachable_from_start.add(nxt)
+                queue_fwd.append(nxt)
+
+    # Живые состояния: достижимы из start И ведут к accept
+    live_states = reachable_from_start & can_reach_accept
+    dead_states = set(dfa.states) - live_states
+
+    # Порядок исключения: сначала dead, потом live (кроме start и accept)
     states = sorted(dfa.states)
     n = len(states)
     state_idx = {s: i for i, s in enumerate(states)}
 
-    # Инициализация: R[i][j] = объединение символов, ведущих из i в j
-    R = [[None for _ in range(n + 2)] for _ in range(n + 2)]
-    # Индексы: 0..n-1 — состояния DFA, n — новый start, n+1 — новый accept
+    elimination_order = []
+    for s in states:
+        if s in dead_states:
+            elimination_order.append(state_idx[s])
+    for s in states:
+        if s in live_states:
+            elimination_order.append(state_idx[s])
 
-    # Заполняем переходы из состояний DFA
+    # --- Строим матрицу GNFA ---
+    # Индексы: 0..n-1 — состояния DFA, n — новый start, n+1 — новый accept
+    R = [[None for _ in range(n + 2)] for _ in range(n + 2)]
+
     for i, src in enumerate(states):
-        # Группируем переходы по целевому состоянию
-        transitions_to = {}
+        transitions_to: Dict[int, List[str]] = {}
         for symbol in dfa.alphabet:
             dst = dfa.get_transition(src, symbol)
             if dst is not None:
@@ -942,49 +986,45 @@ def dfa_to_regex(dfa: DFA) -> str:
             else:
                 R[i][j] = f"({'+'.join(sorted(symbols))})"
 
-    # Новое начальное состояние (индекс n) с ε-переходом к старому start
+    # Новое начальное состояние (индекс n)
     start_idx = state_idx[dfa.start_state]
-    R[n][start_idx] = "ε"
+    R[n][start_idx] = "eps"
 
-    # Новое конечное состояние (индекс n+1) с ε-переходами от accept состояний
+    # Новое конечное состояние (индекс n+1)
     for accept in dfa.accept_states:
         acc_idx = state_idx[accept]
-        R[acc_idx][n + 1] = "ε"
+        R[acc_idx][n + 1] = "eps"
 
-    # Исключаем состояния 0..n-1 (оставляем только n и n+1)
-    for rip in range(n):
-        # Для всех пар (i, j) где i, j != rip
+    # --- Исключаем состояния в оптимальном порядке ---
+    eliminated = set()
+    for rip in elimination_order:
+        eliminated.add(rip)
         for i in range(n + 2):
-            if i == rip:
+            if i in eliminated:
                 continue
             for j in range(n + 2):
-                if j == rip:
+                if j in eliminated:
                     continue
 
-                # R[i][j] := R[i][j] | R[i][rip] · R[rip][rip]* · R[rip][j]
-                r_ij = R[i][j]
+                # R[i][j] := R[i][j] | R[i][rip] . R[rip][rip]* . R[rip][j]
                 r_i_rip = R[i][rip]
-                r_rip_rip = R[rip][rip]
                 r_rip_j = R[rip][j]
 
                 if r_i_rip is None or r_rip_j is None:
-                    # Нет пути через rip
                     continue
 
-                # Строим путь через rip
+                r_rip_rip = R[rip][rip]
                 path_through_rip = _concat_regex(
                     r_i_rip,
                     _concat_regex(_star_regex(r_rip_rip), r_rip_j)
                 )
 
-                # Объединяем с существующим путём
-                R[i][j] = _union_regex(r_ij, path_through_rip)
+                R[i][j] = _union_regex(R[i][j], path_through_rip)
 
-    # Результат — путь из нового start (n) в новый accept (n+1)
     result = R[n][n + 1]
 
     if result is None:
-        return "∅"
+        return "{}"
 
     return _simplify_regex(result)
 
@@ -1005,13 +1045,13 @@ def _union_regex(r1: Optional[str], r2: Optional[str]) -> Optional[str]:
         return r1
     if r1 == r2:
         return r1
-    if r1 == "∅":
+    if r1 == "{}":
         return r2
-    if r2 == "∅":
+    if r2 == "{}":
         return r1
-    if r1 == "ε" and r2.endswith("*"):
-        return r2  # ε | r* = r*
-    if r2 == "ε" and r1.endswith("*"):
+    if r1 == "eps" and r2.endswith("*"):
+        return r2  # eps | r* = r*
+    if r2 == "eps" and r1.endswith("*"):
         return r1
     result = f"({r1}+{r2})"
     if len(result) > MAX_REGEX_LENGTH:
@@ -1020,14 +1060,14 @@ def _union_regex(r1: Optional[str], r2: Optional[str]) -> Optional[str]:
 
 
 def _concat_regex(r1: Optional[str], r2: Optional[str]) -> Optional[str]:
-    """Конкатенация двух регулярок: r1 · r2"""
+    """Конкатенация двух регулярок: r1 . r2"""
     if r1 is None or r2 is None:
         return None
-    if r1 == "∅" or r2 == "∅":
-        return "∅"
-    if r1 == "ε":
+    if r1 == "{}" or r2 == "{}":
+        return "{}"
+    if r1 == "eps":
         return r2
-    if r2 == "ε":
+    if r2 == "eps":
         return r1
     result = f"{r1}{r2}"
     if len(result) > MAX_REGEX_LENGTH:
@@ -1037,8 +1077,8 @@ def _concat_regex(r1: Optional[str], r2: Optional[str]) -> Optional[str]:
 
 def _star_regex(r: Optional[str]) -> str:
     """Замыкание Клини: r*"""
-    if r is None or r == "∅" or r == "ε":
-        return "ε"
+    if r is None or r == "{}" or r == "eps":
+        return "eps"
     if r.endswith("*"):
         return r  # (r*)* = r*
     if len(r) == 1:
@@ -1049,26 +1089,24 @@ def _star_regex(r: Optional[str]) -> str:
 def _simplify_regex(r: str) -> str:
     """Упрощение регулярного выражения."""
     if not r:
-        return "∅"
+        return "{}"
 
-    # Убираем лишние скобки вокруг одиночных символов
-    import re
+    import re as re_mod
 
-    # ε в начале/конце конкатенации
-    r = r.replace("εε", "ε")
+    # eps concatenation cleanup
+    r = r.replace("epseps", "eps")
 
-    # (ε)* = ε
-    r = r.replace("(ε)*", "ε")
+    # (eps)* = eps
+    r = r.replace("(eps)*", "eps")
 
-    # Убираем двойные скобки
-    while "((" in r and "))" in r:
-        r = re.sub(r'\(\(([^()]+)\)\)', r'(\1)', r)
+    # Убираем двойные скобки: ((X)) -> (X) когда X не содержит скобок
+    prev = None
+    while prev != r:
+        prev = r
+        r = re_mod.sub(r'\(\(([^()]+)\)\)', r'(\1)', r)
 
-    # (a) → a для одиночных символов
-    r = re.sub(r'\(([a-zA-Z0-9])\)', r'\1', r)
-
-    # Меняем + на | для стандартной нотации (опционально)
-    # r = r.replace('+', '|')
+    # (a) -> a для одиночных символов
+    r = re_mod.sub(r'\(([a-zA-Z0-9])\)', r'\1', r)
 
     return r
 

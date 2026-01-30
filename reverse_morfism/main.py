@@ -72,6 +72,16 @@ def main():
         print("Error: empty expression")
         return 1
 
+    # Support finite language notation: {w1,w2,...} -> (w1|w2|...)
+    if regex.startswith('{') and regex.endswith('}'):
+        words = [w.strip() for w in regex[1:-1].split(',')]
+        # Replace empty word notation
+        words = ['eps' if w in ('', 'eps', 'epsilon') else w for w in words]
+        regex = '|'.join(words)
+        if len(words) > 1:
+            regex = f"({regex})"
+        print(f"  -> converted to regex: {regex}")
+
     print()
 
     print("Enter homomorphism:")
