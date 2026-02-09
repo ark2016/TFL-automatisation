@@ -3,9 +3,6 @@ import re
 import json
 from typing import Optional
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-
 from pumping_lemma.models.language_spec import LanguageSpec, ParikhConstraint
 from pumping_lemma.llm.client import LLMClient
 from pumping_lemma.llm.prompts import SYSTEM_PROMPT, PARSE_LANGUAGE_PROMPT
@@ -35,6 +32,26 @@ class NLParser:
         """Try to parse common patterns without LLM."""
         desc = description.strip()
 
+        # Pattern: {a^n b^n c^n | n >= 0}  — checked BEFORE a^n b^n to avoid shadowing
+        m = re.search(r'a\^n\s*b\^n\s*c\^n', desc)
+        if m:
+            def check_anbncn(w):
+                n = len(w)
+                if n % 3 != 0: return False
+                k = n // 3
+                return w == 'a' * k + 'b' * k + 'c' * k
+            return LanguageSpec(
+                description=desc,
+                alphabet={'a', 'b', 'c'},
+                spec_type='set_builder',
+                structural_pattern='balanced',
+                constraints=[
+                    ParikhConstraint(constraint_type='equal', symbols=['a', 'b'], description='count(a)==count(b)'),
+                    ParikhConstraint(constraint_type='equal', symbols=['b', 'c'], description='count(b)==count(c)'),
+                ],
+                membership_fn=check_anbncn
+            )
+
         # Pattern: {a^n b^n | n >= 0}
         m = re.search(r'a\^n\s*b\^n', desc)
         if m:
@@ -53,26 +70,6 @@ class NLParser:
                     all(c == 'b' for c in w[len(w)//2:]) and
                     w.count('a') == w.count('b')
                 )
-            )
-
-        # Pattern: {a^n b^n c^n | n >= 0}
-        m = re.search(r'a\^n\s*b\^n\s*c\^n', desc)
-        if m:
-            def check_anbncn(w):
-                n = len(w)
-                if n % 3 != 0: return False
-                k = n // 3
-                return w == 'a' * k + 'b' * k + 'c' * k
-            return LanguageSpec(
-                description=desc,
-                alphabet={'a', 'b', 'c'},
-                spec_type='set_builder',
-                structural_pattern='balanced',
-                constraints=[
-                    ParikhConstraint(constraint_type='equal', symbols=['a', 'b'], description='count(a)==count(b)'),
-                    ParikhConstraint(constraint_type='equal', symbols=['b', 'c'], description='count(b)==count(c)'),
-                ],
-                membership_fn=check_anbncn
             )
 
         # Pattern: {ww | w in {a,b}*}
@@ -149,12 +146,8 @@ class NLParser:
             ))
 
         membership_fn = None
-        rule = data.get('membership_rule')
-        if rule and rule.startswith('lambda'):
-            try:
-                membership_fn = eval(rule)
-            except Exception:
-                pass
+        # NOTE: We intentionally do NOT eval() LLM-returned code.
+        # Instead, build membership functions from structured data only.
 
         return LanguageSpec(
             description=description,

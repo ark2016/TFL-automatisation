@@ -17,10 +17,9 @@ class LengthDensityHeuristic(AbstractHeuristic):
 
         # Collect word lengths present in language
         max_search_length = pumping_constant * 5
+        max_gen_length = min(max_search_length, 15)  # cap to avoid combinatorial explosion
         lengths = set()
-        for word in generate_all_words(spec.alphabet, min(max_search_length, 30)):
-            if len(word) > max_search_length:
-                break
+        for word in generate_all_words(spec.alphabet, max_gen_length, max_words=50000):
             if spec.accepts(word):
                 lengths.add(len(word))
 
@@ -85,13 +84,17 @@ class LengthDensityHeuristic(AbstractHeuristic):
             w = a * length
             if spec.accepts(w):
                 return w
-        # Try combinations
+        # Try combinations (only for short lengths to avoid explosion)
         from itertools import product as iproduct
-        if length <= 15:
+        if length <= 12:
+            count = 0
             for combo in iproduct(alpha, repeat=length):
                 w = ''.join(combo)
                 if spec.accepts(w):
                     return w
+                count += 1
+                if count > 50000:
+                    break
         return None
 
     def _verify_pumping_fails(self, word, spec, p, gap_start, gap_end):

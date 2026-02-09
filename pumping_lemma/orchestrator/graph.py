@@ -172,8 +172,10 @@ class RegularityChecker:
 
             p = state.get("pumping_constant", 20)
             results = state.get("heuristic_results", [])
+            current_mode = state.get("mode", "full")
+            heuristics_to_run = self.heuristics if current_mode == "full" else self.heuristics[:3]
 
-            for h in self.heuristics:
+            for h in heuristics_to_run:
                 try:
                     r = h.analyze(spec, p)
                     results.append(r)

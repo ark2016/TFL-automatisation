@@ -4,12 +4,19 @@ from itertools import product
 import re
 
 
-def generate_all_words(alphabet: Set[str], max_length: int) -> Iterator[str]:
-    """Generate all words over alphabet up to max_length, ordered by length."""
+def generate_all_words(alphabet: Set[str], max_length: int, max_words: int = 50000) -> Iterator[str]:
+    """Generate all words over alphabet up to max_length, ordered by length.
+
+    Stops after max_words to prevent combinatorial explosion.
+    """
     alpha = sorted(alphabet)
+    count = 0
     for length in range(max_length + 1):
         for combo in product(alpha, repeat=length):
+            if count >= max_words:
+                return
             yield ''.join(combo)
+            count += 1
 
 
 def generate_words_of_length(alphabet: Set[str], length: int) -> Iterator[str]:

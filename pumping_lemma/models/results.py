@@ -12,7 +12,7 @@ class HeuristicResult:
 
     @property
     def is_conclusive(self) -> bool:
-        return self.verdict != "unknown" and self.confidence >= 0.7
+        return self.verdict != "unknown" and self.confidence >= 0.85
 
 
 @dataclass

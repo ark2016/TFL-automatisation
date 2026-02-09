@@ -1,11 +1,4 @@
 """Streamlit UI for regularity checking."""
-import sys
-import os
-
-# Ensure project root is on sys.path
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
 
 try:
     from dotenv import load_dotenv
@@ -163,7 +156,7 @@ def main():
         word = st.text_input("Слово для проверки", key="mem_word")
 
         if st.button("Проверить слово"):
-            if lang_desc_mem and word is not None:
+            if lang_desc_mem:
                 llm = get_llm_client(use_llm, model)
                 parser = NLParser(llm)
                 spec = parser.parse(lang_desc_mem)

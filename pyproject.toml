@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "tfl-automatisation"
+version = "1.0.0"
+description = "Formal language theory automation: regularity checking and inverse homomorphism"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.30.0"]
+langgraph = ["langgraph>=0.2.0", "langchain-core>=0.3.0", "langchain-anthropic>=0.3.0"]
+mcp = ["mcp>=1.0.0"]
+viz = ["graphviz>=0.20"]
+all = ["tfl-automatisation[ui,langgraph,mcp,viz]"]
+
+[project.scripts]
+pumping-lemma = "pumping_lemma.cli:main"
+inverse-homomorphism = "reverse_morfism.main:main"
+
+[tool.setuptools.packages.find]
+include = ["pumping_lemma*", "reverse_morfism*"]

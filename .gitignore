@@ -2,3 +2,7 @@ __pycache__/
 .claude/
 .venv/
 .env
+*.egg-info/
+dist/
+build/
+nul

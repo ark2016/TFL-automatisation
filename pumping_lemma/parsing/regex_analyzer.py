@@ -1,7 +1,4 @@
 """Regex analyzer: bridge to reverse_morfism DFA construction."""
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-
 from typing import Optional
 from pumping_lemma.models.language_spec import LanguageSpec
 
