@@ -1,0 +1,18 @@
+digraph InverseHomomorphism {
+    rankdir=LR;
+    node [shape=circle];
+    __start__ [shape=none, label=""];
+    __start__ -> q0;
+    q1 [shape=doublecircle];
+    q2 [shape=doublecircle];
+    q1 -> q3 [label="a,b,c"];
+    q2 -> q3 [label="a"];
+    q2 -> q4 [label="c"];
+    q2 -> q1 [label="b"];
+    q0 -> q4 [label="a"];
+    q0 -> q2 [label="c"];
+    q0 -> q3 [label="b"];
+    q3 -> q3 [label="a,b,c"];
+    q4 -> q3 [label="a,c"];
+    q4 -> q1 [label="b"];
+}
