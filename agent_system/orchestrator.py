@@ -319,19 +319,21 @@ class Pipeline:
                        .get("verdict", "?"))
             _log(f"  classifier verdict: {verdict}")
         classifier_evidence = (classifier_output or {}).get("evidence", {})
-        dispatch = classifier_evidence.get("dispatch", {})
 
-        # If no classifier ran, infer dispatch from hypothesis
-        if not dispatch and self.hypothesis:
-            hyp = self.hypothesis.get("hypothesis", "unknown")
-            if hyp == "regular":
-                dispatch = {"re_builder": True, "dfa_builder": True}
-            elif hyp == "non_regular":
-                dispatch = {"pumping": True, "nerode": True, "closure": True}
-            else:
-                dispatch = {"pumping": True, "dfa_builder": True}
+        # Always run ALL specialists — correctness over speed
+        dispatch = {
+            "re_builder": True,
+            "dfa_builder": True,
+            "pumping": True,
+            "nerode": True,
+            "closure": True,
+        }
+        # Add grammar_analyzer for grammar-based tasks
+        lang_kind = ir.get("language_spec", {}).get("kind")
+        if lang_kind == "grammar":
+            dispatch["grammar_analyzer"] = True
 
-        # --- Step 4: Run specialist agents based on dispatch ---
+        # --- Step 4: Run specialist agents ---
         # ============================================================
         # Steps 4–7: Specialist → Oracle → Reasoning  (with retry loop)
         # Retry protocol §5.2: max 2 enriched retries + 1 inversion
@@ -360,24 +362,13 @@ class Pipeline:
             if retry_context:
                 specialist_input["retry_context"] = retry_context
 
-            # Regular track
-            if dispatch.get("re_builder"):
-                re_out = _run("re_builder", specialist_input)
-                if re_out is not None:
-                    evidence["re_builder"] = re_out
-
-            dfa_builder_output = None
-            if dispatch.get("dfa_builder"):
-                dfa_builder_output = _run("dfa_builder", specialist_input)
-                if dfa_builder_output is not None:
-                    evidence["dfa_builder"] = dfa_builder_output
-
-            # Non-regular track
-            for specialist in ("pumping", "nerode", "closure"):
-                if dispatch.get(specialist):
-                    spec_out = _run(specialist, specialist_input)
-                    if spec_out is not None:
-                        evidence[specialist] = spec_out
+            # Run all dispatched specialists
+            for agent_name in dispatched:
+                agent_out = _run(agent_name, specialist_input)
+                if agent_out is not None:
+                    evidence[agent_name] = agent_out
+                    if agent_name == "dfa_builder":
+                        dfa_builder_output = agent_out
 
             # --- Step 5: Build oracle ---
             if retry_round == 0:
@@ -401,6 +392,19 @@ class Pipeline:
             dfa: dict | None = None
             if dfa_builder_output is not None:
                 dfa = _extract_dfa(dfa_builder_output)
+
+            # Fallback: build DFA from regex if no DFA but RE available
+            if dfa is None and "re_builder" in evidence and oracle_ok:
+                re_ev = evidence["re_builder"].get("evidence",
+                            evidence["re_builder"])
+                regex = re_ev.get("regex")
+                if regex:
+                    _log(f"  building DFA from regex: {regex[:40]}...")
+                    try:
+                        from lib.dfa_builder import build_dfa_from_regex
+                        dfa = build_dfa_from_regex(regex)
+                    except Exception as exc:
+                        _log(f"  DFA from regex failed: {exc}")
 
             if dfa is not None and oracle_ok:
                 dfa_errors = validate_dfa(dfa)
@@ -476,7 +480,7 @@ class Pipeline:
                 "specialist_outputs": {
                     k: evidence[k]
                     for k in ("re_builder", "dfa_builder", "pumping",
-                               "nerode", "closure")
+                               "nerode", "closure", "grammar_analyzer")
                     if k in evidence
                 },
                 "oracle_test": evidence.get("oracle_test"),
@@ -518,17 +522,13 @@ class Pipeline:
                 continue
 
             if action == "invert_hypothesis" and inversions_done < MAX_INVERSIONS:
-                _log(f"  reasoning: inverting hypothesis")
-                inversions_done += 1
-                # Flip dispatch
                 old_hyp = self.hypothesis.get("hypothesis", "unknown")
                 new_hyp = "regular" if old_hyp == "non_regular" else "non_regular"
+                _log(f"  reasoning: inverting hypothesis {old_hyp} → {new_hyp}")
+                inversions_done += 1
                 self.hypothesis = {**self.hypothesis, "hypothesis": new_hyp}
                 evidence["hypothesis"] = self.hypothesis
-                if new_hyp == "regular":
-                    dispatch = {"re_builder": True, "dfa_builder": True}
-                else:
-                    dispatch = {"pumping": True, "nerode": True, "closure": True}
+                # dispatch stays the same — always all agents
                 retry_context = {
                     "issues": issues,
                     "instruction": (
