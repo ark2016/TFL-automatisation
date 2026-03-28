@@ -109,6 +109,31 @@ Language: `{w in {a,b}* | |w| >= 2}` (words of length at least 2)
 }
 ```
 
+## Solved Example (Few-Shot CoT)
+
+**Task:** Build a DFA for L = {w ∈ {a,b}* | |w| mod 2 = 0} (words of even length).
+
+**Reasoning (Chain-of-Thought):**
+1. The DFA needs to track whether the number of symbols read so far is even or odd.
+2. Two states: q0 (even count, accepting) and q1 (odd count, rejecting).
+3. Every symbol flips the parity: δ(q0, a) = q1, δ(q0, b) = q1, δ(q1, a) = q0, δ(q1, b) = q0.
+4. Start state: q0 (0 symbols read = even). Accept states: {q0}.
+5. Verify: "" → q0 ✓, "a" → q1 ✗, "ab" → q0 ✓, "aba" → q1 ✗.
+
+**Output:**
+{
+  "status": "success",
+  "dfa": {
+    "states": ["q0", "q1"],
+    "alphabet": ["a", "b"],
+    "transitions": {"q0": {"a": "q1", "b": "q1"}, "q1": {"a": "q0", "b": "q0"}},
+    "start": "q0",
+    "accept": ["q0"]
+  },
+  "explanation": "Two states tracking parity of input length. q0 = even (accept), q1 = odd (reject).",
+  "confidence": 0.99
+}
+
 ## Failure case
 
 If the language appears non-regular and you cannot construct a correct DFA, **do NOT invent a wrong DFA**. Return:

@@ -94,6 +94,26 @@ Language: `{w in {a,b}* | |w| mod 2 = 0}` (even-length words)
 }
 ```
 
+## Solved Example (Few-Shot CoT)
+
+**Task:** Construct a regex for L = {w ∈ {a,b}* | |w| ≥ 2 and the first two characters are the same}.
+
+**Reasoning (Chain-of-Thought):**
+1. The language requires the first two characters to be identical: either both 'a' or both 'b'.
+2. After the first two characters, anything goes (including empty suffix).
+3. Prefix "aa" followed by anything: aa(a|b)*
+4. Prefix "bb" followed by anything: bb(a|b)*
+5. Combine: (aa|bb)(a|b)*
+6. Verify: "aa" ✓, "bb" ✓, "aab" ✓, "ab" ✗ (first two differ), "a" ✗ (length < 2).
+
+**Output:**
+{
+  "status": "success",
+  "regex": "(aa|bb)(a|b)*",
+  "explanation": "The word must start with two identical characters (aa or bb), followed by any suffix.",
+  "confidence": 0.99
+}
+
 ## Failure case
 
 **IMPORTANT:** If you cannot construct a correct regex — because the language appears non-regular, or you are not confident your regex matches the language exactly — **do NOT guess or return an approximate regex**. Return `status: "failure"` honestly. An incorrect regex will be caught by oracle testing and waste retry cycles.
