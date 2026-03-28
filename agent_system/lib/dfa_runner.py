@@ -22,6 +22,11 @@ def run_dfa(dfa: dict[str, Any], word: str) -> bool:
     }
 
     Returns True if the word is accepted by the DFA.
+
+    Note: DFA alphabet symbols must be single characters.  The word is
+    iterated character-by-character, so multi-character alphabet symbols
+    are not supported.  Use ``grammar_to_dfa`` (which rejects multi-char
+    terminals) to ensure compatibility.
     """
     state = dfa["start"]
     transitions = dfa["transitions"]

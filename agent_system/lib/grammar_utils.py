@@ -27,6 +27,29 @@ def _is_nt(symbol: str, nonterminals: set[str]) -> bool:
     return symbol in nonterminals
 
 
+def _tokenize_word(word: str, terminals: set[str]) -> list[str] | None:
+    """Split a word string into a sequence of terminal symbols.
+
+    Returns None if the word cannot be tokenized using the given terminals.
+    Uses greedy longest-match from left to right.
+    """
+    tokens: list[str] = []
+    i = 0
+    # Sort terminals by length descending for longest match
+    sorted_terms = sorted(terminals, key=len, reverse=True)
+    while i < len(word):
+        matched = False
+        for t in sorted_terms:
+            if word[i:i + len(t)] == t:
+                tokens.append(t)
+                i += len(t)
+                matched = True
+                break
+        if not matched:
+            return None
+    return tokens
+
+
 # ---------------------------------------------------------------------------
 # 1. Right-linearity check
 # ---------------------------------------------------------------------------
@@ -267,6 +290,9 @@ def has_nested_recursion(grammar: dict) -> bool:
 # 4. Word generation (BFS)
 # ---------------------------------------------------------------------------
 
+_MAX_FORMS = 100_000  # hard limit to prevent infinite loops
+
+
 def generate_words(grammar: dict, max_len: int = 12) -> set[str]:
     """Generate all words derivable from the grammar up to *max_len*
     using BFS over sentential forms with leftmost derivation.
@@ -284,8 +310,14 @@ def generate_words(grammar: dict, max_len: int = 12) -> set[str]:
     queue: deque[tuple[str, ...]] = deque([initial])
     visited: set[tuple[str, ...]] = {initial}
 
-    while queue:
+    forms_explored = 0
+    while queue and forms_explored < _MAX_FORMS:
+        forms_explored += 1
         form = queue.popleft()
+
+        # Skip if the sentential form is too long (terminals + nonterminals).
+        if len(form) > max_len + len(nts):
+            continue
 
         # Find leftmost nonterminal.
         nt_idx = -1
@@ -476,9 +508,14 @@ def to_cnf(grammar: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def cyk_parse(grammar: dict, word: str) -> bool:
-    """CYK membership test.  Converts to CNF first if needed."""
+    """CYK membership test.  Converts to CNF first if needed.
+
+    Supports multi-character terminal symbols: the input *word* is
+    tokenized into terminal symbols before running the CYK algorithm.
+    """
     cnf = to_cnf(grammar)
     nts = set(cnf["nonterminals"])
+    ts = set(cnf["terminals"])
     start = cnf["start"]
     rules = cnf["rules"]
 
@@ -489,7 +526,12 @@ def cyk_parse(grammar: dict, word: str) -> bool:
                 return True
         return False
 
-    n = len(word)
+    # Tokenize the word into terminal symbols (handles multi-char terminals).
+    tokens = _tokenize_word(word, ts)
+    if tokens is None:
+        return False
+
+    n = len(tokens)
 
     # Build lookup structures.
     # unit_map: terminal -> set of nonterminals
@@ -505,12 +547,12 @@ def cyk_parse(grammar: dict, word: str) -> bool:
         elif len(rhs) == 2:
             pair_map.setdefault((rhs[0], rhs[1]), set()).add(lhs)
 
-    # T[i][j] = set of nonterminals deriving word[i:j+1].
+    # T[i][j] = set of nonterminals deriving tokens[i:j+1].
     T: list[list[set[str]]] = [[set() for _ in range(n)] for _ in range(n)]
 
     # Fill diagonal.
     for i in range(n):
-        T[i][i] = unit_map.get(word[i], set()).copy()
+        T[i][i] = unit_map.get(tokens[i], set()).copy()
 
     # Fill table bottom-up by span length.
     for span in range(2, n + 1):
@@ -532,8 +574,13 @@ def cyk_parse(grammar: dict, word: str) -> bool:
 def grammar_to_dfa(grammar: dict) -> dict | None:
     """Convert a right-linear or left-linear grammar to a DFA.
 
-    Returns ``None`` if the grammar is neither right-linear nor left-linear.
+    Returns ``None`` if the grammar is neither right-linear nor left-linear,
+    or if any terminal symbol has length > 1 (the DFA alphabet requires
+    single-character symbols).
     """
+    # Multi-char terminals cannot be represented in a simple DFA alphabet.
+    if any(len(t) > 1 for t in grammar.get("terminals", [])):
+        return None
     if is_right_linear(grammar):
         return _right_linear_to_dfa(grammar)
     if is_left_linear(grammar):

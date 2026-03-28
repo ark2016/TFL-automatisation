@@ -134,6 +134,25 @@ class TestOracle(unittest.TestCase):
         self.assertTrue(oracle("aabb"))
         self.assertFalse(oracle("aba"))
 
+    def test_grammar_oracle_long_unit_chain(self):
+        """Grammar with 40 unit rules: S -> A1, A1 -> A2, ..., A39 -> A40, A40 -> a"""
+        nts = ["S"] + [f"A{i}" for i in range(1, 41)]
+        rules = [{"lhs": nts[i], "rhs": [nts[i+1]]} for i in range(40)]
+        rules.append({"lhs": "A40", "rhs": ["a"]})
+        ir = {
+            "task_type": "classify",
+            "source_text": "long unit chain",
+            "language_spec": {
+                "kind": "grammar",
+                "terminals": ["a"],
+                "nonterminals": nts,
+                "start": "S",
+                "rules": rules,
+            },
+        }
+        oracle = oracle_from_ir(ir)
+        self.assertTrue(oracle("a"))
+
 
 # ── word_generator ──────────────────────────────────────────────────────────
 

@@ -100,6 +100,25 @@ class TestHypothesisModule(unittest.TestCase):
         result = analyze_hypothesis(ir)
         self.assertEqual(result["hypothesis"], "non_regular")
 
+    def test_whole_word_palindrome_uu_rev(self):
+        """IR with w = u·rev(u) (even palindromes) -> hypothesis='non_regular'."""
+        ir = {
+            "task_type": "classify",
+            "source_text": "w = u u^R",
+            "language_spec": {
+                "kind": "predicate",
+                "alphabet": ["a", "b"],
+                "variable": "w",
+                "predicate": {
+                    "parts": ["u"],
+                    "concat_pattern": ["u", "rev(u)"],
+                    "constraints": [],
+                },
+            },
+        }
+        result = analyze_hypothesis(ir)
+        self.assertEqual(result["hypothesis"], "non_regular")
+
     def test_regex_no_backref(self):
         """Regex without backreferences -> hypothesis='regular'."""
         ir = {
@@ -290,6 +309,36 @@ class TestGrammarUtils(unittest.TestCase):
         """Grammar S -> aSb | eps -> grammar_to_dfa returns None."""
         dfa = grammar_to_dfa(self._anbn_grammar())
         self.assertIsNone(dfa)
+
+    def test_generate_words_ambiguous_no_hang(self):
+        """S -> SS | a should not hang."""
+        grammar = {
+            "terminals": ["a"],
+            "nonterminals": ["S"],
+            "start": "S",
+            "rules": [
+                {"lhs": "S", "rhs": ["S", "S"]},
+                {"lhs": "S", "rhs": ["a"]},
+            ],
+        }
+        words = generate_words(grammar, max_len=4)
+        assert "a" in words
+        assert "aa" in words
+
+    def test_cyk_multichar_terminal(self):
+        """Grammar with multi-char terminal 'ab'."""
+        grammar = {
+            "terminals": ["ab", "c"],
+            "nonterminals": ["S"],
+            "start": "S",
+            "rules": [
+                {"lhs": "S", "rhs": ["ab"]},
+                {"lhs": "S", "rhs": ["c", "S"]},
+            ],
+        }
+        assert cyk_parse(grammar, "ab") == True
+        assert cyk_parse(grammar, "cab") == True
+        assert cyk_parse(grammar, "a") == False
 
 
 if __name__ == "__main__":

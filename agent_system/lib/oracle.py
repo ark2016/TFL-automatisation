@@ -170,42 +170,73 @@ def _eval_exists_decomposition(pred: dict, env: dict[str, str], alphabet: list[s
 # Grammar oracle (exhaustive derivation up to bounded length)
 # ---------------------------------------------------------------------------
 
+MAX_DERIVATION_FORMS = 100_000
+
+
 def _grammar_oracle(spec: dict, max_len: int = MAX_TEST_LENGTH) -> Callable[[str], bool]:
-    """Build oracle for a grammar by generating all words up to max_len."""
+    """Build oracle for a grammar by generating all words up to max_len.
+
+    Uses BFS with a visited set over sentential forms instead of a depth
+    cutoff.  Pruning is based on the *size* of sentential forms: a form
+    whose terminal count already exceeds max_len can never yield a short
+    enough word, so it is discarded.  A hard limit on the total number of
+    explored forms (MAX_DERIVATION_FORMS) prevents blow-up on ambiguous
+    grammars.
+    """
     rules: list[tuple[str, list[str]]] = [(r["lhs"], r["rhs"]) for r in spec["rules"]]
     start = spec["start"]
     terminals = set(spec["terminals"])
+    nonterminals = set(spec["nonterminals"])
+    num_nonterminals = len(nonterminals)
 
     generated: set[str] = set()
+    visited: set[tuple[str, ...]] = set()
 
-    def derive(sentential_forms: set[tuple[str, ...]], depth: int) -> None:
-        if depth > max_len * 2 + 10:
-            return
-        next_forms: set[tuple[str, ...]] = set()
-        for form in sentential_forms:
-            # Check if terminal
+    from collections import deque
+    queue: deque[tuple[str, ...]] = deque()
+
+    init = (start,)
+    queue.append(init)
+    visited.add(init)
+
+    forms_explored = 0
+
+    while queue and forms_explored < MAX_DERIVATION_FORMS:
+        form = queue.popleft()
+        forms_explored += 1
+
+        # Check if the form is all terminals
+        if all(s in terminals for s in form):
             word = "".join(form)
-            if all(s in terminals for s in form) and len(word) <= max_len:
+            if len(word) <= max_len:
                 generated.add(word)
-                continue
-            if len(word) > max_len:
-                continue
-            # Try expanding first non-terminal
-            for i, sym in enumerate(form):
-                if sym not in terminals:
-                    for lhs, rhs in rules:
-                        if lhs == sym:
-                            new_form = form[:i] + tuple(rhs) + form[i + 1:]
-                            total_len = sum(1 for s in new_form if s in terminals)
-                            nt_count = sum(1 for s in new_form if s not in terminals)
-                            if total_len <= max_len and nt_count + total_len <= max_len * 3:
-                                next_forms.add(new_form)
-                    break  # only expand first NT (leftmost derivation)
+            continue
 
-        if next_forms:
-            derive(next_forms, depth + 1)
+        # Try expanding the first nonterminal (leftmost derivation)
+        for i, sym in enumerate(form):
+            if sym not in terminals:
+                for lhs, rhs in rules:
+                    if lhs == sym:
+                        new_form = form[:i] + tuple(rhs) + form[i + 1:]
 
-    derive({(start,)}, 0)
+                        if new_form in visited:
+                            continue
+
+                        # Count terminals and nonterminals in new form
+                        term_count = sum(1 for s in new_form if s in terminals)
+                        total_len = len(new_form)
+
+                        # Prune: terminal symbols alone already exceed max_len
+                        if term_count > max_len:
+                            continue
+
+                        # Prune: total form size unreasonably large
+                        if total_len > max_len + num_nonterminals:
+                            continue
+
+                        visited.add(new_form)
+                        queue.append(new_form)
+                break  # only expand first NT (leftmost derivation)
 
     def oracle(word: str) -> bool:
         if len(word) > max_len:

@@ -206,14 +206,24 @@ def _classify_decomposition(pred: dict, atoms: list[dict]) -> None:
             ),
         })
     elif has_rev:
-        atoms.append({
-            "description": "existential decomposition (all parts bounded)",
-            "memory_type": "finite",
-            "reason": (
-                "all decomposition parts are constrained to "
-                "constant length"
-            ),
-        })
+        if _all_parts_bounded(pred):
+            atoms.append({
+                "description": "existential decomposition (all parts bounded)",
+                "memory_type": "finite",
+                "reason": (
+                    "all decomposition parts are constrained to "
+                    "constant length"
+                ),
+            })
+        else:
+            atoms.append({
+                "description": "whole-word reversal pattern (e.g. w = u·rev(u))",
+                "memory_type": "infinite",
+                "reason": (
+                    "reversal over unbounded parts requires "
+                    "unbounded memory (palindrome testing)"
+                ),
+            })
     else:
         atoms.append({
             "description": "existential decomposition",
