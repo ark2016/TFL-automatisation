@@ -25,7 +25,10 @@ MODELS = {
     "reasoning_agent":  "claude-opus-4-6",
     "formalizer":       "claude-opus-4-6",
 
-    # Quick validation / summarization → Haiku
+    # Retry planning → Sonnet (fast + smart)
+    "retry_planner":    "claude-sonnet-4-6",
+
+    # Quick validation / summarization → Haiku (logs & translation only)
     "validator":        "claude-haiku-4-5-20251001",
     "summarizer":       "claude-haiku-4-5-20251001",
 }

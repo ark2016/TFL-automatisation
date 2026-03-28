@@ -15,19 +15,97 @@
 
 ## Классификация
 **Вердикт:** regular  
-**Обоснование:** The condition ∃v(|v|>0, w=vv^R·u) reduces to: w has an even-length palindromic prefix, which is satisfied whenever w[0]=w[1] (taking |v|=1); similarly ∃v(|v|>0, w=u·vv^R) is satisfied whenever the last two characters are equal. Both conditions require only finite (O(1)) memory to check. All hypothesis atoms have memory_type 'finite', triggering the all_atoms_finite hard rule.
+**Обоснование:** The predicate reduces to: w starts with 'aa'/'bb' (take |v|=1 for prefix case) OR w ends with 'aa'/'bb' (take |v|=1 for suffix case). Both conditions require only finite memory — checking at most 2 characters at the start or end. The language equals (aa+bb)(a+b)* ∪ (a+b)*(aa+bb), which is regular. All hypothesis atoms have memory_type 'finite', triggering the all_atoms_finite hard rule.
 
 ## Доказательство
 
 ### Регулярное выражение
-`(a|b)*(aa|bb)(a|b)*` — Step 1: vv^R with |v|≥1 is an even-length palindrome of length ≥2. The simplest case is |v|=1, giving 'aa' or 'bb'. Step 2: If w = vv^R u (prefix case) or w = u vv^R (suffix case), then w contains vv^R as a substring. Step 3: For |v|=1, vv^R is 'aa' or 'bb', so any word containing 'aa' or 'bb' is in the language. Step 4: Conversely, if w contains neither 'aa' nor 'bb', then w is an alternating string (like abab... or baba...). Can such a word start or end with a longer even palindrome vv^R? An even palindrome vv^R has first char = last char, so its first two chars are equal or it contains 'aa'/'bb' internally. For an alternating string, no substring of length ≥2 has equal adjacent characters, so no even palindrome of length ≥2 can be a prefix or suffix. Step 5: Therefore the language is exactly the set of words containing 'aa' or 'bb' as a substring.
+`(a|b)(a|b)((a|b)(a|b))*|(aa|bb)(a|b)*|(a|b)*(aa|bb)` — L̄ = alternating strings ∪ {ε,a,b}. L = all strings of length≥2 that are not strictly alternating. A string of length≥2 is non-alternating iff it contains 'aa' or 'bb' as a substring. So L = (a|b)*(aa|bb)(a|b)*. Equivalently, any word containing 'aa' or 'bb'.
 
 ### ДКА
-The language requires detecting whether a word has an even-length palindromic prefix (vv^R with |v|≥1) or an even-length palindromic suffix. While words starting/ending with 'aa' or 'bb' are trivially included (|v|=1), words with alternating starts/ends (like 'ab...' or 'ba...') may still qualify via longer v. Detecting even-length palindromic prefixes/suffixes of arbitrary length requires unbounded memory (matching characters symmetrically around a center), which cannot be done by a finite automaton. For example, distinguishing whether (ab)^n ba is in the language (it has suffix (ab)^n ba — need to check all possible even-palindrome suffixes) requires tracking n. This language is context-free but not regular, so no DFA can recognize it.
+- Состояния: ['q_empty', 'q_a', 'q_b', 'q_aa', 'q_ab', 'q_ba', 'q_bb', 'q_gp_a', 'q_gp_b', 'q_bp_aa', 'q_bp_ab', 'q_bp_ba', 'q_bp_bb']
+- Начальное: q_empty
+- Допускающие: ['q_aa', 'q_bb', 'q_gp_a', 'q_gp_b', 'q_bp_aa', 'q_bp_bb']
+- The language consists of words that start with an even-length palindrome (vv^R, |v|≥1) as prefix OR end with one as suffix. The minimal even palindrome is length 2: aa or bb. Since any word starting with aa/bb has vv^R prefix (v=a or v=b), and any word ending with aa/bb has vv^R suffix, the language equals {w | w starts with aa or bb, or w ends with aa or bb}. We track: (1) whether the first two characters matched (good prefix), and (2) the last two characters seen. If good prefix, always accept. If bad prefix, accept iff last two chars are aa or bb. Verification: 'aa' → q_empty→q_a→q_aa (accept ✓, starts with aa). 'abba' → q_empty→q_a→q_ab→q_bp_bb→q_bp_ba (reject — but wait, let me recheck). Actually 'abba': does it end with vv^R? Last two = 'ba' no. Does it start with vv^R? First two = 'ab' no. But v=ab, vv^R=abba which IS the whole word as suffix. Hmm, I need to reconsider whether longer palindromes matter. v=ab → vv^R = abba. 'abba' = u·vv^R where u=ε, v=ab. So 'abba' SHOULD be accepted. My DFA rejects it. This means the language is NOT just about first/last two characters matching. The language is actually non-regular or requires more careful analysis. Let me reconsider... Actually, checking for even-length palindromic prefixes/suffixes of arbitrary length may require unbounded memory. The language may not be regular.
+
+| State | a | b | Accept |
+|---|---|---|---|
+| →q_empty | q_a | q_b |  |
+| q_a | q_aa | q_ab |  |
+| q_b | q_ba | q_bb |  |
+| q_aa | q_gp_a | q_gp_b | ✓ |
+| q_ab | q_bp_ba | q_bp_bb |  |
+| q_ba | q_bp_aa | q_bp_ab |  |
+| q_bb | q_gp_a | q_gp_b | ✓ |
+| q_gp_a | q_gp_a | q_gp_b | ✓ |
+| q_gp_b | q_gp_a | q_gp_b | ✓ |
+| q_bp_aa | q_bp_aa | q_bp_ab | ✓ |
+| q_bp_ab | q_bp_ba | q_bp_bb |  |
+| q_bp_ba | q_bp_aa | q_bp_ab |  |
+| q_bp_bb | q_bp_ba | q_bp_bb | ✓ |
+
+### Лемма о накачке
+*Невозможно построить доказательство нерегулярности с помощью леммы о накачке. Язык L = {w ∈ {a,b}* | ∃v,u: |v|>0 и (w = vv^R u или w = uvv^R)} является, по всей видимости, регулярным. Обоснование: слово w принадлежит L тогда и только тогда, когда оно содержит подстроку вида vv^R с |v| ≥ 1 в качестве префикса или суффикса. Минимальный палиндром чётной длины vv^R при |v|=1 — это 'aa' или 'bb'. Таким образом, w ∈ L ⇔ w начинается с 'aa' или 'bb', или заканчивается на 'aa' или 'bb', или |w| ≥ 4 и w содержит палиндромный префикс/суффикс длины ≥ 4. Однако более точный анализ показывает: дополнение L̄ состоит из слов, не имеющих ни палиндромного префикса чётной длины ≥ 2, ни палиндромного суффикса чётной длины ≥ 2. Это в точности чередующиеся слова (abab..., baba..., bab, aba, ...) плюс {ε, a, b}. Множество чередующихся слов и коротких слов регулярно (описывается конечным автоматом), следовательно L̄ регулярно, а значит и L регулярно (класс регулярных языков замкнут относительно дополнения). Все попытки применить лемму о накачке, теорему Майхилла–Нероуда и свойства замыкания для доказательства нерегулярности потерпели неудачу, что согласуется с гипотезой о регулярности языка.; Контрпример oracle (abbba: oracle_says=false, automaton_says=true) указывает на ошибку в ранее построенном автомате, а не на нерегулярность языка. Слово abbba: проверим, является ли оно элементом L. Нужно найти v с |v|≥1 такое, что abbba начинается или заканчивается на vv^R. Префиксы чётной длины: 'ab' (не палиндром), 'abbb' (не палиндром). Суффиксы чётной длины: 'ba' (не палиндром), 'bbba' (не палиндром). Значит abbba ∉ L, что согласуется с oracle. Это подтверждает, что язык не сводится к простой проверке первых/последних двух символов, но остаётся регулярным — нужен более аккуратный автомат.*
+
+### Теорема Майхилла-Нероуда
+*Невозможно построить доказательство нерегулярности по теореме Майхилла-Нероуда, поскольку язык L, по всей видимости, является регулярным.; Анализ языка: w ∈ L тогда и только тогда, когда w содержит подстроку вида vv^R с |v| ≥ 1 в качестве префикса или суффикса. Минимальный случай: |v| = 1, тогда vv^R = cc для c ∈ {a, b}. Таким образом, любое слово, начинающееся на 'aa' или 'bb', или заканчивающееся на 'aa' или 'bb', принадлежит L. Но также принадлежат слова с более длинными палиндромными префиксами/суффиксами вида vv^R, например 'abba' (v = ab, v^R = ba, vv^R = abba — палиндромный префикс длины 4).; Дополнение L̄ состоит из слов, у которых нет ни палиндромного префикса vv^R (|v| ≥ 1), ни палиндромного суффикса vv^R (|v| ≥ 1). Аналитически показано, что L̄ = {ε, a, b} ∪ {чередующиеся слова длины ≥ 2: abab..., baba..., abab...a, baba...b}, что является регулярным языком. Следовательно, L — регулярный как дополнение регулярного.; Попытка найти бесконечное семейство попарно различимых слов не увенчалась успехом: для любого разумного семейства (a^i, (ab)^i, и т.д.) не удаётся построить различающие контексты, поскольку эквивалентность Нероуда имеет конечный индекс.; Контрпример abbba ∉ L подтверждает: abbba не начинается с палиндрома vv^R (|v|≥1) и не заканчивается на такой палиндром. Проверка: префиксы — ab (не палиндром), abbb (не палиндром), abbba (не палиндром); суффиксы — ba (не палиндром), bba (не палиндром), bbba (не палиндром), abbba (не палиндром). Единственные палиндромные подстроки вида vv^R — это 'bb' внутри слова, но не на краю. Значит abbba ∉ L — корректно.; Рекомендация: язык регулярен, следует использовать dfa_builder или re_builder с корректным описанием. L = {w | w начинается с палиндрома чётной длины ≥ 2} ∪ {w | w заканчивается палиндромом чётной длины ≥ 2}. Эквивалентно: L̄ = {ε} ∪ {чередующиеся слова (ab)*, (ba)*, a(ba)*, b(ab)*}, и L = Σ* \ L̄.*
+
+{'module': 'nerode_agent', 'status': 'failure', 'proof': None, 'confidence': 0.0, 'errors': ['Невозможно построить доказательство нерегулярности по теореме Майхилла-Нероуда, поскольку язык L, по всей видимости, является регулярным.', "Анализ языка: w ∈ L тогда и только тогда, когда w содержит подстроку вида vv^R с |v| ≥ 1 в качестве префикса или суффикса. Минимальный случай: |v| = 1, тогда vv^R = cc для c ∈ {a, b}. Таким образом, любое слово, начинающееся на 'aa' или 'bb', или заканчивающееся на 'aa' или 'bb', принадлежит L. Но также принадлежат слова с более длинными палиндромными префиксами/суффиксами вида vv^R, например 'abba' (v = ab, v^R = ba, vv^R = abba — палиндромный префикс длины 4).", 'Дополнение L̄ состоит из слов, у которых нет ни палиндромного префикса vv^R (|v| ≥ 1), ни палиндромного суффикса vv^R (|v| ≥ 1). Аналитически показано, что L̄ = {ε, a, b} ∪ {чередующиеся слова длины ≥ 2: abab..., baba..., abab...a, baba...b}, что является регулярным языком. Следовательно, L — регулярный как дополнение регулярного.', 'Попытка найти бесконечное семейство попарно различимых слов не увенчалась успехом: для любого разумного семейства (a^i, (ab)^i, и т.д.) не удаётся построить различающие контексты, поскольку эквивалентность Нероуда имеет конечный индекс.', "Контрпример abbba ∉ L подтверждает: abbba не начинается с палиндрома vv^R (|v|≥1) и не заканчивается на такой палиндром. Проверка: префиксы — ab (не палиндром), abbb (не палиндром), abbba (не палиндром); суффиксы — ba (не палиндром), bba (не палиндром), bbba (не палиндром), abbba (не палиндром). Единственные палиндромные подстроки вида vv^R — это 'bb' внутри слова, но не на краю. Значит abbba ∉ L — корректно.", 'Рекомендация: язык регулярен, следует использовать dfa_builder или re_builder с корректным описанием. L = {w | w начинается с палиндрома чётной длины ≥ 2} ∪ {w | w заканчивается палиндромом чётной длины ≥ 2}. Эквивалентно: L̄ = {ε} ∪ {чередующиеся слова (ab)*, (ba)*, a(ba)*, b(ab)*}, и L = Σ* \\ L̄.']}
+
+### Замыкание
+*Невозможно найти доказательство нерегулярности через свойства замыкания, поскольку язык является регулярным. Дополнение L — множество чередующихся слов и слов длины ≤ 1 — регулярно (описывается конечным автоматом или регулярным выражением ε|a|b|(ab)+|(ba)+|(ab)+a|(ba)+b). Следовательно, L = Σ* \ L̄ тоже регулярен. Ни пересечение с регулярным языком, ни гомоморфизм не приведут к известному нерегулярному языку.*
 
 ## Консолидированное доказательство
-Агент re_builder предложил регулярное выражение (a|b)*(aa|bb)(a|b)*, однако его обоснование содержит ошибку. Слово "baaab" содержит подстроку "aa", но не имеет чётного палиндрома vv^R (|v|≥1) ни в качестве префикса, ни суффикса: префиксы длин 2,4 — "ba","baaa" — не являются чётными палиндромами; суффиксы длин 2,4 — "ab","aaab" — тоже нет. Таким образом, регулярное выражение неверно принимает "baaab". Агент dfa_builder отказался строить автомат, предположив нерегулярность. Необходима повторная попытка с контрпримером.
+Анализ языка L = {w ∈ {a,b}* | ∃v,u (|v|>0 ∧ (w = vv^R u ∨ w = uvv^R))}.
+
+Язык L состоит из слов, которые имеют чётный палиндром vv^R (|v| ≥ 1) в качестве префикса или суффикса.
+
+Ключевое наблюдение: vv^R — это палиндром чётной длины ≥ 2. Минимальный случай |v| = 1 даёт vv^R ∈ {aa, bb}. Но возможны и более длинные: v = ab → vv^R = abba, v = aba → vv^R = abaaba и т.д.
+
+Утверждение: L — регулярный язык.
+
+Доказательство: Покажем, что дополнение L̄ = {a,b}* \ L конечно (или регулярно). Слово w ∉ L тогда и только тогда, когда w не имеет ни чётного палиндромного префикса длины ≥ 2, ни чётного палиндромного суффикса длины ≥ 2.
+
+Префиксное условие: w не начинается с vv^R ни для какого v, |v| ≥ 1. В частности, первые два символа различны (иначе v = первый символ, vv^R = первые два). Значит, w начинается с ab или ba.
+
+Суффиксное условие: w не заканчивается на vv^R ни для какого v, |v| ≥ 1. В частности, последние два символа различны. Значит, w заканчивается на ab или ba.
+
+Но нужно также исключить более длинные палиндромные префиксы/суффиксы. Рассмотрим слова, начинающиеся с ab: чтобы не было палиндромного префикса длины 4, нужно чтобы первые 4 символа не были палиндромом (abba). Аналогично для суффиксов.
+
+Однако для строго чередующихся слов (abab..., baba..., abab...ab, и т.д.) ни один префикс чётной длины не является палиндромом, и ни один суффикс чётной длины не является палиндромом. Такие слова ∉ L.
+
+Множество L̄ состоит из: ε, a, b, и всех строго чередующихся слов длины ≥ 2 (т.е. слов из (ab)*, (ab)*a, (ba)*, (ba)*b). Это регулярный язык: L̄ = ε | a | b | (ab)+ | (ab)+a | (ba)+ | (ba)+b, что упрощается до (ab)* | (ab)*a | (ba)* | (ba)*b.
+
+Поскольку L̄ регулярен, L = {a,b}* \ L̄ тоже регулярен (класс регулярных языков замкнут относительно дополнения).
+
+Проверка: слово 'abba' — начинается с ab (плохой префикс длины 2), но первые 4 символа = abba — палиндром (v=ab, vv^R=abba). Значит abba ∈ L. ✓
+Слово 'abbba': проверим префиксы чётной длины: ab (не палиндром), abbb (не палиндром). Суффиксы чётной длины: ba (не палиндром), bbba (не палиндром). Значит abbba ∉ L. ✓ (совпадает с оракулом)
+Слово 'abab': чередующееся, ∉ L. ✓
+Слово 'aab': начинается с aa, ∈ L. ✓
+
+Регулярное выражение для L: дополнение к (ab)* | (ab)*a | (ba)* | (ba)*b.
+
+ДКА для L̄ имеет конечное число состояний, следовательно ДКА для L получается инвертированием принимающих состояний.
+
+## Подсказки и наблюдения
+- Установлено: слово w ∈ L ⟺ ∃ префикс чётной длины ≥ 2, являющийся палиндромом, ИЛИ ∃ суффикс чётной длины ≥ 2, являющийся палиндромом.
+- Контрпример от оракула: 'abbba' ∉ L. Проверка: префиксы чётной длины: 'ab' (нет), 'abbb' (нет). Суффиксы чётной длины: 'ba' (нет), 'bbba' (нет). Действительно не в L.
+- Установлено: 'abba' ∈ L (v=ab, vv^R=abba — весь word является палиндромным префиксом/суффиксом).
+- Опровергнуто: L ≠ {w | w начинается с aa/bb или заканчивается на aa/bb}. Контрпример: 'abba' ∈ L, но не начинается с aa/bb и не заканчивается на aa/bb.
+- Опровергнуто: L̄ ≠ {чередующиеся слова}. Контрпример: 'abbba' не чередующееся, но abbba ∉ L.
+- Наблюдение: для проверки палиндромности префикса длины 2k нужно сравнить символы на позициях i и 2k-1-i для всех i < k. Для произвольного k это требует запоминания первых k символов — потенциально неограниченная память.
+- Наблюдение: однако для СУЩЕСТВОВАНИЯ хотя бы одного палиндромного префикса/суффикса чётной длины ситуация может быть проще. Если первые два символа одинаковы — сразу в L. Если первые 4 символа образуют палиндром (abba, baab) — в L. И так далее.
+- Гипотеза (требует проверки): возможно, язык НЕ регулярен. Рассмотрим слова вида a·b^n·b·a = ab^(n+1)a. Это палиндром чётной длины при n+3 чётном, т.е. n нечётном. Как суффикс: слово ab^(n+1)a ∈ L при нечётном n (весь word — палиндром чётной длины). При чётном n длина нечётная — не палиндром чётной длины. Нужно проверить, есть ли другие палиндромные префиксы/суффиксы.
+- Рекомендация: попробовать доказать нерегулярность через лемму о накачке или теорему Майхилла-Нероуда, рассматривая семейство слов (ab)^n — для каждого n нужно проверить, различимы ли (ab)^n и (ab)^m контекстом справа (суффиксное условие) или слева (префиксное условие).
+- Рекомендация: рассмотреть слова w_n = (ab)^n. Для w_n ∈ L нужен палиндромный префикс или суффикс чётной длины. Префиксы чётной длины: (ab)^k — не палиндром при k≥1. Суффиксы чётной длины: (ab)^k — не палиндром при k≥1. Значит (ab)^n ∉ L для всех n≥1. Теперь рассмотрим w_n · (ba) = (ab)^n ba. Суффикс длины 2: ba — не палиндром. Суффикс длины 4: nba... нужно аккуратно. Это направление может привести к доказательству нерегулярности или к построению ДКА.
+- Ключевой вопрос: является ли язык L регулярным? Все агенты нерегулярности не смогли доказать обратное, но и корректный ДКА не построен. Требуется более глубокий анализ.
+
+## Верификация
+
+### Oracle Test
+Результат: fail, протестировано слов: 5
+Контрпример: `{'word': 'ab', 'oracle_says': False, 'automaton_says': True}`
 
 ## Итог
-**Статус:** success  
-**Уверенность:** 0.55
+**Статус:** failure  
+**Уверенность:** 0.0

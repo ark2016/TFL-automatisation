@@ -354,13 +354,20 @@ class Pipeline:
             dispatched = [k for k, v in dispatch.items() if v]
             _log(f"Step 4/9: specialists{round_label}: {dispatched}")
 
-            specialist_input = {
-                "ir": ir,
-                "hypothesis": self.hypothesis,
-                "classifier": classifier_evidence,
-            }
-            if retry_context:
-                specialist_input["retry_context"] = retry_context
+            def _build_specialist_input(agent_name: str) -> dict:
+                inp = {
+                    "ir": ir,
+                    "hypothesis": self.hypothesis,
+                    "classifier": classifier_evidence,
+                }
+                if retry_context:
+                    ctx = dict(retry_context)
+                    # Add per-agent feedback from retry planner
+                    fb = ctx.get("feedback", {})
+                    if agent_name in fb:
+                        ctx["agent_feedback"] = fb[agent_name]
+                    inp["retry_context"] = ctx
+                return inp
 
             # Run all dispatched specialists IN PARALLEL
             if agent_runner is not None and len(dispatched) > 1:
@@ -368,7 +375,7 @@ class Pipeline:
                 _log(f"  launching {len(dispatched)} agents in parallel...")
 
                 def _run_one(name: str) -> tuple[str, dict | None]:
-                    return name, _run(name, specialist_input)
+                    return name, _run(name, _build_specialist_input(name))
 
                 with ThreadPoolExecutor(max_workers=len(dispatched)) as pool:
                     futures = {pool.submit(_run_one, name): name
@@ -382,7 +389,7 @@ class Pipeline:
             else:
                 # Sequential fallback (mock mode or single agent)
                 for agent_name in dispatched:
-                    agent_out = _run(agent_name, specialist_input)
+                    agent_out = _run(agent_name, _build_specialist_input(agent_name))
                     if agent_out is not None:
                         evidence[agent_name] = agent_out
                         if agent_name == "dfa_builder":
@@ -455,7 +462,7 @@ class Pipeline:
                 _log(f"  → Level 1 retry: re-running DFA/RE builders with counterexample")
 
                 enriched_input = {
-                    **specialist_input,
+                    **_build_specialist_input("re_builder"),
                     "retry_context": {
                         "oracle_counterexample": ce,
                         "instruction": (
@@ -517,23 +524,42 @@ class Pipeline:
             issues = r_ev.get("issues_found", (reasoning_output or {}).get("issues_found", []))
 
             if action == "retry_enriched" and retry_round < MAX_SPECIALIST_RETRIES:
-                _log(f"  reasoning: retry_enriched — re-running specialists")
-                retry_context = {
-                    "issues": issues,
+                # Ask Retry Planner (Sonnet) which agents to re-run
+                planner_input = {
+                    "issues_found": issues,
                     "oracle_counterexample": (
                         self.test_result.get("counterexample")
                         if self.test_result else None
                     ),
-                    "failed_agents": [
-                        k for k in ("re_builder", "dfa_builder", "pumping",
-                                     "nerode", "closure")
-                        if k in evidence
-                        and evidence[k].get("status") == "failure"
-                    ],
+                    "specialist_results": {
+                        k: {
+                            "status": evidence[k].get("status", "?"),
+                            "verdict": evidence[k].get("evidence", evidence[k])
+                                       .get("verdict", "?"),
+                        }
+                        for k in dispatched if k in evidence
+                    },
+                    "current_hypothesis": self.hypothesis.get("hypothesis"),
+                }
+                planner_output = _run("retry_planner", planner_input)
+                p_ev = (planner_output or {}).get("evidence", planner_output or {})
+
+                agents_to_retry = p_ev.get("agents_to_retry", dispatched)
+                feedback_map = p_ev.get("feedback", {})
+                skip_agents = set(p_ev.get("skip_agents", []))
+
+                _log(f"  retry_planner: retry {agents_to_retry}, skip {list(skip_agents)}")
+
+                # Update dispatch to only retry selected agents
+                dispatch = {k: (k in agents_to_retry) for k in dispatched}
+
+                retry_context = {
+                    "issues": issues,
+                    "oracle_counterexample": planner_input["oracle_counterexample"],
+                    "feedback": feedback_map,
                     "instruction": (
-                        "Previous attempt had issues. "
-                        "Fix the problems listed in 'issues' and "
-                        "account for any counterexamples."
+                        "Previous attempt had issues. See 'feedback' for "
+                        "agent-specific corrections."
                     ),
                 }
                 retry_round += 1
