@@ -189,6 +189,19 @@ class LLMRunner:
         else:
             user_msg = "{}"
 
+        # Inject student notes into the prompt if present
+        student_notes = ""
+        if isinstance(input_data, dict):
+            student_notes = input_data.get("student_notes", "")
+        if student_notes:
+            system_prompt += (
+                "\n\n## Student Notes\n\n"
+                "The student provided the following comments, ideas, or partial "
+                "solutions. Take these into account — they may contain useful "
+                "insights, hypotheses to verify, or mistakes to address:\n\n"
+                f"{student_notes}\n"
+            )
+
         # Formalizer: return raw text, not JSON
         if agent_name in self._RAW_TEXT_AGENTS:
             raw = self._call_raw(system_prompt, user_msg, model)

@@ -312,6 +312,8 @@ class Pipeline:
             "ir": ir,
             "hypothesis": self.hypothesis,
         }
+        if ir.get("student_notes"):
+            classifier_input["student_notes"] = ir["student_notes"]
         classifier_output = _run("classifier", classifier_input)
         if classifier_output is not None:
             evidence["classifier"] = classifier_output
@@ -354,15 +356,19 @@ class Pipeline:
             dispatched = [k for k, v in dispatch.items() if v]
             _log(f"Step 4/9: specialists{round_label}: {dispatched}")
 
+            # Extract student notes once (empty string if absent)
+            _student_notes = ir.get("student_notes", "")
+
             def _build_specialist_input(agent_name: str) -> dict:
                 inp = {
                     "ir": ir,
                     "hypothesis": self.hypothesis,
                     "classifier": classifier_evidence,
                 }
+                if _student_notes:
+                    inp["student_notes"] = _student_notes
                 if retry_context:
                     ctx = dict(retry_context)
-                    # Add per-agent feedback from retry planner
                     fb = ctx.get("feedback", {})
                     if agent_name in fb:
                         ctx["agent_feedback"] = fb[agent_name]
@@ -939,6 +945,8 @@ def main() -> None:
                         help="Render output as markdown (default) or html")
     parser.add_argument("--render-out", metavar="FILE", default=None,
                         help="Write rendered output to file instead of stdout")
+    parser.add_argument("--notes", metavar="TEXT", default=None,
+                        help="Student notes/ideas to inject into agent prompts")
 
     args = parser.parse_args()
 
@@ -949,6 +957,10 @@ def main() -> None:
     except (OSError, json.JSONDecodeError) as exc:
         print(f"Error reading IR file: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # Inject student notes from CLI if provided
+    if args.notes:
+        ir["student_notes"] = args.notes
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     pipeline = Pipeline()

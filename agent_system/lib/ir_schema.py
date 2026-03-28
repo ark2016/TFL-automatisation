@@ -212,6 +212,10 @@ IR_SCHEMA: dict[str, Any] = {
         },
         "source_text": {"type": "string", "minLength": 1},
         "language_spec": {"$ref": "#/$defs/LanguageSpec"},
+        "student_notes": {
+            "type": "string",
+            "description": "Optional student comments, ideas, or partial solutions to guide the agents",
+        },
     },
     "$defs": {
         "LanguageSpec": LANGUAGE_SPEC_SCHEMA,
