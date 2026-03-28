@@ -1,0 +1,18 @@
+{
+  "module": "classifier",
+  "status": "success",
+  "evidence": {
+    "verdict": "regular",
+    "confidence": 0.9,
+    "reasoning": "All predicate atoms have finite memory. Palindromic prefix/suffix with existential quantifier reduces to checking first/last 2 symbols.",
+    "dispatch": {
+      "re_builder": true,
+      "dfa_builder": true,
+      "pumping": false,
+      "nerode": false,
+      "closure": false
+    }
+  },
+  "confidence": 0.9,
+  "errors": []
+}

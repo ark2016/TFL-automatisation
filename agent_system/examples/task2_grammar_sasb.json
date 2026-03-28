@@ -1,0 +1,18 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "Является ли язык данной грамматики регулярным? S → SaSb | ε | A, A → bb | aa | bSb",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": ["a", "b"],
+    "nonterminals": ["S", "A"],
+    "start": "S",
+    "rules": [
+      {"lhs": "S", "rhs": ["S", "a", "S", "b"]},
+      {"lhs": "S", "rhs": []},
+      {"lhs": "S", "rhs": ["A"]},
+      {"lhs": "A", "rhs": ["b", "b"]},
+      {"lhs": "A", "rhs": ["a", "a"]},
+      {"lhs": "A", "rhs": ["b", "S", "b"]}
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "module": "re_builder",
+  "status": "success",
+  "evidence": {
+    "regex": "(aa|bb)(a|b)*|(a|b)*(aa|bb)",
+    "explanation": "The word starts with palindrome vv^R (|v|>=1) iff first two chars are equal (aa or bb). Similarly for suffix. So the language is: starts with aa/bb OR ends with aa/bb."
+  },
+  "confidence": 0.95,
+  "errors": []
+}

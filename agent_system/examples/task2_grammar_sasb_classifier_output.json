@@ -1,0 +1,18 @@
+{
+  "module": "classifier",
+  "status": "success",
+  "evidence": {
+    "verdict": "non_regular",
+    "confidence": 0.85,
+    "reasoning": "The production S -> SaSb introduces unbounded nesting of 'a' and 'b' requiring matched counts. This pattern is characteristic of context-free but non-regular languages (analogous to a^n b^n).",
+    "dispatch": {
+      "re_builder": false,
+      "dfa_builder": false,
+      "pumping": true,
+      "nerode": true,
+      "closure": false
+    }
+  },
+  "confidence": 0.85,
+  "errors": []
+}

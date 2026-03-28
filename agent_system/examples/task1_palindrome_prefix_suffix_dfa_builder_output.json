@@ -1,0 +1,25 @@
+{
+  "module": "dfa_builder",
+  "status": "success",
+  "evidence": {
+    "dfa": {
+      "states": ["q0", "q_fa", "q_fb", "q_yes", "q_xa", "q_aa", "q_xb", "q_bb"],
+      "alphabet": ["a", "b"],
+      "transitions": {
+        "q0":   {"a": "q_fa",  "b": "q_fb"},
+        "q_fa": {"a": "q_yes", "b": "q_xb"},
+        "q_fb": {"a": "q_xa",  "b": "q_yes"},
+        "q_yes":{"a": "q_yes", "b": "q_yes"},
+        "q_xa": {"a": "q_aa",  "b": "q_xb"},
+        "q_aa": {"a": "q_aa",  "b": "q_xb"},
+        "q_xb": {"a": "q_xa",  "b": "q_bb"},
+        "q_bb": {"a": "q_xa",  "b": "q_bb"}
+      },
+      "start": "q0",
+      "accept": ["q_yes", "q_aa", "q_bb"]
+    },
+    "explanation": "8-state DFA. States: q0 = initial; q_fa/q_fb = read first char a/b; q_yes = prefix was palindromic (aa or bb), accept sink; q_xa = no prefix palindrome, last char 'a' (prev different); q_aa = last two chars 'aa' (accept); q_xb = no prefix palindrome, last char 'b' (prev different); q_bb = last two chars 'bb' (accept). The DFA tracks whether the word started with aa/bb (immediate accept) and otherwise tracks last two chars to detect aa/bb suffix."
+  },
+  "confidence": 0.95,
+  "errors": []
+}

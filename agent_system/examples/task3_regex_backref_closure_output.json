@@ -1,0 +1,14 @@
+{
+  "module": "closure",
+  "status": "success",
+  "evidence": {
+    "verdict": "non_regular",
+    "proof_type": "closure_properties",
+    "argument": "Intersect L with the regular language a*ba* to get L' = {a^n b a^n | n >= 0}. If L were regular, L' would be regular (regular languages are closed under intersection). But L' = {a^n b a^n | n >= 0} is the classic non-regular language (provable by pumping lemma). Therefore L is not regular.",
+    "intersection_regex": "a*ba*",
+    "resulting_language": "{a^n b a^n | n >= 0}",
+    "known_non_regular": true
+  },
+  "confidence": 0.9,
+  "errors": []
+}

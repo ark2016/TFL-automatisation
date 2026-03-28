@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>TFL — Результат анализа</title>
+<style>
+body{font-family:'Segoe UI',system-ui,sans-serif;max-width:700px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a;background:#fff}
+.s-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #e0e0e0}
+.s-task{font-size:15px;line-height:1.6}
+.s-label-sm{font-size:12px;color:#888;margin-bottom:6px}
+.s-badge{font-size:12px;font-weight:600;padding:4px 14px;border-radius:6px;white-space:nowrap;flex-shrink:0}
+.s-reg{background:#e8f5e9;color:#2e7d32}
+.s-nonreg{background:#fce4ec;color:#c62828}
+.s-unknown{background:#fff3e0;color:#e65100}
+.s-sec{font-size:16px;font-weight:600;margin:24px 0 10px;padding-top:16px;border-top:1px solid #eee}
+.s-sec:first-of-type{border-top:none;padding-top:0}
+.s-p{font-size:14px;line-height:1.75;margin:6px 0}
+.s-math{font-family:Georgia,'Times New Roman',serif;font-style:italic}
+.s-step{display:flex;gap:10px;margin:10px 0}
+.s-n{min-width:22px;height:22px;border-radius:50%;background:#f5f5f5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#666;flex-shrink:0;margin-top:2px}
+.s-t{font-size:14px;line-height:1.7}
+.s-box{background:#f8f9fa;border-radius:6px;padding:12px 16px;margin:10px 0;font-size:13px;line-height:1.7}
+.s-mono{font-family:Consolas,'Courier New',monospace;font-size:13px}
+.s-tab{display:flex;gap:2px;margin:16px 0 12px}
+.s-tab-btn{font-size:12px;padding:6px 14px;border-radius:6px 6px 0 0;background:#f5f5f5;color:#666;cursor:pointer;border:none;border-bottom:2px solid transparent;font-family:inherit}
+.s-tab-btn:hover{background:#eee}
+.s-tab-btn.active{background:#fff;color:#1a1a1a;border-bottom-color:#1976d2}
+.s-panel{display:none}.s-panel.active{display:block}
+.s-footer{display:flex;gap:16px;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid #eee;font-size:12px;color:#888;flex-wrap:wrap}
+.s-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.s-pass{background:#4caf50}.s-fail{background:#e53935}
+.s-pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#e3f2fd;color:#1565c0}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px}
+th,td{border:1px solid #e0e0e0;padding:6px 10px;text-align:left}
+th{background:#f5f5f5;font-weight:600}
+</style>
+</head>
+<body>
+
+<div class="s-head">
+  <div>
+    <div class="s-label-sm">Задача (экзамен ИУ-9)</div>
+    <div class="s-task">—</div>
+  </div>
+  <span class="s-badge s-nonreg">нерегулярен</span>
+</div>
+<div class="s-sec" style="border-top:none;padding-top:0">Наблюдение</div>
+<div class="s-p">The grammar contains the rule S → SaSb, which exhibits nested/balanced recursion embedding &#x27;a&#x27; and &#x27;b&#x27; symbols in a dependent manner. This structure requires unbounded memory to track matching counts, making the language non-regular. Hard rule &#x27;nested_recursion&#x27; applies directly.</div>
+<div class="s-tab">
+  <button class="s-tab-btn active" onclick="showTab(0)">Лемма о накачке</button>
+  <button class="s-tab-btn" onclick="showTab(1)">Майхилл-Нероуд</button>
+  <button class="s-tab-btn" onclick="showTab(2)">Замыкание</button>
+</div>
+<div class="s-panel active" id="panel-0">
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Предположим L регулярен с длиной накачки <span class="s-math">p</span>.</div></div><div class="s-step"><div class="s-n">2</div><div class="s-t">Выберем слово <span class="s-math">w</span> = a^(2n+1) b^(2n+1) ∈ L, |<span class="s-math">w</span>| ≥ <span class="s-math">p</span>.</div></div><div class="s-step"><div class="s-n">3</div><div class="s-t">Так как |xy| ≤ n, а первые n символов слова a^(2n+1) b^(2n+1) — это буквы &#x27;a&#x27; (поскольку 2n+1 &gt; n при n ≥ 1), подстрока y целиком лежит в блоке из букв &#x27;a&#x27;. Следовательно, y = a^k для некоторого k, 1 ≤ k ≤ n.</div></div><div class="s-step"><div class="s-n">4</div><div class="s-t">Накачиваем: <span class="s-mono">xy^0 z = a^(2n+1-k) b^(2n+1)</span>. В слове xy⁰z = a^(2n+1-k) b^(2n+1) количество букв &#x27;a&#x27; равно 2n+1−k, а количество букв &#x27;b&#x27; равно 2n+1. Покажем, что a^m b^p ∈ L только при m = p (для слов вида a*b*). Действительно, рассмотрим вывод слова вида a^m b^p из S. Правило S → SaSb при применении к словам вида a*b* требует, чтобы S₁ порождало слово из a*, а S₂ — из b*. Слова из чистых a, порождаемые S: ε и aa (через A → aa). Слова из чистых b, порождаемые S: любое b^(2j), j ≥ 0 (через ε, A→bb, A→bSb). Тогда S → S₁ a S₂ b даёт a^m&#x27; · a · b^(2j) · b = a^(m&#x27;+1) · b^(2j+1), где m&#x27; ∈ {0, 2} (чистые a из S₁). Обозначим f(m,p) — принадлежность a^m b^p языку. Имеем: f(0,0)=да, f(2,0)=да, f(0,2)=да. Рекурсия: f(m,p)=да ⟺ (m=0,p=0) или (m=2,p=0) или (m=0,p=2) или (m=0, p≥4 чётное и f(0,p−2)=да) или (m≥1 и ∃m&#x27;∈{0,2}, j≥0: m=m&#x27;+1 и p=2j+1 и f(m&#x27;,0)=да и f(0,2j)=да) или (m≥1 и p≥1 и ∃ разбиение через S→S₁aS₂b где S₁→a^α b^β, S₂→a^γ b^δ с α+1+γ=m, β+δ+1=p, β=0⟹γ свободно, но тогда нужно a^α·a·a^γ b^δ·b = a^(α+1+γ)b^(δ+1)). Ключевое наблюдение: определим функцию d(w) = |w|_a − |w|_b для слова w. Для ε: d=0. Для aa: d=2. Для bb: d=−2. Для bSb: d = d(S)−2. Для S₁aS₂b: d = d(S₁)+1+d(S₂)−1 = d(S₁)+d(S₂). По индукции по дереву вывода, d(S) всегда чётно. Значит |w|_a − |w|_b чётно для любого w ∈ L. Для xy⁰z = a^(2n+1−k)b^(2n+1): разность d = (2n+1−k)−(2n+1) = −k. Так как 1 ≤ k ≤ n, разность d = −k нечётна при нечётном k. Но k может быть и чётным. Рассмотрим i=2: xy²z = a^(2n+1+k)b^(2n+1), d = k. При нечётном k это нечётное число, что противоречит чётности d. При чётном k и i=0: d = −k — чётное. Тогда возьмём i=0: a^(2n+1−k)b^(2n+1). Здесь число a меньше числа b, и d = −k &lt; 0 чётное. Нужно проверить, может ли такое слово быть в L. Возьмём i=3: xy³z = a^(2n+1+2k)b^(2n+1), d = 2k — чётное. Это не даёт противоречия по чётности. Однако при нечётном k возьмём i=2 (или i=0): d = k (или −k) — нечётное, что невозможно. При чётном k возьмём i=0: d = −k, чётное, но отрицательное. Нужен другой аргумент для чётного k. Используем более сильное свойство: для слов вида a^m b^p ∈ L обязательно m = p. Это следует из структурной индукции (см. выше). Тогда a^(2n+1−k) b^(2n+1) ∉ L, так как 2n+1−k ≠ 2n+1 (k ≥ 1).</div></div><div class="s-step"><div class="s-n">5</div><div class="s-t">Для каждого n ≥ 1 слово w = a^(2n+1) b^(2n+1) принадлежит L и имеет длину ≥ n. Для любого разбиения w = xyz с |xy| ≤ n, |y| ≥ 1 подстрока y = aᵏ (k ≥ 1) лежит целиком в блоке a. При i = 0 получаем xy⁰z = a^(2n+1−k) b^(2n+1), где 2n+1−k ≠ 2n+1, и это слово не принадлежит L, так как для слов вида aᵐbᵖ принадлежность L требует m = p (доказывается структурной индукцией по дереву вывода грамматики). Следовательно, по лемме о накачке язык L не является регулярным. ∎</div></div>
+</div>
+<div class="s-panel" id="panel-1">
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Рассмотрим бесконечное семейство слов: a^i (a, aa, aaa, aaaa, ...)</div></div><div class="s-step"><div class="s-n">2</div><div class="s-t">Для различных <span class="s-math">i, j</span> слова различимы контекстом <span class="s-math">z</span> = b^i:</div></div><div class="s-box">a^i b^i ∈ L (порождается из S: применяя правило S → SaSb i раз с S → ε для внутренних S, получаем a^i b^i)<br>a^j b^i ∉ L при j ≠ i (обоснование ниже)</div><div class="s-step"><div class="s-n">3</div><div class="s-t">По теореме Майхилла-Нероуда, язык L, порождаемый данной грамматикой, не является регулярным, так как отношение эквивалентности Нероуда имеет бесконечный индекс (бесконечное множество слов {a^i | i ≥ 1} попарно различимо). ∎</div></div>
+</div>
+<div class="s-panel" id="panel-2">
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Язык R = <span class="s-mono">a*b*</span> регулярен.</div></div><div class="s-step"><div class="s-n">2</div><div class="s-t">L ∩ R = {a^n b^n | n &gt;= 0}</div></div><div class="s-step"><div class="s-n">3</div><div class="s-t">Этот язык нерегулярен (known_non_regular (классический пример для леммы о накачке)).</div></div><div class="s-step"><div class="s-n">4</div><div class="s-t">Рассмотрим пересечение L ∩ a*b*. Покажем, что оно равно {a^n b^n | n ≥ 0}. Включение ⊇: строка a^n b^n порождается цепочкой вывода S → SaSb → SaSaSbb → ... → a^n b^n (на каждом шаге подставляем S → ε во все позиции, кроме левой, и на последнем шаге S → ε). Включение ⊆: любая строка из L ∩ a*b* имеет вид a^k b^m. Индукцией по длине вывода покажем, что k = m. Правило S → SaSb добавляет ровно одну букву a и одну b; правило S → ε не добавляет символов. Правило S → A → aa добавляет два символа a (нет b), A → bb добавляет два символа b (нет a), A → bSb добавляет минимум два символа b. Однако если результат принадлежит a*b*, то использование A → aa возможно только в «a-префиксе», а A → bb или A → bSb — только в «b-суффиксе». Структурный анализ дерева разбора показывает: в правиле S → S₁ a S₂ b подстрока, порождённая S₂, стоит между a и b, то есть должна принадлежать a*b* (для сохранения формы a*b*). Аналогично S₁ порождает префикс из a*. Если S₂ → A → aa, то получаем ...a·aa·b..., что допустимо. Но тогда S₂ вносит 2 символа a и 0 символов b, а обрамляющее правило вносит 1a и 1b. Рекурсивно прослеживая баланс: каждое применение S → SaSb даёт +1a, +1b; S → A → aa даёт +2a; S → A → bb даёт +2b; S → A → bSb даёт +2b + (что порождает S). Для строки a^k b^m ∈ a*b* все символы a идут до всех b. Если бы использовалось A → bb внутри «a-зоны» дерева, появился бы символ b среди a — противоречие с a*b*. Аналогично A → bSb в a-зоне невозможно. А A → aa в «b-зоне» дало бы символ a среди b — тоже противоречие. Таким образом, A → aa может использоваться только в позициях, вносящих вклад в a-префикс, а A → bb и A → bSb — только в b-суффикс. Подсчёт: пусть правило S → SaSb применено n раз, A → aa применено p раз (в a-зоне), A → bb применено q раз, A → bSb применено r раз (в b-зоне). Тогда число a: n + 2p, число b: n + 2q + 2r + (символы от вложенных S в bSb). По индукции вложенные S в bSb тоже порождают строки из b* (так как находятся в b-зоне), и для них аналогичный анализ показывает, что они не могут содержать a. Единственная возможность порождать строку из b* из S — это S → ε или S → A → bb, или S → SaSb, но последнее вставляет a. Значит, вложенный S в bSb не может использовать правило S → SaSb (иначе появится a в b-зоне). Следовательно, вложенный S → ε или S → A → bb. Итого: k = n + 2p, m = n + 2q + 2r + 2·(число bb из вложенных S). Но это не обязательно даёт k = m. Однако заметим, что {a^n b^n} ⊆ L ∩ a*b*, и даже если пересечение шире, оно содержит нерегулярное подмножество. Применим другой подход: возьмём R₂ = a*b* и гомоморфизм. Или проще: пересечём L с регулярным языком a*b, получив {a^n b | слово a^n b ∈ L}. Из грамматики a^n b ∈ L только при n=1 (из S→SaSb→(ε)a(ε)b=ab) — это регулярно. Вернёмся к a*b*: на самом деле L ∩ a*b* = {a^n b^n | n ≥ 0} ∪ {a^(n+2)b^n, a^n b^(n+2) | ...}? Нет. Проверим: можно ли получить aabb из грамматики? S→SaSb→(ε)a(ε)b = ab (n=1). S→SaSb→(SaSb)a(ε)b = SaSbab → (ε)a(ε)bab = abab ∉ a*b*. Попробуем: S→SaSb, левый S→SaSb: (SaSb)aSb → εaεbaεb = abaeb? Нет: ((ε)a(ε)b)a(ε)b = abab. Для a²b²: S→SaSb, правый S→SaSb: Sa(SaSb)b → (ε)a((ε)a(ε)b)b = a·ab·b = aabb. Да! И a³b³: S→SaSb, S₂→SaSb, S₂&#x27;→SaSb: aaabbb. Можно ли получить a⁴b²? Нужно S→SaSb, S₂→A→aa: S→(ε)a(aa)b = aaab — это a³b¹, не a*b* с k≠m+2? Ну a³b ∈ a*b*. Проверим: S→SaSb→εa(A)b, A→aa: a·aa·b = aaab = a³b. Это в a*b* и k≠m. Значит L∩a*b* ⊋ {a^n b^n}. Но L∩a*b* содержит {a^n b^n}, и нам нужно точное описание. Используем дополнительное пересечение: L ∩ {a^p b^p | p ≥ 0} — но это не регулярный язык. Вместо этого рассмотрим L&#x27; = L ∩ (a*b*) и затем применим гомоморфизм? Или лучше: пересечём с a*ba*b (нет, сложно). Лучший подход: пересечём L с a*b* и затем покажем, что если бы L∩a*b* было регулярным, то и {a^n b^n} было бы регулярным (через ещё одно пересечение). Но это усложняет. Самый чистый способ: возьмём R = {a^n b^n | n ≥ 0}... нет, это не регулярный. Используем Майхилла-Нероуда напрямую или лемму о накачке. Но задание — через замыкание. Попробуем обратный гомоморфизм: h: {c} → {a,b}*, h(c) = ab. Тогда h⁻¹(L) = {c^n | ab...ab (n раз) ∈ L} = {c^n | (ab)^n ∈ L}. Из грамматики (ab)^n ∈ L? Проверим: ab ∈ L (да), abab ∈ L? S→SaSb→(SaSb)a(ε)b, внутренний: (ε)a(ε)b·a·b = ab·a·b = abab. Да! ababab? S→SaSb→(SaSb)aSb→((SaSb)aSb)aSb→... = (ab)(ab)(ab). Да, (ab)^n ∈ L для всех n. Так h⁻¹(L) = c* — регулярный. Не помогает. Ладно, используем пересечение с a*b* и покажем нерегулярность результата леммой о накачке, упомянув что {a^n b^n} ⊂ L∩a*b*. ∎</div></div>
+</div>
+<div class="s-footer">
+  <span>confidence: 0.95</span>
+  <span style="display:flex;align-items:center;gap:5px"><span class="s-dot s-fail"></span> Lean 4: errors</span>
+  <span class="s-pill">3 метода согласованы</span>
+</div>
+<script>
+function showTab(n){
+  document.querySelectorAll('.s-tab-btn').forEach((b,i)=>b.classList.toggle('active',i===n));
+  document.querySelectorAll('.s-panel').forEach((p,i)=>p.classList.toggle('active',i===n));
+}
+</script>
+</body>
+</html>

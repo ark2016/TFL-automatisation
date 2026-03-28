@@ -1,0 +1,38 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "{w ∈ {a,b}* | ∃v,u(|v| > 0 & w = vv^R u ∨ w = uvv^R)}",
+  "language_spec": {
+    "kind": "predicate",
+    "alphabet": ["a", "b"],
+    "variable": "w",
+    "predicate": {
+      "op": "or",
+      "operands": [
+        {
+          "type": "exists_decomposition",
+          "parts": ["v", "u"],
+          "concat_pattern": ["v", "rev(v)", "u"],
+          "constraints": [
+            {
+              "op": "gt",
+              "left": {"kind": "length", "of_var": "v"},
+              "right": {"kind": "constant", "value": 0}
+            }
+          ]
+        },
+        {
+          "type": "exists_decomposition",
+          "parts": ["u", "v"],
+          "concat_pattern": ["u", "v", "rev(v)"],
+          "constraints": [
+            {
+              "op": "gt",
+              "left": {"kind": "length", "of_var": "v"},
+              "right": {"kind": "constant", "value": 0}
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

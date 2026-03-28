@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>TFL — Результат анализа</title>
+<style>
+body{font-family:'Segoe UI',system-ui,sans-serif;max-width:700px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a;background:#fff}
+.s-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #e0e0e0}
+.s-task{font-size:15px;line-height:1.6}
+.s-label-sm{font-size:12px;color:#888;margin-bottom:6px}
+.s-badge{font-size:12px;font-weight:600;padding:4px 14px;border-radius:6px;white-space:nowrap;flex-shrink:0}
+.s-reg{background:#e8f5e9;color:#2e7d32}
+.s-nonreg{background:#fce4ec;color:#c62828}
+.s-unknown{background:#fff3e0;color:#e65100}
+.s-sec{font-size:16px;font-weight:600;margin:24px 0 10px;padding-top:16px;border-top:1px solid #eee}
+.s-sec:first-of-type{border-top:none;padding-top:0}
+.s-p{font-size:14px;line-height:1.75;margin:6px 0}
+.s-math{font-family:Georgia,'Times New Roman',serif;font-style:italic}
+.s-step{display:flex;gap:10px;margin:10px 0}
+.s-n{min-width:22px;height:22px;border-radius:50%;background:#f5f5f5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#666;flex-shrink:0;margin-top:2px}
+.s-t{font-size:14px;line-height:1.7}
+.s-box{background:#f8f9fa;border-radius:6px;padding:12px 16px;margin:10px 0;font-size:13px;line-height:1.7}
+.s-mono{font-family:Consolas,'Courier New',monospace;font-size:13px}
+.s-tab{display:flex;gap:2px;margin:16px 0 12px}
+.s-tab-btn{font-size:12px;padding:6px 14px;border-radius:6px 6px 0 0;background:#f5f5f5;color:#666;cursor:pointer;border:none;border-bottom:2px solid transparent;font-family:inherit}
+.s-tab-btn:hover{background:#eee}
+.s-tab-btn.active{background:#fff;color:#1a1a1a;border-bottom-color:#1976d2}
+.s-panel{display:none}.s-panel.active{display:block}
+.s-footer{display:flex;gap:16px;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid #eee;font-size:12px;color:#888;flex-wrap:wrap}
+.s-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.s-pass{background:#4caf50}.s-fail{background:#e53935}
+.s-pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#e3f2fd;color:#1565c0}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px}
+th,td{border:1px solid #e0e0e0;padding:6px 10px;text-align:left}
+th{background:#f5f5f5;font-weight:600}
+</style>
+</head>
+<body>
+
+<div class="s-head">
+  <div>
+    <div class="s-label-sm">Задача (экзамен ИУ-9)</div>
+    <div class="s-task">—</div>
+  </div>
+  <span class="s-badge s-reg">регулярен</span>
+</div>
+<div class="s-sec" style="border-top:none;padding-top:0">Наблюдение</div>
+<div class="s-p">The condition ∃v(|v|&gt;0, w=vv^R·u) reduces to: w has an even-length palindromic prefix, which is satisfied whenever w[0]=w[1] (taking |v|=1); similarly ∃v(|v|&gt;0, w=u·vv^R) is satisfied whenever the last two characters are equal. Both conditions require only finite (O(1)) memory to check. All hypothesis atoms have memory_type &#x27;finite&#x27;, triggering the all_atoms_finite hard rule.</div>
+<div class="s-tab">
+  <button class="s-tab-btn active" onclick="showTab(0)">Рег. выражение</button>
+  <button class="s-tab-btn" onclick="showTab(1)">ДКА</button>
+</div>
+<div class="s-panel active" id="panel-0">
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Регулярное выражение: <span class="s-mono">(a|b)*(aa|bb)(a|b)*</span></div></div><div class="s-step"><div class="s-n">2</div><div class="s-t">Step 1: vv^R with |v|≥1 is an even-length palindrome of length ≥2. The simplest case is |v|=1, giving &#x27;aa&#x27; or &#x27;bb&#x27;. Step 2: If w = vv^R u (prefix case) or w = u vv^R (suffix case), then w contains vv^R as a substring. Step 3: For |v|=1, vv^R is &#x27;aa&#x27; or &#x27;bb&#x27;, so any word containing &#x27;aa&#x27; or &#x27;bb&#x27; is in the language. Step 4: Conversely, if w contains neither &#x27;aa&#x27; nor &#x27;bb&#x27;, then w is an alternating string (like abab... or baba...). Can such a word start or end with a longer even palindrome vv^R? An even palindrome vv^R has first char = last char, so its first two chars are equal or it contains &#x27;aa&#x27;/&#x27;bb&#x27; internally. For an alternating string, no substring of length ≥2 has equal adjacent characters, so no even palindrome of length ≥2 can be a prefix or suffix. Step 5: Therefore the language is exactly the set of words containing &#x27;aa&#x27; or &#x27;bb&#x27; as a substring.</div></div>
+</div>
+<div class="s-panel" id="panel-1">
+<div class="s-p">The language requires detecting whether a word has an even-length palindromic prefix (vv^R with |v|≥1) or an even-length palindromic suffix. While words starting/ending with &#x27;aa&#x27; or &#x27;bb&#x27; are trivially included (|v|=1), words with alternating starts/ends (like &#x27;ab...&#x27; or &#x27;ba...&#x27;) may still qualify via longer v. Detecting even-length palindromic prefixes/suffixes of arbitrary length requires unbounded memory (matching characters symmetrically around a center), which cannot be done by a finite automaton. For example, distinguishing whether (ab)^n ba is in the language (it has suffix (ab)^n ba — need to check all possible even-palindrome suffixes) requires tracking n. This language is context-free but not regular, so no DFA can recognize it.</div>
+</div>
+<div class="s-footer">
+  <span>confidence: 0.55</span>
+</div>
+<script>
+function showTab(n){
+  document.querySelectorAll('.s-tab-btn').forEach((b,i)=>b.classList.toggle('active',i===n));
+  document.querySelectorAll('.s-panel').forEach((p,i)=>p.classList.toggle('active',i===n));
+}
+</script>
+</body>
+</html>

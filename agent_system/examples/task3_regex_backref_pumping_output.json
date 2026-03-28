@@ -1,0 +1,24 @@
+{
+  "module": "pumping",
+  "status": "success",
+  "evidence": {
+    "verdict": "non_regular",
+    "proof_type": "pumping_lemma",
+    "word_family": "a^n b a^n",
+    "word_description": "w = a^p b a^p. This word matches the pattern with the outer * once: group 1 = 'a^p b a^p', group 2 (a*) captures a^p, b? matches b, (\\2)+ matches a^p (one copy of group 2).",
+    "argument": "For any decomposition w = xyz with |xy| <= p and |y| > 0, y = a^k for some k >= 1 (since xy lies entirely within the first p characters, which are all a's). Pumping up (i=2): xy^2z = a^(p+k) b a^p. For this word to match ((a*)b?(\\2)+)*, the captured group (a*) would need to be a^(p+k), requiring (\\2)+ = a^(p+k), but the suffix after b is only a^p. Alternatively, if (a*) captures a^p, then the prefix before b should be a^p, but it is a^(p+k). No valid grouping exists, so the pumped word is not in the language.",
+    "formal_steps": [
+      "Let p be the pumping length.",
+      "Choose w = a^p b a^p. w matches ((a*)b?(\\2)+)* with (a*) = a^p, b? = b, (\\2)+ = a^p.",
+      "For any split w = xyz with |xy| <= p, |y| > 0: y = a^k (1 <= k <= p).",
+      "Consider i = 2: xy^2z = a^(p+k) b a^p.",
+      "For this to match, one iteration of the outer group must consume a^(p+k) b a^p.",
+      "If (a*) captures a^m, then b? matches b, and (\\2)+ matches a^(m*j) for some j >= 1.",
+      "We need m + 1 + m*j = 2p + k + 1, with the first m a's before b and m*j a's after b.",
+      "Before b: m = p + k. After b: m*j = p. So (p+k)*j = p, which requires j < 1. Contradiction since j >= 1.",
+      "Therefore a^(p+k) b a^p is not in the language, violating the pumping lemma."
+    ]
+  },
+  "confidence": 0.85,
+  "errors": []
+}

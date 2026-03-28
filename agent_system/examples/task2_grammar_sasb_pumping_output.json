@@ -1,0 +1,22 @@
+{
+  "module": "pumping",
+  "status": "success",
+  "evidence": {
+    "verdict": "non_regular",
+    "proof_type": "pumping_lemma",
+    "word_family": "a^n bb b^n",
+    "word_description": "w = a^p bb b^p where p is the pumping length. This word is in L(G) via derivation: S =>* S a S b =>* ... =>* a^p S b^p => a^p A b^p => a^p bb b^p.",
+    "argument": "For any decomposition w = xyz with |xy| <= p and |y| > 0, y = a^k for some k >= 1. Pumping down (i=0): xz = a^(p-k) bb b^p. Since p-k < p, the number of leading a's no longer matches the number of trailing b's after 'bb'. This word is not in L(G) because the grammar enforces that a's and b's from the S -> SaSb rule must be balanced.",
+    "formal_steps": [
+      "Let p be the pumping length.",
+      "Choose w = a^p bb b^p. w is in L(G) with |w| = 2p + 2 >= p.",
+      "For any split w = xyz with |xy| <= p, |y| > 0: y = a^k (1 <= k <= p) since xy is within the first p characters (all a's).",
+      "Consider i = 0: xy^0z = xz = a^(p-k) bb b^p.",
+      "In L(G), any word of the form a^m bb b^n requires m = n (from balanced S -> SaSb derivations).",
+      "Since p - k != p, the word a^(p-k) bb b^p is not in L(G).",
+      "Contradiction with the pumping lemma. Therefore L(G) is not regular."
+    ]
+  },
+  "confidence": 0.9,
+  "errors": []
+}

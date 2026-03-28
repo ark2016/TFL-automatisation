@@ -1,0 +1,10 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "Является ли регулярным язык regex-выражения ((a*)b?(\\2)+)*?",
+  "language_spec": {
+    "kind": "regex",
+    "alphabet": ["a", "b"],
+    "pattern": "((a*)b?(\\2)+)*",
+    "has_backreferences": true
+  }
+}

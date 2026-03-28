@@ -1,0 +1,18 @@
+{
+  "module": "classifier",
+  "status": "success",
+  "evidence": {
+    "verdict": "non_regular",
+    "confidence": 0.8,
+    "reasoning": "The backreference \\2 forces repeated substrings to have the same length as the captured group (a*). This creates a copy language constraint that cannot be recognized by a finite automaton.",
+    "dispatch": {
+      "re_builder": false,
+      "dfa_builder": false,
+      "pumping": true,
+      "nerode": false,
+      "closure": true
+    }
+  },
+  "confidence": 0.8,
+  "errors": []
+}
