@@ -96,7 +96,9 @@ Language: `{w in {a,b}* | |w| mod 2 = 0}` (even-length words)
 
 ## Failure case
 
-If you cannot construct a regex (e.g., the language appears non-regular despite the classifier's verdict), return:
+**IMPORTANT:** If you cannot construct a correct regex — because the language appears non-regular, or you are not confident your regex matches the language exactly — **do NOT guess or return an approximate regex**. Return `status: "failure"` honestly. An incorrect regex will be caught by oracle testing and waste retry cycles.
+
+If you cannot construct a regex, return:
 
 ```json
 {

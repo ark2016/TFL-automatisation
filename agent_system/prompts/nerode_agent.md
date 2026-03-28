@@ -116,4 +116,16 @@ For L = {a^n b^n | n >= 0}:
 
 ## Failure case
 
-If you cannot construct a Nerode proof (e.g., the language might actually be regular), return status `"failure"` with an explanation in `errors`.
+If you cannot find an infinite family of pairwise distinguishable words — because the language appears regular, or distinguishing contexts don't work — **do NOT fabricate a proof**. Return:
+
+```json
+{
+  "module": "nerode_agent",
+  "status": "failure",
+  "proof": null,
+  "confidence": 0.0,
+  "errors": ["Unable to construct Myhill-Nerode proof: [specific reason, e.g., 'word family a^i is not distinguishable because L ∩ a*b* is regular']"]
+}
+```
+
+Honest failure is far more valuable than an incorrect proof. The reasoning agent will use your failure as evidence.

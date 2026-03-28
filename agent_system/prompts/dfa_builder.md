@@ -108,3 +108,20 @@ Language: `{w in {a,b}* | |w| >= 2}` (words of length at least 2)
   "errors": null
 }
 ```
+
+## Failure case
+
+If the language appears non-regular and you cannot construct a correct DFA, **do NOT invent a wrong DFA**. Return:
+
+```json
+{
+  "module": "dfa_builder",
+  "status": "failure",
+  "dfa": null,
+  "explanation": "Unable to construct a DFA. The language requires tracking unbounded information (e.g., matching counts of symbols), which is impossible with finitely many states.",
+  "confidence": 0.0,
+  "errors": ["Language appears non-regular: [specific reason]"]
+}
+```
+
+It is **much better** to return `status: "failure"` honestly than to return an incorrect DFA. An incorrect DFA will be caught by oracle testing and waste retry cycles.

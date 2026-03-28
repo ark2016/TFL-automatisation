@@ -163,3 +163,21 @@ For L = {w in {a,b,c}* | count_a(w) = count_b(w)}:
   "errors": null
 }
 ```
+
+## Failure case
+
+If you cannot find a useful closure reduction (no intersection/homomorphism leads to a known non-regular language), **do NOT invent one**. Return:
+
+```json
+{
+  "module": "closure_agent",
+  "status": "failure",
+  "method": null,
+  "details": null,
+  "conclusion": null,
+  "confidence": 0.0,
+  "errors": ["Unable to find a closure-based proof. No intersection with a regular language or homomorphism produced a known non-regular result. The language may be regular."]
+}
+```
+
+Honest failure helps the reasoning agent make a correct final decision.

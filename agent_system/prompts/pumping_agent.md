@@ -123,3 +123,19 @@ For L = {w in {a,b}* | w is a palindrome}:
   "errors": null
 }
 ```
+
+## Failure case
+
+If the language appears regular and you cannot find a pumping contradiction, **do NOT fabricate a proof**. Return:
+
+```json
+{
+  "module": "pumping_agent",
+  "status": "failure",
+  "proof": null,
+  "confidence": 0.0,
+  "errors": ["Unable to construct pumping lemma proof. The language may be regular: [specific reason, e.g., 'all attempted word choices can be pumped without leaving the language']"]
+}
+```
+
+Honest failure is far more valuable than an incorrect proof. The reasoning agent will use your failure as evidence that the language might be regular.
