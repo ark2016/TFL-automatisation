@@ -247,20 +247,21 @@ def _all_parts_bounded(pred: dict) -> bool:
     bounded_parts: set[str] = set()
 
     for c in constraints:
-        # A constraint like length(part) <= constant bounds that part
         op = c.get("op", "")
-        if op in ("eq", "leq", "lt"):
-            left = c.get("left", {})
-            right = c.get("right", {})
-            if (left.get("kind") == "length"
-                    and left.get("of") in parts
-                    and right.get("kind") == "constant"):
-                bounded_parts.add(left["of"])
-            elif (right.get("kind") == "length"
-                    and right.get("of") in parts
-                    and left.get("kind") == "constant"
-                    and op in ("eq", "geq", "gt")):
-                bounded_parts.add(right["of"])
+        left = c.get("left", {})
+        right = c.get("right", {})
+        # length(part) {eq|leq|lt} constant  →  part is bounded
+        if (op in ("eq", "leq", "lt")
+                and left.get("kind") == "length"
+                and left.get("of_var") in parts
+                and right.get("kind") == "constant"):
+            bounded_parts.add(left["of_var"])
+        # constant {eq|geq|gt} length(part)  →  part is bounded
+        elif (op in ("eq", "geq", "gt")
+                and right.get("kind") == "length"
+                and right.get("of_var") in parts
+                and left.get("kind") == "constant"):
+            bounded_parts.add(right["of_var"])
 
     return set(parts) == bounded_parts and len(parts) > 0
 

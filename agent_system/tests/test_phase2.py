@@ -119,6 +119,31 @@ class TestHypothesisModule(unittest.TestCase):
         result = analyze_hypothesis(ir)
         self.assertEqual(result["hypothesis"], "non_regular")
 
+    def test_bounded_palindrome_u_eq_1(self):
+        """IR with w = u·rev(u), |u|=1 → finite language {aa, bb} → regular."""
+        ir = {
+            "task_type": "classify",
+            "source_text": "w = u u^R, |u|=1",
+            "language_spec": {
+                "kind": "predicate",
+                "alphabet": ["a", "b"],
+                "variable": "w",
+                "predicate": {
+                    "parts": ["u"],
+                    "concat_pattern": ["u", "rev(u)"],
+                    "constraints": [
+                        {
+                            "op": "eq",
+                            "left": {"kind": "length", "of_var": "u"},
+                            "right": {"kind": "constant", "value": 1},
+                        }
+                    ],
+                },
+            },
+        }
+        result = analyze_hypothesis(ir)
+        self.assertEqual(result["hypothesis"], "regular")
+
     def test_regex_no_backref(self):
         """Regex without backreferences -> hypothesis='regular'."""
         ir = {
