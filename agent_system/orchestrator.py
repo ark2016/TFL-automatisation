@@ -362,13 +362,31 @@ class Pipeline:
             if retry_context:
                 specialist_input["retry_context"] = retry_context
 
-            # Run all dispatched specialists
-            for agent_name in dispatched:
-                agent_out = _run(agent_name, specialist_input)
-                if agent_out is not None:
-                    evidence[agent_name] = agent_out
-                    if agent_name == "dfa_builder":
-                        dfa_builder_output = agent_out
+            # Run all dispatched specialists IN PARALLEL
+            if agent_runner is not None and len(dispatched) > 1:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                _log(f"  launching {len(dispatched)} agents in parallel...")
+
+                def _run_one(name: str) -> tuple[str, dict | None]:
+                    return name, _run(name, specialist_input)
+
+                with ThreadPoolExecutor(max_workers=len(dispatched)) as pool:
+                    futures = {pool.submit(_run_one, name): name
+                               for name in dispatched}
+                    for future in as_completed(futures):
+                        name, out = future.result()
+                        if out is not None:
+                            evidence[name] = out
+                            if name == "dfa_builder":
+                                dfa_builder_output = out
+            else:
+                # Sequential fallback (mock mode or single agent)
+                for agent_name in dispatched:
+                    agent_out = _run(agent_name, specialist_input)
+                    if agent_out is not None:
+                        evidence[agent_name] = agent_out
+                        if agent_name == "dfa_builder":
+                            dfa_builder_output = agent_out
 
             # --- Step 5: Build oracle ---
             if retry_round == 0:
