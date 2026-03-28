@@ -183,8 +183,19 @@ def render_markdown(result: dict) -> str:
     pump = evidence.get("pumping")
     if pump:
         pump_ev = pump.get("evidence", pump)
-        proof = pump_ev.get("proof", {})
+        proof = pump_ev.get("proof") or {}
         _add("### Лемма о накачке")
+        # Show failure message if agent failed
+        if pump.get("status") == "failure" or pump_ev.get("status") == "failure":
+            err = pump_ev.get("errors") or pump.get("errors") or []
+            if isinstance(err, list):
+                err = "; ".join(str(e) for e in err)
+            _add(f"*{err}*")
+            _add()
+            pump = None  # skip proof parsing
+    if pump:
+        pump_ev = pump.get("evidence", pump)
+        proof = pump_ev.get("proof") or {}
         # Word choice
         wc = proof.get("word_choice", {})
         word = wc.get("word", "")
@@ -248,8 +259,15 @@ def render_markdown(result: dict) -> str:
     ner = evidence.get("nerode")
     if ner:
         ner_ev = ner.get("evidence", ner)
-        proof = ner_ev.get("proof", {})
+        proof = ner_ev.get("proof") or {}
         _add("### Теорема Майхилла-Нероуда")
+        if ner.get("status") == "failure" or ner_ev.get("status") == "failure":
+            err = ner_ev.get("errors") or ner.get("errors") or []
+            if isinstance(err, list):
+                err = "; ".join(str(e) for e in err)
+            _add(f"*{err}*")
+            _add()
+            proof = {}  # skip proof parsing
         if proof:
             ws = proof.get("word_sequence", {})
             contexts = proof.get("distinguishing_contexts", [])
@@ -286,10 +304,19 @@ def render_markdown(result: dict) -> str:
     clo = evidence.get("closure")
     if clo:
         clo_ev = clo.get("evidence", clo)
+        _add("### Замыкание")
+        if clo.get("status") == "failure" or clo_ev.get("status") == "failure":
+            err = clo_ev.get("errors") or clo.get("errors") or []
+            if isinstance(err, list):
+                err = "; ".join(str(e) for e in err)
+            _add(f"*{err}*")
+            _add()
+            clo = None  # skip details
+    if clo:
+        clo_ev = clo.get("evidence", clo)
         method = clo.get("method", clo_ev.get("method", ""))
         conclusion = clo.get("conclusion", clo_ev.get("conclusion", ""))
         details = clo.get("details", clo_ev.get("details", {}))
-        _add("### Замыкание")
         _add(f"**Метод:** {method}")
         if details:
             reg = details.get("regular_language", {})
