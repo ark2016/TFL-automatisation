@@ -347,6 +347,16 @@ def render_markdown(result: dict) -> str:
             _add(consolidated)
             _add()
 
+    # --- Подсказки и наблюдения ---
+    if reasoning:
+        reas_ev = reasoning.get("evidence", reasoning)
+        hints = reas_ev.get("hints_for_human", reasoning.get("hints_for_human", []))
+        if hints:
+            _add("## Подсказки и наблюдения")
+            for hint in hints:
+                _add(f"- {hint}")
+            _add()
+
     # --- Верификация ---
     has_verif = evidence.get("oracle_test") or evidence.get("formalization")
     if has_verif:
@@ -671,6 +681,16 @@ def render_html(result: dict) -> str:
             p(f'<div class="s-panel{active}" id="panel-{i}">')
             p(panel_html)
             p('</div>')
+
+    # --- Hints for human ---
+    if reasoning:
+        r_ev = (reasoning or {}).get("evidence", reasoning or {})
+        hints = r_ev.get("hints_for_human", (reasoning or {}).get("hints_for_human", []))
+        if hints:
+            p('<div class="s-sec">Подсказки и наблюдения</div>')
+            for hint in hints:
+                p(f'<div class="s-step"><div class="s-n">💡</div>'
+                  f'<div class="s-t">{_esc(hint)}</div></div>')
 
     # --- Footer ---
     footer_items: list[str] = []

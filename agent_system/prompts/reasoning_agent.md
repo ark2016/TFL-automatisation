@@ -93,6 +93,11 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "issues_found": [],
   "action": "proceed_to_formalizer",
   "retry_context": null,
+  "hints_for_human": [
+    "Установлено: L ∩ a*b* = {aⁿbⁿ | n ≥ 0} (доказано через анализ грамматики)",
+    "Инвариант: для всех w ∈ L, разность #a(w) − #b(w) чётна",
+    "Рекомендация: для экзамена достаточно доказательства через замыкание (пересечение с a*b*)"
+  ],
   "errors": null
 }
 ```
@@ -107,6 +112,22 @@ Return **only** valid JSON. No markdown fences, no extra text.
 - `issues_found`: list of inconsistencies or problems detected. Empty if none.
 - `action`: one of `"proceed_to_formalizer"`, `"retry_enriched"`, `"invert_hypothesis"`, `"escalate"`.
 - `retry_context`: if action is `"retry_enriched"`, include the enriched context (counterexample, failing evidence) to send to specialists. Otherwise `null`.
+- `hints_for_human`: **ALWAYS include this field.** A list of concrete observations, partial results, and suggestions that help a human solve the problem — even if the system couldn't finish automatically. Write in Russian.
+
+### hints_for_human — what to include
+
+This field is critical for the user experience. Even when the system fully solves the problem, include useful observations. When it escalates, this is the most valuable part of the output.
+
+Include any of these that apply:
+
+1. **Установленные факты** — things proved along the way (e.g., "L ∩ a*b* = {aⁿbⁿ}", "все строки из L имеют чётную разность #a − #b")
+2. **Опровергнутые гипотезы** — approaches that failed and WHY (e.g., "Regex (aa|bb)Σ* неверен: контрпример abbba")
+3. **Контрпримеры** — specific words from oracle testing with explanation
+4. **Частичные конструкции** — partial DFA/regex that works for most cases, with known failures
+5. **Наблюдения о структуре языка** — patterns noticed (e.g., "суффиксное условие требует запоминания всей истории")
+6. **Рекомендуемый подход** — what a human should try next (e.g., "попробовать построить ДКА с состояниями, кодирующими последние 4 символа")
+7. **Связь с известными задачами** — references to similar problems or theorems
+8. **Инварианты** — properties preserved by the language (e.g., "чётность разности #a − #b")
 
 ## Example: Retry due to oracle failure
 
@@ -148,6 +169,14 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "issues_found": ["No high-confidence proof available after 3 retries."],
   "action": "escalate",
   "retry_context": null,
+  "hints_for_human": [
+    "Опровергнуто: regex (aa|bb)(a|b)* неверен — контрпример 'abba' (vv^R с v=ab)",
+    "Опровергнуто: regex (a|b)*(aa|bb)(a|b)* неверен — контрпример 'abbba' (нет палиндромного префикса/суффикса чётной длины)",
+    "Установлено: слово w ∈ L ⟺ ∃k≥1: первые 2k символов образуют палиндром, ИЛИ последние 2k символов образуют палиндром",
+    "Наблюдение: суффиксное условие (чётный палиндромный суффикс) требует запоминания информации обо всём прочитанном слове — это может делать язык нерегулярным",
+    "Наблюдение: все три агента (накачка, Нероуд, замыкание) не смогли доказать нерегулярность — возможно, язык регулярен, но требует сложного ДКА",
+    "Рекомендация: попробовать построить ДКА, отслеживающий последние N символов для обнаружения палиндромного суффикса"
+  ],
   "errors": ["Max retries exceeded. Human review recommended."]
 }
 ```
