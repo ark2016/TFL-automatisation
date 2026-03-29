@@ -448,6 +448,20 @@ class Pipeline:
                 if closure_check:
                     evidence["closure_verification"] = closure_check
 
+            # --- Step 5c: Verify ALL word-membership claims via oracle ---
+            if oracle_ok:
+                from lib.claim_verifier import verify_claims
+                claims_result = verify_claims(
+                    evidence, self.oracle_fn, _get_alphabet(ir))
+                if claims_result["disproved"] > 0:
+                    evidence["claim_verification"] = claims_result
+                    _log(f"  CLAIM ERRORS: {claims_result['disproved']} false claims found!")
+                    for err in claims_result["errors"][:5]:
+                        _log(f"    {err}")
+                elif claims_result["total_claims"] > 0:
+                    evidence["claim_verification"] = claims_result
+                    _log(f"  claims verified: {claims_result['verified']}/{claims_result['total_claims']}")
+
             # --- Step 6: Oracle test ---
             _log(f"Step 6/9: oracle test{round_label}...")
             self.test_result = None
