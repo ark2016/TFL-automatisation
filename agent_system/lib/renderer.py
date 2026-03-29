@@ -457,11 +457,13 @@ def _step(n: int, text: str) -> str:
     return f'<div class="s-step"><div class="s-n">{n}</div><div class="s-t">{text}</div></div>'
 
 
-def _extract_steps_from_proof(proof: dict, pump_ev: dict) -> list[str]:
+def _extract_steps_from_proof(proof: dict | None, pump_ev: dict) -> list[str]:
     """Extract numbered proof steps from pumping proof structure."""
     steps: list[str] = []
-    wc = proof.get("word_choice", {})
-    cut = proof.get("cut_analysis", {})
+    if not proof:
+        proof = {}
+    wc = proof.get("word_choice") or {}
+    cut = proof.get("cut_analysis") or {}
 
     if wc.get("word"):
         steps.append(f'Предположим L регулярен с длиной накачки <span class="s-math">p</span>.')
@@ -561,12 +563,21 @@ def render_html(result: dict) -> str:
     pump = evidence.get("pumping")
     if pump:
         pump_ev = pump.get("evidence", pump)
-        proof = pump_ev.get("proof", {})
-        steps = _extract_steps_from_proof(proof, pump_ev)
-        panel = ""
-        for i, s in enumerate(steps, 1):
-            panel += _step(i, s)
-        proof_tabs.append(("Лемма о накачке", panel))
+        proof = pump_ev.get("proof") or {}
+        # Show failure message if agent failed
+        if pump.get("status") == "failure" or pump_ev.get("status") == "failure":
+            err = pump_ev.get("errors") or pump.get("errors") or "Не удалось построить доказательство"
+            if isinstance(err, list):
+                err = "; ".join(str(e) for e in err)
+            proof_tabs.append(("Лемма о накачке",
+                f'<div class="s-p" style="color:#888">{_esc(err)}</div>'))
+            pump = None
+        if pump:
+            steps = _extract_steps_from_proof(proof, pump_ev)
+            panel = ""
+            for i, s in enumerate(steps, 1):
+                panel += _step(i, s)
+            proof_tabs.append(("Лемма о накачке", panel))
 
     # Nerode
     ner = evidence.get("nerode")
