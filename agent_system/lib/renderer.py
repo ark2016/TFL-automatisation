@@ -197,7 +197,7 @@ def render_markdown(result: dict) -> str:
         pump_ev = pump.get("evidence", pump)
         proof = pump_ev.get("proof") or {}
         # Word choice
-        wc = proof.get("word_choice", {})
+        wc = proof.get("word_choice") or {}
         word = wc.get("word", "")
         membership = wc.get("membership_argument", "")
         if word:
@@ -207,7 +207,7 @@ def render_markdown(result: dict) -> str:
             _add(f"**Принадлежность:** {membership}")
             _add()
         # Cut analysis
-        cut = proof.get("cut_analysis", {})
+        cut = proof.get("cut_analysis") or {}
         cut_arg = cut.get("argument", "")
         cases = cut.get("cases", [])
         if cut_arg:
@@ -269,7 +269,7 @@ def render_markdown(result: dict) -> str:
             _add()
             proof = {}  # skip proof parsing
         if proof:
-            ws = proof.get("word_sequence", {})
+            ws = proof.get("word_sequence") or {}
             contexts = proof.get("distinguishing_contexts", [])
             argument = proof.get("argument", "")
             conclusion = proof.get("conclusion", "")
@@ -316,11 +316,11 @@ def render_markdown(result: dict) -> str:
         clo_ev = clo.get("evidence", clo)
         method = clo.get("method", clo_ev.get("method", ""))
         conclusion = clo.get("conclusion", clo_ev.get("conclusion", ""))
-        details = clo.get("details", clo_ev.get("details", {}))
+        details = clo.get("details", clo_ev.get("details")) or {}
         _add(f"**Метод:** {method}")
         if details:
-            reg = details.get("regular_language", {})
-            inter = details.get("intersection_result", {})
+            reg = details.get("regular_language") or {}
+            inter = details.get("intersection_result") or {}
             if reg:
                 regex = reg.get("regex", "")
                 justification = reg.get("justification", "")
@@ -629,15 +629,15 @@ def render_html(result: dict) -> str:
     clo = evidence.get("closure")
     if clo:
         clo_ev = clo.get("evidence", clo)
-        details = clo.get("details", clo_ev.get("details", {}))
+        details = clo.get("details", clo_ev.get("details")) or {}
         conclusion = clo.get("conclusion", clo_ev.get("conclusion", ""))
         panel = ""
         step_n = 1
-        reg = details.get("regular_language", {})
+        reg = details.get("regular_language") or {}
         if reg:
             panel += _step(step_n, f'Язык R = <span class="s-mono">{_esc(reg.get("regex", "a*b*"))}</span> регулярен.')
             step_n += 1
-        inter = details.get("intersection_result", {})
+        inter = details.get("intersection_result") or {}
         if inter:
             lang = inter.get("language", "")
             panel += _step(step_n, f'L ∩ R = {_esc(lang)}')
