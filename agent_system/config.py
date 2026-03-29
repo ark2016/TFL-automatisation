@@ -25,7 +25,8 @@ MODELS = {
     "reasoning_agent":  "claude-opus-4-6",
     "formalizer":       "claude-opus-4-6",
 
-    # Retry planning → Sonnet (fast + smart)
+    # Verification & retry planning
+    "proof_checker":    "claude-opus-4-6",
     "retry_planner":    "claude-sonnet-4-6",
 
     # Quick validation / summarization → Haiku (logs & translation only)

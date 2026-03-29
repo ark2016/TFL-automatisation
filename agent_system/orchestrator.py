@@ -417,6 +417,13 @@ class Pipeline:
             else:
                 oracle_ok = self.oracle_fn is not None
 
+            # --- Step 5b: Verify closure agent's intersection claim ---
+            if oracle_ok and "closure" in evidence:
+                closure_check = _verify_closure_claim(
+                    evidence["closure"], self.oracle_fn, _get_alphabet(ir), _log)
+                if closure_check:
+                    evidence["closure_verification"] = closure_check
+
             # --- Step 6: Oracle test ---
             _log(f"Step 6/9: oracle test{round_label}...")
             self.test_result = None
@@ -503,6 +510,26 @@ class Pipeline:
                                 _log(f"  oracle re-test: {self.test_result.get('status')} "
                                      f"({self.test_result.get('tested', 0)} words)")
 
+            # --- Step 6b: Proof checker (Opus, adversarial) ---
+            if agent_runner is not None or mock_runner is not None:
+                _log(f"Step 6b/9: proof checker{round_label}...")
+                checker_input = {
+                    "ir": ir,
+                    "specialist_outputs": {
+                        k: evidence[k]
+                        for k in ("re_builder", "dfa_builder", "pumping",
+                                   "nerode", "closure", "grammar_analyzer")
+                        if k in evidence
+                    },
+                    "oracle_test": evidence.get("oracle_test"),
+                    "closure_verification": evidence.get("closure_verification"),
+                }
+                if _student_notes:
+                    checker_input["student_notes"] = _student_notes
+                checker_output = _run("proof_checker", checker_input)
+                if checker_output is not None:
+                    evidence["proof_checker"] = checker_output
+
             # --- Step 7: Reasoning agent ---
             _log(f"Step 7/9: reasoning agent{round_label}...")
             reasoning_input = {
@@ -515,6 +542,8 @@ class Pipeline:
                     if k in evidence
                 },
                 "oracle_test": evidence.get("oracle_test"),
+                "closure_verification": evidence.get("closure_verification"),
+                "proof_checker": evidence.get("proof_checker"),
             }
             if retry_round > 0:
                 reasoning_input["retry_round"] = retry_round
@@ -881,6 +910,89 @@ def _generate_lean_stub(result: dict, pipeline: Pipeline) -> str | None:
 
     header = "\n".join(line for line in header_lines if line is not None)
     return header + "\n" + template
+
+
+def _verify_closure_claim(
+    closure_output: dict,
+    oracle: Any,
+    alphabet: list[str],
+    _log: Any,
+) -> dict | None:
+    """Verify closure agent's intersection claim via oracle.
+
+    If the closure agent claims L ∩ R is non-regular, we compute L ∩ R
+    empirically and check whether its Nerode index is actually infinite.
+    """
+    clo_ev = closure_output.get("evidence", closure_output)
+    if closure_output.get("status") == "failure":
+        return None
+
+    # Extract the regex for the regular language R
+    details = clo_ev.get("details") or {}
+    reg = details.get("regular_language") or {}
+    regex = reg.get("regex")
+    if not regex:
+        return None
+
+    _log(f"  verifying closure claim: L ∩ {regex}...")
+
+    try:
+        from lib.dfa_builder import build_dfa_from_regex
+        from lib.dfa_runner import run_dfa
+        from lib.congruence import estimate_index
+
+        r_dfa = build_dfa_from_regex(regex)
+
+        # Build oracle for L ∩ R
+        def intersection_oracle(word: str) -> bool:
+            return oracle(word) and run_dfa(r_dfa, word)
+
+        # Estimate Nerode index of L ∩ R
+        est = estimate_index(intersection_oracle, alphabet, max_depth=7)
+        idx = est.get("estimated_index")
+        conf = est.get("confidence", 0)
+
+        if idx != "infinite" and conf >= 0.8:
+            _log(f"  CLOSURE CLAIM WRONG: L ∩ {regex} has finite index "
+                 f"{idx} (confidence {conf}) — intersection is regular!")
+
+            # Find concrete counterexample to "L ∩ R = {aⁿbⁿ}"
+            # by listing words in L ∩ R that aren't of form aⁿbⁿ
+            from lib.word_generator import generate_exhaustive
+            counterexamples = []
+            for w in generate_exhaustive(alphabet, max_len=8):
+                if intersection_oracle(w):
+                    # Check if this word disproves {aⁿbⁿ} claim
+                    a_count = sum(1 for c in w if c == 'a')
+                    b_count = sum(1 for c in w if c == 'b')
+                    if a_count != b_count and len(w) > 0:
+                        counterexamples.append(w)
+                        if len(counterexamples) >= 3:
+                            break
+
+            return {
+                "status": "disproved",
+                "claim": f"L ∩ {regex} is non-regular",
+                "actual": f"L ∩ {regex} has finite Nerode index {idx}",
+                "counterexamples": counterexamples,
+                "message": (
+                    f"Closure agent's claim is WRONG. "
+                    f"L ∩ {regex} appears regular (index={idx}). "
+                    f"Words in L ∩ {regex} with count_a ≠ count_b: "
+                    f"{counterexamples}"
+                ),
+            }
+        elif idx == "infinite":
+            _log(f"  closure claim verified: L ∩ {regex} is non-regular "
+                 f"(index=infinite, confidence {conf})")
+            return {"status": "verified", "claim": f"L ∩ {regex} is non-regular"}
+        else:
+            _log(f"  closure claim inconclusive (index={idx}, confidence {conf})")
+            return None
+
+    except Exception as exc:
+        _log(f"  closure verification failed: {exc}")
+        return None
 
 
 def _count_sorry(lean_code: str) -> int:

@@ -1,0 +1,36 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "Проанализировать язык {z1 w a w b z2 | z_i, w ∈ {a,b}+ & |z1| < |z2|} на регулярность.",
+  "language_spec": {
+    "kind": "predicate",
+    "alphabet": ["a", "b"],
+    "variable": "s",
+    "predicate": {
+      "type": "exists_decomposition",
+      "parts": ["z1", "w", "z2"],
+      "concat_pattern": ["z1", "w", "a", "w", "b", "z2"],
+      "constraints": [
+        {
+          "op": "gt",
+          "left": {"kind": "length", "of_var": "w"},
+          "right": {"kind": "constant", "value": 0}
+        },
+        {
+          "op": "gt",
+          "left": {"kind": "length", "of_var": "z1"},
+          "right": {"kind": "constant", "value": 0}
+        },
+        {
+          "op": "gt",
+          "left": {"kind": "length", "of_var": "z2"},
+          "right": {"kind": "constant", "value": 0}
+        },
+        {
+          "op": "lt",
+          "left": {"kind": "length", "of_var": "z1"},
+          "right": {"kind": "length", "of_var": "z2"}
+        }
+      ]
+    }
+  }
+}
