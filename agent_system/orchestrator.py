@@ -335,6 +335,28 @@ class Pipeline:
         if lang_kind == "grammar":
             dispatch["grammar_analyzer"] = True
 
+        # --- Step 3b: Grammar preprocessor (pure-fn, zero cost) ---
+        grammar_facts: dict | None = None
+        if lang_kind == "grammar":
+            _log("Step 3b: grammar preprocessor (pure-fn)...")
+            try:
+                from lib.grammar_preprocessor import analyze_grammar
+                grammar_facts = analyze_grammar(
+                    ir["language_spec"],
+                    oracle=self.oracle_fn if self.oracle_fn else None,
+                    max_word_len=10,
+                )
+                evidence["grammar_facts"] = grammar_facts
+                _log(f"  generated {grammar_facts.get('total_generated', 0)} words")
+                _log(f"  linear={grammar_facts.get('is_linear')}, "
+                     f"nested_recursion={grammar_facts.get('has_nested_recursion')}")
+                summary = grammar_facts.get("summary", "")
+                if summary:
+                    for line in summary.split("\n"):
+                        _log(f"  {line}")
+            except Exception as exc:
+                _log(f"  grammar preprocessor failed: {exc}")
+
         # --- Step 4: Run specialist agents ---
         # ============================================================
         # Steps 4–7: Specialist → Oracle → Reasoning  (with retry loop)
@@ -365,6 +387,8 @@ class Pipeline:
                     "hypothesis": self.hypothesis,
                     "classifier": classifier_evidence,
                 }
+                if grammar_facts:
+                    inp["grammar_facts"] = grammar_facts
                 if _student_notes:
                     inp["student_notes"] = _student_notes
                 if retry_context:
