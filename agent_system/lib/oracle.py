@@ -266,6 +266,15 @@ def oracle_from_ir(ir: dict) -> Callable[[str], bool]:
 
     kind = spec["kind"]
 
+    if kind == "grammar":
+        # Use CYK parser — guaranteed correct for any word length
+        from .grammar_utils import cyk_parse
+
+        def oracle(word: str) -> bool:
+            return cyk_parse(spec, word)
+
+        return oracle
+
     if kind == "predicate":
         alphabet = spec["alphabet"]
         variable = spec.get("variable", "w")
@@ -277,8 +286,7 @@ def oracle_from_ir(ir: dict) -> Callable[[str], bool]:
 
         return oracle
 
-    if kind == "grammar":
-        return _grammar_oracle(spec)
+    # Grammar is handled above via CYK
 
     if kind == "regex" and not spec.get("has_backreferences", False):
         import re
