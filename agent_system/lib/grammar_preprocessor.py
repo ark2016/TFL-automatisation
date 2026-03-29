@@ -53,6 +53,9 @@ def analyze_grammar(
     facts["generated_words"] = sorted_words[:100]  # cap for prompt size
     facts["total_generated"] = len(words)
 
+    # --- Derivation trees (show HOW grammar produces words) ---
+    facts["derivations"] = _generate_derivations(spec, max_word_len)
+
     # --- Grammar to DFA (if linear) ---
     dfa = grammar_to_dfa(spec)
     if dfa is not None:
@@ -86,6 +89,91 @@ def analyze_grammar(
     facts["summary"] = _build_summary(facts)
 
     return facts
+
+
+def _generate_derivations(
+    spec: dict,
+    max_len: int,
+    max_derivations: int = 20,
+) -> list[dict]:
+    """Generate sample derivation trees showing how the grammar produces words.
+
+    Returns list of derivations, each with the step-by-step sentential forms
+    and the final word.
+    """
+    rules = [(r["lhs"], r["rhs"]) for r in spec["rules"]]
+    start = spec["start"]
+    terminals = set(spec["terminals"])
+
+    from collections import deque
+
+    # BFS: each entry is (sentential_form_as_tuple, list_of_steps)
+    queue: deque[tuple[tuple[str, ...], list[str]]] = deque()
+    init = (start,)
+    queue.append((init, [start]))
+
+    # Group derivations by word: word -> list of step-sequences
+    word_derivations: dict[str, list[list[str]]] = {}
+    max_per_word = 3  # keep up to 3 different derivations per word
+    total_found = 0
+    forms_explored = 0
+
+    while queue and total_found < max_derivations * 2 and forms_explored < 50_000:
+        form, steps = queue.popleft()
+        forms_explored += 1
+
+        # Check if all terminals
+        if all(s in terminals for s in form):
+            word = "".join(form) if form else "ε"
+            if len(word) <= max_len:
+                if word not in word_derivations:
+                    word_derivations[word] = []
+                if len(word_derivations[word]) < max_per_word:
+                    word_derivations[word].append(steps)
+                    total_found += 1
+            continue
+
+        # Total length guard
+        term_count = sum(1 for s in form if s in terminals)
+        if term_count > max_len:
+            continue
+        if len(form) > max_len * 2 + 5:
+            continue
+
+        # Expand first nonterminal
+        for i, sym in enumerate(form):
+            if sym not in terminals:
+                for lhs, rhs in rules:
+                    if lhs == sym:
+                        new_form = form[:i] + tuple(rhs) + form[i + 1:]
+                        rhs_str = " ".join(rhs) if rhs else "ε"
+                        new_form_str = " ".join(s for s in new_form) if new_form else "ε"
+                        step = f"→ {new_form_str}  [{lhs}→{rhs_str}]"
+                        new_steps = steps + [step]
+
+                        if len(new_steps) <= max_len + 5:
+                            queue.append((new_form, new_steps))
+                break  # leftmost derivation only
+
+    # Build results: group by word, show multiple derivation paths
+    results: list[dict] = []
+    for word in sorted(word_derivations, key=lambda w: (len(w), w)):
+        paths = word_derivations[word]
+        entry: dict[str, Any] = {
+            "word": word,
+            "length": len(word) if word != "ε" else 0,
+            "num_derivations": len(paths),
+            "derivation": " ".join(paths[0]),  # primary path as string
+        }
+        if len(paths) > 1:
+            entry["alternative_derivations"] = [
+                " ".join(p) for p in paths[1:]
+            ]
+        results.append(entry)
+        if len(results) >= max_derivations:
+            break
+
+    return results
 
 
 def _analyze_intersections(
@@ -221,7 +309,17 @@ def _build_summary(facts: dict) -> str:
                       "alone doesn't prove it (other rules may compensate).")
 
     n = facts["total_generated"]
-    lines.append(f"Generated {n} words up to length {len(facts['generated_words'][0]) if facts['generated_words'] else 0}.")
+    lines.append(f"Generated {n} words up to length 10.")
+
+    derivations = facts.get("derivations", [])
+    if derivations:
+        lines.append(f"\nSample derivations ({len(derivations)} words):")
+        for d in derivations[:10]:
+            w = d["word"]
+            n_paths = d["num_derivations"]
+            path = d["derivation"]
+            tag = f" [{n_paths} paths]" if n_paths > 1 else ""
+            lines.append(f"  {w}{tag}: {path}")
 
     inters = facts.get("intersections", {})
     for name, data in inters.items():
