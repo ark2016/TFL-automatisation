@@ -602,20 +602,21 @@ class Pipeline:
         consolidated = (r_evidence.get("consolidated_proof")
                         or (reasoning_output or {}).get("consolidated_proof", ""))
 
-        # Check if formalizer already provided lean_code
-        lean_code: str | None = r_evidence.get("lean_code")
-
-        # If reasoning says proceed_to_formalizer and we have an agent runner
-        if (not lean_code
-                and action == "proceed_to_formalizer"
-                and (agent_runner is not None or mock_runner is not None)):
-            lean_code = self._run_formalizer(
-                ir, evidence, best_proof, consolidated,
-                _run, _log, errors,
-            )
-
-        if lean_code is not None:
-            evidence["lean_code"] = lean_code
+        # Formalization disabled for now (Lean errors under investigation)
+        # To re-enable: remove the `if False` guard below
+        lean_code: str | None = None
+        if False:  # DISABLED — re-enable when Lean templates are stable
+            lean_code = r_evidence.get("lean_code")
+            if (not lean_code
+                    and action == "proceed_to_formalizer"
+                    and (agent_runner is not None or mock_runner is not None)):
+                lean_code = self._run_formalizer(
+                    ir, evidence, best_proof, consolidated,
+                    _run, _log, errors,
+                )
+            if lean_code is not None:
+                evidence["lean_code"] = lean_code
+        _log("  formalization: disabled")
 
         # --- Step 9: Assemble final result ---
         _log("Step 9/9: assembling result...")
