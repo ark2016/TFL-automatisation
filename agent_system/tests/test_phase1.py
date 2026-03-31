@@ -1,16 +1,12 @@
 """Smoke tests for all Phase 1 modules."""
 
-import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from lib.ir_schema import validate_ir
-from lib.oracle import oracle_from_ir
-from lib.word_generator import generate_test_words
-from lib.dfa_runner import run_dfa, validate_dfa
-from lib.oracle_test import oracle_test
+from agent_system.lib.ir_schema import validate_ir
+from agent_system.lib.oracle import oracle_from_ir
+from agent_system.lib.word_generator import generate_test_words
+from agent_system.lib.dfa_runner import run_dfa, validate_dfa
+from agent_system.lib.oracle_test import oracle_test
 
 
 # ── ir_schema ───────────────────────────────────────────────────────────────

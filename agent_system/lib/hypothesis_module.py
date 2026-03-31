@@ -6,7 +6,7 @@ constituent "atom" as requiring finite or infinite memory, then derives
 an overall regularity hypothesis with confidence and suggested agents.
 
 Usage:
-    from lib.hypothesis_module import analyze_hypothesis
+    from agent_system.lib.hypothesis_module import analyze_hypothesis
     result = analyze_hypothesis(ir_dict)
 """
 

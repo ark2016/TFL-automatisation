@@ -1,12 +1,9 @@
 """Tests for Phase 3 (Lean 4 formalization)."""
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from lib.type_check import check_lean, is_docker_available
+from agent_system.lib.type_check import check_lean, is_docker_available
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 DOCKER_DIR = Path(__file__).resolve().parent.parent / "docker"

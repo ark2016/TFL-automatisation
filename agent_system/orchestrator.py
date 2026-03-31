@@ -1,18 +1,18 @@
 """
 Orchestrator — TFL Agent System pipeline.
 
-Usage:
-    python orchestrator.py <ir.json>                          # pure-fn only
-    python orchestrator.py <ir.json> --mock examples/         # mock agents
-    python orchestrator.py <ir.json> --live                   # real LLM agents
-    python orchestrator.py <ir.json> --live --render md       # + markdown output
-    python orchestrator.py <ir.json> --live --render html     # + html output
+Usage (CLI):
+    python -m agent_system <ir.json>                          # pure-fn only
+    python -m agent_system <ir.json> --mock examples/         # mock agents
+    python -m agent_system <ir.json> --live                   # real LLM agents
+    python -m agent_system <ir.json> --live --render md       # + markdown output
+    python -m agent_system <ir.json> --live --render html     # + html output
 
 Programmatically:
-    from orchestrator import Pipeline, MockRunner
+    from agent_system.orchestrator import Pipeline, MockRunner
     result = Pipeline().run_full_pipeline(ir_dict, mock_runner=mock)
 
-    from lib.llm_client import LLMRunner
+    from agent_system.lib.llm_client import LLMRunner
     result = Pipeline().run_full_pipeline(ir_dict, agent_runner=LLMRunner())
 """
 
@@ -27,12 +27,12 @@ from typing import Any, Callable
 # Lib imports (§7 Phase 1 modules)
 # ---------------------------------------------------------------------------
 
-from lib.ir_schema import validate_ir
-from lib.oracle import oracle_from_ir
-from lib.oracle_test import oracle_test
-from lib.dfa_runner import validate_dfa, run_dfa
-from lib.hypothesis_module import analyze_hypothesis
-from lib.type_check import check_lean
+from .lib.ir_schema import validate_ir
+from .lib.oracle import oracle_from_ir
+from .lib.oracle_test import oracle_test
+from .lib.dfa_runner import validate_dfa, run_dfa
+from .lib.hypothesis_module import analyze_hypothesis
+from .lib.type_check import check_lean
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +252,8 @@ class Pipeline:
     ) -> dict[str, Any]:
         """Run the full end-to-end pipeline per §5.1.
 
+        Delegates to the LangGraph-based pipeline in ``graph.py``.
+
         Agent resolution order:
         1. *mock_runner* — load from JSON files (for testing).
         2. *agent_runner* — call LLM via API (for production).
@@ -262,463 +264,22 @@ class Pipeline:
         Returns:
             Structured result per §5.3 output contract.
         """
-        import time as _time
+        from .graph import run_pipeline
 
-        errors: list[str] = []
-        evidence: dict[str, Any] = {}
-        verbose = agent_runner is not None  # log progress in live mode
-
-        def _log(msg: str) -> None:
-            if verbose:
-                print(f"  [{_time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
-
-        def _run(agent_name: str, input_data: Any = None) -> dict | None:
-            """Try mock first, then live runner."""
-            if mock_runner is not None:
-                out = mock_runner.run_agent(agent_name)
-                if out is not None:
-                    _log(f"{agent_name}: loaded from mock")
-                    return out
-            if agent_runner is not None:
-                _log(f"{agent_name}: calling LLM...")
-                t0 = _time.monotonic()
-                out = agent_runner.run_agent(agent_name, input_data)
-                elapsed = _time.monotonic() - t0
-                if out is not None:
-                    _log(f"{agent_name}: done ({elapsed:.1f}s)")
-                else:
-                    _log(f"{agent_name}: FAILED ({elapsed:.1f}s)")
-                return out
-            return None
-
-        # --- Step 1: Validate IR ---
-        _log("Step 1/9: validating IR...")
-        ir_errors = validate_ir(ir)
-        if ir_errors:
-            return _result("failure", errors=ir_errors, confidence=0.0)
-
-        self.ir = ir
-
-        # --- Step 2: Hypothesis analysis ---
-        _log("Step 2/9: hypothesis analysis...")
-        self.hypothesis = analyze_hypothesis(ir)
-        evidence["hypothesis"] = self.hypothesis
-        _log(f"  hypothesis={self.hypothesis.get('hypothesis')} "
-             f"confidence={self.hypothesis.get('confidence')}")
-
-        # --- Step 3: Classifier ---
-        _log("Step 3/9: classifier...")
-        classifier_input = {
-            "ir": ir,
-            "hypothesis": self.hypothesis,
-        }
-        if ir.get("student_notes"):
-            classifier_input["student_notes"] = ir["student_notes"]
-        classifier_output = _run("classifier", classifier_input)
-        if classifier_output is not None:
-            evidence["classifier"] = classifier_output
-            verdict = (classifier_output.get("evidence", {})
-                       .get("verdict", "?"))
-            _log(f"  classifier verdict: {verdict}")
-        classifier_evidence = (classifier_output or {}).get("evidence", {})
-
-        # Always run ALL specialists — correctness over speed
-        dispatch = {
-            "re_builder": True,
-            "dfa_builder": True,
-            "pumping": True,
-            "nerode": True,
-            "closure": True,
-        }
-        # Add grammar_analyzer for grammar-based tasks
-        lang_kind = ir.get("language_spec", {}).get("kind")
-        if lang_kind == "grammar":
-            dispatch["grammar_analyzer"] = True
-
-        # --- Step 3b: Grammar preprocessor (pure-fn, zero cost) ---
-        grammar_facts: dict | None = None
-        if lang_kind == "grammar":
-            _log("Step 3b: grammar preprocessor (pure-fn)...")
-            try:
-                from lib.grammar_preprocessor import analyze_grammar
-                grammar_facts = analyze_grammar(
-                    ir["language_spec"],
-                    oracle=self.oracle_fn if self.oracle_fn else None,
-                    max_word_len=10,
-                )
-                evidence["grammar_facts"] = grammar_facts
-                _log(f"  generated {grammar_facts.get('total_generated', 0)} words")
-                _log(f"  linear={grammar_facts.get('is_linear')}, "
-                     f"nested_recursion={grammar_facts.get('has_nested_recursion')}")
-                summary = grammar_facts.get("summary", "")
-                if summary:
-                    for line in summary.split("\n"):
-                        _log(f"  {line}")
-            except Exception as exc:
-                _log(f"  grammar preprocessor failed: {exc}")
-
-        # --- Step 4: Run specialist agents ---
-        # ============================================================
-        # Steps 4–7: Specialist → Oracle → Reasoning  (with retry loop)
-        # Retry protocol §5.2: max 2 enriched retries + 1 inversion
-        # ============================================================
-        MAX_SPECIALIST_RETRIES = 2
-        MAX_INVERSIONS = 1
-        retry_round = 0
-        inversions_done = 0
-        retry_context: dict | None = None  # enriched context from reasoning
-        reasoning_output: dict | None = None
-        dfa_builder_output: dict | None = None
-
-        while retry_round <= MAX_SPECIALIST_RETRIES:
-            round_label = (f" (retry {retry_round})" if retry_round > 0
-                           else "")
-
-            # --- Step 4: Run specialists ---
-            dispatched = [k for k, v in dispatch.items() if v]
-            _log(f"Step 4/9: specialists{round_label}: {dispatched}")
-
-            # Extract student notes once (empty string if absent)
-            _student_notes = ir.get("student_notes", "")
-
-            def _build_specialist_input(agent_name: str) -> dict:
-                inp = {
-                    "ir": ir,
-                    "hypothesis": self.hypothesis,
-                    "classifier": classifier_evidence,
-                }
-                if grammar_facts:
-                    inp["grammar_facts"] = grammar_facts
-                if _student_notes:
-                    inp["student_notes"] = _student_notes
-                if retry_context:
-                    ctx = dict(retry_context)
-                    fb = ctx.get("feedback", {})
-                    if agent_name in fb:
-                        ctx["agent_feedback"] = fb[agent_name]
-                    inp["retry_context"] = ctx
-                return inp
-
-            # Run all dispatched specialists IN PARALLEL
-            if agent_runner is not None and len(dispatched) > 1:
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                _log(f"  launching {len(dispatched)} agents in parallel...")
-
-                def _run_one(name: str) -> tuple[str, dict | None]:
-                    return name, _run(name, _build_specialist_input(name))
-
-                with ThreadPoolExecutor(max_workers=len(dispatched)) as pool:
-                    futures = {pool.submit(_run_one, name): name
-                               for name in dispatched}
-                    for future in as_completed(futures):
-                        name, out = future.result()
-                        if out is not None:
-                            evidence[name] = out
-                            if name == "dfa_builder":
-                                dfa_builder_output = out
-            else:
-                # Sequential fallback (mock mode or single agent)
-                for agent_name in dispatched:
-                    agent_out = _run(agent_name, _build_specialist_input(agent_name))
-                    if agent_out is not None:
-                        evidence[agent_name] = agent_out
-                        if agent_name == "dfa_builder":
-                            dfa_builder_output = agent_out
-
-            # --- Step 5: Build oracle ---
-            if retry_round == 0:
-                _log("Step 5/9: building oracle...")
-                spec = ir.get("language_spec")
-                oracle_ok = False
-                if spec is not None:
-                    try:
-                        self.oracle_fn = oracle_from_ir(ir)
-                        oracle_ok = True
-                    except ValueError as exc:
-                        errors.append(f"Oracle build failed: {exc}")
-                else:
-                    errors.append("No language_spec — cannot build oracle")
-            else:
-                oracle_ok = self.oracle_fn is not None
-
-            # --- Step 5b: Verify closure agent's intersection claim ---
-            if oracle_ok and "closure" in evidence:
-                closure_check = _verify_closure_claim(
-                    evidence["closure"], self.oracle_fn, _get_alphabet(ir), _log)
-                if closure_check:
-                    evidence["closure_verification"] = closure_check
-
-            # --- Step 5c: Verify ALL word-membership claims via oracle ---
-            if oracle_ok:
-                from lib.claim_verifier import verify_claims
-                claims_result = verify_claims(
-                    evidence, self.oracle_fn, _get_alphabet(ir))
-                if claims_result["disproved"] > 0:
-                    evidence["claim_verification"] = claims_result
-                    _log(f"  CLAIM ERRORS: {claims_result['disproved']} false claims found!")
-                    for err in claims_result["errors"][:5]:
-                        _log(f"    {err}")
-                elif claims_result["total_claims"] > 0:
-                    evidence["claim_verification"] = claims_result
-                    _log(f"  claims verified: {claims_result['verified']}/{claims_result['total_claims']}")
-
-            # --- Step 6: Oracle test ---
-            _log(f"Step 6/9: oracle test{round_label}...")
-            self.test_result = None
-            dfa: dict | None = None
-            if dfa_builder_output is not None:
-                dfa = _extract_dfa(dfa_builder_output)
-
-            # Fallback: build DFA from regex if no DFA but RE available
-            if dfa is None and "re_builder" in evidence and oracle_ok:
-                re_ev = evidence["re_builder"].get("evidence",
-                            evidence["re_builder"])
-                regex = re_ev.get("regex")
-                if regex:
-                    _log(f"  building DFA from regex: {regex[:40]}...")
-                    try:
-                        from lib.dfa_builder import build_dfa_from_regex
-                        dfa = build_dfa_from_regex(regex)
-                    except Exception as exc:
-                        _log(f"  DFA from regex failed: {exc}")
-
-            if dfa is not None and oracle_ok:
-                dfa_errors = validate_dfa(dfa)
-                if dfa_errors:
-                    errors.extend(f"DFA validation: {e}" for e in dfa_errors)
-                else:
-                    alphabet = _get_alphabet(ir)
-                    self.test_result = oracle_test(
-                        self.oracle_fn,
-                        dfa,
-                        alphabet,
-                        strategies=["exhaustive_k"],
-                        max_exhaustive=7,
-                    )
-                    evidence["oracle_test"] = self.test_result
-
-            if self.test_result:
-                _log(f"  oracle_test: {self.test_result.get('status')} "
-                     f"({self.test_result.get('tested', 0)} words)")
-
-            # --- Level 1 retry: Oracle counterexample → re-run DFA/RE builder ---
-            if (self.test_result
-                    and self.test_result.get("status") == "fail"
-                    and self.test_result.get("counterexample")
-                    and retry_round == 0
-                    and (agent_runner is not None or mock_runner is not None)):
-                ce = self.test_result["counterexample"]
-                _log(f"  oracle counterexample: '{ce.get('word')}' "
-                     f"(oracle={ce.get('oracle_says')}, dfa={ce.get('automaton_says')})")
-                _log(f"  → Level 1 retry: re-running DFA/RE builders with counterexample")
-
-                enriched_input = {
-                    **_build_specialist_input("re_builder"),
-                    "retry_context": {
-                        "oracle_counterexample": ce,
-                        "instruction": (
-                            f"Your previous DFA/regex was WRONG. "
-                            f"The word '{ce.get('word')}' should be "
-                            f"{'accepted' if ce.get('oracle_says') else 'rejected'} "
-                            f"but your automaton "
-                            f"{'rejected' if ce.get('oracle_says') else 'accepted'} it. "
-                            f"Fix your construction."
-                        ),
-                    },
-                }
-                if dispatch.get("re_builder"):
-                    re_out = _run("re_builder", enriched_input)
-                    if re_out is not None:
-                        evidence["re_builder"] = re_out
-                if dispatch.get("dfa_builder"):
-                    dfa_builder_output = _run("dfa_builder", enriched_input)
-                    if dfa_builder_output is not None:
-                        evidence["dfa_builder"] = dfa_builder_output
-                        # Re-run oracle test
-                        dfa2 = _extract_dfa(dfa_builder_output)
-                        if dfa2 is not None and oracle_ok:
-                            dfa_errs2 = validate_dfa(dfa2)
-                            if not dfa_errs2:
-                                self.test_result = oracle_test(
-                                    self.oracle_fn, dfa2, _get_alphabet(ir),
-                                    strategies=["exhaustive_k"],
-                                    max_exhaustive=7,
-                                )
-                                evidence["oracle_test"] = self.test_result
-                                _log(f"  oracle re-test: {self.test_result.get('status')} "
-                                     f"({self.test_result.get('tested', 0)} words)")
-
-            # --- Step 6b: Proof checker (Opus, adversarial) ---
-            if agent_runner is not None or mock_runner is not None:
-                _log(f"Step 6b/9: proof checker{round_label}...")
-                checker_input = {
-                    "ir": ir,
-                    "specialist_outputs": {
-                        k: evidence[k]
-                        for k in ("re_builder", "dfa_builder", "pumping",
-                                   "nerode", "closure", "grammar_analyzer")
-                        if k in evidence
-                    },
-                    "oracle_test": evidence.get("oracle_test"),
-                    "closure_verification": evidence.get("closure_verification"),
-                }
-                if _student_notes:
-                    checker_input["student_notes"] = _student_notes
-                checker_output = _run("proof_checker", checker_input)
-                if checker_output is not None:
-                    evidence["proof_checker"] = checker_output
-
-            # --- Step 7: Reasoning agent ---
-            _log(f"Step 7/9: reasoning agent{round_label}...")
-            reasoning_input = {
-                "ir": ir,
-                "hypothesis": self.hypothesis,
-                "specialist_outputs": {
-                    k: evidence[k]
-                    for k in ("re_builder", "dfa_builder", "pumping",
-                               "nerode", "closure", "grammar_analyzer")
-                    if k in evidence
-                },
-                "oracle_test": evidence.get("oracle_test"),
-                "closure_verification": evidence.get("closure_verification"),
-                "proof_checker": evidence.get("proof_checker"),
-            }
-            if retry_round > 0:
-                reasoning_input["retry_round"] = retry_round
-                reasoning_input["previous_issues"] = retry_context
-
-            reasoning_output = _run("reasoning", reasoning_input)
-            if reasoning_output is not None:
-                evidence["reasoning"] = reasoning_output
-
-            # --- Check if reasoning says retry ---
-            r_ev = (reasoning_output or {}).get("evidence", reasoning_output or {})
-            action = r_ev.get("action", (reasoning_output or {}).get("action", ""))
-            issues = r_ev.get("issues_found", (reasoning_output or {}).get("issues_found", []))
-
-            if action == "retry_enriched" and retry_round < MAX_SPECIALIST_RETRIES:
-                # Ask Retry Planner (Sonnet) which agents to re-run
-                planner_input = {
-                    "issues_found": issues,
-                    "oracle_counterexample": (
-                        self.test_result.get("counterexample")
-                        if self.test_result else None
-                    ),
-                    "specialist_results": {
-                        k: {
-                            "status": evidence[k].get("status", "?"),
-                            "verdict": evidence[k].get("evidence", evidence[k])
-                                       .get("verdict", "?"),
-                        }
-                        for k in dispatched if k in evidence
-                    },
-                    "current_hypothesis": self.hypothesis.get("hypothesis"),
-                }
-                planner_output = _run("retry_planner", planner_input)
-                p_ev = (planner_output or {}).get("evidence", planner_output or {})
-
-                agents_to_retry = p_ev.get("agents_to_retry", dispatched)
-                feedback_map = p_ev.get("feedback", {})
-                skip_agents = set(p_ev.get("skip_agents", []))
-
-                _log(f"  retry_planner: retry {agents_to_retry}, skip {list(skip_agents)}")
-
-                # Update dispatch to only retry selected agents
-                dispatch = {k: (k in agents_to_retry) for k in dispatched}
-
-                retry_context = {
-                    "issues": issues,
-                    "oracle_counterexample": planner_input["oracle_counterexample"],
-                    "feedback": feedback_map,
-                    "instruction": (
-                        "Previous attempt had issues. See 'feedback' for "
-                        "agent-specific corrections."
-                    ),
-                }
-                retry_round += 1
-                continue
-
-            if action == "invert_hypothesis" and inversions_done < MAX_INVERSIONS:
-                old_hyp = self.hypothesis.get("hypothesis", "unknown")
-                new_hyp = "regular" if old_hyp == "non_regular" else "non_regular"
-                _log(f"  reasoning: inverting hypothesis {old_hyp} → {new_hyp}")
-                inversions_done += 1
-                self.hypothesis = {**self.hypothesis, "hypothesis": new_hyp}
-                evidence["hypothesis"] = self.hypothesis
-                # dispatch stays the same — always all agents
-                retry_context = {
-                    "issues": issues,
-                    "instruction": (
-                        f"Hypothesis inverted from {old_hyp} to {new_hyp}. "
-                        f"Previous agents failed. Try the opposite approach."
-                    ),
-                }
-                retry_round += 1
-                continue
-
-            # No retry needed — break
-            break
-
-        # --- Step 8: Formalize ---
-        _log("Step 8/9: formalization...")
-        r_evidence = (reasoning_output or {}).get("evidence", reasoning_output or {})
-        action = (r_evidence.get("action")
-                  or (reasoning_output or {}).get("action", ""))
-        best_proof = (r_evidence.get("best_proof")
-                      or (reasoning_output or {}).get("best_proof", ""))
-        consolidated = (r_evidence.get("consolidated_proof")
-                        or (reasoning_output or {}).get("consolidated_proof", ""))
-
-        # Formalization disabled for now (Lean errors under investigation)
-        # To re-enable: remove the `if False` guard below
-        lean_code: str | None = None
-        if False:  # DISABLED — re-enable when Lean templates are stable
-            lean_code = r_evidence.get("lean_code")
-            if (not lean_code
-                    and action == "proceed_to_formalizer"
-                    and (agent_runner is not None or mock_runner is not None)):
-                lean_code = self._run_formalizer(
-                    ir, evidence, best_proof, consolidated,
-                    _run, _log, errors,
-                )
-            if lean_code is not None:
-                evidence["lean_code"] = lean_code
-        _log("  formalization: disabled")
-
-        # --- Step 9: Assemble final result ---
-        _log("Step 9/9: assembling result...")
-
-        # Use reasoning agent verdict/confidence if available (overrides hypothesis)
-        r_ev = (reasoning_output or {}).get("evidence", reasoning_output or {})
-        reasoning_verdict = r_ev.get("verdict", (reasoning_output or {}).get("verdict"))
-        reasoning_confidence = r_ev.get("confidence", (reasoning_output or {}).get("confidence"))
-
-        if self.test_result is not None:
-            if self.test_result.get("status") == "pass":
-                status = "success"
-                confidence = 1.0
-            else:
-                status = "failure"
-                confidence = 0.0
-        elif reasoning_verdict is not None:
-            # Reasoning agent gave a verdict → success
-            status = "success"
-            confidence = float(reasoning_confidence or 0.9)
-        elif errors:
-            status = "partial"
-            confidence = self.hypothesis.get("confidence", 0.0)
-        else:
-            status = "partial"
-            confidence = self.hypothesis.get("confidence", 0.0)
-
-        _log(f"  final: status={status}, confidence={confidence}")
-
-        return _result(
-            status,
-            evidence=evidence,
-            errors=errors if errors else None,
-            confidence=confidence,
+        result = run_pipeline(
+            ir,
+            mock_runner=mock_runner,
+            agent_runner=agent_runner,
         )
+
+        # Sync instance attributes for backward compatibility
+        # (some tests read pipeline.hypothesis, pipeline.test_result, etc.)
+        self.ir = ir
+        ev = result.get("evidence", {})
+        self.hypothesis = ev.get("hypothesis")
+        self.test_result = ev.get("oracle_test")
+
+        return result
 
     def _run_formalizer(
         self,
@@ -975,18 +536,48 @@ def _verify_closure_claim(
     _log(f"  verifying closure claim: L ∩ {regex}...")
 
     try:
-        from lib.dfa_builder import build_dfa_from_regex
-        from lib.dfa_runner import run_dfa
-        from lib.congruence import estimate_index
+        import threading
+        from .lib.dfa_builder import build_dfa_from_regex
+        from .lib.dfa_runner import run_dfa
+        from .lib.congruence import estimate_index
 
         r_dfa = build_dfa_from_regex(regex)
 
-        # Build oracle for L ∩ R
-        def intersection_oracle(word: str) -> bool:
-            return oracle(word) and run_dfa(r_dfa, word)
+        # Build memoized oracle for L ∩ R
+        _oracle_cache: dict[str, bool] = {}
 
-        # Estimate Nerode index of L ∩ R
-        est = estimate_index(intersection_oracle, alphabet, max_depth=7)
+        def intersection_oracle(word: str) -> bool:
+            if word not in _oracle_cache:
+                _oracle_cache[word] = oracle(word) and run_dfa(r_dfa, word)
+            return _oracle_cache[word]
+
+        # Adaptive depth: |Σ|=2 → depth 7, |Σ|=3 → depth 4, |Σ|≥4 → depth 3
+        _alphabet_depth = {2: 7, 3: 5, 4: 3}
+        depth = _alphabet_depth.get(len(alphabet), 3)
+
+        # Estimate Nerode index with hard timeout (daemon thread)
+        _timeout = 120
+        _log(f"  estimate_index(depth={depth}, timeout={_timeout}s)...")
+        result_box: dict[str, Any] = {}
+
+        def _worker() -> None:
+            try:
+                result_box["result"] = estimate_index(
+                    intersection_oracle, alphabet, depth,
+                )
+            except Exception as exc:
+                result_box["error"] = exc
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        thread.join(timeout=_timeout)
+
+        if thread.is_alive():
+            _log(f"  estimate_index TIMED OUT after {_timeout}s")
+            return None
+        if "error" in result_box:
+            raise result_box["error"]
+        est = result_box["result"]
         idx = est.get("estimated_index")
         conf = est.get("confidence", 0)
 
@@ -996,7 +587,7 @@ def _verify_closure_claim(
 
             # Find concrete counterexample to "L ∩ R = {aⁿbⁿ}"
             # by listing words in L ∩ R that aren't of form aⁿbⁿ
-            from lib.word_generator import generate_exhaustive
+            from .lib.word_generator import generate_exhaustive
             counterexamples = []
             for w in generate_exhaustive(alphabet, max_len=8):
                 if intersection_oracle(w):
@@ -1020,10 +611,16 @@ def _verify_closure_claim(
                     f"{counterexamples}"
                 ),
             }
-        elif idx == "infinite":
+        elif idx == "infinite" and conf >= 0.8:
             _log(f"  closure claim verified: L ∩ {regex} is non-regular "
                  f"(index=infinite, confidence {conf})")
-            return {"status": "verified", "claim": f"L ∩ {regex} is non-regular"}
+            return {"status": "verified", "claim": f"L ∩ {regex} is non-regular",
+                    "confidence": conf}
+        elif idx == "infinite":
+            _log(f"  closure claim plausible but unconfirmed "
+                 f"(index=infinite, confidence {conf} < 0.8)")
+            return {"status": "plausible", "claim": f"L ∩ {regex} is non-regular",
+                    "confidence": conf}
         else:
             _log(f"  closure claim inconclusive (index={idx}, confidence {conf})")
             return None
@@ -1122,7 +719,7 @@ def main() -> None:
         result = pipeline.run_full_pipeline(ir, mock_runner=mock_runner)
 
     elif args.live:
-        from lib.llm_client import LLMRunner
+        from .lib.llm_client import LLMRunner
         try:
             llm = LLMRunner()
         except RuntimeError as exc:
@@ -1146,7 +743,7 @@ def main() -> None:
 
     # Render
     if args.render:
-        from lib.renderer import render_markdown, render_html, render_to_file
+        from .lib.renderer import render_markdown, render_html, render_to_file
 
         # Auto-generate output filenames from IR name
         ir_stem = Path(args.ir_json).stem
@@ -1218,5 +815,7 @@ def main() -> None:
     sys.exit(0 if result["status"] != "failure" else 1)
 
 
-if __name__ == "__main__":
-    main()
+
+# Direct script execution is NOT supported with relative imports.
+# Use:  python -m agent_system <args>
+# Or:   python agent_system/__main__.py <args>

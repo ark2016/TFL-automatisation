@@ -1,15 +1,10 @@
 """Tests for dfa_to_regex (state elimination algorithm)."""
 
-import sys
 from itertools import product
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import unittest
 
-from lib.dfa_builder import dfa_to_regex, build_dfa_from_regex
-from lib.dfa_runner import run_dfa
+from agent_system.lib.dfa_builder import dfa_to_regex, build_dfa_from_regex
+from agent_system.lib.dfa_runner import run_dfa
 
 
 def _all_words(alphabet, max_length):

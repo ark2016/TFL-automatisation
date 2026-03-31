@@ -1,13 +1,10 @@
 """End-to-end tests — full mock pipeline on all 3 example tasks."""
 
 import json
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from orchestrator import Pipeline, MockRunner
+from agent_system.orchestrator import Pipeline, MockRunner
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
@@ -28,7 +25,12 @@ def _run_mock(task_name: str) -> dict:
 
 
 class TestTask1PalindromeRegular(unittest.TestCase):
-    """Task 1: palindrome prefix/suffix — REGULAR language."""
+    """Task 1: palindrome prefix/suffix — REGULAR language.
+
+    NOTE: The mock DFA for this task is intentionally incorrect so that
+    the oracle detects a counterexample.  This exercises the failure
+    path (oracle_test → status=failure) as a negative fixture.
+    """
 
     def setUp(self):
         self.result = _run_mock("task1_palindrome_prefix_suffix")

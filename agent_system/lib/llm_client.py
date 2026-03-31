@@ -17,8 +17,7 @@ from typing import Any
 
 # Import config (with fallback defaults if missing)
 try:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from config import MODELS as _CFG_MODELS, MAX_TOKENS as _CFG_MAX_TOKENS, TEMPERATURE as _CFG_TEMP
+    from agent_system.config import MODELS as _CFG_MODELS, MAX_TOKENS as _CFG_MAX_TOKENS, TEMPERATURE as _CFG_TEMP
 except ImportError:
     _CFG_MODELS = {}
     _CFG_MAX_TOKENS = 4096

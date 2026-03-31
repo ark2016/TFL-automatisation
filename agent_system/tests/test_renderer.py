@@ -1,14 +1,11 @@
 """Tests for the renderer module."""
 
-import sys
 import os
 import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from lib.renderer import render_markdown, render_html, render_dfa_table, render_to_file
+from agent_system.lib.renderer import render_markdown, render_html, render_dfa_table, render_to_file
 
 
 def _minimal_result(**overrides):

@@ -1,16 +1,12 @@
 """Tests for Phase 2 modules."""
 
-import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from lib.hypothesis_module import analyze_hypothesis
-from lib.dfa_builder import build_dfa_from_regex, minimize_dfa
-from lib.dfa_runner import run_dfa
-from lib.congruence import compute_nerode_classes, estimate_index
-from lib.grammar_utils import (
+from agent_system.lib.hypothesis_module import analyze_hypothesis
+from agent_system.lib.dfa_builder import build_dfa_from_regex, minimize_dfa
+from agent_system.lib.dfa_runner import run_dfa
+from agent_system.lib.congruence import compute_nerode_classes, estimate_index
+from agent_system.lib.grammar_utils import (
     is_right_linear,
     is_left_linear,
     has_nested_recursion,
