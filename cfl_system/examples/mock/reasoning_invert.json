@@ -1,0 +1,4 @@
+{
+  "action": "invert",
+  "reasoning": "Initial hypothesis seems wrong, try the opposite"
+}

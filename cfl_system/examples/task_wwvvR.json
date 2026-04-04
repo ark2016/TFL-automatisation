@@ -1,0 +1,11 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "{wwvvᴿ | v, w ∈ {a,b}*}",
+  "language_spec": {
+    "kind": "exists_decomposition",
+    "parts": ["w", "v"],
+    "concat_pattern": ["w", "w", "v", "rev(v)"],
+    "alphabets": {"w": ["a", "b"], "v": ["a", "b"]},
+    "constraints": []
+  }
+}

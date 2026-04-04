@@ -1,0 +1,7 @@
+{
+  "agents_to_retry": ["pumping_cfl", "ogden"],
+  "retry_params": {
+    "pumping_cfl": {"strategy": "longer_word"},
+    "ogden": {"strategy": "mark_boundary"}
+  }
+}

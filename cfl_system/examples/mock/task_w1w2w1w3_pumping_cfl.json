@@ -1,0 +1,13 @@
+{
+  "agent": "pumping_cfl",
+  "status": "success",
+  "verdict": "non_cfl",
+  "confidence": 0.8,
+  "evidence": {
+    "word_chosen": "abba",
+    "cases": [
+      {"case": "v in a*, x in b*", "why_not_in_L": "pumped word breaks repeated w1 structure"}
+    ],
+    "all_cases_covered": true
+  }
+}

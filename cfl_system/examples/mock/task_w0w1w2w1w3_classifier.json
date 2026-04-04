@@ -1,0 +1,1 @@
+{"verdict": "non_cfl", "confidence": 0.8, "reasoning": "Repeated w1 with intervening parts creates copying dependency", "advisory_only": true}

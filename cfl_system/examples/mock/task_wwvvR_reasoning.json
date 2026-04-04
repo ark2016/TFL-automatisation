@@ -1,0 +1,6 @@
+{
+  "action": "done",
+  "verdict": "cfl",
+  "confidence": 0.8,
+  "reasoning": "The language allows empty w and v, making it Sigma* which is trivially CFL. CFG builder provided a working grammar."
+}

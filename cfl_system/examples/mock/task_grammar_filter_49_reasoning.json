@@ -1,0 +1,6 @@
+{
+  "action": "done",
+  "verdict": "cfl",
+  "confidence": 0.85,
+  "reasoning": "The filter |a|=|b| is itself a CFL property. L(G) intersected with a CFL may or may not be CFL, but cfg_builder produced a working grammar for the intersection."
+}

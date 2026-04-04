@@ -1,0 +1,26 @@
+{
+  "agent": "cfg_builder",
+  "status": "success",
+  "verdict": "cfl",
+  "confidence": 0.8,
+  "evidence": {
+    "grammar": {
+      "terminals": ["a", "b"],
+      "nonterminals": ["S", "W", "V"],
+      "start": "S",
+      "rules": [
+        {"lhs": "S", "rhs": ["W", "W", "V"]},
+        {"lhs": "W", "rhs": ["a", "W"]},
+        {"lhs": "W", "rhs": ["b", "W"]},
+        {"lhs": "W", "rhs": ["a"]},
+        {"lhs": "W", "rhs": ["b"]},
+        {"lhs": "W", "rhs": []},
+        {"lhs": "V", "rhs": ["a", "V", "a"]},
+        {"lhs": "V", "rhs": ["b", "V", "b"]},
+        {"lhs": "V", "rhs": []}
+      ]
+    },
+    "explanation": "S generates ww (arbitrary) followed by vv^R (palindrome)"
+  },
+  "errors": []
+}

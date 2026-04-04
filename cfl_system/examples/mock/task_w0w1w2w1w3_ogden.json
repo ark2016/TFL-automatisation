@@ -1,0 +1,16 @@
+{
+  "agent": "ogden",
+  "status": "success",
+  "verdict": "non_cfl",
+  "confidence": 0.8,
+  "evidence": {
+    "word_chosen": "aa bb cc aa dd",
+    "marked_positions": "positions in first w1 block (aa)",
+    "num_marked": "p",
+    "cases": [
+      {"case": "marked positions pumped", "why_not_in_L": "First w1 copy grows, second stays same"}
+    ],
+    "conclusion": "L is not context-free (by Ogden's lemma)"
+  },
+  "errors": []
+}

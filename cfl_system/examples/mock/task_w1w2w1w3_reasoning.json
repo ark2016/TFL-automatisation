@@ -1,0 +1,6 @@
+{
+  "action": "done",
+  "verdict": "non_cfl",
+  "confidence": 0.85,
+  "reasoning": "Repeated subword w1 with interleaved dependencies makes this non-CFL"
+}

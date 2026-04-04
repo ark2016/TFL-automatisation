@@ -1,0 +1,13 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "{w₀w₁w₂w₁w₃ | wᵢ ∈ {a,b,c}*, |w₁| > 1}",
+  "language_spec": {
+    "kind": "repeated_subword",
+    "parts": ["w0", "w1", "w2", "w3"],
+    "concat_pattern": ["w0", "w1", "w2", "w1", "w3"],
+    "alphabets": {"w0": ["a", "b", "c"], "w1": ["a", "b", "c"], "w2": ["a", "b", "c"], "w3": ["a", "b", "c"]},
+    "constraints": [
+      {"op": "gt", "left": {"kind": "length", "of_var": "w1"}, "right": {"kind": "constant", "value": 1}}
+    ]
+  }
+}

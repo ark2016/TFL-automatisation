@@ -1,0 +1,26 @@
+{
+  "task_type": "grammar_filter_cfl",
+  "source_text": "Язык слов грамматики S→aSbb|ε|bbSa|aA, A→aA|a, у которых |a|=|b|",
+  "language_spec": {
+    "kind": "grammar_filter",
+    "grammar": {
+      "kind": "grammar",
+      "terminals": ["a", "b"],
+      "nonterminals": ["S", "A"],
+      "start": "S",
+      "rules": [
+        {"lhs": "S", "rhs": ["a", "S", "b", "b"]},
+        {"lhs": "S", "rhs": []},
+        {"lhs": "S", "rhs": ["b", "b", "S", "a"]},
+        {"lhs": "S", "rhs": ["a", "A"]},
+        {"lhs": "A", "rhs": ["a", "A"]},
+        {"lhs": "A", "rhs": ["a"]}
+      ]
+    },
+    "filter": {
+      "op": "eq",
+      "left": {"kind": "count_symbol", "symbol": "a", "in_var": "w"},
+      "right": {"kind": "count_symbol", "symbol": "b", "in_var": "w"}
+    }
+  }
+}

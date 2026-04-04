@@ -1,0 +1,21 @@
+{
+  "agent": "cfg_builder",
+  "status": "success",
+  "verdict": "cfl",
+  "confidence": 0.85,
+  "evidence": {
+    "grammar": {
+      "terminals": ["a", "b"],
+      "nonterminals": ["S"],
+      "start": "S",
+      "rules": [
+        {"lhs": "S", "rhs": ["a", "S", "b"]},
+        {"lhs": "S", "rhs": ["b", "S", "a"]},
+        {"lhs": "S", "rhs": ["S", "S"]},
+        {"lhs": "S", "rhs": []}
+      ]
+    },
+    "explanation": "Grammar for {w : |w|_a = |w|_b} which is a superset. The intersection L(G) ∩ {|a|=|b|} keeps only words from the original grammar where counts are equal."
+  },
+  "errors": []
+}

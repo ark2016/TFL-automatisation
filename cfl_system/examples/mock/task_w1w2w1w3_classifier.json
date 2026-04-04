@@ -1,0 +1,5 @@
+{
+  "classification": "non_cfl",
+  "confidence": 0.7,
+  "reasoning": "Repeated subword pattern suggests non-CFL"
+}

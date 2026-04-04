@@ -1,0 +1,1 @@
+{"verdict": "cfl", "confidence": 0.7, "reasoning": "Palindrome component suggests CFL", "advisory_only": true}

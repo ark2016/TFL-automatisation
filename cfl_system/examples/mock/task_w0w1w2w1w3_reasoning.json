@@ -1,0 +1,6 @@
+{
+  "action": "done",
+  "verdict": "non_cfl",
+  "confidence": 0.9,
+  "reasoning": "Both pumping and Ogden confirm non-CFL. The repeated w1 with |w1|>1 creates a copying constraint that CFGs cannot enforce."
+}

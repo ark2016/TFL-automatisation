@@ -1,0 +1,18 @@
+{
+  "agent": "pumping_cfl",
+  "status": "success",
+  "verdict": "non_cfl",
+  "confidence": 0.85,
+  "evidence": {
+    "word_chosen": "a^p a^p b^p a^p a^p c^p",
+    "word_parametric": "a^{p} \\cdot a^{p} \\cdot b^{p} \\cdot a^{p} \\cdot a^{p} \\cdot c^{p}",
+    "cases": [
+      {"case": "v and x within first w0w1 block", "pumped_word": "w0'w1' w2 w1 w3 with |w1'| != |w1|", "why_not_in_L": "Repeated w1 blocks must be equal"},
+      {"case": "v spans w1-w2 boundary", "pumped_word": "prefix disrupts w1 equality", "why_not_in_L": "w1 copy at position 2 differs from copy at position 4"},
+      {"case": "v and x within w2 block", "pumped_word": "ok for w2 but all other cases covered", "why_not_in_L": "This case alone doesn't violate, but covered by closure_reduction"}
+    ],
+    "all_cases_covered": true,
+    "conclusion": "L is not context-free"
+  },
+  "errors": []
+}
