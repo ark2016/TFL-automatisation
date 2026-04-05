@@ -30,6 +30,15 @@ except ImportError:
     _base_eval_expr = None
 
 
+class UnsupportedOracleKindError(ValueError):
+    """Raised when an IR language_spec kind has no automated oracle.
+
+    These kinds (e.g. "natural", "arithmetic_index") are valid per the
+    schema but cannot be evaluated mechanically. Callers should catch
+    this and treat oracle_test as not_applicable.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Local expression / predicate evaluators (fallback if base not available)
 # ---------------------------------------------------------------------------
@@ -250,7 +259,13 @@ def _eval_filter_predicate(pred: dict, word: str) -> bool:
 
 
 def _grammar_filter_oracle(spec: dict) -> Callable[[str], bool]:
-    """Build oracle for grammar_filter kind."""
+    """Build oracle for grammar_filter kind.
+
+    For natural_language filters the oracle is marked as approximate:
+    it accepts everything the grammar generates (the NL condition is
+    for humans to interpret), but carries the attribute
+    `.is_approximate = True` so oracle_test_node can skip it.
+    """
     g_oracle = grammar_oracle(spec["grammar"])
     filter_spec = spec.get("filter") or {}
 
@@ -261,8 +276,12 @@ def _grammar_filter_oracle(spec: dict) -> Callable[[str], bool]:
         filter_spec.get("kind") == "natural_language_filter"
         or "natural_language_filter" in filter_spec
     ):
-        # Accept anything the grammar generates; the filter is for humans.
-        return g_oracle
+        def nl_oracle(word: str) -> bool:
+            return g_oracle(word)
+        # Mark as approximate so oracle_test knows to skip
+        nl_oracle.is_approximate = True  # type: ignore[attr-defined]
+        nl_oracle.approximation_reason = "natural_language_filter"  # type: ignore[attr-defined]
+        return nl_oracle
 
     def check(word: str) -> bool:
         if not g_oracle(word):
@@ -470,6 +489,15 @@ def cfl_oracle_from_ir(ir: dict) -> Callable[[str], bool]:
 
     kind = spec["kind"]
 
+    # Kinds that cannot be evaluated automatically — the IR is valid but
+    # no oracle exists for them. Raise an explicit error so callers
+    # (e.g. build_oracle_node) can handle this as "no oracle available"
+    # cleanly instead of as an unexpected exception.
+    if kind in ("natural", "arithmetic_index"):
+        raise UnsupportedOracleKindError(
+            f"No automated oracle for language_spec kind={kind!r}"
+        )
+
     if kind == "grammar":
         return grammar_oracle(spec)
 
@@ -487,6 +515,11 @@ def cfl_oracle_from_ir(ir: dict) -> Callable[[str], bool]:
 
     # Try delegating to base oracle for other kinds (regex, etc.)
     if _base_oracle_from_ir is not None:
-        return _base_oracle_from_ir(ir)
+        try:
+            return _base_oracle_from_ir(ir)
+        except ValueError as exc:
+            raise UnsupportedOracleKindError(str(exc)) from exc
 
-    raise ValueError(f"Unsupported language_spec kind for CFL oracle: {kind}")
+    raise UnsupportedOracleKindError(
+        f"Unsupported language_spec kind for CFL oracle: {kind}"
+    )

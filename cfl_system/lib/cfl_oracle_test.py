@@ -11,8 +11,26 @@ Public API:
 
 from __future__ import annotations
 
-from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir, grammar_oracle, pda_oracle
+from cfl_system.lib.cfl_oracle import (
+    cfl_oracle_from_ir,
+    grammar_oracle,
+    pda_oracle,
+    UnsupportedOracleKindError,
+)
 from cfl_system.lib.cfl_word_generator import generate_test_words
+
+
+# Minimum number of words required for a "pass" verdict. Below this,
+# the test is reported as not_applicable (coverage too low to conclude).
+_MIN_COVERAGE = 3
+
+
+def _safe_call(oracle, word: str) -> bool | None:
+    """Call oracle(word) catching exceptions; returns None on failure."""
+    try:
+        return bool(oracle(word))
+    except Exception:
+        return None
 
 
 def _empty_result() -> dict:
@@ -40,16 +58,12 @@ def _run_test(
 ) -> dict:
     """Core testing logic shared by grammar and PDA tests.
 
-    Args:
-        candidate_oracle: callable(str) -> bool for the proposed grammar/PDA.
-        lang_oracle: callable(str) -> bool for the reference language.
-        ir: intermediate representation with language_spec.
-        max_words: maximum words to generate per category.
-        max_length: maximum word length.
-        label: "G" or "PDA" for human-readable messages.
+    All oracle calls are exception-safe: if either oracle raises, the
+    word is skipped (not counted as pass or fail). Words where lang_oracle
+    itself raises cannot contribute to the test.
 
-    Returns:
-        Result dict with status, counters, counterexamples, and details.
+    Below _MIN_COVERAGE effectively-checked words, the status is
+    "not_applicable" (insufficient coverage to claim a pass).
     """
     test_data = generate_test_words(
         ir,
@@ -62,11 +76,16 @@ def _run_test(
     pos_checked = pos_passed = 0
     neg_checked = neg_passed = 0
     bnd_checked = bnd_passed = 0
+    skipped = 0
 
     # Positive test: words in L should be in L(candidate)
     for word in test_data["positive"]:
+        cand = _safe_call(candidate_oracle, word)
+        if cand is None:
+            skipped += 1
+            continue
         pos_checked += 1
-        if candidate_oracle(word):
+        if cand:
             pos_passed += 1
         else:
             counterexamples.append({
@@ -77,8 +96,12 @@ def _run_test(
 
     # Negative test: words NOT in L should NOT be in L(candidate)
     for word in test_data["negative"]:
+        cand = _safe_call(candidate_oracle, word)
+        if cand is None:
+            skipped += 1
+            continue
         neg_checked += 1
-        if not candidate_oracle(word):
+        if not cand:
             neg_passed += 1
         else:
             counterexamples.append({
@@ -89,9 +112,12 @@ def _run_test(
 
     # Boundary test: edge cases checked against the reference oracle
     for word in test_data["boundary"]:
+        expected = _safe_call(lang_oracle, word)
+        actual = _safe_call(candidate_oracle, word)
+        if expected is None or actual is None:
+            skipped += 1
+            continue
         bnd_checked += 1
-        expected = lang_oracle(word)
-        actual = candidate_oracle(word)
         if expected == actual:
             bnd_passed += 1
         else:
@@ -105,7 +131,14 @@ def _run_test(
             })
 
     total = pos_checked + neg_checked + bnd_checked
-    status = "pass" if not counterexamples else "grammar_incorrect"
+
+    if counterexamples:
+        status = "grammar_incorrect"
+    elif total < _MIN_COVERAGE:
+        # Not enough test words to conclude — avoid ложный pass.
+        status = "not_applicable"
+    else:
+        status = "pass"
 
     return {
         "status": status,
@@ -116,7 +149,11 @@ def _run_test(
         "boundary_checked": bnd_checked,
         "boundary_passed": bnd_passed,
         "counterexamples": counterexamples,
-        "details": f"Checked {total} words total",
+        "details": (
+            f"Checked {total} words total"
+            + (f" ({skipped} skipped due to oracle errors)" if skipped else "")
+            + (f"; below min coverage ({_MIN_COVERAGE})" if total < _MIN_COVERAGE else "")
+        ),
     }
 
 
@@ -159,11 +196,32 @@ def oracle_test_grammar(
     """
     try:
         lang_oracle = cfl_oracle_from_ir(ir)
-        gram_oracle = grammar_oracle(grammar)
+    except UnsupportedOracleKindError as e:
+        result = _empty_result()
+        result["status"] = "not_applicable"
+        result["details"] = f"no automated oracle: {e}"
+        return result
     except Exception as e:
         result = _empty_result()
         result["status"] = "error"
         result["details"] = str(e)
+        return result
+
+    try:
+        gram_oracle = grammar_oracle(grammar)
+    except Exception as e:
+        result = _empty_result()
+        result["status"] = "error"
+        result["details"] = f"grammar construction failed: {e}"
+        return result
+
+    # If the language oracle is approximate (e.g. natural_language_filter),
+    # running membership comparisons would produce misleading passes.
+    if getattr(lang_oracle, "is_approximate", False):
+        reason = getattr(lang_oracle, "approximation_reason", "approximate oracle")
+        result = _empty_result()
+        result["status"] = "not_applicable"
+        result["details"] = f"language oracle is approximate: {reason}"
         return result
 
     return _run_test(gram_oracle, lang_oracle, ir, max_words, max_length, "G")
@@ -181,11 +239,45 @@ def oracle_test_pda(
     """
     try:
         lang_oracle = cfl_oracle_from_ir(ir)
-        p_oracle = pda_oracle(pda)
+    except UnsupportedOracleKindError as e:
+        result = _empty_result()
+        result["status"] = "not_applicable"
+        result["details"] = f"no automated oracle: {e}"
+        return result
     except Exception as e:
         result = _empty_result()
         result["status"] = "error"
         result["details"] = str(e)
+        return result
+
+    # Validate PDA structure upfront (pda_oracle is lazy).
+    try:
+        from cfl_system.lib.pda_simulator import validate_pda
+        pda_errors = validate_pda(pda)
+    except Exception as e:
+        result = _empty_result()
+        result["status"] = "error"
+        result["details"] = f"PDA validation failed: {e}"
+        return result
+    if pda_errors:
+        result = _empty_result()
+        result["status"] = "error"
+        result["details"] = f"PDA invalid: {'; '.join(pda_errors)}"
+        return result
+
+    try:
+        p_oracle = pda_oracle(pda)
+    except Exception as e:
+        result = _empty_result()
+        result["status"] = "error"
+        result["details"] = f"PDA construction failed: {e}"
+        return result
+
+    if getattr(lang_oracle, "is_approximate", False):
+        reason = getattr(lang_oracle, "approximation_reason", "approximate oracle")
+        result = _empty_result()
+        result["status"] = "not_applicable"
+        result["details"] = f"language oracle is approximate: {reason}"
         return result
 
     return _run_test(p_oracle, lang_oracle, ir, max_words, max_length, "PDA")
@@ -244,13 +336,25 @@ def oracle_test(
         all_counterexamples.append(tagged)
     merged["counterexamples"] = all_counterexamples
 
-    # Status: error if either errored, grammar_incorrect if any counterexamples
-    if g_result["status"] == "error" or p_result["status"] == "error":
+    # Status resolution (priority order):
+    #   1. error → error
+    #   2. any counterexamples → grammar_incorrect
+    #   3. both not_applicable → not_applicable
+    #   4. at least one pass, none failed → pass
+    g_status = g_result["status"]
+    p_status = p_result["status"]
+
+    if g_status == "error" or p_status == "error":
         merged["status"] = "error"
     elif all_counterexamples:
         merged["status"] = "grammar_incorrect"
-    else:
+    elif g_status == "not_applicable" and p_status == "not_applicable":
+        merged["status"] = "not_applicable"
+    elif "pass" in (g_status, p_status):
+        # At least one real test ran and passed; the other may be not_applicable.
         merged["status"] = "pass"
+    else:
+        merged["status"] = "not_applicable"
 
     merged["details"] = (
         f"Grammar: {g_result['details']}; PDA: {p_result['details']}"

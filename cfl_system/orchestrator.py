@@ -309,8 +309,9 @@ def _build_specialist_input(state: PipelineState, agent_name: str) -> dict:
     }
     retry_ctx = state.get("retry_context") or {}
     if retry_ctx:
-        hints = retry_ctx.get("hints", {}) or {}
-        inp["retry_params"] = hints.get(agent_name)
+        hints = retry_ctx.get("hints") or {}
+        if isinstance(hints, dict):
+            inp["retry_params"] = hints.get(agent_name)
         # Provide prior oracle_test feedback on retry (normalized)
         prior_oracle = state.get("oracle_test_result")
         if prior_oracle:
@@ -341,6 +342,10 @@ def _build_reasoning_input(state: PipelineState) -> dict:
 def _get_action(reasoning_output: dict) -> str:
     """Extract action from reasoning output — supports both 'action' and 'decision' fields."""
     return reasoning_output.get("action") or reasoning_output.get("decision") or "done"
+
+
+# Valid action values per reasoning prompt contract
+_VALID_ACTIONS = {"done", "retry", "invert"}
 
 
 # Valid verdict values per reasoning prompt contract
@@ -392,15 +397,28 @@ def _normalize_oracle_test(raw: dict | None) -> dict:
 
 
 def _normalize_claim_verification(raw: dict | None) -> dict:
-    """Normalize claim_verification: add 'status' field from 'verification_status'."""
+    """Normalize claim_verification for the reasoning agent prompt.
+
+    The claim verifier returns verification_status in
+    {verified, refuted, inconclusive, error}. The reasoning prompt
+    expects status in {verified, issues_found}. Map them:
+      verified → verified
+      refuted, inconclusive, error → issues_found
+    We also preserve the original verification_status for nuance.
+    """
     if not isinstance(raw, dict):
         return {}
     result: dict[str, Any] = {}
     for agent, cv in raw.items():
         if isinstance(cv, dict):
             normalized = dict(cv)
-            if "verification_status" in normalized and "status" not in normalized:
-                normalized["status"] = normalized["verification_status"]
+            vs = normalized.get("verification_status")
+            if vs == "verified":
+                normalized["status"] = "verified"
+            elif vs in ("refuted", "inconclusive", "error"):
+                normalized["status"] = "issues_found"
+            elif "status" not in normalized:
+                normalized["status"] = "issues_found"
             result[agent] = normalized
         else:
             result[agent] = cv
@@ -610,10 +628,17 @@ def build_oracle_node(state: PipelineState) -> dict:
         return {}
     log_msg(state, "build_oracle_node...")
     try:
+        from cfl_system.lib.cfl_oracle import UnsupportedOracleKindError
+    except ImportError:
+        UnsupportedOracleKindError = None
+    try:
         oracle_fn = cfl_oracle_from_ir(state["ir"])
         return {"oracle_fn": oracle_fn, "oracle_ok": True}
     except Exception as exc:
-        log_msg(state, f"  oracle build failed: {exc}")
+        if UnsupportedOracleKindError is not None and isinstance(exc, UnsupportedOracleKindError):
+            log_msg(state, f"  oracle not applicable: {exc}")
+        else:
+            log_msg(state, f"  oracle build failed: {exc}")
         return {"oracle_fn": None, "oracle_ok": False}
 
 
@@ -637,6 +662,19 @@ def oracle_test_node(state: PipelineState) -> dict:
     oracle_fn = state.get("oracle_fn")
     if not oracle_fn:
         return {"oracle_test_result": {"status": "not_applicable", "details": "no oracle"}}
+
+    # Skip if the oracle is approximate (e.g. natural_language_filter) —
+    # running a word-membership comparison against an approximate oracle
+    # would produce false passes.
+    if getattr(oracle_fn, "is_approximate", False):
+        reason = getattr(oracle_fn, "approximation_reason", "approximate oracle")
+        log_msg(state, f"  oracle is approximate ({reason}), skipping oracle test")
+        return {
+            "oracle_test_result": {
+                "status": "not_applicable",
+                "details": f"oracle is approximate: {reason}",
+            }
+        }
 
     constructive_evidence: dict[str, Any] = {}
     for name in _CONSTRUCTIVE_AGENTS:
@@ -681,6 +719,11 @@ def run_proof_checker_node(state: PipelineState) -> dict:
 
 def run_reasoning_node(state: PipelineState) -> dict:
     log_msg(state, "run_reasoning_node...")
+    # Clear any transient retry_context from a prior round so the
+    # planner's should_invert signal doesn't leak into a subsequent
+    # reasoning->invert path.
+    state["retry_context"] = {}
+
     reasoning_input = _build_reasoning_input(state)
     output = _run_agent(state, "reasoning", reasoning_input)
 
@@ -696,6 +739,7 @@ def run_reasoning_node(state: PipelineState) -> dict:
     #   - None: runner unavailable or call failed
     #   - agent_error: LLM returned non-JSON
     #   - no action/decision field at all
+    #   - action not in enum {done, retry, invert}
     #   - action="done" but verdict is missing (contract violation)
     needs_fallback = False
     if output is None:
@@ -704,8 +748,13 @@ def run_reasoning_node(state: PipelineState) -> dict:
         needs_fallback = True
     elif not output.get("action") and not output.get("decision"):
         needs_fallback = True
-    elif _get_action(output) == "done" and not output.get("verdict"):
-        needs_fallback = True
+    else:
+        act = _get_action(output)
+        if act not in _VALID_ACTIONS:
+            log_msg(state, f"  reasoning returned unknown action={act!r}, using fallback")
+            needs_fallback = True
+        elif act == "done" and not output.get("verdict"):
+            needs_fallback = True
 
     if needs_fallback:
         log_msg(state, "  reasoning unavailable/invalid, using fallback")
@@ -713,7 +762,7 @@ def run_reasoning_node(state: PipelineState) -> dict:
 
     action = _get_action(output)
     log_msg(state, f"  action={action} verdict={output.get('verdict')}")
-    return {"reasoning_output": output}
+    return {"reasoning_output": output, "retry_context": {}}
 
 
 def _clamp_confidence(value: Any) -> float:
@@ -741,12 +790,18 @@ def _fallback_reasoning_result(
     """Build a contract-compliant reasoning output for the fallback path.
 
     Matches the schema in prompts/cfl_reasoning.md (hints_for_human is a list).
+    If verdict fails to normalize, confidence is reset to 0 to avoid
+    publishing a high-confidence inconclusive result.
     """
+    normalized_verdict = _normalize_verdict(verdict)
+    if verdict and normalized_verdict is None:
+        # Invalid verdict — force confidence to 0
+        confidence = 0.0
     return {
         "agent": "reasoning",
         "action": action,
         "decision": action,  # mirror for both field names
-        "verdict": _normalize_verdict(verdict),
+        "verdict": normalized_verdict,
         "confidence": _clamp_confidence(confidence),
         "primary_evidence": primary_evidence,
         "supporting_evidence": supporting_evidence or [],
@@ -810,10 +865,30 @@ def _fallback_reasoning(state: PipelineState) -> dict:
     if refuted_count > 0:
         log_msg(state, f"  {refuted_count} claims refuted, weakening hypothesis")
 
+    # If there are refuted claims AND retries are still available, retry
+    # instead of committing to a verdict based on stale evidence.
+    retry_round = state.get("retry_round", 0)
+    if refuted_count > 0 and retry_round < MAX_RETRIES:
+        refuted_agents = [
+            name for name, v in verifications.items()
+            if isinstance(v, dict) and v.get("verification_status") == "refuted"
+        ]
+        return _fallback_reasoning_result(
+            action="retry", verdict=None, confidence=0.25,
+            summary=f"{refuted_count} claims refuted; retrying {refuted_agents}",
+            retry_plan={"agents_to_retry": refuted_agents, "hints": {}},
+        )
+
     hyp = hypothesis.get("hypothesis", "unknown")
     hyp_conf = _clamp_confidence(hypothesis.get("confidence", 0.0))
 
-    if hyp in ("cfl", "non_cfl") and hyp_conf >= 0.7 and verified_count > 0:
+    # Only trust hypothesis-based done if there are NO refuted claims
+    if (
+        hyp in ("cfl", "non_cfl")
+        and hyp_conf >= 0.7
+        and verified_count > 0
+        and refuted_count == 0
+    ):
         return _fallback_reasoning_result(
             action="done", verdict=hyp,
             confidence=min(hyp_conf + 0.05 * verified_count, 0.95),
@@ -822,10 +897,17 @@ def _fallback_reasoning(state: PipelineState) -> dict:
         )
 
     # Pick best agent verdict with clamped confidence
+    # Skip agents whose claim was refuted
+    refuted_agents_set = {
+        name for name, v in verifications.items()
+        if isinstance(v, dict) and v.get("verification_status") == "refuted"
+    }
     best_agent: str | None = None
     best_verdict: str | None = None
     best_conf = 0.0
     for name, output in agent_results.items():
+        if name in refuted_agents_set:
+            continue
         if not isinstance(output, dict):
             continue
         verdict = output.get("verdict")
@@ -844,7 +926,6 @@ def _fallback_reasoning(state: PipelineState) -> dict:
             primary_evidence=best_agent or "",
         )
 
-    retry_round = state.get("retry_round", 0)
     if retry_round < MAX_RETRIES:
         return _fallback_reasoning_result(
             action="retry", verdict=None, confidence=0.2,
@@ -908,15 +989,41 @@ def run_retry_planner_node(state: PipelineState) -> dict:
     )
     if not planner_failed:
         agents_to_retry = output.get("agents_to_retry")
-        hints = output.get("hints") or output.get("retry_params") or {}
+        hints_raw = output.get("hints") or output.get("retry_params") or {}
         should_invert = bool(output.get("should_invert_hypothesis", False))
         max_retries_remaining = output.get("max_retries_remaining")
     else:
         if output is not None:
             log_msg(state, "  retry_planner returned agent_error, using reasoning.retry_plan")
-        r_plan = reasoning.get("retry_plan", {})
-        agents_to_retry = r_plan.get("agents_to_retry") if r_plan else None
-        hints = r_plan.get("hints", {}) if r_plan else {}
+        r_plan = reasoning.get("retry_plan") or {}
+        if not isinstance(r_plan, dict):
+            r_plan = {}
+        agents_to_retry = r_plan.get("agents_to_retry")
+        hints_raw = r_plan.get("hints") or {}
+        should_invert = bool(r_plan.get("should_invert_hypothesis", False))
+        max_retries_remaining = r_plan.get("max_retries_remaining")
+
+    # Validate and coerce types defensively (LLM may produce malformed JSON)
+    if not isinstance(hints_raw, dict):
+        log_msg(state, f"  hints is not a dict (type={type(hints_raw).__name__}), ignoring")
+        hints = {}
+    else:
+        # Ensure per-agent hints are also dicts
+        hints = {k: v for k, v in hints_raw.items() if isinstance(v, dict)}
+
+    if max_retries_remaining is not None:
+        try:
+            max_retries_remaining = int(max_retries_remaining)
+        except (TypeError, ValueError):
+            log_msg(state, f"  max_retries_remaining is not an int, ignoring")
+            max_retries_remaining = None
+
+    if agents_to_retry is not None and not isinstance(agents_to_retry, list):
+        log_msg(state, f"  agents_to_retry is not a list, ignoring")
+        agents_to_retry = None
+    if isinstance(agents_to_retry, list):
+        # Keep only string entries
+        agents_to_retry = [a for a in agents_to_retry if isinstance(a, str)]
 
     # Validate agents_to_retry: filter unknown names to prevent silent 0-agent dispatch
     if isinstance(agents_to_retry, list):
@@ -927,13 +1034,15 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         agents_to_retry = valid_agents
 
     # Terminal condition: planner returns empty retry list, max_retries_remaining<=0,
-    # OR retry_round will exceed MAX_RETRIES, and no inversion requested → give up.
+    # OR retry_round will exceed MAX_RETRIES, and no USABLE inversion requested → give up.
+    # An inversion is usable only if we haven't already exhausted MAX_INVERSIONS.
     empty_list = agents_to_retry is not None and len(agents_to_retry) == 0
-    # Safe comparison: treat None as "not exhausted" (trust retry_round limit)
     exhausted = max_retries_remaining is not None and max_retries_remaining <= 0
     next_round = state.get("retry_round", 0) + 1
     hard_limit = next_round > MAX_RETRIES
-    terminal = (empty_list or exhausted or hard_limit) and not should_invert
+    can_invert = state.get("inversions_done", 0) < MAX_INVERSIONS
+    effective_invert = should_invert and can_invert
+    terminal = (empty_list or exhausted or hard_limit) and not effective_invert
 
     log_msg(
         state,
@@ -959,8 +1068,17 @@ def decide_after_retry_planner(state: PipelineState) -> str:
     ctx = state.get("retry_context", {})
     if ctx.get("terminal"):
         return "fail"
-    if ctx.get("should_invert") and state.get("inversions_done", 0) < MAX_INVERSIONS:
-        return "invert"
+    should_invert = ctx.get("should_invert")
+    can_invert = state.get("inversions_done", 0) < MAX_INVERSIONS
+    if should_invert:
+        if can_invert:
+            return "invert"
+        # Planner asked for invert but we're out of inversions — if there's
+        # also nothing else to do, fail (terminal should have caught this,
+        # but guard defensively).
+        agents = state.get("agents_to_retry")
+        if isinstance(agents, list) and len(agents) == 0:
+            return "fail"
     return "dispatch"
 
 
@@ -1028,7 +1146,12 @@ def assemble_result_node(state: PipelineState) -> dict:
     raw_verdict = reasoning.get("verdict")
     normalized = _normalize_verdict(raw_verdict)
     verdict = normalized or "inconclusive"
-    confidence = _clamp_confidence(reasoning.get("confidence"))
+    # If the verdict was invalid (normalized to None but raw was truthy),
+    # the confidence belongs to a nonsense output — reset to 0.
+    if raw_verdict and normalized is None:
+        confidence = 0.0
+    else:
+        confidence = _clamp_confidence(reasoning.get("confidence"))
 
     grammar = pda = None
     for name in _CONSTRUCTIVE_AGENTS:

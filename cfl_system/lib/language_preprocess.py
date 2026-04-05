@@ -95,9 +95,17 @@ def _analyze_filter_recursive(filt: dict) -> tuple[bool | None, str]:
         # If any non-regular -> non-regular
         return False, f"boolean_{op}_with_non_regular"
 
-    # Boolean NOT
+    # Boolean NOT — schema uses `operands: [predicate]`; accept legacy `operand` too
     if op == "not":
-        operand = filt.get("operand", {})
+        operand = None
+        if "operand" in filt:
+            operand = filt.get("operand")
+        else:
+            ops_list = filt.get("operands") or []
+            if isinstance(ops_list, list) and ops_list:
+                operand = ops_list[0]
+        if not isinstance(operand, dict):
+            return None, "complex"
         r, t = _analyze_filter_recursive(operand)
         # Regular languages are closed under complement
         return r, f"not_{t}"
@@ -284,15 +292,26 @@ def preprocess_language(ir: dict) -> dict:
 
     # Filter analysis (only for grammar_filter)
     filter_analysis = None
+    filter_uncomputable = False
     if kind == "grammar_filter":
         filt = spec.get("filter", {})
         filter_analysis = _analyze_filter(filt)
+        # Natural-language filter or anything we can't classify as regular
+        # means we should NOT compute bounded/Parikh over the raw grammar
+        # and present it as if it described the whole language.
+        if filter_analysis and filter_analysis.get("filter_is_regular") is None:
+            filter_uncomputable = True
 
-    # Bounded language test
-    bounded_analysis = _check_bounded(ir)
-
-    # Parikh pre-check
-    parikh = _parikh_precheck(ir)
+    if filter_uncomputable:
+        # Filter makes the language's shape unknowable — skip bounded/Parikh
+        # to avoid giving the classifier misleading "definitive" data.
+        bounded_analysis = None
+        parikh = None
+    else:
+        # Bounded language test
+        bounded_analysis = _check_bounded(ir)
+        # Parikh pre-check
+        parikh = _parikh_precheck(ir)
 
     # Quick verdict
     verdict, reason = _determine_quick_verdict(
