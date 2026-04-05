@@ -50,16 +50,20 @@ def _confidence_bar(confidence: float | None) -> str:
 
 def render_grammar(grammar: dict | None) -> str:
     """Render a CFG as readable text: S → aSb | ε."""
-    if grammar is None:
+    if not isinstance(grammar, dict):
         return ""
-    rules = grammar.get("rules", [])
+    rules = grammar.get("rules") or []
     if not rules:
         return ""
     by_lhs: dict[str, list[str]] = {}
     for rule in rules:
-        lhs = rule["lhs"]
-        rhs = rule["rhs"]
-        rhs_str = " ".join(rhs) if rhs else "ε"
+        if not isinstance(rule, dict):
+            continue
+        lhs = rule.get("lhs")
+        rhs = rule.get("rhs", [])
+        if not lhs:
+            continue
+        rhs_str = " ".join(str(s) for s in rhs) if rhs else "ε"
         by_lhs.setdefault(lhs, []).append(rhs_str)
 
     lines = []
@@ -82,9 +86,9 @@ def render_grammar(grammar: dict | None) -> str:
 
 def render_pda_table(pda: dict | None) -> str:
     """Render PDA transitions as a Markdown table."""
-    if pda is None:
+    if not isinstance(pda, dict):
         return ""
-    transitions = pda.get("transitions", [])
+    transitions = pda.get("transitions") or []
     if not transitions:
         return ""
 
@@ -92,10 +96,15 @@ def render_pda_table(pda: dict | None) -> str:
     sep = "|------|-------|-----------|-----|------|"
     rows = [header, sep]
     for t in transitions:
+        if not isinstance(t, dict):
+            continue
         inp = t.get("input") or "ε"
-        push_list = t.get("push", [])
-        push = " ".join(push_list) if push_list else "ε (pop)"
-        rows.append(f"| {t['from']} | {inp} | {t['stack_top']} | {t['to']} | {push} |")
+        push_list = t.get("push") or []
+        push = " ".join(str(s) for s in push_list) if push_list else "ε (pop)"
+        rows.append(
+            f"| {t.get('from', '?')} | {inp} | {t.get('stack_top', '?')} "
+            f"| {t.get('to', '?')} | {push} |"
+        )
     return "\n".join(rows)
 
 
@@ -147,24 +156,64 @@ def render_markdown(result: dict) -> str:
     # Proof
     proof = result.get("proof")
     if proof is not None:
-        method = proof.get("method", "")
-        summary = proof.get("summary", "")
-        sections.append(f"> [!proof] Доказательство ({method})")
-        sections.append(f"> {summary}\n")
-
-        details = proof.get("details", {})
-
-        # Pumping cases
-        cases = details.get("cases")
-        if cases:
-            sections.append("### Разбор случаев (накачка)\n")
-            sections.append(_render_pumping_cases(cases))
+        if isinstance(proof, str):
+            # Raw markdown proof from formalizer
+            sections.append("> [!proof] Доказательство")
+            for line in proof.split("\n"):
+                sections.append(f"> {line}")
             sections.append("")
+        elif isinstance(proof, dict):
+            # Support formalizer proof_document schema (title, method, steps, conclusion)
+            title = proof.get("title", "")
+            method = proof.get("method", "")
+            summary = proof.get("summary", "")
 
-        # Word chosen
-        word = details.get("word_chosen") or details.get("word_parametric")
-        if word:
-            sections.append(f"> [!note] Выбранное слово\n> $z = {word}$\n")
+            header = f"> [!proof] {title}" if title else "> [!proof] Доказательство"
+            if method:
+                header += f" ({method})"
+            sections.append(header)
+            if summary:
+                sections.append(f"> {summary}\n")
+            else:
+                sections.append("")
+
+            # Formalizer structured steps
+            steps = proof.get("steps") or []
+            if steps:
+                sections.append("### Шаги доказательства\n")
+                for step in steps:
+                    if not isinstance(step, dict):
+                        continue
+                    num = step.get("step_number", "")
+                    s_title = step.get("title", "")
+                    content = step.get("content", "")
+                    justification = step.get("justification", "")
+                    sections.append(f"**Шаг {num}. {s_title}**\n")
+                    if content:
+                        sections.append(f"{content}\n")
+                    if justification:
+                        sections.append(f"*Обоснование:* {justification}\n")
+
+            # Conclusion (formalizer)
+            conclusion = proof.get("conclusion")
+            if conclusion:
+                sections.append(f"### Заключение\n\n{conclusion}\n")
+
+            # References (formalizer)
+            refs = proof.get("references") or []
+            if refs:
+                sections.append(f"**Источники:** {', '.join(refs)}\n")
+
+            # Legacy fields: details with pumping cases / word_chosen
+            details = proof.get("details") or {}
+            cases = details.get("cases")
+            if cases:
+                sections.append("### Разбор случаев (накачка)\n")
+                sections.append(_render_pumping_cases(cases))
+                sections.append("")
+            word = details.get("word_chosen") or details.get("word_parametric")
+            if word:
+                sections.append(f"> [!note] Выбранное слово\n> $z = {word}$\n")
 
     # Grammar
     grammar = result.get("grammar")
@@ -182,16 +231,21 @@ def render_markdown(result: dict) -> str:
 
     # Oracle test
     oracle = result.get("oracle_test")
-    if oracle and oracle.get("status") != "not_applicable":
+    if isinstance(oracle, dict) and oracle.get("status") != "not_applicable":
         sections.append("### Oracle тест\n")
         sections.append(f"- Статус: {oracle.get('status', 'N/A')}")
         sections.append(f"- Проверено положительных: {oracle.get('positive_checked', 0)}")
         sections.append(f"- Проверено отрицательных: {oracle.get('negative_checked', 0)}")
-        ces = oracle.get("counterexamples", [])
+        ces = oracle.get("counterexamples") or []
         if ces:
             sections.append(f"- Контрпримеры: {len(ces)}")
             for ce in ces[:5]:
-                sections.append(f"  - `{ce.get('word', '')}`: {ce.get('description', '')}")
+                if isinstance(ce, dict):
+                    word = ce.get("word", "")
+                    desc = ce.get("description", "")
+                    sections.append(f"  - `{word}`: {desc}")
+                else:
+                    sections.append(f"  - `{ce}`")
         sections.append("")
 
     # Agents used
@@ -213,7 +267,7 @@ def render_markdown(result: dict) -> str:
 def render_html(result: dict) -> str:
     """Convert CFL pipeline result to standalone HTML page."""
     if result is None:
-        return "<html><body><p>Результат отсутств��ет</p></body></html>"
+        return "<html><body><p>Результат отсутствует</p></body></html>"
 
     verdict = result.get("verdict")
     source = _esc(result.get("source_text", ""))
@@ -252,42 +306,86 @@ def render_html(result: dict) -> str:
     # Proof
     proof = result.get("proof")
     if proof is not None:
-        method = _esc(proof.get("method", ""))
-        summary = _esc(proof.get("summary", ""))
-        parts.append(f'<div class="callout proof-callout">')
-        parts.append(f"<strong>Доказательство ({method}):</strong><br>{summary}")
-        parts.append("</div>")
+        if isinstance(proof, str):
+            parts.append('<div class="callout proof-callout">')
+            parts.append(f"<strong>Доказательство:</strong><br><pre>{_esc(proof)}</pre>")
+            parts.append("</div>")
+        elif isinstance(proof, dict):
+            title = _esc(proof.get("title", "Доказательство"))
+            method = _esc(proof.get("method", ""))
+            summary = _esc(proof.get("summary", ""))
+            parts.append('<div class="callout proof-callout">')
+            header = f"<strong>{title}"
+            if method:
+                header += f" ({method})"
+            header += "</strong>"
+            parts.append(header)
+            if summary:
+                parts.append(f"<br>{summary}")
+            # Steps
+            steps = proof.get("steps") or []
+            if steps:
+                parts.append("<ol>")
+                for step in steps:
+                    if not isinstance(step, dict):
+                        continue
+                    s_title = _esc(step.get("title", ""))
+                    content = _esc(step.get("content", ""))
+                    just = _esc(step.get("justification", ""))
+                    parts.append(f"<li><strong>{s_title}</strong><br>{content}")
+                    if just:
+                        parts.append(f"<br><em>{just}</em>")
+                    parts.append("</li>")
+                parts.append("</ol>")
+            conclusion = proof.get("conclusion")
+            if conclusion:
+                parts.append(f"<p><strong>Заключение:</strong> {_esc(conclusion)}</p>")
+            refs = proof.get("references") or []
+            if refs:
+                refs_esc = ", ".join(_esc(r) for r in refs)
+                parts.append(f"<p><strong>Источники:</strong> {refs_esc}</p>")
+            parts.append("</div>")
 
     # Grammar
     grammar = result.get("grammar")
-    if grammar is not None:
+    if isinstance(grammar, dict):
         parts.append("<h3>Грамматика</h3>")
-        rules = grammar.get("rules", [])
+        rules = grammar.get("rules") or []
         if rules:
             parts.append("<ul>")
             by_lhs: dict[str, list[str]] = {}
             for rule in rules:
-                rhs_str = " ".join(rule["rhs"]) if rule["rhs"] else "ε"
-                by_lhs.setdefault(rule["lhs"], []).append(_esc(rhs_str))
+                if not isinstance(rule, dict):
+                    continue
+                lhs = rule.get("lhs")
+                rhs = rule.get("rhs", [])
+                if not lhs:
+                    continue
+                rhs_str = " ".join(str(s) for s in rhs) if rhs else "ε"
+                by_lhs.setdefault(lhs, []).append(_esc(rhs_str))
             for nt, alts in by_lhs.items():
                 parts.append(f"<li>{_esc(nt)} → {' | '.join(alts)}</li>")
             parts.append("</ul>")
 
     # PDA
     pda = result.get("pda")
-    if pda is not None:
+    if isinstance(pda, dict):
         parts.append("<h3>МП-автомат</h3>")
-        transitions = pda.get("transitions", [])
+        transitions = pda.get("transitions") or []
         if transitions:
             parts.append("<table><tr><th>From</th><th>Input</th><th>Stack Top</th>"
                          "<th>To</th><th>Push</th></tr>")
             for t in transitions:
+                if not isinstance(t, dict):
+                    continue
                 inp = _esc(t.get("input") or "ε")
-                push_list = t.get("push", [])
-                push = _esc(" ".join(push_list) if push_list else "ε")
-                parts.append(f"<tr><td>{_esc(t['from'])}</td><td>{inp}</td>"
-                             f"<td>{_esc(t['stack_top'])}</td><td>{_esc(t['to'])}</td>"
-                             f"<td>{push}</td></tr>")
+                push_list = t.get("push") or []
+                push = _esc(" ".join(str(s) for s in push_list) if push_list else "ε")
+                parts.append(
+                    f"<tr><td>{_esc(t.get('from', '?'))}</td><td>{inp}</td>"
+                    f"<td>{_esc(t.get('stack_top', '?'))}</td>"
+                    f"<td>{_esc(t.get('to', '?'))}</td><td>{push}</td></tr>"
+                )
             parts.append("</table>")
 
     # Oracle test

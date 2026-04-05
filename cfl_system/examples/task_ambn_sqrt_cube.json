@@ -1,0 +1,8 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "Исследовать на КС-свойство язык L = {a^m b^n | m ≥ √n ∨ n ≥ m³}",
+  "language_spec": {
+    "kind": "natural",
+    "description": "L = {a^m b^n | m >= sqrt(n) OR n >= m^3}. Equivalently: m^2 >= n OR n >= m^3. Words consist of a-block followed by b-block. Alphabet: {a, b}."
+  }
+}

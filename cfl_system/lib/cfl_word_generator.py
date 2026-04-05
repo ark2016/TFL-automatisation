@@ -74,23 +74,28 @@ def _check_constraints(assignment: dict[str, str], constraints: list[dict]) -> b
       - constant: literal value
       - count_symbol: count of symbol in assignment[in_var]
     """
+    _ops = {
+        "gt":  (lambda a, b: a > b),
+        "ge":  (lambda a, b: a >= b),
+        "geq": (lambda a, b: a >= b),
+        "lt":  (lambda a, b: a < b),
+        "le":  (lambda a, b: a <= b),
+        "leq": (lambda a, b: a <= b),
+        "eq":  (lambda a, b: a == b),
+        "ne":  (lambda a, b: a != b),
+        "neq": (lambda a, b: a != b),
+    }
     for c in constraints:
         op = c.get("op")
+        if op not in _ops:
+            # Unknown operator — conservatively reject (was: silently pass)
+            return False
         left_val = _eval_expr(c.get("left", {}), assignment)
         right_val = _eval_expr(c.get("right", {}), assignment)
         if left_val is None or right_val is None:
-            continue  # skip unknown expressions
-        if op == "gt" and not (left_val > right_val):
+            # Unknown expression kind — conservatively reject
             return False
-        elif op == "ge" and not (left_val >= right_val):
-            return False
-        elif op == "lt" and not (left_val < right_val):
-            return False
-        elif op == "le" and not (left_val <= right_val):
-            return False
-        elif op == "eq" and not (left_val == right_val):
-            return False
-        elif op == "ne" and not (left_val != right_val):
+        if not _ops[op](left_val, right_val):
             return False
     return True
 
@@ -293,10 +298,42 @@ def _generate_grammar_filter(
 
 
 def _check_filter(word: str, filt: dict) -> bool:
-    """Check if a word passes the grammar_filter predicate."""
-    op = filt.get("op")
-    if not op:
+    """Check if a word passes the grammar_filter predicate.
+
+    Natural-language filters are indeterminate: accept everything the
+    grammar generates (caller filters by grammar separately).
+    Unknown operators are conservatively rejected.
+    """
+    if not isinstance(filt, dict):
         return True
+
+    # Natural language filter: cannot evaluate, accept all words
+    if filt.get("kind") == "natural_language_filter" or "natural_language_filter" in filt:
+        return True
+
+    # Boolean combinations
+    op = filt.get("op")
+    if op in ("and", "or"):
+        operands = filt.get("operands", []) or []
+        results = [_check_filter(word, o) for o in operands]
+        return all(results) if op == "and" else any(results)
+    if op == "not":
+        operand = filt.get("operand") or (filt.get("operands") or [{}])[0]
+        return not _check_filter(word, operand)
+
+    # Modular predicate
+    if "modulus" in filt and "remainder" in filt and "expr" in filt:
+        val = _eval_expr(filt.get("expr", {}), {"w": word})
+        if val is None:
+            return False
+        try:
+            return val % int(filt["modulus"]) == int(filt["remainder"])
+        except (TypeError, ValueError):
+            return False
+
+    # No op field at all — conservatively reject (was: silently pass)
+    if not op:
+        return False
 
     # Build a pseudo-assignment with "w" as the whole word
     assignment = {"w": word}
@@ -305,21 +342,22 @@ def _check_filter(word: str, filt: dict) -> bool:
     right_val = _eval_expr(filt.get("right", {}), assignment)
 
     if left_val is None or right_val is None:
-        return True  # can't evaluate — pass through
+        return False  # can't evaluate — conservatively reject
 
-    if op == "eq":
-        return left_val == right_val
-    if op == "ne":
-        return left_val != right_val
-    if op == "gt":
-        return left_val > right_val
-    if op == "ge":
-        return left_val >= right_val
-    if op == "lt":
-        return left_val < right_val
-    if op == "le":
-        return left_val <= right_val
-    return True
+    _ops = {
+        "eq":  (lambda a, b: a == b),
+        "ne":  (lambda a, b: a != b),
+        "neq": (lambda a, b: a != b),
+        "gt":  (lambda a, b: a > b),
+        "ge":  (lambda a, b: a >= b),
+        "geq": (lambda a, b: a >= b),
+        "lt":  (lambda a, b: a < b),
+        "le":  (lambda a, b: a <= b),
+        "leq": (lambda a, b: a <= b),
+    }
+    if op in _ops:
+        return _ops[op](left_val, right_val)
+    return False  # unknown op
 
 
 def _generate_predicate(

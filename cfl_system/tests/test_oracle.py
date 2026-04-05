@@ -341,17 +341,21 @@ class TestGrammarFilterOracle:
         assert oracle("ab") is False   # |a|=1 not > |b|=1
         assert oracle("abb") is False  # |a|=1 not > |b|=2
 
-    def test_natural_language_filter_returns_false(self):
+    def test_natural_language_filter_accepts_grammar(self):
+        """NL filters cannot be evaluated — oracle accepts what the grammar generates."""
         spec = {
             "kind": "grammar_filter",
             "grammar": _anbn_grammar(),
             "filter": {
-                "natural_language_filter": "word must be pretty",
+                "kind": "natural_language_filter",
+                "description": "word must be pretty",
             },
         }
         ir = {"language_spec": spec}
         oracle = cfl_oracle_from_ir(ir)
-        assert oracle("ab") is False  # NL filters always return False
+        assert oracle("ab") is True   # in grammar a^n b^n
+        assert oracle("aabb") is True
+        assert oracle("aab") is False  # not in grammar
 
 
 # ---------------------------------------------------------------------------

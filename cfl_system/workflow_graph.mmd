@@ -1,0 +1,51 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	validate_ir_node(validate_ir_node)
+	assemble_early_failure(assemble_early_failure)
+	analyze_hypothesis_node(analyze_hypothesis_node)
+	run_classifier_node(run_classifier_node)
+	language_preprocess_node(language_preprocess_node)
+	setup_dispatch_node(setup_dispatch_node)
+	run_specialist_node(run_specialist_node)
+	collect_specialists_node(collect_specialists_node)
+	build_oracle_node(build_oracle_node)
+	verify_claims_node(verify_claims_node)
+	oracle_test_node(oracle_test_node)
+	run_proof_checker_node(run_proof_checker_node)
+	run_reasoning_node(run_reasoning_node)
+	run_retry_planner_node(run_retry_planner_node)
+	invert_hypothesis_node(invert_hypothesis_node)
+	formalize_node(formalize_node)
+	assemble_result_node(assemble_result_node)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> validate_ir_node;
+	analyze_hypothesis_node --> run_classifier_node;
+	build_oracle_node --> verify_claims_node;
+	collect_specialists_node --> build_oracle_node;
+	formalize_node --> assemble_result_node;
+	invert_hypothesis_node --> setup_dispatch_node;
+	language_preprocess_node --> setup_dispatch_node;
+	oracle_test_node --> run_proof_checker_node;
+	run_classifier_node --> language_preprocess_node;
+	run_proof_checker_node --> run_reasoning_node;
+	run_reasoning_node -. &nbsp;fail&nbsp; .-> assemble_early_failure;
+	run_reasoning_node -. &nbsp;done&nbsp; .-> formalize_node;
+	run_reasoning_node -. &nbsp;invert&nbsp; .-> invert_hypothesis_node;
+	run_reasoning_node -. &nbsp;retry&nbsp; .-> run_retry_planner_node;
+	run_retry_planner_node --> setup_dispatch_node;
+	run_specialist_node --> collect_specialists_node;
+	setup_dispatch_node -.-> collect_specialists_node;
+	setup_dispatch_node -.-> run_specialist_node;
+	validate_ir_node -. &nbsp;ok&nbsp; .-> analyze_hypothesis_node;
+	validate_ir_node -. &nbsp;fail&nbsp; .-> assemble_early_failure;
+	verify_claims_node --> oracle_test_node;
+	assemble_early_failure --> __end__;
+	assemble_result_node --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

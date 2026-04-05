@@ -87,16 +87,26 @@ def _validate_grammar_filter(spec: dict, path: str) -> None:
     filt = spec["filter"]
     _cfl_check(isinstance(filt, dict), f"{path}.filter: filter must be an object")
 
-    # Filter can be a Predicate (reuse base validation) or a natural_language_filter
+    # Filter can be a Predicate or a natural_language_filter.
+    # Canonical format: {"kind": "natural_language_filter", "description": "..."}.
+    if filt.get("kind") == "natural_language_filter":
+        _cfl_check(
+            "description" in filt and isinstance(filt["description"], str),
+            f"{path}.filter: natural_language_filter requires 'description' string",
+        )
+        return
+    # Legacy/alternative: {"natural_language_filter": "string"}
     if "natural_language_filter" in filt:
-        _cfl_check(isinstance(filt["natural_language_filter"], str),
-                    f"{path}.filter: natural_language_filter must be a string")
-    else:
-        # Treat as a Predicate — use base validation (raises IRValidationError)
-        try:
-            _validate_predicate(filt, f"{path}.filter")
-        except IRValidationError as e:
-            raise CFLIRValidationError(str(e))
+        _cfl_check(
+            isinstance(filt["natural_language_filter"], str),
+            f"{path}.filter: natural_language_filter must be a string",
+        )
+        return
+    # Otherwise treat as a Predicate — use base validation
+    try:
+        _validate_predicate(filt, f"{path}.filter")
+    except IRValidationError as e:
+        raise CFLIRValidationError(str(e))
 
 
 def _validate_repeated_subword(spec: dict, path: str) -> None:

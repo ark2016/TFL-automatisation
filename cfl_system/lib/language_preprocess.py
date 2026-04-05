@@ -24,7 +24,9 @@ def _classify_single_filter(filt: dict) -> tuple[bool | None, str]:
     Returns (is_regular, filter_type).
     """
     # Natural language filter -- cannot determine
-    if "natural_language_filter" in filt:
+    # Canonical: {"kind": "natural_language_filter", "description": "..."}
+    # Legacy:    {"natural_language_filter": "..."}
+    if filt.get("kind") == "natural_language_filter" or "natural_language_filter" in filt:
         return None, "natural_language"
 
     op = filt.get("op")
@@ -42,8 +44,8 @@ def _classify_single_filter(filt: dict) -> tuple[bool | None, str]:
     if op == "not":
         return None, "complex"
 
-    # --- Comparison operators ---
-    if op in ("eq", "ne", "lt", "le", "gt", "ge"):
+    # --- Comparison operators (support both short and explicit forms) ---
+    if op in ("eq", "ne", "neq", "lt", "le", "leq", "gt", "ge", "geq"):
         left_kind = left.get("kind")
         right_kind = right.get("kind")
 
@@ -225,6 +227,17 @@ def _determine_quick_verdict(
     if parikh_precheck and parikh_precheck.get("is_semilinear") is False:
         return "non_cfl", "Parikh image is not semilinear, so the language cannot be context-free."
 
+    # If the filter is uncomputable (natural language / complex), we cannot
+    # safely give a quick CFL verdict even if the grammar part looks CFL.
+    # Bail out early so bounded/Parikh analysis on the grammar alone
+    # doesn't produce a misleading verdict.
+    filter_uncomputable = (
+        filter_analysis is not None
+        and filter_analysis.get("filter_is_regular") is None
+    )
+    if filter_uncomputable:
+        return None, None
+
     # Grammar + regular filter -> CFL (CFL intersect REG = CFL)
     if filter_analysis and filter_analysis.get("filter_is_regular") is True:
         return "cfl", "Grammar generates a CFL; filter is regular; CFL intersect REG = CFL."
@@ -256,8 +269,17 @@ def preprocess_language(ir: dict) -> dict:
 
     Returns a dict with filter_analysis, bounded_analysis,
     parikh_precheck, quick_verdict, and quick_verdict_reason.
+    Always returns a complete dict even on malformed input.
     """
-    spec = ir.get("language_spec", {})
+    spec = ir.get("language_spec") if isinstance(ir, dict) else None
+    if not isinstance(spec, dict):
+        return {
+            "filter_analysis": None,
+            "bounded_analysis": None,
+            "parikh_precheck": None,
+            "quick_verdict": None,
+            "quick_verdict_reason": None,
+        }
     kind = spec.get("kind")
 
     # Filter analysis (only for grammar_filter)

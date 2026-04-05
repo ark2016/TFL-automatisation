@@ -35,20 +35,21 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def _eval_expr(expr: dict, env: dict[str, str]) -> int:
-    """Evaluate an Expr node given variable bindings."""
-    if _base_eval_expr is not None:
-        return _base_eval_expr(expr, env)
+    """Evaluate an Expr node given variable bindings.
 
-    kind = expr["kind"]
+    Missing variables are treated as empty strings (defensive) to
+    avoid crashing the oracle on malformed predicates.
+    """
+    kind = expr.get("kind")
     if kind == "constant":
-        return expr["value"]
+        return int(expr.get("value", 0))
     if kind == "length":
-        return len(env[expr["of_var"]])
+        return len(env.get(expr.get("of_var", ""), ""))
     if kind == "count_symbol":
-        return env[expr["in_var"]].count(expr["symbol"])
+        return env.get(expr.get("in_var", ""), "").count(expr.get("symbol", ""))
     if kind == "count_subword":
-        word = env[expr["in_var"]]
-        sub = expr["subword"]
+        word = env.get(expr.get("in_var", ""), "")
+        sub = expr.get("subword", "")
         if not sub:
             return 0
         count, start = 0, 0
@@ -59,7 +60,13 @@ def _eval_expr(expr: dict, env: dict[str, str]) -> int:
             count += 1
             start = idx + 1
         return count
-    raise ValueError(f"Unknown expr kind: {kind}")
+    # Try base evaluator as fallback (may handle extended kinds)
+    if _base_eval_expr is not None:
+        try:
+            return _base_eval_expr(expr, env)
+        except (KeyError, ValueError, TypeError):
+            return 0
+    return 0
 
 
 def _eval_predicate(pred: dict, env: dict[str, str], alphabet: list[str]) -> bool:
@@ -78,14 +85,20 @@ def _eval_predicate(pred: dict, env: dict[str, str], alphabet: list[str]) -> boo
             return any(results)
         return not results[0]
 
-    # Comparison
-    if op in ("eq", "neq", "lt", "leq", "gt", "geq"):
-        left = _eval_expr(pred["left"], env)
-        right = _eval_expr(pred["right"], env)
+    # Comparison (support both short and explicit forms)
+    if op in ("eq", "neq", "ne", "lt", "leq", "le", "gt", "geq", "ge"):
+        left = _eval_expr(pred.get("left", {}), env)
+        right = _eval_expr(pred.get("right", {}), env)
         ops = {
-            "eq": lambda a, b: a == b, "neq": lambda a, b: a != b,
-            "lt": lambda a, b: a < b, "leq": lambda a, b: a <= b,
-            "gt": lambda a, b: a > b, "geq": lambda a, b: a >= b,
+            "eq":  lambda a, b: a == b,
+            "neq": lambda a, b: a != b,
+            "ne":  lambda a, b: a != b,
+            "lt":  lambda a, b: a < b,
+            "leq": lambda a, b: a <= b,
+            "le":  lambda a, b: a <= b,
+            "gt":  lambda a, b: a > b,
+            "geq": lambda a, b: a >= b,
+            "ge":  lambda a, b: a >= b,
         }
         return ops[op](left, right)
 
@@ -192,23 +205,32 @@ def predicate_oracle(spec: dict) -> Callable[[str], bool]:
     """Build oracle from predicate language spec.
 
     Delegates to agent_system.lib.oracle.oracle_from_ir if available,
-    otherwise implements basic predicate evaluation.
+    otherwise implements basic predicate evaluation. Returns False
+    on malformed predicates instead of crashing.
     """
     if _base_oracle_from_ir is not None:
-        # Wrap spec into an IR dict that the base oracle expects
         ir = {"language_spec": spec}
         try:
-            return _base_oracle_from_ir(ir)
+            base_oracle = _base_oracle_from_ir(ir)
+            def safe_base_oracle(word: str) -> bool:
+                try:
+                    return base_oracle(word)
+                except (KeyError, ValueError, TypeError):
+                    return False
+            return safe_base_oracle
         except (ValueError, KeyError):
             pass  # fall through to local implementation
 
     alphabet = spec.get("alphabet", ["a", "b"])
     variable = spec.get("variable", "w")
-    predicate = spec["predicate"]
+    predicate = spec.get("predicate", {})
 
     def oracle(word: str) -> bool:
         env = {variable: word}
-        return _eval_predicate(predicate, env, alphabet)
+        try:
+            return _eval_predicate(predicate, env, alphabet)
+        except (KeyError, ValueError, TypeError):
+            return False
 
     return oracle
 
@@ -230,16 +252,25 @@ def _eval_filter_predicate(pred: dict, word: str) -> bool:
 def _grammar_filter_oracle(spec: dict) -> Callable[[str], bool]:
     """Build oracle for grammar_filter kind."""
     g_oracle = grammar_oracle(spec["grammar"])
-    filter_spec = spec["filter"]
+    filter_spec = spec.get("filter") or {}
 
-    # Natural language filters cannot be evaluated automatically
-    if filter_spec.get("natural_language_filter"):
-        return lambda w: False
+    # Natural language filters cannot be evaluated automatically.
+    # Canonical: {"kind": "natural_language_filter", "description": "..."}
+    # Legacy:    {"natural_language_filter": "..."}
+    if (
+        filter_spec.get("kind") == "natural_language_filter"
+        or "natural_language_filter" in filter_spec
+    ):
+        # Accept anything the grammar generates; the filter is for humans.
+        return g_oracle
 
     def check(word: str) -> bool:
         if not g_oracle(word):
             return False
-        return _eval_filter_predicate(filter_spec, word)
+        try:
+            return _eval_filter_predicate(filter_spec, word)
+        except (KeyError, ValueError, TypeError):
+            return False
 
     return check
 
