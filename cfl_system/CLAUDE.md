@@ -19,6 +19,17 @@ Full spec: `cfl_system/tz_cfl_agent_system.md`
 - May import from `agent_system.lib.word_generator` (base word generator)
 - Do NOT modify any files in `agent_system/`
 
+## External tool requirements
+
+- **Graphviz `dot` binary** — required for rendering PDA state diagrams as
+  inline SVG in the HTML reports (`cfl_renderer.py`). The renderer invokes
+  `dot -Tsvg` via subprocess. If `dot` is not on PATH, the renderer falls
+  back to a mermaid diagram (requires internet for CDN). Install:
+  - Windows: download from <https://graphviz.org/download/> (add `bin/` to PATH)
+  - macOS: `brew install graphviz`
+  - Linux: `apt install graphviz` / `dnf install graphviz`
+  - Verify: `dot -V` should print the version.
+
 ## Code style
 - Python 3.11+, type hints everywhere
 - Dataclasses or Pydantic for structured data

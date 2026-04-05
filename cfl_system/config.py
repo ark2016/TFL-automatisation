@@ -54,7 +54,26 @@ TEMPERATURES: dict[str, float] = {
 # Pipeline settings
 # ---------------------------------------------------------------------------
 
-MAX_TOKENS = 4096
+# Output token budget.
+#
+# The Anthropic API requires max_tokens — it cannot be omitted. So the
+# question is only what value to pass. Key facts:
+#   • Opus 4.6 physical ceiling is 32000 output tokens per request.
+#   • You pay for REAL output_tokens, not max_tokens — a high ceiling with
+#     a short reply costs the same as a tight ceiling with the same reply.
+#   • With streaming (which LiveRunner uses), the 10-minute-request guard
+#     no longer refuses large budgets.
+#
+# So the sensible default is: give every agent the full model ceiling.
+# This eliminates truncation-mid-JSON bugs (formalizer was hitting 4K and
+# 16K limits before streaming + this value). The only downside is the
+# runaway-loop scenario, which is capped at 32K × $0.015/1K ≈ $0.48.
+MAX_TOKENS = 32000
+
+# Kept as an escape hatch for per-agent tuning, but intentionally empty:
+# every agent uses MAX_TOKENS unless a specific reason to lower it emerges.
+MAX_TOKENS_PER_AGENT: dict[str, int] = {}
+
 LLM_JSON_RETRIES = 2          # retry if LLM returns non-JSON
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 

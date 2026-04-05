@@ -129,7 +129,7 @@ class LiveRunner:
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from cfl_system.config import (
-            MODELS, TEMPERATURES, MAX_TOKENS,
+            MODELS, TEMPERATURES, MAX_TOKENS, MAX_TOKENS_PER_AGENT,
             LLM_JSON_RETRIES, PROMPT_FILES, ANTHROPIC_API_KEY,
         )
         import anthropic
@@ -152,11 +152,95 @@ class LiveRunner:
         self.models = MODELS
         self.temperatures = TEMPERATURES
         self.max_tokens = MAX_TOKENS
+        self.max_tokens_per_agent = MAX_TOKENS_PER_AGENT
         self.json_retries = LLM_JSON_RETRIES
         self.prompt_files = PROMPT_FILES
         self.prompts_dir = Path(__file__).parent / "prompts"
         self.verbose = verbose
         self._prompt_cache: dict[str, str] = {}
+        # Model used to repair broken JSON returned by specialist agents.
+        # Haiku is ~15× cheaper than Opus and excellent at structural text
+        # conversion — ideal for turning "Opus wrote prose around its JSON"
+        # into pure JSON. One repair call ≈ $0.01 vs ≈ $0.25 for a full
+        # Opus retry, and it's faster too (~2s vs ~30s).
+        self._json_repair_model = "claude-haiku-4-5-20251001"
+
+    def _repair_json_with_haiku(self, agent_name: str, raw_text: str, was_truncated: bool) -> dict | None:
+        """Ask Haiku to extract/repair valid JSON from a specialist's raw output.
+
+        Returns the parsed dict on success, None on failure. Never raises.
+
+        Costs pennies compared to retrying the original Opus agent. Handles:
+          - trailing prose after the JSON object
+          - stray markdown fences inside the object
+          - single quotes, trailing commas, comment lines
+          - responses truncated at max_tokens (closes open braces/brackets,
+            drops the last partial field)
+
+        Not called on empty input.
+        """
+        if not raw_text or not raw_text.strip():
+            return None
+
+        truncation_note = (
+            "\n\nNOTE: The original response was truncated at max_tokens. "
+            "The JSON is incomplete. Close any open braces/brackets sensibly, "
+            "dropping the last partial field if needed. Preserve all fully-"
+            "written fields verbatim."
+            if was_truncated else ""
+        )
+
+        system = (
+            "You are a JSON repair tool. You will receive text that was "
+            "supposed to be a single JSON object but failed to parse. "
+            "Your ONLY job is to extract or fix that JSON object and return "
+            "it as valid JSON. Do NOT add explanations, comments, or markdown "
+            "fences. Do NOT change semantic content — only fix syntax "
+            "(quote style, trailing commas, stray text around the object, "
+            "missing closing braces). Return ONLY the repaired JSON object, "
+            "nothing else."
+        )
+        user_msg = (
+            f"Agent: {agent_name}\n"
+            f"The following text failed JSON parsing. Repair it and return "
+            f"the clean JSON object:{truncation_note}\n\n"
+            f"```\n{raw_text}\n```"
+        )
+
+        t0 = _time.monotonic()
+        try:
+            response = self.client.messages.create(
+                model=self._json_repair_model,
+                max_tokens=min(len(raw_text) // 2 + 2000, 8000),
+                temperature=0.0,
+                system=system,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+        except Exception as exc:
+            logger.warning("[%s] JSON repair (Haiku) failed: %s", agent_name, exc)
+            return None
+
+        elapsed = _time.monotonic() - t0
+        repaired_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                repaired_text += block.text
+
+        if self.verbose:
+            usage = response.usage
+            t_in = usage.input_tokens if usage else 0
+            t_out = usage.output_tokens if usage else 0
+            print(
+                f"[{agent_name}] json-repair via haiku: "
+                f"tokens_in={t_in} tokens_out={t_out} time={elapsed:.1f}s",
+                file=sys.stderr, flush=True,
+            )
+
+        parsed = _extract_json(repaired_text)
+        if parsed is not None:
+            logger.info("[%s] JSON repaired via Haiku", agent_name)
+        return parsed
+
 
     def _load_prompt(self, agent_name: str) -> str:
         if agent_name in self._prompt_cache:
@@ -180,97 +264,224 @@ class LiveRunner:
 
         model = self.models.get(agent_name, "claude-sonnet-4-6")
         temperature = self.temperatures.get(agent_name, 0.0)
+        max_tokens = self.max_tokens_per_agent.get(agent_name, self.max_tokens)
         user_content = json.dumps(input_data or {}, ensure_ascii=False, indent=2)
 
         last_error: str | None = None
+        prev_raw_excerpt: str | None = None
+        raw_text = ""
         for attempt in range(1 + self.json_retries):
             if attempt > 0 and last_error:
+                # Include: (a) the original input, (b) a short excerpt of
+                # what the model produced last time, (c) the specific
+                # parse error with position/context, (d) concrete fix
+                # instructions. This gives Opus enough signal to repair
+                # the exact issue instead of blindly regenerating from
+                # scratch and repeating the same mistake.
+                excerpt = ""
+                if prev_raw_excerpt:
+                    excerpt = (
+                        f"\nYour previous response (first 500 chars):\n"
+                        f"---\n{prev_raw_excerpt[:500]}\n---\n"
+                        f"(then {max(0, len(prev_raw_excerpt) - 500)} more chars "
+                        f"that were also invalid)"
+                    )
                 user_msg = (
                     f"{user_content}\n\n"
                     f"[RETRY {attempt}/{self.json_retries}] "
-                    f"Your previous response was not valid JSON. Error: {last_error}\n"
-                    f"Please respond with ONLY a valid JSON object."
+                    f"Your previous response could not be parsed as JSON.\n"
+                    f"Parse error: {last_error}"
+                    f"{excerpt}\n\n"
+                    f"CRITICAL instructions for this retry:\n"
+                    f"1. Output ONLY a single JSON object — nothing before, "
+                    f"nothing after, no markdown fences, no commentary.\n"
+                    f"2. Fix the specific error shown above at the indicated "
+                    f"position.\n"
+                    f"3. Preserve all the semantic content you intended last "
+                    f"time — only fix the syntax.\n"
+                    f"4. Double-check: matched braces/brackets, commas "
+                    f"between fields, double quotes (not single), no "
+                    f"trailing commas, no comments."
                 )
             else:
                 user_msg = user_content
 
             t0 = _time.monotonic()
+            raw_text = ""
+            tokens_in = tokens_out = 0
+            stop_reason = None
+            # Always stream. Non-streaming requests are rejected by the SDK
+            # when max_tokens × projected latency exceeds 10 minutes; streaming
+            # lifts that cap and handles long proofs / audits reliably.
             try:
-                response = self.client.messages.create(
+                with self.client.messages.stream(
                     model=model,
-                    max_tokens=self.max_tokens,
+                    max_tokens=max_tokens,
                     temperature=temperature,
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_msg}],
-                )
+                ) as stream:
+                    for chunk in stream.text_stream:
+                        raw_text += chunk
+                    final_msg = stream.get_final_message()
+                if final_msg.usage is not None:
+                    tokens_in = final_msg.usage.input_tokens
+                    tokens_out = final_msg.usage.output_tokens
+                stop_reason = getattr(final_msg, "stop_reason", None)
             except Exception as exc:
                 elapsed = _time.monotonic() - t0
                 logger.error("[%s] API error after %.1fs: %s", agent_name, elapsed, exc)
-                return None
+                # Return an agent_error dict (not None) so downstream nodes
+                # can record the failure in state["errors"] instead of
+                # silently dropping it.
+                return {
+                    "agent": agent_name,
+                    "status": "agent_error",
+                    "verdict": None,
+                    "confidence": 0.0,
+                    "evidence": {},
+                    "errors": [f"API error: {exc}"],
+                }
 
             elapsed = _time.monotonic() - t0
-            raw_text = ""
-            for block in response.content:
-                if hasattr(block, "text"):
-                    raw_text += block.text
-
-            tokens_in = response.usage.input_tokens if response.usage else 0
-            tokens_out = response.usage.output_tokens if response.usage else 0
 
             if self.verbose:
+                extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
                 print(
                     f"[{agent_name}] model={model} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
-                    f"time={elapsed:.1f}s",
+                    f"time={elapsed:.1f}s max={max_tokens}{extra}",
                     file=sys.stderr, flush=True,
                 )
 
-            parsed = _extract_json(raw_text)
+            parsed, parse_error = _extract_json_with_error(raw_text)
             if parsed is not None:
                 return parsed
 
-            last_error = f"Could not parse JSON from response (length={len(raw_text)})"
+            # Parse failed. Try cheap Haiku-based JSON repair BEFORE issuing
+            # another full Opus retry — the raw text usually contains valid
+            # content, just with prose around it / trailing commas / stray
+            # fences. Haiku fixes that in ~2s for ≈ $0.01. This saves both
+            # money and latency vs. re-invoking the original expensive agent.
+            was_truncated = stop_reason == "max_tokens"
+            repaired = self._repair_json_with_haiku(agent_name, raw_text, was_truncated)
+            if repaired is not None:
+                return repaired
+
+            # Distinguish truncation (max_tokens) from other parse failures.
+            # If Haiku couldn't even repair a truncated response, a full
+            # Opus retry with the same limit cannot help either — bail out.
+            if was_truncated:
+                last_error = (
+                    f"Response was truncated at max_tokens={max_tokens} "
+                    f"(tokens_out={tokens_out}); Haiku repair also failed. "
+                    f"Parse error: {parse_error}"
+                )
+                logger.error("[%s] attempt %d: %s", agent_name, attempt + 1, last_error)
+                break
+            # Pass the precise parse error (position + local context) back
+            # to Opus on the next retry so it can fix the exact spot.
+            last_error = (
+                f"{parse_error} "
+                f"[response length={len(raw_text)}, Haiku repair also failed]"
+            )
+            # Keep an excerpt of the bad response so the next retry can
+            # see what it wrote and fix it rather than regenerating blind.
+            prev_raw_excerpt = raw_text
             logger.warning("[%s] attempt %d: %s", agent_name, attempt + 1, last_error)
 
-        logger.error("[%s] JSON parse failed after %d attempts", agent_name, 1 + self.json_retries)
+        logger.error("[%s] JSON parse failed: %s", agent_name, last_error)
         return {
             "agent": agent_name, "status": "agent_error", "verdict": None,
             "confidence": 0.0, "evidence": {},
-            "errors": [f"Failed to parse JSON after {1 + self.json_retries} attempts"],
+            "errors": [last_error or "JSON parse failed"],
             "raw_response": raw_text[:2000],
         }
 
 
 def _extract_json(text: str) -> dict | None:
-    """Extract JSON object from LLM response text."""
+    """Extract JSON object from LLM response text (back-compat wrapper)."""
+    parsed, _ = _extract_json_with_error(text)
+    return parsed
+
+
+def _extract_json_with_error(text: str) -> tuple[dict | None, str | None]:
+    """Extract JSON object and return (parsed, error_detail).
+
+    error_detail is None on success, otherwise a human-readable string
+    describing what went wrong at which position, to be fed back to the
+    LLM on retry. Tries three strategies in order:
+      1) whole text as JSON
+      2) content of a ```json fenced block
+      3) substring between first '{' and last '}'
+    """
     text = text.strip()
+    if not text:
+        return None, "response was empty"
+
+    last_err: json.JSONDecodeError | None = None
+    last_strategy: str = ""
+
+    # Strategy 1: whole text
     try:
         obj = json.loads(text)
         if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
+            return obj, None
+        return None, f"parsed as JSON but top-level is {type(obj).__name__}, not object"
+    except json.JSONDecodeError as e:
+        last_err, last_strategy = e, "whole text"
 
+    # Strategy 2: fenced code block
     fence_match = _re.search(r"```(?:json)?\s*\n(.*?)\n```", text, _re.DOTALL)
     if fence_match:
         try:
             obj = json.loads(fence_match.group(1))
             if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
+                return obj, None
+            return None, f"fenced block parsed but top-level is {type(obj).__name__}"
+        except json.JSONDecodeError as e:
+            last_err, last_strategy = e, "fenced block"
 
+    # Strategy 3: first-brace to last-brace
     first_brace = text.find("{")
     last_brace = text.rfind("}")
     if first_brace != -1 and last_brace > first_brace:
+        substring = text[first_brace:last_brace + 1]
         try:
-            obj = json.loads(text[first_brace:last_brace + 1])
+            obj = json.loads(substring)
             if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
+                return obj, None
+            return None, f"brace-substring parsed but top-level is {type(obj).__name__}"
+        except json.JSONDecodeError as e:
+            last_err, last_strategy = e, "brace substring"
 
-    return None
+    if last_err is not None:
+        # Build a precise error string with position and local context
+        msg = last_err.msg
+        line = last_err.lineno
+        col = last_err.colno
+        pos = last_err.pos
+
+        # Show ~60 chars around the failure point to help the LLM locate it
+        src = text
+        if last_strategy == "fenced block" and fence_match:
+            src = fence_match.group(1)
+        elif last_strategy == "brace substring" and first_brace != -1:
+            src = text[first_brace:last_brace + 1]
+
+        start = max(0, pos - 30)
+        end = min(len(src), pos + 30)
+        context = src[start:end].replace("\n", "\\n")
+        pointer_offset = pos - start
+        pointer = " " * pointer_offset + "^"
+
+        return None, (
+            f"{msg} at line {line} column {col} (char {pos}) "
+            f"— tried strategy: {last_strategy}. "
+            f"Context around failure:\n  {context}\n  {pointer}"
+        )
+
+    return None, "no JSON object found in response (no '{' / '}' delimiters)"
 
 
 # ---------------------------------------------------------------------------
@@ -320,8 +531,40 @@ def _build_specialist_input(state: PipelineState, agent_name: str) -> dict:
 
 
 def _build_reasoning_input(state: PipelineState) -> dict:
-    """Build input for the reasoning agent (matches cfl_reasoning.md prompt)."""
+    """Build input for the reasoning agent (matches cfl_reasoning.md prompt).
+
+    Marks proof_checker explicitly as "not_run" when it failed, to prevent
+    the reasoning agent from hallucinating verification results. Empty dict
+    was previously ambiguous and led to the agent inventing "5/5 checks
+    passed" claims in its summary.
+    """
     evidence = state.get("evidence", {})
+
+    # Make proof_checker status explicit. The reasoning prompt enumerates
+    # {verified, issues_found} only; we extend that enum here with
+    # {not_run} so the agent cannot silently promote absent data to
+    # "verified". Any text the agent writes in its summary must now
+    # acknowledge that the checker did not execute.
+    pc_out = state.get("proof_checker_output")
+    if not pc_out or not isinstance(pc_out, dict) or not pc_out.get("status"):
+        pc_errs = [
+            e for e in state.get("errors", [])
+            if isinstance(e, str) and e.startswith("proof_checker:")
+        ]
+        proof_checker_field: dict = {
+            "status": "not_run",
+            "reason": (
+                "Proof checker agent did not execute successfully — "
+                "do NOT claim verification in your summary or justification. "
+                "You may still reach a verdict from specialists + oracle, "
+                "but must state that independent verification is absent."
+            ),
+        }
+        if pc_errs:
+            proof_checker_field["errors"] = pc_errs
+    else:
+        proof_checker_field = pc_out
+
     return {
         "ir": state["ir"],
         "hypothesis": state.get("hypothesis", {}),
@@ -329,14 +572,36 @@ def _build_reasoning_input(state: PipelineState) -> dict:
         "specialist_outputs": {
             k: evidence[k] for k in CFL_SPECIALIST_NAMES if k in evidence
         },
+        "failed_agents": _collect_failed_agents(state),
         "oracle_test": _normalize_oracle_test(state.get("oracle_test_result")),
         "claim_verification": _normalize_claim_verification(state.get("claim_verification")),
-        "proof_checker": state.get("proof_checker_output"),
+        "proof_checker": proof_checker_field,
         "retry_count": state.get("retry_round", 0),
         "inversion_count": state.get("inversions_done", 0),
         "max_retries": MAX_RETRIES,
         "max_inversions": MAX_INVERSIONS,
     }
+
+
+def _collect_failed_agents(state: PipelineState) -> list[dict]:
+    """Return list of {agent, error} for agents that were dispatched but failed.
+
+    Used to tell the reasoning agent explicitly which specialists did not
+    contribute, so it doesn't silently assume coverage it doesn't have.
+    """
+    failed: list[dict] = []
+    seen: set[str] = set()
+    for err in state.get("errors", []):
+        if not isinstance(err, str) or ":" not in err:
+            continue
+        name, _, msg = err.partition(":")
+        name = name.strip()
+        if name in seen:
+            continue
+        if name in CFL_SPECIALIST_NAMES or name in ("proof_checker", "formalizer"):
+            failed.append({"agent": name, "error": msg.strip()})
+            seen.add(name)
+    return failed
 
 
 def _get_action(reasoning_output: dict) -> str:
@@ -477,6 +742,12 @@ def assemble_early_failure(state: PipelineState) -> dict:
         if not pda:
             pda = output.get("pda") or (output.get("evidence", {}) or {}).get("pda")
 
+    specialist_outputs_out: dict[str, dict] = {}
+    for name in CFL_SPECIALIST_NAMES:
+        out = agent_results.get(name)
+        if isinstance(out, dict):
+            specialist_outputs_out[name] = out
+
     return {
         "result": {
             "task": ir.get("task_type"),
@@ -484,10 +755,15 @@ def assemble_early_failure(state: PipelineState) -> dict:
             "verdict": "failure" if errors else "inconclusive",
             "confidence": 0.0,
             "proof": None,
+            "proof_verified": False,
             "grammar": grammar,
             "pda": pda,
             "oracle_test": oracle_report,
             "agents_used": sorted(agent_results.keys()),
+            "agents_failed": _collect_failed_agents(state),
+            "specialist_outputs": specialist_outputs_out,
+            "hints_for_human": [],
+            "classifier_hint": state.get("classifier_output") or {},
             "retries": state.get("retry_round", 0),
             "inversions": state.get("inversions_done", 0),
             "errors": errors if errors else [detail],
@@ -576,10 +852,16 @@ def run_specialist_node(state: PipelineState) -> dict:
     out = _run_agent(state, agent_name, inp)
 
     # Treat agent_error as a failed run — emit None marker so collect
-    # can drop previous stale results for this agent on retry.
+    # can drop previous stale results for this agent on retry. Also
+    # record the error in state["errors"] so the final result surfaces
+    # the failure instead of silently pretending the agent was skipped.
     if out is not None and out.get("status") == "agent_error":
-        log_msg(state, f"  {agent_name} returned agent_error")
-        return {"specialist_outputs": [(agent_name, None)]}
+        err_msgs = out.get("errors") or [f"{agent_name} returned agent_error"]
+        log_msg(state, f"  {agent_name} returned agent_error: {err_msgs}")
+        return {
+            "specialist_outputs": [(agent_name, None)],
+            "errors": [f"{agent_name}: {m}" for m in err_msgs],
+        }
 
     return {"specialist_outputs": [(agent_name, out)]}
 
@@ -711,10 +993,16 @@ def run_proof_checker_node(state: PipelineState) -> dict:
         "claim_verification": _normalize_claim_verification(state.get("claim_verification")),
     }
     output = _run_agent(state, "proof_checker", checker_input)
+    errors_to_add: list[str] = []
     if output is not None and output.get("status") == "agent_error":
-        log_msg(state, "  proof_checker returned agent_error, ignoring")
+        err_msgs = output.get("errors") or ["proof_checker returned agent_error"]
+        errors_to_add = [f"proof_checker: {m}" for m in err_msgs]
+        log_msg(state, f"  proof_checker failed: {err_msgs}")
         output = None
-    return {"proof_checker_output": output or {}}
+    result: dict[str, Any] = {"proof_checker_output": output or {}}
+    if errors_to_add:
+        result["errors"] = errors_to_add
+    return result
 
 
 def run_reasoning_node(state: PipelineState) -> dict:
@@ -1118,15 +1406,44 @@ def formalize_node(state: PipelineState) -> dict:
 
     agent_results = state.get("agent_results", {})
     primary = reasoning.get("primary_evidence", "")
+
+    # Pass the proof_checker status explicitly so the formalizer knows
+    # whether the evidence was independently verified. The formalizer
+    # prompt starts with "The informal proof has already been verified
+    # by the proof checker" — we must override that assumption when
+    # proof_checker did not actually run.
+    pc_out = state.get("proof_checker_output") or {}
+    proof_was_verified = (
+        isinstance(pc_out, dict) and pc_out.get("status") == "verified"
+    )
+
     formalizer_input = {
         "ir": state["ir"],
         "reasoning_output": reasoning,
         "specialist_output": agent_results.get(primary, {}),
+        "proof_was_verified": proof_was_verified,
+        "verification_note": (
+            "The proof checker VERIFIED this evidence — you may present it as verified."
+            if proof_was_verified
+            else "The proof checker did NOT verify this evidence (agent failed or "
+                 "did not run). You must NOT claim the proof was independently "
+                 "verified. Do not write phrases like 'verified by checker' or "
+                 "'N/N checks passed'. Present the proof as the specialist's "
+                 "argument, not as a verified theorem."
+        ),
     }
 
     output = _run_agent(state, "formalizer", formalizer_input)
-    if output is None or output.get("status") == "agent_error":
+    if output is None:
+        # Runner unavailable — silent skip (MockRunner / missing prompt).
         return {}
+    if output.get("status") == "agent_error":
+        # Record the failure so the final result surfaces it instead of
+        # silently returning proof=null with an empty errors list.
+        err_msgs = output.get("errors") or ["formalizer returned agent_error"]
+        return {
+            "errors": [f"formalizer: {m}" for m in err_msgs],
+        }
 
     evidence = dict(state.get("evidence", {}))
     evidence["formalizer"] = output
@@ -1163,8 +1480,15 @@ def assemble_result_node(state: PipelineState) -> dict:
         if not pda:
             pda = output.get("pda") or (output.get("evidence", {}) or {}).get("pda")
 
-    # Proof source priority: reasoning.proof > formalizer.proof_document > formatted_proof string
-    # (proof_checker doesn't return a proof field per its prompt schema)
+    # Proof source priority:
+    #   1. reasoning.proof (rarely set — reasoning prompt returns summary only)
+    #   2. formalizer.proof_document / markdown
+    #   3. evidence.formatted_proof
+    #   4. Fallback: raw evidence from reasoning.primary_evidence specialist
+    #      (e.g. pumping_cfl.evidence with cases/conclusion for non_cfl verdicts).
+    #      This prevents a successful verdict from being reported with proof=null
+    #      when the formalizer agent fails — the underlying specialist data is
+    #      still there, just unformatted.
     proof = None
     evidence = state.get("evidence", {}) or {}
     if reasoning.get("proof"):
@@ -1178,6 +1502,23 @@ def assemble_result_node(state: PipelineState) -> dict:
                 proof = formalizer_out["markdown"]
         if proof is None and evidence.get("formatted_proof"):
             proof = evidence["formatted_proof"]
+        if proof is None:
+            primary = reasoning.get("primary_evidence")
+            if isinstance(primary, str) and primary in agent_results:
+                spec = agent_results[primary]
+                if isinstance(spec, dict):
+                    spec_ev = spec.get("evidence")
+                    if spec_ev:
+                        proof = {
+                            "source": primary,
+                            "note": (
+                                "Raw specialist evidence — formalizer agent was "
+                                "unavailable or failed. Render with cfl_renderer."
+                            ),
+                            "evidence": spec_ev,
+                            "summary": reasoning.get("summary")
+                                or reasoning.get("primary_justification"),
+                        }
 
     # Normalize oracle_test status for the public result contract.
     # Keep the raw status in 'raw_status' for debugging.
@@ -1189,6 +1530,33 @@ def assemble_result_node(state: PipelineState) -> dict:
 
     errors = list(state.get("errors", []))
 
+    # Build explicit list of agents that were dispatched but failed,
+    # so agents_used (= succeeded) and agents_failed (= attempted but
+    # died) together give a complete picture of coverage.
+    failed_agents = _collect_failed_agents(state)
+
+    # Independent-verification flag for the consumer of the result.
+    # The proof checker actually verified the evidence iff it produced
+    # a dict with status='verified'. Anything else (not_run / issues_found
+    # / missing) means the proof is unverified and must be presented as such.
+    pc_out = state.get("proof_checker_output") or {}
+    proof_verified = (
+        isinstance(pc_out, dict) and pc_out.get("status") == "verified"
+    )
+
+    # Include raw specialist outputs so the renderer can build per-approach
+    # tabs (pumping / Ogden / Parikh / closure / CFG / PDA / ...).
+    # Each value is the full agent output dict with verdict+status+evidence.
+    specialist_outputs_out: dict[str, dict] = {}
+    for name in CFL_SPECIALIST_NAMES:
+        out = agent_results.get(name)
+        if isinstance(out, dict):
+            specialist_outputs_out[name] = out
+
+    hints = reasoning.get("hints_for_human") or []
+    if not isinstance(hints, list):
+        hints = []
+
     return {
         "result": {
             "task": ir.get("task_type"),
@@ -1196,10 +1564,15 @@ def assemble_result_node(state: PipelineState) -> dict:
             "verdict": verdict,
             "confidence": confidence,
             "proof": proof,
+            "proof_verified": proof_verified,
             "grammar": grammar,
             "pda": pda,
             "oracle_test": oracle_report,
             "agents_used": sorted(agent_results.keys()),
+            "agents_failed": failed_agents,
+            "specialist_outputs": specialist_outputs_out,
+            "hints_for_human": hints,
+            "classifier_hint": state.get("classifier_output") or {},
             "retries": state.get("retry_round", 0),
             "inversions": state.get("inversions_done", 0),
             "errors": errors,
@@ -1425,6 +1798,18 @@ if __name__ == "__main__":
         out_path = save_dir / f"{task_name}_result.json"
         out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"Result saved to {out_path}", file=sys.stderr)
+
+        # Render Markdown + HTML alongside the JSON, matching agent_system.
+        try:
+            from cfl_system.lib.cfl_renderer import render_to_file
+            md_path = save_dir / f"{task_name}_result.md"
+            html_path = save_dir / f"{task_name}_result.html"
+            render_to_file(result, str(md_path), fmt="md")
+            render_to_file(result, str(html_path), fmt="html")
+            print(f"Rendered: {md_path}", file=sys.stderr)
+            print(f"Rendered: {html_path}", file=sys.stderr)
+        except Exception as exc:
+            print(f"Renderer failed: {exc}", file=sys.stderr)
 
     # Exit code reflects pipeline outcome
     verdict = result.get("verdict")
