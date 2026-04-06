@@ -1,0 +1,20 @@
+{
+  "task_id": "dcfl_exam_04",
+  "source_text": "S → aSSb | ba | Ab, A → aAb | a",
+  "input_format": "grammar",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": ["a", "b"],
+    "nonterminals": ["S", "A"],
+    "start": "S",
+    "rules": [
+      {"lhs": "S", "rhs": ["a", "S", "S", "b"]},
+      {"lhs": "S", "rhs": ["b", "a"]},
+      {"lhs": "S", "rhs": ["A", "b"]},
+      {"lhs": "A", "rhs": ["a", "A", "b"]},
+      {"lhs": "A", "rhs": ["a"]}
+    ]
+  },
+  "alphabet": ["a", "b"]
+}

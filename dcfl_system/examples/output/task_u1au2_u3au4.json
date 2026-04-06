@@ -1,0 +1,367 @@
+{
+  "task": "classify_and_prove_dcfl",
+  "source_text": "Исследовать на детерминированность: {w₁w₂ | w₁ = u₁au₂ & w₂ = u₃au₄ & |u₁| ≤ |u₂| & |u₃| ≥ |u₄|}",
+  "verdict": "dcfl",
+  "confidence": 0.88,
+  "hypothesis": {
+    "pattern_type": "dual_length_cmp",
+    "memory_analysis": "single_stack",
+    "separator_analysis": "no_separator",
+    "disjunction_present": false,
+    "regex_constrained_vars": [],
+    "prediction": "likely_dcfl",
+    "confidence": 0.6,
+    "reasoning": "Pattern classified as 'dual_length_cmp'. Memory model: single_stack. No fixed separator found between segments. The language is likely deterministic context-free."
+  },
+  "classifier_hint": null,
+  "preprocess": {
+    "patterns": [
+      {
+        "pattern": "dual_length_cmp_compatible",
+        "score": 0.8,
+        "verdict": "dcfl",
+        "method": "stack_strategy",
+        "reason": "two compatible length comparisons"
+      }
+    ],
+    "closure": {
+      "applicable_strategies": [
+        {
+          "operation": "complement",
+          "direction": "both",
+          "description": "DCFL is closed under complement — proving complement(L) is DCFL proves L is DCFL, and vice versa",
+          "confidence": 0.6
+        }
+      ],
+      "complement_structure": null,
+      "warnings": []
+    },
+    "sample_words": [
+      {
+        "word": "aabaaaaabaaaaaaababb",
+        "length": 20,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "aabbbaabaababbbabababbaaa",
+        "length": 25,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "abaaabbbbabbabaaaabbb",
+        "length": 21,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "abaaabbbaababbbabaabbbbaabaaa",
+        "length": 29,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "abab",
+        "length": 4,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "bbaabbabbaba",
+        "length": 12,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "baabaabaabbaabbaaaaabaaababbaa",
+        "length": 30,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "bbbbbaaaabaaaaaaaaabaa",
+        "length": 22,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "baababba",
+        "length": 8,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "abb",
+        "length": 3,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      }
+    ]
+  },
+  "reasoning_summary": "Agent 'stack_strategy' verdict: dcfl",
+  "primary_evidence": "stack_strategy",
+  "proof_method": "stack_strategy",
+  "proof_sketch": {
+    "kind": "stack_strategy",
+    "phases": [
+      {
+        "name": "read_u1",
+        "action": "push",
+        "what": "символы u₁ на стек",
+        "trigger": "встретили 'a' — разделитель w₁"
+      },
+      {
+        "name": "read_u2",
+        "action": "compare",
+        "what": "снимаем u₂ со стека, считаем |u₁| ≤ |u₂|",
+        "trigger": "стек пуст или u₂ длиннее u₁"
+      },
+      {
+        "name": "read_u3",
+        "action": "push",
+        "what": "символы u₃ на стек",
+        "trigger": "встретили 'a' — разделитель w₂"
+      },
+      {
+        "name": "read_u4",
+        "action": "compare",
+        "what": "снимаем u₄, проверяем |u₃| ≥ |u₄|",
+        "trigger": "конец слова"
+      }
+    ],
+    "separator": "a (два вхождения символа 'a' разделяют u₁u₂ и u₃u₄)",
+    "finite_control": "Два состояния: чтение первой и второй половины",
+    "determinism_argument": "Символ 'a' однозначно маркирует границу между частями; после каждого 'a' переключение детерминировано",
+    "regex_in_states": []
+  },
+  "proof_text": null,
+  "oracle_verification": {
+    "stack_strategy": {
+      "verification_status": "verified",
+      "checks_run": [
+        "separator_non_empty",
+        "phase[0]_fields",
+        "phase[1]_fields",
+        "phase[2]_fields",
+        "phase[3]_fields"
+      ],
+      "checks_passed": 5,
+      "checks_total": 5
+    },
+    "closure_reduction": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "dcfl_pumping": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "shallit": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "inh_ambiguity": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    }
+  },
+  "agents_used": [
+    "closure_reduction",
+    "dcfl_pumping",
+    "inh_ambiguity",
+    "shallit",
+    "stack_strategy"
+  ],
+  "specialist_outputs": {
+    "stack_strategy": {
+      "agent_name": "stack_strategy",
+      "status": "success",
+      "verdict": "dcfl",
+      "proof_sketch": {
+        "kind": "stack_strategy",
+        "phases": [
+          {
+            "name": "read_u1",
+            "action": "push",
+            "what": "символы u₁ на стек",
+            "trigger": "встретили 'a' — разделитель w₁"
+          },
+          {
+            "name": "read_u2",
+            "action": "compare",
+            "what": "снимаем u₂ со стека, считаем |u₁| ≤ |u₂|",
+            "trigger": "стек пуст или u₂ длиннее u₁"
+          },
+          {
+            "name": "read_u3",
+            "action": "push",
+            "what": "символы u₃ на стек",
+            "trigger": "встретили 'a' — разделитель w₂"
+          },
+          {
+            "name": "read_u4",
+            "action": "compare",
+            "what": "снимаем u₄, проверяем |u₃| ≥ |u₄|",
+            "trigger": "конец слова"
+          }
+        ],
+        "separator": "a (два вхождения символа 'a' разделяют u₁u₂ и u₃u₄)",
+        "finite_control": "Два состояния: чтение первой и второй половины",
+        "determinism_argument": "Символ 'a' однозначно маркирует границу между частями; после каждого 'a' переключение детерминировано",
+        "regex_in_states": []
+      },
+      "evidence": [
+        "Identified separator 'a' appearing twice to delimit u₁u₂ and u₃u₄",
+        "Constructed 4-phase stack strategy: read_u1, read_u2, read_u3, read_u4",
+        "Deterministic switching via 'a' separator",
+        "Finite control uses 2 states for first/second half"
+      ],
+      "confidence": 0.88,
+      "errors": []
+    },
+    "closure_reduction": {
+      "agent_name": "closure_reduction",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "dcfl_pumping": {
+      "agent_name": "dcfl_pumping",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "shallit": {
+      "agent_name": "shallit",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "inh_ambiguity": {
+      "agent_name": "inh_ambiguity",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    }
+  },
+  "agent_results": {
+    "stack_strategy": {
+      "agent_name": "stack_strategy",
+      "status": "success",
+      "verdict": "dcfl",
+      "proof_sketch": {
+        "kind": "stack_strategy",
+        "phases": [
+          {
+            "name": "read_u1",
+            "action": "push",
+            "what": "символы u₁ на стек",
+            "trigger": "встретили 'a' — разделитель w₁"
+          },
+          {
+            "name": "read_u2",
+            "action": "compare",
+            "what": "снимаем u₂ со стека, считаем |u₁| ≤ |u₂|",
+            "trigger": "стек пуст или u₂ длиннее u₁"
+          },
+          {
+            "name": "read_u3",
+            "action": "push",
+            "what": "символы u₃ на стек",
+            "trigger": "встретили 'a' — разделитель w₂"
+          },
+          {
+            "name": "read_u4",
+            "action": "compare",
+            "what": "снимаем u₄, проверяем |u₃| ≥ |u₄|",
+            "trigger": "конец слова"
+          }
+        ],
+        "separator": "a (два вхождения символа 'a' разделяют u₁u₂ и u₃u₄)",
+        "finite_control": "Два состояния: чтение первой и второй половины",
+        "determinism_argument": "Символ 'a' однозначно маркирует границу между частями; после каждого 'a' переключение детерминировано",
+        "regex_in_states": []
+      },
+      "evidence": [
+        "Identified separator 'a' appearing twice to delimit u₁u₂ and u₃u₄",
+        "Constructed 4-phase stack strategy: read_u1, read_u2, read_u3, read_u4",
+        "Deterministic switching via 'a' separator",
+        "Finite control uses 2 states for first/second half"
+      ],
+      "confidence": 0.88,
+      "errors": []
+    },
+    "closure_reduction": {
+      "agent_name": "closure_reduction",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "dcfl_pumping": {
+      "agent_name": "dcfl_pumping",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "shallit": {
+      "agent_name": "shallit",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "inh_ambiguity": {
+      "agent_name": "inh_ambiguity",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    }
+  },
+  "hints_for_human": [
+    "Fallback reasoning (no LLM available)"
+  ],
+  "retries": 0,
+  "errors": []
+}

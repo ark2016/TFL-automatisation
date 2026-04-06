@@ -1,0 +1,21 @@
+{
+  "task_id": "dcfl_exam_02",
+  "source_text": "Исследовать на детерминированность: {w₁w₂ | w₁ = u₁au₂ & w₂ = u₃au₄ & |u₁| ≤ |u₂| & |u₃| ≥ |u₄|}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "u₁au₂u₃au₄",
+    "variables": [
+      {"name": "u₁", "domain": null, "quantifier": "forall"},
+      {"name": "u₂", "domain": null, "quantifier": "forall"},
+      {"name": "u₃", "domain": null, "quantifier": "forall"},
+      {"name": "u₄", "domain": null, "quantifier": "forall"}
+    ],
+    "constraints": [
+      {"kind": "length_cmp", "args": {"left": "u₁", "op": "<=", "right": "u₂"}},
+      {"kind": "length_cmp", "args": {"left": "u₃", "op": ">=", "right": "u₄"}}
+    ]
+  },
+  "alphabet": ["a", "b"]
+}

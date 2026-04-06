@@ -1,0 +1,21 @@
+{
+  "task_id": "dcfl_exam_03",
+  "source_text": "Является ли данный язык детерминированным? {aⁿb*(cⁿ|bⁿ)ac* | n > 0}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "aⁿ b* (cⁿ|bⁿ) a c*",
+    "variables": [
+      {"name": "n", "domain": null, "quantifier": "forall"}
+    ],
+    "constraints": [
+      {"kind": "integer_cmp", "args": {"left": "n", "op": ">", "right": 0}},
+      {"kind": "disjunction", "args": {
+        "branches": ["cⁿ", "bⁿ"],
+        "shared_var": "n"
+      }}
+    ]
+  },
+  "alphabet": ["a", "b", "c"]
+}

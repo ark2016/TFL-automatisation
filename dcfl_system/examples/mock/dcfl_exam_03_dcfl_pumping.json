@@ -1,0 +1,12 @@
+{
+  "agent_name": "dcfl_pumping",
+  "status": "uncertain",
+  "verdict": "non_dcfl",
+  "proof_sketch": null,
+  "evidence": [
+    "Pumping analysis suggests non-DCFL but proof is incomplete",
+    "Unable to find a clean pumping argument for all decompositions"
+  ],
+  "confidence": 0.5,
+  "errors": []
+}

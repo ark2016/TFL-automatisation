@@ -1,0 +1,588 @@
+{
+  "task": "classify_and_prove_dcfl",
+  "source_text": "Проверить язык на детерминизм: {wvaav^Rw^R | w ∈ (aa*b)*a & v ∈ b(ab|aa)*}",
+  "verdict": "dcfl",
+  "confidence": 0.92,
+  "hypothesis": {
+    "pattern_type": "single_palindrome_nosep",
+    "memory_analysis": "single_stack",
+    "separator_analysis": "no_separator",
+    "disjunction_present": false,
+    "regex_constrained_vars": [
+      "w",
+      "v"
+    ],
+    "prediction": "likely_non_dcfl",
+    "confidence": 0.8,
+    "reasoning": "Pattern classified as 'single_palindrome_nosep'. Memory model: single_stack. No fixed separator found between segments. Variables with regex-constrained domains: w, v. The language is likely NOT deterministic context-free."
+  },
+  "classifier_hint": null,
+  "preprocess": {
+    "patterns": [
+      {
+        "pattern": "sequential_palindromes",
+        "score": 0.8,
+        "verdict": "dcfl",
+        "method": "stack_strategy",
+        "reason": "sequential reversal pairs detected"
+      },
+      {
+        "pattern": "regex_constrained_palindrome",
+        "score": 0.75,
+        "verdict": "dcfl",
+        "method": "stack_strategy",
+        "reason": "palindrome with regex-constrained variables"
+      }
+    ],
+    "closure": {
+      "applicable_strategies": [
+        {
+          "operation": "complement",
+          "direction": "both",
+          "description": "DCFL is closed under complement — proving complement(L) is DCFL proves L is DCFL, and vice versa",
+          "confidence": 0.6
+        }
+      ],
+      "complement_structure": null,
+      "warnings": []
+    },
+    "sample_words": [
+      {
+        "word": "aabaabababaaaaaabababaabaa",
+        "length": 26,
+        "in_language": true,
+        "variables": {
+          "w": "aabaababa",
+          "v": "baa"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "aabaababababaababababaabaa",
+        "length": 26,
+        "in_language": true,
+        "variables": {
+          "w": "aabaababa",
+          "v": "bab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "aabaabababababaabababababaabaa",
+        "length": 30,
+        "in_language": true,
+        "variables": {
+          "w": "aabaababa",
+          "v": "babab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "aabaabababaaabaabaaabababaabaa",
+        "length": 30,
+        "in_language": true,
+        "variables": {
+          "w": "aabaababa",
+          "v": "baaab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "aabaabababaabababaabaa",
+        "length": 22,
+        "in_language": true,
+        "variables": {
+          "w": "aabaababa",
+          "v": "b"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "aabaababaaaababaabaa",
+        "length": 20,
+        "in_language": true,
+        "variables": {
+          "w": "aabaababa",
+          "v": ""
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaababaaaaaababaaba",
+        "length": 20,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "baa"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaababaaaaaaaaaaaaaababaaba",
+        "length": 28,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "baaaaaa"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaabababaabababaaba",
+        "length": 20,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "bab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaababababaababababaaba",
+        "length": 24,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "babab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaababaaaaabaabaaaaababaaba",
+        "length": 28,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "baaaaab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaababaaabaabaaababaaba",
+        "length": 24,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "baaab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaabababaaaaaaaaaabababaaba",
+        "length": 28,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "babaaaa"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaababaababaaba",
+        "length": 16,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "b"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaababaaabaaaaaabaaababaaba",
+        "length": 28,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": "baaabaa"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaabaaaabaaba",
+        "length": 14,
+        "in_language": true,
+        "variables": {
+          "w": "abaaba",
+          "v": ""
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaaaaaaba",
+        "length": 10,
+        "in_language": true,
+        "variables": {
+          "w": "a",
+          "v": "baa"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaaaaaaaaaaaaaaba",
+        "length": 18,
+        "in_language": true,
+        "variables": {
+          "w": "a",
+          "v": "baaaaaa"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "abaaaaaaabaabaaaaaaaba",
+        "length": 22,
+        "in_language": true,
+        "variables": {
+          "w": "a",
+          "v": "baaaaaaab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "ababaababa",
+        "length": 10,
+        "in_language": true,
+        "variables": {
+          "w": "a",
+          "v": "bab"
+        },
+        "source": "substitution"
+      },
+      {
+        "word": "aabaabababaaaaaababaababaa",
+        "length": 26,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aabaabababaaaaaabababaaba",
+        "length": 25,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aabaabababaaaaaabababaabaaa",
+        "length": 27,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aaabaabababaaaaaabababaabaa",
+        "length": 27,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aabaababababaababababaaba",
+        "length": 25,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aabaababababaababababaabaab",
+        "length": 27,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "baabaababababaababababaabaa",
+        "length": 27,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aabaabaabbababaabababababaabaa",
+        "length": 30,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aabaabababababaabababababaaba",
+        "length": 29,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aabaabababababaabababababaabaaa",
+        "length": 31,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      }
+    ]
+  },
+  "reasoning_summary": "Agent 'stack_strategy' verdict: dcfl",
+  "primary_evidence": "stack_strategy",
+  "proof_method": "stack_strategy",
+  "proof_sketch": {
+    "kind": "stack_strategy",
+    "phases": [
+      {
+        "name": "push_w",
+        "action": "push",
+        "what": "символы w",
+        "trigger": "конец w (определяется по regex (aa*b)*a)"
+      },
+      {
+        "name": "push_v",
+        "action": "push",
+        "what": "символы v поверх w",
+        "trigger": "встретили 'aa' — разделитель"
+      },
+      {
+        "name": "pop_v^R",
+        "action": "compare",
+        "what": "сравниваем с v^R из стека",
+        "trigger": "v закончился (стек дошёл до маркера w)"
+      },
+      {
+        "name": "pop_w^R",
+        "action": "compare",
+        "what": "сравниваем с w^R из стека",
+        "trigger": "стек пуст"
+      }
+    ],
+    "separator": "aa (разделяет v и v^R, чётко маркирует переход)",
+    "finite_control": "Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний",
+    "determinism_argument": "Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на 'a', за которым идёт символ из v ∈ b(ab|aa)*, т.е. 'b'. Это однозначно определяет точку переключения.",
+    "regex_in_states": [
+      "(aa*b)*a → 3 состояния ДКА",
+      "b(ab|aa)* → 4 состояния ДКА"
+    ]
+  },
+  "proof_text": null,
+  "oracle_verification": {
+    "stack_strategy": {
+      "verification_status": "verified",
+      "checks_run": [
+        "regex_compile[0]",
+        "regex_compile[1]",
+        "separator_non_empty",
+        "phase[0]_fields",
+        "phase[1]_fields",
+        "phase[2]_fields",
+        "phase[3]_fields"
+      ],
+      "checks_passed": 7,
+      "checks_total": 7
+    },
+    "closure_reduction": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "dcfl_pumping": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "shallit": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "inh_ambiguity": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    }
+  },
+  "agents_used": [
+    "closure_reduction",
+    "dcfl_pumping",
+    "inh_ambiguity",
+    "shallit",
+    "stack_strategy"
+  ],
+  "specialist_outputs": {
+    "stack_strategy": {
+      "agent_name": "stack_strategy",
+      "status": "success",
+      "verdict": "dcfl",
+      "proof_sketch": {
+        "kind": "stack_strategy",
+        "phases": [
+          {
+            "name": "push_w",
+            "action": "push",
+            "what": "символы w",
+            "trigger": "конец w (определяется по regex (aa*b)*a)"
+          },
+          {
+            "name": "push_v",
+            "action": "push",
+            "what": "символы v поверх w",
+            "trigger": "встретили 'aa' — разделитель"
+          },
+          {
+            "name": "pop_v^R",
+            "action": "compare",
+            "what": "сравниваем с v^R из стека",
+            "trigger": "v закончился (стек дошёл до маркера w)"
+          },
+          {
+            "name": "pop_w^R",
+            "action": "compare",
+            "what": "сравниваем с w^R из стека",
+            "trigger": "стек пуст"
+          }
+        ],
+        "separator": "aa (разделяет v и v^R, чётко маркирует переход)",
+        "finite_control": "Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний",
+        "determinism_argument": "Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на 'a', за которым идёт символ из v ∈ b(ab|aa)*, т.е. 'b'. Это однозначно определяет точку переключения.",
+        "regex_in_states": [
+          "(aa*b)*a → 3 состояния ДКА",
+          "b(ab|aa)* → 4 состояния ДКА"
+        ]
+      },
+      "evidence": [
+        "Identified separator 'aa' between v and v^R",
+        "Constructed 4-phase stack strategy: push_w, push_v, pop_v^R, pop_w^R",
+        "Verified deterministic switching via regex boundary analysis",
+        "DFA state counts: 3 for (aa*b)*a, 4 for b(ab|aa)*"
+      ],
+      "confidence": 0.92,
+      "errors": []
+    },
+    "closure_reduction": {
+      "agent_name": "closure_reduction",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "dcfl_pumping": {
+      "agent_name": "dcfl_pumping",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "shallit": {
+      "agent_name": "shallit",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "inh_ambiguity": {
+      "agent_name": "inh_ambiguity",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    }
+  },
+  "agent_results": {
+    "stack_strategy": {
+      "agent_name": "stack_strategy",
+      "status": "success",
+      "verdict": "dcfl",
+      "proof_sketch": {
+        "kind": "stack_strategy",
+        "phases": [
+          {
+            "name": "push_w",
+            "action": "push",
+            "what": "символы w",
+            "trigger": "конец w (определяется по regex (aa*b)*a)"
+          },
+          {
+            "name": "push_v",
+            "action": "push",
+            "what": "символы v поверх w",
+            "trigger": "встретили 'aa' — разделитель"
+          },
+          {
+            "name": "pop_v^R",
+            "action": "compare",
+            "what": "сравниваем с v^R из стека",
+            "trigger": "v закончился (стек дошёл до маркера w)"
+          },
+          {
+            "name": "pop_w^R",
+            "action": "compare",
+            "what": "сравниваем с w^R из стека",
+            "trigger": "стек пуст"
+          }
+        ],
+        "separator": "aa (разделяет v и v^R, чётко маркирует переход)",
+        "finite_control": "Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний",
+        "determinism_argument": "Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на 'a', за которым идёт символ из v ∈ b(ab|aa)*, т.е. 'b'. Это однозначно определяет точку переключения.",
+        "regex_in_states": [
+          "(aa*b)*a → 3 состояния ДКА",
+          "b(ab|aa)* → 4 состояния ДКА"
+        ]
+      },
+      "evidence": [
+        "Identified separator 'aa' between v and v^R",
+        "Constructed 4-phase stack strategy: push_w, push_v, pop_v^R, pop_w^R",
+        "Verified deterministic switching via regex boundary analysis",
+        "DFA state counts: 3 for (aa*b)*a, 4 for b(ab|aa)*"
+      ],
+      "confidence": 0.92,
+      "errors": []
+    },
+    "closure_reduction": {
+      "agent_name": "closure_reduction",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "dcfl_pumping": {
+      "agent_name": "dcfl_pumping",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "shallit": {
+      "agent_name": "shallit",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "inh_ambiguity": {
+      "agent_name": "inh_ambiguity",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    }
+  },
+  "hints_for_human": [
+    "Fallback reasoning (no LLM available)"
+  ],
+  "retries": 0,
+  "errors": []
+}

@@ -1,0 +1,20 @@
+{
+  "agent_name": "inh_ambiguity",
+  "status": "success",
+  "verdict": "non_dcfl",
+  "proof_sketch": {
+    "kind": "inh_ambiguity",
+    "disjunction_identified": "cⁿ|bⁿ при общем n с префиксом aⁿb*",
+    "overlap_words": "Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.",
+    "ambiguity_argument": "Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...",
+    "dcfl_implication": "Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)"
+  },
+  "evidence": [
+    "Identified disjunction cⁿ|bⁿ as source of inherent ambiguity",
+    "Constructed overlap words demonstrating ambiguous parse",
+    "Applied inherent ambiguity theorem: L₁ ∪ L₂ with non-empty intersection",
+    "Concluded: inherently ambiguous → not UnambCF → not DCFL"
+  ],
+  "confidence": 0.9,
+  "errors": []
+}

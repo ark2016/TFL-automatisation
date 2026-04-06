@@ -1,0 +1,14 @@
+{
+  "agent_name": "stack_strategy",
+  "status": "fail",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "Attempted to construct deterministic stack strategy",
+    "Failed: disjunction cⁿ|bⁿ requires nondeterministic choice"
+  ],
+  "confidence": 0.3,
+  "errors": [
+    "Cannot construct deterministic stack strategy for disjunction cⁿ|bⁿ"
+  ]
+}

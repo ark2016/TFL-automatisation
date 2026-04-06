@@ -1,0 +1,49 @@
+{
+  "agent_name": "stack_strategy",
+  "status": "success",
+  "verdict": "dcfl",
+  "proof_sketch": {
+    "kind": "stack_strategy",
+    "phases": [
+      {
+        "name": "push_w",
+        "action": "push",
+        "what": "символы w",
+        "trigger": "конец w (определяется по regex (aa*b)*a)"
+      },
+      {
+        "name": "push_v",
+        "action": "push",
+        "what": "символы v поверх w",
+        "trigger": "встретили 'aa' — разделитель"
+      },
+      {
+        "name": "pop_v^R",
+        "action": "compare",
+        "what": "сравниваем с v^R из стека",
+        "trigger": "v закончился (стек дошёл до маркера w)"
+      },
+      {
+        "name": "pop_w^R",
+        "action": "compare",
+        "what": "сравниваем с w^R из стека",
+        "trigger": "стек пуст"
+      }
+    ],
+    "separator": "aa (разделяет v и v^R, чётко маркирует переход)",
+    "finite_control": "Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний",
+    "determinism_argument": "Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на 'a', за которым идёт символ из v ∈ b(ab|aa)*, т.е. 'b'. Это однозначно определяет точку переключения.",
+    "regex_in_states": [
+      "(aa*b)*a → 3 состояния ДКА",
+      "b(ab|aa)* → 4 состояния ДКА"
+    ]
+  },
+  "evidence": [
+    "Identified separator 'aa' between v and v^R",
+    "Constructed 4-phase stack strategy: push_w, push_v, pop_v^R, pop_w^R",
+    "Verified deterministic switching via regex boundary analysis",
+    "DFA state counts: 3 for (aa*b)*a, 4 for b(ab|aa)*"
+  ],
+  "confidence": 0.92,
+  "errors": []
+}

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang='ru'><head><meta charset='utf-8'>
+<title>DCFL — Результат анализа</title>
+<style>
+body{font-family:'Segoe UI',system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a;background:#fff}
+.s-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #e0e0e0}
+.s-task{font-size:15px;line-height:1.6}
+.s-label-sm{font-size:12px;color:#888;margin-bottom:6px}
+.s-badge{font-size:12px;font-weight:600;padding:4px 14px;border-radius:6px;white-space:nowrap;flex-shrink:0}
+.s-dcfl{background:#e8f5e9;color:#2e7d32}
+.s-nondcfl{background:#fce4ec;color:#c62828}
+.s-unknown{background:#fff3e0;color:#e65100}
+.s-fail-v{background:#ffebee;color:#b71c1c}
+.s-sec{font-size:16px;font-weight:600;margin:24px 0 10px;padding-top:16px;border-top:1px solid #eee}
+.s-sec:first-of-type{border-top:none;padding-top:0}
+.s-p{font-size:14px;line-height:1.75;margin:6px 0}
+.s-meta{font-size:12px;color:#666;margin:4px 0 10px}
+.s-step{display:flex;gap:10px;margin:10px 0}
+.s-n{min-width:22px;height:22px;border-radius:50%;background:#f5f5f5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#666;flex-shrink:0;margin-top:2px}
+.s-t{font-size:14px;line-height:1.7}
+.s-box{background:#f8f9fa;border-radius:6px;padding:12px 16px;margin:10px 0;font-size:13px;line-height:1.7}
+.s-mono{font-family:Consolas,'Courier New',monospace;font-size:13px}
+.s-tab{display:flex;gap:2px;margin:16px 0 12px;flex-wrap:wrap}
+.s-tab-btn{font-size:12px;padding:6px 14px;border-radius:6px 6px 0 0;background:#f5f5f5;color:#666;cursor:pointer;border:none;border-bottom:2px solid transparent;font-family:inherit}
+.s-tab-btn:hover{background:#eee}
+.s-tab-btn.active{background:#fff;color:#1a1a1a;border-bottom-color:#1976d2}
+.s-panel{display:none}.s-panel.active{display:block}
+.s-footer{display:flex;gap:16px;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid #eee;font-size:12px;color:#888;flex-wrap:wrap}
+.s-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.s-pass{background:#4caf50}.s-fail{background:#e53935}
+.s-pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#e3f2fd;color:#1565c0}
+.s-banner-ok{background:#e8f5e9;border-left:4px solid #2e7d32;padding:10px 14px;border-radius:4px;margin:12px 0;font-size:13px}
+.s-banner-warn{background:#fff3e0;border-left:4px solid #f57c00;padding:10px 14px;border-radius:4px;margin:12px 0;font-size:13px}
+.s-main-proof{background:#f1f8e9;border-left:4px solid #4caf50;padding:14px 18px;border-radius:4px;margin:14px 0}
+.s-err{color:#c62828}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px}
+th,td{border:1px solid #e0e0e0;padding:6px 10px;text-align:left}
+th{background:#f5f5f5;font-weight:600}
+</style></head><body>
+<div class="s-head">
+  <div>
+    <div class="s-label-sm">Задача (анализ детерминированности КС-языка)</div>
+    <div class="s-task">Проверить язык на детерминизм: {wvaav^Rw^R | w ∈ (aa*b)*a &amp; v ∈ b(ab|aa)*}</div>
+  </div>
+  <span class="s-badge s-dcfl">ДКСЯ</span>
+</div>
+<div class="s-banner-ok"><strong>✓ Oracle верификация пройдена</strong> (1 из 1 агентов верифицировано)</div>
+<div class="s-sec">Основное доказательство</div>
+<div class="s-main-proof">
+<div class="s-p"><strong>Метод:</strong> stack_strategy</div>
+<table><thead><tr><th>#</th><th>Фаза</th><th>Действие</th><th>Что</th><th>Триггер</th></tr></thead><tbody>
+<tr><td>1</td><td>push_w</td><td>push</td><td>символы w</td><td>конец w (определяется по regex (aa*b)*a)</td></tr>
+<tr><td>2</td><td>push_v</td><td>push</td><td>символы v поверх w</td><td>встретили &#x27;aa&#x27; — разделитель</td></tr>
+<tr><td>3</td><td>pop_v^R</td><td>compare</td><td>сравниваем с v^R из стека</td><td>v закончился (стек дошёл до маркера w)</td></tr>
+<tr><td>4</td><td>pop_w^R</td><td>compare</td><td>сравниваем с w^R из стека</td><td>стек пуст</td></tr>
+</tbody></table>
+<div class="s-p"><strong>Разделитель:</strong> aa (разделяет v и v^R, чётко маркирует переход)</div>
+<div class="s-p"><strong>Аргумент детерминированности:</strong> Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на &#x27;a&#x27;, за которым идёт символ из v ∈ b(ab|aa)*, т.е. &#x27;b&#x27;. Это однозначно определяет точку переключения.</div>
+<div class="s-p"><strong>Конечное управление:</strong> Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний</div>
+<div class="s-p"><strong>Regex → состояния ДКА:</strong></div><ul>
+<li>(aa*b)*a → 3 состояния ДКА</li>
+<li>b(ab|aa)* → 4 состояния ДКА</li>
+</ul>
+</div>
+<div class="s-box" style="background:#e3f2fd;border-left:4px solid #1976d2;margin:12px 0">
+<div class="s-p"><strong>Итог рассуждения:</strong></div>
+<div style="white-space:pre-wrap">Agent &#x27;stack_strategy&#x27; verdict: dcfl</div>
+</div>
+<div class="s-sec">Методы специалистов</div>
+<div class="s-tab">
+  <button class="s-tab-btn active" onclick="showTab(0)">Стековая стратегия</button>
+  <button class="s-tab-btn" onclick="showTab(1)">Замыкание</button>
+  <button class="s-tab-btn" onclick="showTab(2)">Лемма накачки ДКСЛ</button>
+  <button class="s-tab-btn" onclick="showTab(3)">Лемма Шаллита</button>
+  <button class="s-tab-btn" onclick="showTab(4)">Существ. неоднозначность</button>
+</div>
+<div class="s-panel active" id="panel-0">
+<div class="s-meta">вердикт: <code>dcfl</code> · статус: <code>success</code> · уверенность: 0.92</div>
+<table><thead><tr><th>#</th><th>Фаза</th><th>Действие</th><th>Что</th><th>Триггер</th></tr></thead><tbody>
+<tr><td>1</td><td>push_w</td><td>push</td><td>символы w</td><td>конец w (определяется по regex (aa*b)*a)</td></tr>
+<tr><td>2</td><td>push_v</td><td>push</td><td>символы v поверх w</td><td>встретили &#x27;aa&#x27; — разделитель</td></tr>
+<tr><td>3</td><td>pop_v^R</td><td>compare</td><td>сравниваем с v^R из стека</td><td>v закончился (стек дошёл до маркера w)</td></tr>
+<tr><td>4</td><td>pop_w^R</td><td>compare</td><td>сравниваем с w^R из стека</td><td>стек пуст</td></tr>
+</tbody></table>
+<div class="s-p"><strong>Разделитель:</strong> aa (разделяет v и v^R, чётко маркирует переход)</div>
+<div class="s-p"><strong>Аргумент детерминированности:</strong> Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на &#x27;a&#x27;, за которым идёт символ из v ∈ b(ab|aa)*, т.е. &#x27;b&#x27;. Это однозначно определяет точку переключения.</div>
+<div class="s-p"><strong>Конечное управление:</strong> Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний</div>
+<div class="s-p"><strong>Regex → состояния ДКА:</strong></div><ul>
+<li>(aa*b)*a → 3 состояния ДКА</li>
+<li>b(ab|aa)* → 4 состояния ДКА</li>
+</ul>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Identified separator &#x27;aa&#x27; between v and v^R</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Constructed 4-phase stack strategy: push_w, push_v, pop_v^R, pop_w^R</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">Verified deterministic switching via regex boundary analysis</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">DFA state counts: 3 for (aa*b)*a, 4 for b(ab|aa)*</div></div>
+</div>
+<div class="s-panel" id="panel-1">
+<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+</div>
+<div class="s-panel" id="panel-2">
+<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+</div>
+<div class="s-panel" id="panel-3">
+<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+</div>
+<div class="s-panel" id="panel-4">
+<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+</div>
+<div class="s-sec">Oracle верификация (детали)</div>
+<table><thead><tr><th>Агент</th><th>Статус</th><th>Проверки</th><th>Проблемы</th></tr></thead><tbody>
+<tr><td>stack_strategy</td><td><code>verified</code></td><td>7/7</td><td>—</td></tr>
+<tr><td>closure_reduction</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
+<tr><td>dcfl_pumping</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
+<tr><td>shallit</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
+<tr><td>inh_ambiguity</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
+</tbody></table>
+<div class="s-sec">Подсказки и наблюдения</div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Fallback reasoning (no LLM available)</div></div>
+<div class="s-footer">
+  <span>confidence: 0.92</span>
+  <span class="s-pill">5 агентов отработали</span>
+  <span style="display:flex;align-items:center;gap:5px"><span class="s-dot s-pass"></span>verified</span>
+</div>
+<script>
+function showTab(n){
+  document.querySelectorAll('.s-tab-btn').forEach((b,i)=>b.classList.toggle('active',i===n));
+  document.querySelectorAll('.s-panel').forEach((p,i)=>p.classList.toggle('active',i===n));
+  if(window.renderMathInElement){try{renderMathInElement(document.querySelector('.s-panel.active'),{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false});}catch(e){}}
+}
+</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false});"></script>
+</body></html>

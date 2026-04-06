@@ -1,0 +1,11 @@
+{
+  "agent_name": "dcfl_pumping",
+  "status": "fail",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "Attempted pumping argument but could not find valid decomposition"
+  ],
+  "confidence": 0.2,
+  "errors": []
+}

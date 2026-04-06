@@ -1,0 +1,18 @@
+{
+  "agent_name": "reasoning",
+  "status": "success",
+  "verdict": "dcfl",
+  "proof_sketch": {
+    "action": "done",
+    "primary_evidence": "stack_strategy",
+    "supporting_agents": ["stack_strategy"],
+    "conflicting_agents": []
+  },
+  "evidence": [
+    "stack_strategy agent returned verdict=dcfl with confidence=0.88",
+    "No conflicting evidence from other agents",
+    "Final verdict: dcfl (action=done)"
+  ],
+  "confidence": 0.88,
+  "errors": []
+}

@@ -1,0 +1,19 @@
+{
+  "agent_name": "reasoning",
+  "status": "success",
+  "verdict": "non_dcfl",
+  "proof_sketch": {
+    "action": "done",
+    "primary_evidence": "inh_ambiguity",
+    "supporting_agents": ["inh_ambiguity", "dcfl_pumping"],
+    "conflicting_agents": []
+  },
+  "evidence": [
+    "inh_ambiguity agent returned verdict=non_dcfl with confidence=0.90",
+    "dcfl_pumping agent returned verdict=non_dcfl with confidence=0.50 (supporting)",
+    "stack_strategy agent failed to construct DPDA (consistent with non_dcfl)",
+    "Final verdict: non_dcfl (action=done)"
+  ],
+  "confidence": 0.9,
+  "errors": []
+}

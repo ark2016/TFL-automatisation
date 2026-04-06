@@ -1,0 +1,407 @@
+{
+  "task": "classify_and_prove_dcfl",
+  "source_text": "S → aSSb | ba | Ab, A → aAb | a",
+  "verdict": "dcfl",
+  "confidence": 0.55,
+  "hypothesis": {
+    "pattern_type": "grammar_analysis",
+    "memory_analysis": "unknown",
+    "separator_analysis": "ambiguous",
+    "disjunction_present": false,
+    "regex_constrained_vars": [],
+    "prediction": "uncertain",
+    "confidence": 0.4,
+    "reasoning": "Pattern classified as 'grammar_analysis'. Grammar-based input requires deeper analysis; cannot determine DCFL membership from heuristics alone."
+  },
+  "classifier_hint": null,
+  "preprocess": {
+    "patterns": [
+      {
+        "pattern": "grammar_lr_like",
+        "score": 0.85,
+        "verdict": "dcfl",
+        "method": "stack_strategy",
+        "reason": "grammar appears LR(k)-parseable"
+      }
+    ],
+    "closure": {
+      "applicable_strategies": [
+        {
+          "operation": "complement",
+          "direction": "both",
+          "description": "grammar provided — consider whether the complement is a simpler or known DCFL; DCFL is closed under complement",
+          "confidence": 0.5
+        }
+      ],
+      "complement_structure": null,
+      "warnings": []
+    },
+    "sample_words": [
+      {
+        "word": "ba",
+        "length": 2,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "ab",
+        "length": 2,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "ababab",
+        "length": 6,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aabb",
+        "length": 4,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "abaabb",
+        "length": 6,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aabbab",
+        "length": 6,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aaabbb",
+        "length": 6,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aabababbab",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "abaabababb",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "abaaabbb",
+        "length": 8,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aaabbbab",
+        "length": 8,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aababb",
+        "length": 6,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aaaabbbb",
+        "length": 8,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aababababb",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aabaabbbab",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aaabbabbab",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "abaabaabbb",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "abaaabbabb",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "abaaaabbbb",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "aaaabbbbab",
+        "length": 10,
+        "in_language": true,
+        "variables": null,
+        "source": "grammar_derivation"
+      },
+      {
+        "word": "b",
+        "length": 1,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "baa",
+        "length": 3,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aba",
+        "length": 3,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "a",
+        "length": 1,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aab",
+        "length": 3,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "ababa",
+        "length": 5,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "abababa",
+        "length": 7,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aababab",
+        "length": 7,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aabba",
+        "length": 5,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      },
+      {
+        "word": "aaabb",
+        "length": 5,
+        "in_language": false,
+        "variables": null,
+        "source": "boundary"
+      }
+    ]
+  },
+  "reasoning_summary": "Max retries reached, returning best guess",
+  "primary_evidence": "stack_strategy",
+  "proof_method": "stack_strategy",
+  "proof_sketch": null,
+  "proof_text": "Max retries reached, returning best guess",
+  "oracle_verification": {
+    "stack_strategy": {
+      "verification_status": "not_verified",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "closure_reduction": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "dcfl_pumping": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "shallit": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "inh_ambiguity": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    }
+  },
+  "agents_used": [
+    "closure_reduction",
+    "dcfl_pumping",
+    "inh_ambiguity",
+    "shallit",
+    "stack_strategy"
+  ],
+  "specialist_outputs": {
+    "stack_strategy": {
+      "agent_name": "stack_strategy",
+      "status": "uncertain",
+      "verdict": "dcfl",
+      "proof_sketch": null,
+      "evidence": [
+        "Partial stack strategy constructed but determinism not fully verified",
+        "Grammar S → aSb | SS | ε generates Dyck-like language",
+        "Likely DCFL but confidence is low due to ambiguous grammar structure"
+      ],
+      "confidence": 0.55,
+      "errors": []
+    },
+    "closure_reduction": {
+      "agent_name": "closure_reduction",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "dcfl_pumping": {
+      "agent_name": "dcfl_pumping",
+      "status": "fail",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [
+        "Attempted pumping argument but could not find valid decomposition"
+      ],
+      "confidence": 0.2,
+      "errors": []
+    },
+    "shallit": {
+      "agent_name": "shallit",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "inh_ambiguity": {
+      "agent_name": "inh_ambiguity",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    }
+  },
+  "agent_results": {
+    "stack_strategy": {
+      "agent_name": "stack_strategy",
+      "status": "uncertain",
+      "verdict": "dcfl",
+      "proof_sketch": null,
+      "evidence": [
+        "Partial stack strategy constructed but determinism not fully verified",
+        "Grammar S → aSb | SS | ε generates Dyck-like language",
+        "Likely DCFL but confidence is low due to ambiguous grammar structure"
+      ],
+      "confidence": 0.55,
+      "errors": []
+    },
+    "closure_reduction": {
+      "agent_name": "closure_reduction",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "dcfl_pumping": {
+      "agent_name": "dcfl_pumping",
+      "status": "fail",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [
+        "Attempted pumping argument but could not find valid decomposition"
+      ],
+      "confidence": 0.2,
+      "errors": []
+    },
+    "shallit": {
+      "agent_name": "shallit",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "inh_ambiguity": {
+      "agent_name": "inh_ambiguity",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    }
+  },
+  "hints_for_human": [
+    "Fallback reasoning (no LLM available)"
+  ],
+  "retries": 2,
+  "errors": []
+}

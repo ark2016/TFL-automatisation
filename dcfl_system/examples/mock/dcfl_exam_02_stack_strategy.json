@@ -1,0 +1,46 @@
+{
+  "agent_name": "stack_strategy",
+  "status": "success",
+  "verdict": "dcfl",
+  "proof_sketch": {
+    "kind": "stack_strategy",
+    "phases": [
+      {
+        "name": "read_u1",
+        "action": "push",
+        "what": "символы u₁ на стек",
+        "trigger": "встретили 'a' — разделитель w₁"
+      },
+      {
+        "name": "read_u2",
+        "action": "compare",
+        "what": "снимаем u₂ со стека, считаем |u₁| ≤ |u₂|",
+        "trigger": "стек пуст или u₂ длиннее u₁"
+      },
+      {
+        "name": "read_u3",
+        "action": "push",
+        "what": "символы u₃ на стек",
+        "trigger": "встретили 'a' — разделитель w₂"
+      },
+      {
+        "name": "read_u4",
+        "action": "compare",
+        "what": "снимаем u₄, проверяем |u₃| ≥ |u₄|",
+        "trigger": "конец слова"
+      }
+    ],
+    "separator": "a (два вхождения символа 'a' разделяют u₁u₂ и u₃u₄)",
+    "finite_control": "Два состояния: чтение первой и второй половины",
+    "determinism_argument": "Символ 'a' однозначно маркирует границу между частями; после каждого 'a' переключение детерминировано",
+    "regex_in_states": []
+  },
+  "evidence": [
+    "Identified separator 'a' appearing twice to delimit u₁u₂ and u₃u₄",
+    "Constructed 4-phase stack strategy: read_u1, read_u2, read_u3, read_u4",
+    "Deterministic switching via 'a' separator",
+    "Finite control uses 2 states for first/second half"
+  ],
+  "confidence": 0.88,
+  "errors": []
+}

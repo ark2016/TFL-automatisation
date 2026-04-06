@@ -1,0 +1,16 @@
+{
+  "task_id": "dcfl_exam_01",
+  "source_text": "Проверить язык на детерминизм: {wvaav^Rw^R | w ∈ (aa*b)*a & v ∈ b(ab|aa)*}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "wvaav^Rw^R",
+    "variables": [
+      {"name": "w", "domain": "(aa*b)*a", "quantifier": "forall"},
+      {"name": "v", "domain": "b(ab|aa)*", "quantifier": "forall"}
+    ],
+    "constraints": []
+  },
+  "alphabet": ["a", "b"]
+}

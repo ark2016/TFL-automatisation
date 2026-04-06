@@ -1,0 +1,298 @@
+{
+  "task": "classify_and_prove_dcfl",
+  "source_text": "Является ли данный язык детерминированным? {aⁿb*(cⁿ|bⁿ)ac* | n > 0}",
+  "verdict": "non_dcfl",
+  "confidence": 0.9,
+  "hypothesis": {
+    "pattern_type": "grammar_analysis",
+    "memory_analysis": "unknown",
+    "separator_analysis": "ambiguous",
+    "disjunction_present": false,
+    "regex_constrained_vars": [],
+    "prediction": "uncertain",
+    "confidence": 0.4,
+    "reasoning": "Pattern classified as 'grammar_analysis'. Cannot determine DCFL membership with confidence from heuristics alone."
+  },
+  "classifier_hint": null,
+  "preprocess": {
+    "patterns": [],
+    "closure": {
+      "applicable_strategies": [
+        {
+          "operation": "complement",
+          "direction": "both",
+          "description": "DCFL is closed under complement — proving complement(L) is DCFL proves L is DCFL, and vice versa",
+          "confidence": 0.6
+        }
+      ],
+      "complement_structure": null,
+      "warnings": [
+        "disjunction detected in constraints — DCFL is NOT closed under union, so no conclusion follows from closure properties alone; consider inherent ambiguity or direct DPDA construction"
+      ]
+    },
+    "sample_words": [
+      {
+        "word": "aacbaaacacccacbaaaaa",
+        "length": 20,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "cacaccccbabcbaac",
+        "length": 16,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "bbaabaababbcb",
+        "length": 13,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "acbcabacbccbcacaacabaaabb",
+        "length": 25,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "cbabbacbcccacc",
+        "length": 14,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "ccaab",
+        "length": 5,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "bcccacbaaabb",
+        "length": 12,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "aaccbacb",
+        "length": 8,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "cbabaacccbcc",
+        "length": 12,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      },
+      {
+        "word": "cbbaacbaaaaca",
+        "length": 13,
+        "in_language": false,
+        "variables": null,
+        "source": "random"
+      }
+    ]
+  },
+  "reasoning_summary": "Agent 'inh_ambiguity' verdict: non_dcfl",
+  "primary_evidence": "inh_ambiguity",
+  "proof_method": "inh_ambiguity",
+  "proof_sketch": {
+    "kind": "inh_ambiguity",
+    "disjunction_identified": "cⁿ|bⁿ при общем n с префиксом aⁿb*",
+    "overlap_words": "Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.",
+    "ambiguity_argument": "Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...",
+    "dcfl_implication": "Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)"
+  },
+  "proof_text": null,
+  "oracle_verification": {
+    "stack_strategy": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "closure_reduction": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "dcfl_pumping": {
+      "verification_status": "not_verified",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "shallit": {
+      "verification_status": "not_applicable",
+      "checks_run": [],
+      "checks_passed": 0,
+      "checks_total": 0
+    },
+    "inh_ambiguity": {
+      "verification_status": "verified",
+      "checks_run": [
+        "disjunction_identified_non_empty",
+        "overlap_words_non_empty",
+        "ambiguity_argument_non_empty",
+        "dcfl_implication_mentions_not_dcfl_or_unambcf"
+      ],
+      "checks_passed": 4,
+      "checks_total": 4
+    }
+  },
+  "agents_used": [
+    "closure_reduction",
+    "dcfl_pumping",
+    "inh_ambiguity",
+    "shallit",
+    "stack_strategy"
+  ],
+  "specialist_outputs": {
+    "stack_strategy": {
+      "agent_name": "stack_strategy",
+      "status": "fail",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [
+        "Attempted to construct deterministic stack strategy",
+        "Failed: disjunction cⁿ|bⁿ requires nondeterministic choice"
+      ],
+      "confidence": 0.3,
+      "errors": [
+        "Cannot construct deterministic stack strategy for disjunction cⁿ|bⁿ"
+      ]
+    },
+    "closure_reduction": {
+      "agent_name": "closure_reduction",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "dcfl_pumping": {
+      "agent_name": "dcfl_pumping",
+      "status": "uncertain",
+      "verdict": "non_dcfl",
+      "proof_sketch": null,
+      "evidence": [
+        "Pumping analysis suggests non-DCFL but proof is incomplete",
+        "Unable to find a clean pumping argument for all decompositions"
+      ],
+      "confidence": 0.5,
+      "errors": []
+    },
+    "shallit": {
+      "agent_name": "shallit",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "inh_ambiguity": {
+      "agent_name": "inh_ambiguity",
+      "status": "success",
+      "verdict": "non_dcfl",
+      "proof_sketch": {
+        "kind": "inh_ambiguity",
+        "disjunction_identified": "cⁿ|bⁿ при общем n с префиксом aⁿb*",
+        "overlap_words": "Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.",
+        "ambiguity_argument": "Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...",
+        "dcfl_implication": "Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)"
+      },
+      "evidence": [
+        "Identified disjunction cⁿ|bⁿ as source of inherent ambiguity",
+        "Constructed overlap words demonstrating ambiguous parse",
+        "Applied inherent ambiguity theorem: L₁ ∪ L₂ with non-empty intersection",
+        "Concluded: inherently ambiguous → not UnambCF → not DCFL"
+      ],
+      "confidence": 0.9,
+      "errors": []
+    }
+  },
+  "agent_results": {
+    "stack_strategy": {
+      "agent_name": "stack_strategy",
+      "status": "fail",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [
+        "Attempted to construct deterministic stack strategy",
+        "Failed: disjunction cⁿ|bⁿ requires nondeterministic choice"
+      ],
+      "confidence": 0.3,
+      "errors": [
+        "Cannot construct deterministic stack strategy for disjunction cⁿ|bⁿ"
+      ]
+    },
+    "closure_reduction": {
+      "agent_name": "closure_reduction",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "dcfl_pumping": {
+      "agent_name": "dcfl_pumping",
+      "status": "uncertain",
+      "verdict": "non_dcfl",
+      "proof_sketch": null,
+      "evidence": [
+        "Pumping analysis suggests non-DCFL but proof is incomplete",
+        "Unable to find a clean pumping argument for all decompositions"
+      ],
+      "confidence": 0.5,
+      "errors": []
+    },
+    "shallit": {
+      "agent_name": "shallit",
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": null,
+      "evidence": [],
+      "confidence": 0.0,
+      "errors": []
+    },
+    "inh_ambiguity": {
+      "agent_name": "inh_ambiguity",
+      "status": "success",
+      "verdict": "non_dcfl",
+      "proof_sketch": {
+        "kind": "inh_ambiguity",
+        "disjunction_identified": "cⁿ|bⁿ при общем n с префиксом aⁿb*",
+        "overlap_words": "Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.",
+        "ambiguity_argument": "Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...",
+        "dcfl_implication": "Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)"
+      },
+      "evidence": [
+        "Identified disjunction cⁿ|bⁿ as source of inherent ambiguity",
+        "Constructed overlap words demonstrating ambiguous parse",
+        "Applied inherent ambiguity theorem: L₁ ∪ L₂ with non-empty intersection",
+        "Concluded: inherently ambiguous → not UnambCF → not DCFL"
+      ],
+      "confidence": 0.9,
+      "errors": []
+    }
+  },
+  "hints_for_human": [
+    "Fallback reasoning (no LLM available)"
+  ],
+  "retries": 0,
+  "errors": []
+}
