@@ -369,7 +369,7 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
         "explanation": str
     }
     """
-    agent = "marker_detector"
+    agent = "marker_analyzer"
     checks_passed = 0
     checks_total = 0
     issues: list[str] = []
@@ -400,7 +400,12 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
         issues.append("No 'explanation' / 'marker_description' / 'll_usage' provided in proof_sketch")
 
     # Check 3: grammar provided (optional but preferred)
-    grammar = proof_sketch.get("grammar")
+    # Prompt puts grammar in artifacts.ll_grammar; proof_sketch may also carry it.
+    grammar = (
+        proof_sketch.get("grammar")
+        or proof_sketch.get("ll_grammar")
+        or proof_sketch.get("_artifacts_ll_grammar")  # injected by verify_ll_claim
+    )
     # Prompt uses "suggested_k"; accept both names.
     k = proof_sketch.get("k") or proof_sketch.get("suggested_k")
     if grammar is not None:
@@ -647,8 +652,14 @@ def verify_ll_claim(agent_result: dict, ir: dict) -> dict:
             issues=["No proof_sketch in agent result"],
         )
 
-    # dispatch by method
+    # For marker_detection: prompt puts grammar in artifacts.ll_grammar.
+    # Inject it into proof_sketch so verify_marker_claim can find it.
     method = proof_sketch.get("method", "")
+    if method == "marker_detection":
+        artifacts = agent_result.get("artifacts") or {}
+        art_grammar = artifacts.get("ll_grammar")
+        if art_grammar and not proof_sketch.get("grammar") and not proof_sketch.get("ll_grammar"):
+            proof_sketch = {**proof_sketch, "_artifacts_ll_grammar": art_grammar}
     dispatch = {
         "ll_grammar_construction": verify_ll_grammar_claim,
         "substitution": verify_substitution_claim,

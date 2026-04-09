@@ -1,5 +1,7 @@
 """
-Regression tests for Finding 2: for_all_k must be True, not just present.
+Regression tests:
+  - Finding 2: for_all_k must be True, not just present.
+  - Round 7 Finding 2: verify_marker_claim must read artifacts.ll_grammar.
 """
 from __future__ import annotations
 
@@ -8,6 +10,7 @@ import pytest
 from ll_system.lib.claim_verifier import (
     verify_substitution_claim,
     verify_prefix_classes_claim,
+    verify_ll_claim,
 )
 
 IR_SIMPLE = {
@@ -96,3 +99,78 @@ class TestForAllKMustBeTrue:
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
         assert result["verification_status"] != "verified"
         assert any("for_all_k" in i for i in result["issues"])
+
+
+# ---------------------------------------------------------------------------
+# Regression: Round 7 Finding 2 — verify_marker_claim must read artifacts.ll_grammar
+# ---------------------------------------------------------------------------
+
+_VALID_GRAMMAR = {
+    "nonterminals": ["S"],
+    "terminals": ["a"],
+    "start": "S",
+    "rules": [{"lhs": "S", "rhs": ["a"]}],
+}
+
+_BROKEN_GRAMMAR = {"broken": True}
+
+
+class TestMarkerAnalyzerReadsArtifactsGrammar:
+    """Regression Round 7 Finding 2: verify_ll_claim dispatches marker_detection.
+    The prompt places grammar in artifacts.ll_grammar, not in proof_sketch.grammar.
+    Before the fix, verify_marker_claim only read proof_sketch['grammar'],
+    so a broken artifacts.ll_grammar was silently ignored and the claim was 'verified'.
+    """
+
+    def _marker_agent_result(self, artifacts: dict, proof_grammar: dict | None = None) -> dict:
+        ps: dict = {
+            "method": "marker_detection",
+            "marker_symbol": "a",
+            "marker_description": "unique prefix marker",
+            "ll_usage": "start of S",
+            "suggested_k": 1,
+        }
+        if proof_grammar is not None:
+            ps["grammar"] = proof_grammar
+        return {
+            "agent_name": "marker_analyzer",
+            "verdict": "ll",
+            "confidence": 0.9,
+            "proof_sketch": ps,
+            "artifacts": artifacts,
+        }
+
+    def test_broken_artifacts_grammar_not_verified(self):
+        """Regression: artifacts.ll_grammar={'broken': True} must prevent verification."""
+        agent_result = self._marker_agent_result(
+            artifacts={"ll_grammar": _BROKEN_GRAMMAR}
+        )
+        result = verify_ll_claim(agent_result, IR_SIMPLE)
+        assert result["verification_status"] != "verified", (
+            "A claim with a broken artifacts.ll_grammar must not be verified. "
+            "Before the fix, verify_marker_claim ignored artifacts entirely."
+        )
+
+    def test_valid_artifacts_grammar_verified(self):
+        """A valid grammar in artifacts.ll_grammar must allow verification."""
+        agent_result = self._marker_agent_result(
+            artifacts={"ll_grammar": _VALID_GRAMMAR}
+        )
+        result = verify_ll_claim(agent_result, IR_SIMPLE)
+        assert result["verification_status"] == "verified"
+
+    def test_proof_sketch_grammar_still_works(self):
+        """If grammar is already in proof_sketch, artifacts injection is a no-op."""
+        agent_result = self._marker_agent_result(
+            artifacts={},
+            proof_grammar=_VALID_GRAMMAR,
+        )
+        result = verify_ll_claim(agent_result, IR_SIMPLE)
+        assert result["verification_status"] == "verified"
+
+    def test_no_grammar_anywhere_still_verified_on_marker_and_explanation(self):
+        """Grammar is optional in marker_detection — marker + explanation alone suffice."""
+        agent_result = self._marker_agent_result(artifacts={})
+        result = verify_ll_claim(agent_result, IR_SIMPLE)
+        # Grammar check is skipped (optional), so marker+explanation checks still pass
+        assert result["verification_status"] == "verified"

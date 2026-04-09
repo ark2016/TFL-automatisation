@@ -279,7 +279,8 @@ The `lean_sketch` field is always `null` — Lean formalization is out of scope 
 ## Instructions
 
 1. **Read the reasoning output** to determine verdict, primary method, and primary evidence.
-2. **Select the correct template** based on the method: substitution, ll_grammar_construction, grammar_transformation, prefix_classes, essential_ambiguity.
+2. **Select the correct template** based on the method: substitution, ll_grammar_construction, grammar_transformation, prefix_classes, essential_ambiguity, first_follow_oracle.
+   - For **first_follow_oracle**: the proof evidence is in `first_follow_result`. If verdict is `ll`, report the confirmed `k` and reference the parse table (conflicts list is empty). If verdict is `not_ll`, list the conflicts from `first_follow_result.conflicts` and explain why they prevent deterministic parsing.
 3. **Fill in ALL template placeholders** with concrete values from the specialist evidence.
 4. **Apply LaTeX conventions** throughout: `$a^n \cdot b^n$`, `\cdot` for concatenation, `^{...}` for multi-char superscripts.
 5. **Include the hierarchy section** reminding where this language sits: $\text{REG} \subsetneq \text{LL}(1) \subsetneq \text{LL}(k) \subsetneq \text{DCFL} \subsetneq \text{CFL}$.

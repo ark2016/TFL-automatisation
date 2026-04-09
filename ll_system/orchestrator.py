@@ -1185,8 +1185,9 @@ def assemble_result_node(state: PipelineState) -> dict:
                 "conflicts": ff.get("conflicts", []),
             },
         }
-        # Also pull grammar from constructive agents if available (for display)
-        for agent_name in _CONSTRUCTIVE_AGENTS:
+        # Pull grammar from constructive agents using the same fixed order as the
+        # oracle node, so the grammar shown in the result is the one oracle checked.
+        for agent_name in ("ll_grammar_builder", "marker_analyzer", "grammar_transformer"):
             _, g = _extract_constructive_proof(agent_name)
             if g is not None:
                 grammar = g

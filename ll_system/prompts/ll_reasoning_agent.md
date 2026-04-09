@@ -198,7 +198,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "summary": "Русский текст: краткое изложение всех доказательств и итоговый вывод.",
   "justification": "Русский текст: основное доказательство, оформленное по стандарту экзамена.",
   "primary_method": "substitution | ll_grammar_construction | marker_detection | grammar_transformation | prefix_classes | essential_ambiguity | first_follow_oracle",
-  "primary_agent": "substitution_agent | ll_grammar_builder | marker_analyzer | grammar_transformer | prefix_classes_agent | ambiguity_detector",
+  "primary_agent": "substitution_agent | ll_grammar_builder | marker_analyzer | grammar_transformer | prefix_classes_agent | ambiguity_detector | first_follow_oracle",
   "supporting_agents": ["prefix_classes_agent"],
   "contradictions": [
     {

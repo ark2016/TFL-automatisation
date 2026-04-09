@@ -593,3 +593,95 @@ class TestAssembleOraclePrimaryAgent:
         grammar = result.get("grammar")
         # Grammar from ll_grammar_builder may be set — that is OK for display
         # The key is that proof.method is oracle, not ll_grammar_construction
+
+
+# ---------------------------------------------------------------------------
+# Regression: Round 7 Finding 1 — oracle grammar uses fixed agent order
+# ---------------------------------------------------------------------------
+
+
+class TestOracleGrammarUsesFixedOrder:
+    """Regression Round 7 Finding 1: assemble_result_node used an unordered set to pick
+    the grammar for display when primary_agent='first_follow_oracle'.  The grammar shown
+    might not match the one oracle actually checked.  Fix: iterate in the same fixed order
+    as first_follow_oracle_node: ll_grammar_builder → marker_analyzer → grammar_transformer.
+    """
+
+    GRAMMAR_FROM_MARKER = {
+        "nonterminals": ["S"],
+        "terminals": ["m"],
+        "start": "S",
+        "rules": [{"lhs": "S", "rhs": ["m"]}],
+    }
+    GRAMMAR_FROM_TRANSFORMER = {
+        "nonterminals": ["T"],
+        "terminals": ["t"],
+        "start": "T",
+        "rules": [{"lhs": "T", "rhs": ["t"]}],
+    }
+
+    def _state_oracle_primary_multi(self, agents: dict) -> dict:
+        state = _base_assemble_state("ll", primary_agent="first_follow_oracle")
+        state["reasoning_output"]["primary_method"] = "first_follow_oracle"
+        state["reasoning_output"]["k"] = 1
+        state["first_follow_result"] = {
+            "found": True, "min_k": 1, "is_ll_k": True, "conflicts": [],
+        }
+        state["agent_results"] = agents
+        return state
+
+    def test_ll_grammar_builder_preferred_over_marker_analyzer(self):
+        """ll_grammar_builder comes first in fixed order, so its grammar wins."""
+        state = self._state_oracle_primary_multi({
+            "ll_grammar_builder": {
+                "verdict": "ll", "confidence": 0.7,
+                "proof_sketch": {
+                    "method": "ll_grammar_construction", "k": 1,
+                    "ll_grammar": GRAMMAR_LL1,
+                },
+                "artifacts": {},
+            },
+            "marker_analyzer": {
+                "verdict": "ll", "confidence": 0.9,
+                "proof_sketch": {
+                    "method": "marker_detection",
+                    "ll_grammar": self.GRAMMAR_FROM_MARKER,
+                },
+                "artifacts": {},
+            },
+        })
+        out = assemble_result_node(state)
+        result = out.get("result", {})
+        grammar = result.get("grammar")
+        assert grammar == GRAMMAR_LL1, (
+            "ll_grammar_builder is first in fixed order; its grammar must be chosen "
+            "even if marker_analyzer has higher confidence"
+        )
+
+    def test_marker_analyzer_preferred_over_grammar_transformer(self):
+        """marker_analyzer comes before grammar_transformer in fixed order."""
+        state = self._state_oracle_primary_multi({
+            "marker_analyzer": {
+                "verdict": "ll", "confidence": 0.7,
+                "proof_sketch": {
+                    "method": "marker_detection",
+                    "ll_grammar": self.GRAMMAR_FROM_MARKER,
+                },
+                "artifacts": {},
+            },
+            "grammar_transformer": {
+                "verdict": "ll", "confidence": 0.9,
+                "proof_sketch": {
+                    "method": "grammar_transformation", "k": 1,
+                    "transformed_grammar": self.GRAMMAR_FROM_TRANSFORMER,
+                    "conflicts": [],
+                },
+                "artifacts": {},
+            },
+        })
+        out = assemble_result_node(state)
+        result = out.get("result", {})
+        grammar = result.get("grammar")
+        assert grammar == self.GRAMMAR_FROM_MARKER, (
+            "marker_analyzer precedes grammar_transformer in fixed order"
+        )
