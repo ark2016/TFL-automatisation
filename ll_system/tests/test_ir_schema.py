@@ -523,3 +523,142 @@ class TestValidateGrammarSymbols:
         errors = validate_grammar_symbols(grammar)
         assert len(errors) == 1
         assert "both" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# Regression: Fix 1 — single-char terminal validation via validate_ll_ir
+# ---------------------------------------------------------------------------
+
+
+class TestSingleCharTerminalValidation:
+    """Multi-char terminals must be rejected (parser is character-level)."""
+
+    def _make_ir(self, terminals: list[str], rules: list[dict]) -> dict:
+        return {
+            "task_type": "ll_check_grammar",
+            "source_text": "test",
+            "grammar": {
+                "nonterminals": ["S"],
+                "terminals": terminals,
+                "start": "S",
+                "rules": rules,
+            },
+        }
+
+    def test_single_char_terminals_valid(self) -> None:
+        ir = self._make_ir(["a", "b"], [{"lhs": "S", "rhs": ["a"]}])
+        assert validate_ll_ir(ir) == []
+
+    def test_multi_char_terminal_id_rejected(self) -> None:
+        ir = self._make_ir(["i", "d"], [{"lhs": "S", "rhs": ["i"]}])
+        # 'i' and 'd' individually are single-char — valid
+        assert validate_ll_ir(ir) == []
+
+    def test_terminal_id_as_single_token_rejected(self) -> None:
+        """S -> 'id' where 'id' is declared as a single multi-char terminal."""
+        ir = self._make_ir(["id"], [{"lhs": "S", "rhs": ["id"]}])
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "id" in errors[0]
+        assert "character-level" in errors[0] or "length" in errors[0]
+
+    def test_two_char_terminal_rejected(self) -> None:
+        ir = self._make_ir(["ab"], [{"lhs": "S", "rhs": ["ab"]}])
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "ab" in errors[0]
+
+    def test_empty_terminal_rejected(self) -> None:
+        """Empty string as a terminal is also length != 1."""
+        ir = self._make_ir([""], [{"lhs": "S", "rhs": []}])
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+
+
+# ---------------------------------------------------------------------------
+# Regression: Fix 2 — IR validator consistency checks
+# ---------------------------------------------------------------------------
+
+
+def _make_format3_ir(**grammar_overrides) -> dict:
+    """Build a minimal Format 3 IR with optional grammar field overrides."""
+    g = {
+        "nonterminals": ["S"],
+        "terminals": ["a"],
+        "start": "S",
+        "rules": [{"lhs": "S", "rhs": ["a"]}],
+    }
+    g.update(grammar_overrides)
+    return {
+        "task_type": "ll_check_grammar",
+        "source_text": "test",
+        "grammar": g,
+    }
+
+
+class TestGrammarConsistencyChecks:
+    """validate_ll_ir must catch inconsistent grammars before they reach check_ll_k."""
+
+    def test_valid_grammar_no_errors(self) -> None:
+        assert validate_ll_ir(_make_format3_ir()) == []
+
+    def test_start_not_in_nonterminals_gives_error(self) -> None:
+        """Repro from review: start='S', nonterminals=['A'] → was silently accepted."""
+        ir = _make_format3_ir(nonterminals=["A"], start="S", rules=[{"lhs": "A", "rhs": ["a"]}])
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "'S'" in errors[0]
+        assert "nonterminals" in errors[0]
+
+    def test_symbol_overlap_gives_error(self) -> None:
+        """A symbol that is both terminal and nonterminal must be rejected."""
+        ir = _make_format3_ir(
+            nonterminals=["S", "a"],
+            terminals=["a", "b"],
+            rules=[{"lhs": "S", "rhs": ["a"]}],
+        )
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "both" in errors[0]
+
+    def test_rule_lhs_not_in_nonterminals_rejected(self) -> None:
+        """Rule with undeclared lhs must be rejected."""
+        ir = _make_format3_ir(
+            nonterminals=["S"],
+            terminals=["a"],
+            start="S",
+            rules=[
+                {"lhs": "S", "rhs": ["a"]},
+                {"lhs": "X", "rhs": ["a"]},  # X not declared
+            ],
+        )
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "X" in errors[0]
+        assert "nonterminals" in errors[0]
+
+    def test_rule_rhs_undeclared_symbol_rejected(self) -> None:
+        """Rule rhs referencing undeclared symbol must be rejected."""
+        ir = _make_format3_ir(
+            nonterminals=["S"],
+            terminals=["a"],
+            start="S",
+            rules=[{"lhs": "S", "rhs": ["a", "b"]}],  # 'b' not declared
+        )
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "b" in errors[0]
+
+    def test_epsilon_in_rhs_allowed(self) -> None:
+        """ε is always a valid rhs symbol even if not in terminals."""
+        ir = _make_format3_ir(
+            rules=[{"lhs": "S", "rhs": ["ε"]}],
+        )
+        assert validate_ll_ir(ir) == []
+
+    def test_empty_rhs_allowed(self) -> None:
+        """Empty rhs [] means epsilon — always valid."""
+        ir = _make_format3_ir(
+            rules=[{"lhs": "S", "rhs": []}],
+        )
+        assert validate_ll_ir(ir) == []

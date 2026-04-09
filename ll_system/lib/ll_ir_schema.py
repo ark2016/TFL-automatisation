@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ll_system.lib.utils import validate_grammar_symbols
+
 # ---------------------------------------------------------------------------
 # LL-specific constants
 # ---------------------------------------------------------------------------
@@ -52,6 +54,13 @@ def _validate_ll_grammar(spec: Any, path: str) -> None:
 
     Rules format: flat list of {"lhs": str, "rhs": list[str]}.
     Empty rhs [] means epsilon. "ε" in rhs is also epsilon.
+
+    Checks beyond basic field presence:
+    - start ∈ nonterminals
+    - nonterminals ∩ terminals = ∅
+    - every terminal has length == 1 (LL parser is character-level)
+    - every rule lhs ∈ nonterminals
+    - every rhs symbol ∈ nonterminals ∪ terminals ∪ {"ε"}
     """
     _ll_check(isinstance(spec, dict), f"{path}: grammar must be an object")
     for field in ("nonterminals", "terminals", "start", "rules"):
@@ -69,6 +78,25 @@ def _validate_ll_grammar(spec: Any, path: str) -> None:
         f"{path}: start must be a non-empty string",
     )
     _ll_check(isinstance(spec["rules"], list), f"{path}: rules must be a list")
+
+    # Consistency checks via validate_grammar_symbols
+    sym_errors = validate_grammar_symbols(spec)
+    if sym_errors:
+        _ll_check(False, f"{path}: {sym_errors[0]}")
+
+    # Single-char terminal constraint (parser is character-level)
+    for t in spec["terminals"]:
+        if isinstance(t, str) and len(t) != 1:
+            _ll_check(
+                False,
+                f"{path}: terminal '{t}' has length {len(t)}; "
+                "only single-character terminals are supported (parser is character-level)",
+            )
+
+    nonterminals = set(spec["nonterminals"])
+    terminals = set(spec["terminals"])
+    allowed_rhs = nonterminals | terminals | {"ε"}
+
     for i, rule in enumerate(spec["rules"]):
         _ll_check(
             isinstance(rule, dict),
@@ -86,6 +114,20 @@ def _validate_ll_grammar(spec: Any, path: str) -> None:
             isinstance(rule["rhs"], list),
             f"{path}.rules[{i}]: 'rhs' must be a list",
         )
+        _ll_check(
+            rule["lhs"] in nonterminals,
+            f"{path}.rules[{i}]: lhs '{rule['lhs']}' is not in nonterminals",
+        )
+        for j, sym in enumerate(rule["rhs"]):
+            _ll_check(
+                isinstance(sym, str),
+                f"{path}.rules[{i}].rhs[{j}]: symbol must be a string",
+            )
+            _ll_check(
+                sym in allowed_rhs,
+                f"{path}.rules[{i}].rhs[{j}]: symbol '{sym}' is not declared "
+                "(not in nonterminals, terminals, or ε)",
+            )
 
 
 # ---------------------------------------------------------------------------

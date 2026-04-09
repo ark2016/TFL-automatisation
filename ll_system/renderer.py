@@ -292,14 +292,14 @@ def render_conflicts_md(first_follow_result: dict | None) -> str:
         if isinstance(c, dict):
             nt = c.get("nonterminal", "?")
             la = c.get("lookahead", "?")
-            rules = c.get("conflicting_rules", [])
-            desc = c.get("description", "")
+            rules = c.get("competing_rules", [])
+            conflict_type = c.get("type", "")
             rule_str = " vs ".join(str(r) for r in rules) if rules else ""
             entry = f"{i}. **NT={nt}, lookahead={la}**"
             if rule_str:
                 entry += f": `{rule_str}`"
-            if desc:
-                entry += f" — {desc}"
+            if conflict_type:
+                entry += f" — {conflict_type}"
             lines.append(entry)
         else:
             lines.append(f"{i}. {c}")
@@ -664,14 +664,14 @@ def _render_conflicts_html(ff_result: dict) -> str:
         if isinstance(c, dict):
             nt = _esc(c.get("nonterminal", "?"))
             la = _esc(c.get("lookahead", "?"))
-            rules = c.get("conflicting_rules", [])
-            desc = _esc(c.get("description", ""))
+            rules = c.get("competing_rules", [])
+            conflict_type = _esc(c.get("type", ""))
             rule_str = " vs ".join(_esc(str(r)) for r in rules) if rules else ""
             item = f"<strong>NT={nt}, lookahead={la}</strong>"
             if rule_str:
                 item += f': <span class="ll-mono">{rule_str}</span>'
-            if desc:
-                item += f" — {desc}"
+            if conflict_type:
+                item += f" — {conflict_type}"
             parts.append(f"<li>{item}</li>")
         else:
             parts.append(f"<li>{_esc(str(c))}</li>")
