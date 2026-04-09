@@ -35,6 +35,8 @@ CLOSURE_TABLE: list[dict[str, Any]] = [
         "closed": True,
         "implication_if_closed": "if L' is DCFL and R is regular, then L' ∩ R is DCFL",
         "proof_direction": "constructive",
+        "note": "Not from Table 1 (where ∩ means DCFL ∩ DCFL, which is NOT closed). "
+                "Follows from DPDA × DFA product construction preserving determinism.",
     },
     {
         "operation": "union",

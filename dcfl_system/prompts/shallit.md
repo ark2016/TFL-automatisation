@@ -45,15 +45,27 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
 
 ## Shallit's Lemma — Formal Statement
 
-**Lemma (positive form):**
-If L is a DCFL, then there exists an infinite set M subset of Sigma* such that for all w in Sigma*: either Mw subset of L (all elements of M followed by w are in L) or Mw intersection L = empty (no element of M followed by w is in L).
+**Lemma (stronger form):**
+If L is a DCFL, then for every infinite set M ⊆ Σ* there exists an
+infinite subset M' ⊆ M that is **homogeneous**: for all w ∈ Σ*,
+either M'w ⊆ L or M'w ∩ L = ∅.
 
-In other words: for a DCFL, there is an infinite set of prefixes that are "indistinguishable" by any suffix — they all behave the same way.
+In other words: every infinite set of prefixes contains an infinite
+subset where all elements are "indistinguishable" by any suffix —
+they all behave the same way with respect to L.
 
 **Negation (to prove non-DCFL):**
-For EVERY infinite set M subset of Sigma*, find a suffix w such that w SEPARATES M: there exist u, v in M where uw in L but vw not in L (or vice versa).
+There EXISTS an infinite set M ⊆ Σ* such that NO infinite subset
+M' ⊆ M is homogeneous. That is: for every infinite M' ⊆ M there
+exists a suffix w that SEPARATES M': ∃ u, v ∈ M' where uw ∈ L
+but vw ∉ L (or vice versa).
 
-If every infinite set can be separated, the language has infinitely many Myhill-Nerode equivalence classes in a way incompatible with DCFL, so L is not DCFL.
+If such an M exists, L is not DCFL.
+
+**Practical approach:** Typically, construct M so that every two
+distinct elements u ≠ v in M can be separated by some suffix w
+(depending on u, v). This means no two elements of M are equivalent,
+so no infinite homogeneous subset exists.
 
 ## Example: Palindromes L = { ww^R | w in {a,b}* }
 

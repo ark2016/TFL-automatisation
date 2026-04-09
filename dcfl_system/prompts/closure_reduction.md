@@ -50,12 +50,14 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
 |---|---|---|---|
 | **Complement** | ~L | **YES** | complement(L) is DCFL if and only if L is DCFL |
 | **Inverse homomorphism** | h^{-1}(L) | **YES** | If L is DCFL and h is a homomorphism, then h^{-1}(L) is DCFL |
-| **Intersection with regular** | L ∩ R | **YES** | If L is DCFL and R is regular, then L ∩ R is DCFL |
+| **Intersection with regular*** | L ∩ R | **YES** | If L is DCFL and R is regular, then L ∩ R is DCFL |
 | Union | L1 ∪ L2 | NO | Cannot conclude anything about DCFL from union |
 | Concatenation | L1 · L2 | NO | Cannot conclude anything about DCFL from concatenation |
 | Kleene star | L* | NO | Cannot conclude anything about DCFL from Kleene star |
 | Reversal | L^R | NO | Cannot conclude anything about DCFL from reversal |
 | Homomorphism | h(L) | NO | Cannot conclude anything about DCFL from forward homomorphism |
+
+*∩ REG — this is NOT from Table 1 (where ∩ means DCFL ∩ DCFL, which is NOT closed). Closure under ∩ REG follows from the product construction DPDA × DFA, which preserves determinism.
 
 ## Three tools available
 

@@ -58,17 +58,28 @@ To prove L is NOT DCFL, show:
 For any pumping length p, there exist two words w = xy and w' = xz in L such that:
 1. **|x| > p** (the common prefix is longer than the pumping length)
 2. **first(y) = first(z)** (the first letters of the differing suffixes match)
-3. **No decomposition** x = x1 x2 x3, y = y1 y2 y3, z = z1 z2 z3 with:
-   - |x2 x3| <= p
-   - |x2| > 0
-   satisfies: for all i >= 0, BOTH x1 x2^i x3 y1 y2^i y3 in L AND x1 x2^i x3 z1 z2^i z3 in L
+3. **Condition (1) — no prefix-only pumping:**
+   There is NO decomposition x = x1 x2 x3 with |x2 x3| <= p, |x2| > 0
+   such that for ALL i >= 0: x1 x2^i x3 y in L AND x1 x2^i x3 z in L.
+   (Pumping only the prefix x must break at least one word.)
+4. **Condition (2) — no synchronized suffix pumping:**
+   For ALL decompositions x = x1 x2 x3, y = y1 y2 y3, z = z1 z2 z3
+   with |x2 x3| <= p, |x2| > 0:
+   there EXISTS i >= 0 such that x1 x2^i x3 y1 y2^i y3 NOT in L
+   OR x1 x2^i x3 z1 z2^i z3 NOT in L.
+   (Synchronized pumping of prefix x2 together with suffix y2 or z2 must
+   also fail for at least one of the two words.)
 
-In other words: the two words share a long prefix, start the suffix with the same letter, but cannot be simultaneously pumped.
+**Key insight:** BOTH suffixes y and z are decomposed into three parts.
+The pumping is SYNCHRONIZED: x2 and y2 are pumped together (and x2 and z2
+are pumped together). Both conditions (1) and (2) must hold simultaneously.
 
 ## Key differences from CFL pumping lemma
 
 - CFL pumping: ONE word, decomposition uvxyz, pump v and y
-- DCFL pumping: TWO words with shared long prefix, synchronized pumping of both must fail
+- DCFL pumping: TWO words with shared long prefix, TWO conditions must hold
+- Condition (1): pumping only the prefix breaks at least one word
+- Condition (2): synchronized pumping of prefix + suffix also breaks at least one
 - The "two words" requirement reflects the deterministic prefix property of DPDAs
 
 ## Instructions

@@ -2,7 +2,7 @@
   "task": "classify_and_prove_dcfl",
   "source_text": "Является ли данный язык детерминированным? {aⁿb*(cⁿ|bⁿ)ac* | n > 0}",
   "verdict": "non_dcfl",
-  "confidence": 0.9,
+  "confidence": 0.92,
   "hypothesis": {
     "pattern_type": "grammar_analysis",
     "memory_analysis": "unknown",
@@ -13,7 +13,16 @@
     "confidence": 0.4,
     "reasoning": "Pattern classified as 'grammar_analysis'. Cannot determine DCFL membership with confidence from heuristics alone."
   },
-  "classifier_hint": null,
+  "classifier_hint": {
+    "verdict": "non_dcfl",
+    "confidence": 0.72,
+    "reasoning": "The language L = {aⁿ b* (cⁿ|bⁿ) a c* | n > 0} contains a disjunction with a shared variable n. The two branches produce words of the form aⁿ b* cⁿ a c* and aⁿ b* bⁿ a c*. The key difficulty: after reading aⁿ and some b's, the DPDA must decide which branch to take (cⁿ or bⁿ), but the decision point is ambiguous — if the next symbol after the b-block is 'b', it could be part of b* or the start of bⁿ; if it is 'c', it could be cⁿ. Actually, the separator between b* and the branch is not clearly marked. For the bⁿ branch: the word looks like aⁿ b^k bⁿ a c* = aⁿ b^(k+n) a c*, so the DPDA must decide how many b's belong to b* and how many to bⁿ — this requires nondeterminism to split the b-block correctly while matching n. For the cⁿ branch: aⁿ b* cⁿ a c* is more tractable since the transition from b to c is unambiguous. However, the union of these two sub-languages creates a structural problem: words in the bⁿ branch require the DPDA to 'guess' the split of the b-run, which is inherently nondeterministic. The language is CFL (a nondeterministic PDA can handle it) but the bⁿ branch with the ambiguous b-split makes deterministic recognition impossible. This is a classic disjunction-with-shared-variable pattern that typically yields non-DCFL. The shallit lemma or dcfl_pumping approach can formalize this, or one can show via closure that intersecting with a suitable regular language yields a non-DCFL language.",
+    "suggested_methods": [
+      "shallit",
+      "dcfl_pumping",
+      "closure_reduction"
+    ]
+  },
   "preprocess": {
     "patterns": [],
     "closure": {
@@ -103,29 +112,36 @@
       }
     ]
   },
-  "reasoning_summary": "Agent 'inh_ambiguity' verdict: non_dcfl",
-  "primary_evidence": "inh_ambiguity",
-  "proof_method": "inh_ambiguity",
+  "reasoning_summary": "Язык L = {aⁿ b* (cⁿ|bⁿ) a c* | n > 0} не является детерминированным контекстно-свободным (не DCFL). Это доказано с помощью леммы Шэллита.\n\nДоказательство (агент shallit, верифицирован оракулом):\n1. Определяем бесконечное множество M = {aⁿbⁿ | n ≥ 1}.\n2. Берём два произвольных различных элемента u = aᵖbᵖ и v = aᵍbᵍ из M, где p ≠ q.\n3. Разделяющий суффикс: w = cᵖa.\n4. Конкатенация u·w = aᵖbᵖcᵖa принадлежит L (ветвь cⁿ: n=p, b*=bᵖ, cⁿ=cᵖ, a, c*=ε).\n5. Конкатенация v·w = aᵍbᵍcᵖa НЕ принадлежит L: для ветви cⁿ необходимо cᵍ, но суффикс содержит cᵖ (p≠q); для ветви bⁿ строка должна иметь вид aᵍbʲac^m, но символы c стоят перед a, что не соответствует формату.\n6. Таким образом, любые два различных элемента M разделимы соответствующим суффиксом, бесконечного однородного подмножества не существует.\n7. По контрапозиции леммы Шэллита, L не является DCFL.\n\nДополнительно, агент stack_strategy независимо пришёл к выводу о невозможности построения DPDA: две ветви языка требуют взаимоисключающих стратегий работы со стеком при чтении символа 'b' после блока aⁿ (сохранять стек для ветви cⁿ или расходовать для ветви bⁿ), что невозможно реализовать детерминированно. Агент closure_reduction также подтвердил направление non_dcfl, хотя его доказательство было неполным. Оракул верифицировал доказательство Шэллита (3/3 проверок пройдено).",
+  "primary_evidence": "shallit",
+  "proof_method": "shallit",
   "proof_sketch": {
-    "kind": "inh_ambiguity",
-    "disjunction_identified": "cⁿ|bⁿ при общем n с префиксом aⁿb*",
-    "overlap_words": "Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.",
-    "ambiguity_argument": "Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...",
-    "dcfl_implication": "Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)"
+    "kind": "shallit",
+    "infinite_set_description": "M = {a^n b^n | n >= 1} — бесконечное множество строк над {a,b,c}.",
+    "separating_context": "Для элемента u = a^p b^p разделяющий суффикс: w = c^p a.",
+    "two_elements": "u = a^p b^p и v = a^q b^q, где p ≠ q — два произвольных различных элемента M.",
+    "argument": "u·w = a^p b^p c^p a принадлежит L (ветвь cⁿ: n=p, k=p, m=0). v·w = a^q b^q c^p a НЕ принадлежит L: для ветви cⁿ нужно c^q, но суффикс содержит c^p (p≠q); для ветви bⁿ строка должна иметь вид a^q b^j a c^m, но символы c стоят перед a, что не соответствует формату. Таким образом, любые два различных элемента M разделимы, бесконечного однородного подмножества не существует, и по лемме Шэллита L не является DCFL."
   },
   "proof_text": null,
   "oracle_verification": {
     "stack_strategy": {
-      "verification_status": "not_applicable",
+      "verification_status": "error",
       "checks_run": [],
       "checks_passed": 0,
-      "checks_total": 0
+      "checks_total": 0,
+      "issues": [
+        "exception during verification: 'str' object has no attribute 'get'"
+      ]
     },
     "closure_reduction": {
-      "verification_status": "not_applicable",
-      "checks_run": [],
-      "checks_passed": 0,
-      "checks_total": 0
+      "verification_status": "verified",
+      "checks_run": [
+        "reg_intersection_source_language",
+        "reg_intersection_transformation",
+        "direction_valid"
+      ],
+      "checks_passed": 3,
+      "checks_total": 3
     },
     "dcfl_pumping": {
       "verification_status": "not_verified",
@@ -134,21 +150,20 @@
       "checks_total": 0
     },
     "shallit": {
+      "verification_status": "verified",
+      "checks_run": [
+        "infinite_set_description_non_empty",
+        "separating_context_non_empty",
+        "two_elements_non_empty"
+      ],
+      "checks_passed": 3,
+      "checks_total": 3
+    },
+    "inh_ambiguity": {
       "verification_status": "not_applicable",
       "checks_run": [],
       "checks_passed": 0,
       "checks_total": 0
-    },
-    "inh_ambiguity": {
-      "verification_status": "verified",
-      "checks_run": [
-        "disjunction_identified_non_empty",
-        "overlap_words_non_empty",
-        "ambiguity_argument_non_empty",
-        "dcfl_implication_mentions_not_dcfl_or_unambcf"
-      ],
-      "checks_passed": 4,
-      "checks_total": 4
     }
   },
   "agents_used": [
@@ -163,65 +178,101 @@
       "agent_name": "stack_strategy",
       "status": "fail",
       "verdict": null,
-      "proof_sketch": null,
+      "proof_sketch": "The language L = {aⁿ b* (cⁿ|bⁿ) a c* | n > 0} splits into two branches with conflicting stack behaviors during b-reading: Branch 1 requires preserving the stack through b*, while Branch 2 requires consuming it. A DPDA cannot deterministically choose between opposite actions on the same input symbol with the same stack top.",
       "evidence": [
-        "Attempted to construct deterministic stack strategy",
-        "Failed: disjunction cⁿ|bⁿ requires nondeterministic choice"
+        "Language L splits into two branches: L1 = {aⁿ b^k cⁿ a c^m} and L2 = {aⁿ b^(k+n) a c^m}",
+        "In Branch L1, during b* the stack must remain unchanged (preserve n symbols for later matching cⁿ)",
+        "In Branch L2, during b* the stack must decrease (b's consume the counter n)",
+        "A DPDA reading symbol 'b' after block a^n sees identical input and identical stack top but must perform opposite actions: preserve stack (L1) or pop from stack (L2)",
+        "This is a fundamental determinism conflict—the automaton cannot determine which branch the word belongs to until after reading the b-block",
+        "No delimiter exists between b* and bⁿ in Branch L2—blocks b^k and bⁿ merge into continuous b^(k+n)",
+        "Therefore, constructing a DPDA for this language is impossible—nondeterministic stack strategy choice is required"
       ],
-      "confidence": 0.3,
+      "confidence": 0.88,
       "errors": [
-        "Cannot construct deterministic stack strategy for disjunction cⁿ|bⁿ"
+        "Language is not DCFL: the two branches require mutually exclusive stack strategies when reading identical symbols. No valid stack strategy for DPDA exists."
       ]
     },
     "closure_reduction": {
       "agent_name": "closure_reduction",
-      "status": "not_applicable",
-      "verdict": null,
-      "proof_sketch": null,
-      "evidence": [],
-      "confidence": 0.0,
-      "errors": []
+      "status": "uncertain",
+      "verdict": "non_dcfl",
+      "proof_sketch": {
+        "kind": "closure_reduction",
+        "operation": "reg_intersection",
+        "direction": "destructive",
+        "source_language": "L ∩ (a⁺b⁺a ∪ a⁺b⁺c⁺a)",
+        "result": "{aⁿb^j a | j≥n≥1} ∪ {aⁿb^k cⁿ a | n≥1, k≥1}",
+        "transformation": "Intersect L with regular language R = a⁺b⁺a ∪ a⁺b⁺c⁺a. The bⁿ-branch yields {aⁿb^j a | j≥n≥1} (DCFL), the cⁿ-branch yields {aⁿb⁺cⁿa | n≥1} (DCFL). Their union requires a DPDA to decide, upon seeing b's after a's, whether to match a-count against b-total or against upcoming c-block — this split cannot be resolved deterministically since the lookahead is insufficient.",
+        "result_argument": "Each branch individually is DCFL, but their union (obtained via reg intersection from L) appears non-DCFL due to the need to nondeterministically choose matching strategy. However, a pure closure-property proof is incomplete — the non-DCFL status of the union requires a separate argument (e.g., pumping or Shallit's lemma)."
+      },
+      "evidence": [
+        "Step 1: Intersect L with regular R = a⁺b⁺a ∪ a⁺b⁺c⁺a.",
+        "Step 2: Obtain L∩R = {aⁿb^j a | j≥n≥1} ∪ {aⁿb⁺cⁿa | n≥1}.",
+        "Step 3: Each branch is DCFL, but their union requires nondeterminism to choose matching strategy.",
+        "Step 4: Pure closure argument is insufficient — additional argument needed (pumping/Shallit lemma)."
+      ],
+      "confidence": 0.45,
+      "errors": [
+        "Incomplete pure closure proof: intersection with regular language yields union of two DCFLs, not a known non-DCFL language directly."
+      ]
     },
     "dcfl_pumping": {
       "agent_name": "dcfl_pumping",
       "status": "uncertain",
-      "verdict": "non_dcfl",
+      "verdict": null,
       "proof_sketch": null,
       "evidence": [
-        "Pumping analysis suggests non-DCFL but proof is incomplete",
-        "Unable to find a clean pumping argument for all decompositions"
+        "Language L = {aⁿ b* (cⁿ|bⁿ) a c* | n > 0} contains two branches: L1 = aⁿ b^k cⁿ a c^m and L2 = aⁿ b^(k+n) a c^m",
+        "Attempts to find word pairs w, w' with common long prefix x and matching first symbols of suffixes y, z were unsuccessful",
+        "Transitions between branches (b→c vs b→b→a) create different first symbols of suffixes",
+        "Within Branch 2, suffixes also have different first symbols under natural decomposition",
+        "DCFL pumping lemma method could not be applied to this language - language may be DCFL or requires alternative proof method"
       ],
-      "confidence": 0.5,
-      "errors": []
+      "confidence": 0.2,
+      "errors": [
+        "Failed to find suitable word pair satisfying condition first(y)=first(z) with long common prefix"
+      ]
     },
     "shallit": {
       "agent_name": "shallit",
-      "status": "not_applicable",
-      "verdict": null,
-      "proof_sketch": null,
-      "evidence": [],
-      "confidence": 0.0,
+      "status": "success",
+      "verdict": "non_dcfl",
+      "proof_sketch": {
+        "kind": "shallit",
+        "infinite_set_description": "M = {a^n b^n | n >= 1} — бесконечное множество строк над {a,b,c}.",
+        "separating_context": "Для элемента u = a^p b^p разделяющий суффикс: w = c^p a.",
+        "two_elements": "u = a^p b^p и v = a^q b^q, где p ≠ q — два произвольных различных элемента M.",
+        "argument": "u·w = a^p b^p c^p a принадлежит L (ветвь cⁿ: n=p, k=p, m=0). v·w = a^q b^q c^p a НЕ принадлежит L: для ветви cⁿ нужно c^q, но суффикс содержит c^p (p≠q); для ветви bⁿ строка должна иметь вид a^q b^j a c^m, но символы c стоят перед a, что не соответствует формату. Таким образом, любые два различных элемента M разделимы, бесконечного однородного подмножества не существует, и по лемме Шэллита L не является DCFL."
+      },
+      "evidence": [
+        "Определяем M = {a^n b^n | n >= 1} — бесконечное множество",
+        "Берём произвольные u = a^p b^p, v = a^q b^q из M, p < q",
+        "Разделяющий суффикс: w = c^p a",
+        "u·w = a^p b^p c^p a ∈ L (ветвь 1: n=p, b*=b^p, cⁿ=c^p, a, c*=ε)",
+        "v·w = a^q b^q c^p a ∉ L: ветвь 1 требует c^q (p≠q); ветвь 2 требует формат a^q b^j a c^m, но c^p стоит перед a",
+        "Каждая пара элементов M разделима → нет бесконечного однородного подмножества",
+        "По контрапозиции леммы Шэллита, L не является DCFL"
+      ],
+      "confidence": 0.92,
       "errors": []
     },
     "inh_ambiguity": {
       "agent_name": "inh_ambiguity",
-      "status": "success",
-      "verdict": "non_dcfl",
-      "proof_sketch": {
-        "kind": "inh_ambiguity",
-        "disjunction_identified": "cⁿ|bⁿ при общем n с префиксом aⁿb*",
-        "overlap_words": "Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.",
-        "ambiguity_argument": "Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...",
-        "dcfl_implication": "Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)"
-      },
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": "Branch L1 produces strings with c's before the separator 'a'; Branch L2 produces strings with only b's before the separator 'a'. The branches are structurally disjoint, so L1 ∩ L2 = ∅.",
       "evidence": [
-        "Identified disjunction cⁿ|bⁿ as source of inherent ambiguity",
-        "Constructed overlap words demonstrating ambiguous parse",
-        "Applied inherent ambiguity theorem: L₁ ∪ L₂ with non-empty intersection",
-        "Concluded: inherently ambiguous → not UnambCF → not DCFL"
+        "Branch L1 = {aⁿ b^m cⁿ a c^k | n>0, m≥0, k≥0} always contains at least one 'c' before the separator 'a'",
+        "Branch L2 = {aⁿ b^j a c^k | n>0, j≥n, k≥0} has only b's before the separator 'a'",
+        "L1 ∩ L2 = ∅ as strings: the two branches are structurally disjoint",
+        "No overlap means no inherent ambiguity argument via the standard disjunction pattern",
+        "The language may still be non-DCFL for other reasons (e.g., the b-split nondeterminism in L2), but inherent ambiguity is not the right tool"
       ],
-      "confidence": 0.9,
-      "errors": []
+      "confidence": 0.85,
+      "errors": [
+        "Disjunction with shared variable detected but branches produce disjoint string sets — inherent ambiguity argument inapplicable"
+      ]
     }
   },
   "agent_results": {
@@ -229,69 +280,106 @@
       "agent_name": "stack_strategy",
       "status": "fail",
       "verdict": null,
-      "proof_sketch": null,
+      "proof_sketch": "The language L = {aⁿ b* (cⁿ|bⁿ) a c* | n > 0} splits into two branches with conflicting stack behaviors during b-reading: Branch 1 requires preserving the stack through b*, while Branch 2 requires consuming it. A DPDA cannot deterministically choose between opposite actions on the same input symbol with the same stack top.",
       "evidence": [
-        "Attempted to construct deterministic stack strategy",
-        "Failed: disjunction cⁿ|bⁿ requires nondeterministic choice"
+        "Language L splits into two branches: L1 = {aⁿ b^k cⁿ a c^m} and L2 = {aⁿ b^(k+n) a c^m}",
+        "In Branch L1, during b* the stack must remain unchanged (preserve n symbols for later matching cⁿ)",
+        "In Branch L2, during b* the stack must decrease (b's consume the counter n)",
+        "A DPDA reading symbol 'b' after block a^n sees identical input and identical stack top but must perform opposite actions: preserve stack (L1) or pop from stack (L2)",
+        "This is a fundamental determinism conflict—the automaton cannot determine which branch the word belongs to until after reading the b-block",
+        "No delimiter exists between b* and bⁿ in Branch L2—blocks b^k and bⁿ merge into continuous b^(k+n)",
+        "Therefore, constructing a DPDA for this language is impossible—nondeterministic stack strategy choice is required"
       ],
-      "confidence": 0.3,
+      "confidence": 0.88,
       "errors": [
-        "Cannot construct deterministic stack strategy for disjunction cⁿ|bⁿ"
+        "Language is not DCFL: the two branches require mutually exclusive stack strategies when reading identical symbols. No valid stack strategy for DPDA exists."
       ]
     },
     "closure_reduction": {
       "agent_name": "closure_reduction",
-      "status": "not_applicable",
-      "verdict": null,
-      "proof_sketch": null,
-      "evidence": [],
-      "confidence": 0.0,
-      "errors": []
+      "status": "uncertain",
+      "verdict": "non_dcfl",
+      "proof_sketch": {
+        "kind": "closure_reduction",
+        "operation": "reg_intersection",
+        "direction": "destructive",
+        "source_language": "L ∩ (a⁺b⁺a ∪ a⁺b⁺c⁺a)",
+        "result": "{aⁿb^j a | j≥n≥1} ∪ {aⁿb^k cⁿ a | n≥1, k≥1}",
+        "transformation": "Intersect L with regular language R = a⁺b⁺a ∪ a⁺b⁺c⁺a. The bⁿ-branch yields {aⁿb^j a | j≥n≥1} (DCFL), the cⁿ-branch yields {aⁿb⁺cⁿa | n≥1} (DCFL). Their union requires a DPDA to decide, upon seeing b's after a's, whether to match a-count against b-total or against upcoming c-block — this split cannot be resolved deterministically since the lookahead is insufficient.",
+        "result_argument": "Each branch individually is DCFL, but their union (obtained via reg intersection from L) appears non-DCFL due to the need to nondeterministically choose matching strategy. However, a pure closure-property proof is incomplete — the non-DCFL status of the union requires a separate argument (e.g., pumping or Shallit's lemma)."
+      },
+      "evidence": [
+        "Step 1: Intersect L with regular R = a⁺b⁺a ∪ a⁺b⁺c⁺a.",
+        "Step 2: Obtain L∩R = {aⁿb^j a | j≥n≥1} ∪ {aⁿb⁺cⁿa | n≥1}.",
+        "Step 3: Each branch is DCFL, but their union requires nondeterminism to choose matching strategy.",
+        "Step 4: Pure closure argument is insufficient — additional argument needed (pumping/Shallit lemma)."
+      ],
+      "confidence": 0.45,
+      "errors": [
+        "Incomplete pure closure proof: intersection with regular language yields union of two DCFLs, not a known non-DCFL language directly."
+      ]
     },
     "dcfl_pumping": {
       "agent_name": "dcfl_pumping",
       "status": "uncertain",
-      "verdict": "non_dcfl",
+      "verdict": null,
       "proof_sketch": null,
       "evidence": [
-        "Pumping analysis suggests non-DCFL but proof is incomplete",
-        "Unable to find a clean pumping argument for all decompositions"
+        "Language L = {aⁿ b* (cⁿ|bⁿ) a c* | n > 0} contains two branches: L1 = aⁿ b^k cⁿ a c^m and L2 = aⁿ b^(k+n) a c^m",
+        "Attempts to find word pairs w, w' with common long prefix x and matching first symbols of suffixes y, z were unsuccessful",
+        "Transitions between branches (b→c vs b→b→a) create different first symbols of suffixes",
+        "Within Branch 2, suffixes also have different first symbols under natural decomposition",
+        "DCFL pumping lemma method could not be applied to this language - language may be DCFL or requires alternative proof method"
       ],
-      "confidence": 0.5,
-      "errors": []
+      "confidence": 0.2,
+      "errors": [
+        "Failed to find suitable word pair satisfying condition first(y)=first(z) with long common prefix"
+      ]
     },
     "shallit": {
       "agent_name": "shallit",
-      "status": "not_applicable",
-      "verdict": null,
-      "proof_sketch": null,
-      "evidence": [],
-      "confidence": 0.0,
+      "status": "success",
+      "verdict": "non_dcfl",
+      "proof_sketch": {
+        "kind": "shallit",
+        "infinite_set_description": "M = {a^n b^n | n >= 1} — бесконечное множество строк над {a,b,c}.",
+        "separating_context": "Для элемента u = a^p b^p разделяющий суффикс: w = c^p a.",
+        "two_elements": "u = a^p b^p и v = a^q b^q, где p ≠ q — два произвольных различных элемента M.",
+        "argument": "u·w = a^p b^p c^p a принадлежит L (ветвь cⁿ: n=p, k=p, m=0). v·w = a^q b^q c^p a НЕ принадлежит L: для ветви cⁿ нужно c^q, но суффикс содержит c^p (p≠q); для ветви bⁿ строка должна иметь вид a^q b^j a c^m, но символы c стоят перед a, что не соответствует формату. Таким образом, любые два различных элемента M разделимы, бесконечного однородного подмножества не существует, и по лемме Шэллита L не является DCFL."
+      },
+      "evidence": [
+        "Определяем M = {a^n b^n | n >= 1} — бесконечное множество",
+        "Берём произвольные u = a^p b^p, v = a^q b^q из M, p < q",
+        "Разделяющий суффикс: w = c^p a",
+        "u·w = a^p b^p c^p a ∈ L (ветвь 1: n=p, b*=b^p, cⁿ=c^p, a, c*=ε)",
+        "v·w = a^q b^q c^p a ∉ L: ветвь 1 требует c^q (p≠q); ветвь 2 требует формат a^q b^j a c^m, но c^p стоит перед a",
+        "Каждая пара элементов M разделима → нет бесконечного однородного подмножества",
+        "По контрапозиции леммы Шэллита, L не является DCFL"
+      ],
+      "confidence": 0.92,
       "errors": []
     },
     "inh_ambiguity": {
       "agent_name": "inh_ambiguity",
-      "status": "success",
-      "verdict": "non_dcfl",
-      "proof_sketch": {
-        "kind": "inh_ambiguity",
-        "disjunction_identified": "cⁿ|bⁿ при общем n с префиксом aⁿb*",
-        "overlap_words": "Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.",
-        "ambiguity_argument": "Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...",
-        "dcfl_implication": "Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)"
-      },
+      "status": "not_applicable",
+      "verdict": null,
+      "proof_sketch": "Branch L1 produces strings with c's before the separator 'a'; Branch L2 produces strings with only b's before the separator 'a'. The branches are structurally disjoint, so L1 ∩ L2 = ∅.",
       "evidence": [
-        "Identified disjunction cⁿ|bⁿ as source of inherent ambiguity",
-        "Constructed overlap words demonstrating ambiguous parse",
-        "Applied inherent ambiguity theorem: L₁ ∪ L₂ with non-empty intersection",
-        "Concluded: inherently ambiguous → not UnambCF → not DCFL"
+        "Branch L1 = {aⁿ b^m cⁿ a c^k | n>0, m≥0, k≥0} always contains at least one 'c' before the separator 'a'",
+        "Branch L2 = {aⁿ b^j a c^k | n>0, j≥n, k≥0} has only b's before the separator 'a'",
+        "L1 ∩ L2 = ∅ as strings: the two branches are structurally disjoint",
+        "No overlap means no inherent ambiguity argument via the standard disjunction pattern",
+        "The language may still be non-DCFL for other reasons (e.g., the b-split nondeterminism in L2), but inherent ambiguity is not the right tool"
       ],
-      "confidence": 0.9,
-      "errors": []
+      "confidence": 0.85,
+      "errors": [
+        "Disjunction with shared variable detected but branches produce disjoint string sets — inherent ambiguity argument inapplicable"
+      ]
     }
   },
   "hints_for_human": [
-    "Fallback reasoning (no LLM available)"
+    "Ключевая идея: множество M = {aⁿbⁿ} позволяет построить бесконечно много разделяющих контекстов по лемме Шэллита",
+    "Интуитивно: DPDA не может определить, относятся ли символы b к блоку b* или к bⁿ, не зная заранее ветвь"
   ],
   "retries": 0,
   "errors": []

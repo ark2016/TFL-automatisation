@@ -31,7 +31,7 @@ class TestTableIntegrity:
 
     @pytest.mark.parametrize("entry", CLOSURE_TABLE, ids=lambda e: e["operation"])
     def test_entry_has_required_keys(self, entry):
-        assert set(entry.keys()) == REQUIRED_KEYS
+        assert REQUIRED_KEYS <= set(entry.keys())
 
 
 # ====================================================================

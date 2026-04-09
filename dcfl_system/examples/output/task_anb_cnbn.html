@@ -44,18 +44,29 @@ th{background:#f5f5f5;font-weight:600}
   </div>
   <span class="s-badge s-nondcfl">НЕ ДКСЯ</span>
 </div>
-<div class="s-banner-ok"><strong>✓ Oracle верификация пройдена</strong> (1 из 1 агентов верифицировано)</div>
+<div class="s-banner-ok"><strong>✓ Oracle верификация пройдена</strong> (2 из 3 агентов верифицировано)</div>
 <div class="s-sec">Основное доказательство</div>
 <div class="s-main-proof">
-<div class="s-p"><strong>Метод:</strong> inh_ambiguity</div>
-<div class="s-p"><strong>Дизъюнкция:</strong> cⁿ|bⁿ при общем n с префиксом aⁿb*</div>
-<div class="s-p"><strong>Пересекающиеся слова:</strong> Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.</div>
-<div class="s-p"><strong>Аргумент неоднозначности:</strong> Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...</div>
-<div class="s-p"><strong>Импликация для ДКСЯ:</strong> Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)</div>
+<div class="s-p"><strong>Метод:</strong> shallit</div>
+<div class="s-p"><strong>Бесконечное множество:</strong> M = {a^n b^n | n &gt;= 1} — бесконечное множество строк над {a,b,c}.</div>
+<div class="s-p"><strong>Разделяющий контекст:</strong> Для элемента u = a^p b^p разделяющий суффикс: w = c^p a.</div>
+<div class="s-p"><strong>Два элемента:</strong> u = a^p b^p и v = a^q b^q, где p ≠ q — два произвольных различных элемента M.</div>
+<div class="s-p"><strong>Аргумент:</strong> u·w = a^p b^p c^p a принадлежит L (ветвь cⁿ: n=p, k=p, m=0). v·w = a^q b^q c^p a НЕ принадлежит L: для ветви cⁿ нужно c^q, но суффикс содержит c^p (p≠q); для ветви bⁿ строка должна иметь вид a^q b^j a c^m, но символы c стоят перед a, что не соответствует формату. Таким образом, любые два различных элемента M разделимы, бесконечного однородного подмножества не существует, и по лемме Шэллита L не является DCFL.</div>
 </div>
 <div class="s-box" style="background:#e3f2fd;border-left:4px solid #1976d2;margin:12px 0">
 <div class="s-p"><strong>Итог рассуждения:</strong></div>
-<div style="white-space:pre-wrap">Agent &#x27;inh_ambiguity&#x27; verdict: non_dcfl</div>
+<div style="white-space:pre-wrap">Язык L = {aⁿ b* (cⁿ|bⁿ) a c* | n &gt; 0} не является детерминированным контекстно-свободным (не DCFL). Это доказано с помощью леммы Шэллита.
+
+Доказательство (агент shallit, верифицирован оракулом):
+1. Определяем бесконечное множество M = {aⁿbⁿ | n ≥ 1}.
+2. Берём два произвольных различных элемента u = aᵖbᵖ и v = aᵍbᵍ из M, где p ≠ q.
+3. Разделяющий суффикс: w = cᵖa.
+4. Конкатенация u·w = aᵖbᵖcᵖa принадлежит L (ветвь cⁿ: n=p, b*=bᵖ, cⁿ=cᵖ, a, c*=ε).
+5. Конкатенация v·w = aᵍbᵍcᵖa НЕ принадлежит L: для ветви cⁿ необходимо cᵍ, но суффикс содержит cᵖ (p≠q); для ветви bⁿ строка должна иметь вид aᵍbʲac^m, но символы c стоят перед a, что не соответствует формату.
+6. Таким образом, любые два различных элемента M разделимы соответствующим суффиксом, бесконечного однородного подмножества не существует.
+7. По контрапозиции леммы Шэллита, L не является DCFL.
+
+Дополнительно, агент stack_strategy независимо пришёл к выводу о невозможности построения DPDA: две ветви языка требуют взаимоисключающих стратегий работы со стеком при чтении символа &#x27;b&#x27; после блока aⁿ (сохранять стек для ветви cⁿ или расходовать для ветви bⁿ), что невозможно реализовать детерминированно. Агент closure_reduction также подтвердил направление non_dcfl, хотя его доказательство было неполным. Оракул верифицировал доказательство Шэллита (3/3 проверок пройдено).</div>
 </div>
 <div class="s-sec">Методы специалистов</div>
 <div class="s-tab">
@@ -66,47 +77,82 @@ th{background:#f5f5f5;font-weight:600}
   <button class="s-tab-btn" onclick="showTab(4)">Существ. неоднозначность</button>
 </div>
 <div class="s-panel active" id="panel-0">
-<div class="s-meta">статус: <code>fail</code> · уверенность: 0.30</div>
-<div class="s-step"><div class="s-n">1</div><div class="s-t">Attempted to construct deterministic stack strategy</div></div>
-<div class="s-step"><div class="s-n">2</div><div class="s-t">Failed: disjunction cⁿ|bⁿ requires nondeterministic choice</div></div>
+<div class="s-meta">статус: <code>fail</code> · уверенность: 0.88</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Language L splits into two branches: L1 = {aⁿ b^k cⁿ a c^m} and L2 = {aⁿ b^(k+n) a c^m}</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">In Branch L1, during b* the stack must remain unchanged (preserve n symbols for later matching cⁿ)</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">In Branch L2, during b* the stack must decrease (b&#x27;s consume the counter n)</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">A DPDA reading symbol &#x27;b&#x27; after block a^n sees identical input and identical stack top but must perform opposite actions: preserve stack (L1) or pop from stack (L2)</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t">This is a fundamental determinism conflict—the automaton cannot determine which branch the word belongs to until after reading the b-block</div></div>
+<div class="s-step"><div class="s-n">6</div><div class="s-t">No delimiter exists between b* and bⁿ in Branch L2—blocks b^k and bⁿ merge into continuous b^(k+n)</div></div>
+<div class="s-step"><div class="s-n">7</div><div class="s-t">Therefore, constructing a DPDA for this language is impossible—nondeterministic stack strategy choice is required</div></div>
 <div class="s-p s-err"><strong>Ошибки:</strong></div><ul>
-<li>Cannot construct deterministic stack strategy for disjunction cⁿ|bⁿ</li>
+<li>Language is not DCFL: the two branches require mutually exclusive stack strategies when reading identical symbols. No valid stack strategy for DPDA exists.</li>
 </ul>
 </div>
 <div class="s-panel" id="panel-1">
-<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+<div class="s-meta">вердикт: <code>non_dcfl</code> · статус: <code>uncertain</code> · уверенность: 0.45</div>
+<div class="s-p"><strong>Операция:</strong> reg_intersection</div>
+<div class="s-p"><strong>Направление:</strong> destructive</div>
+<div class="s-p"><strong>Исходный язык:</strong> L ∩ (a⁺b⁺a ∪ a⁺b⁺c⁺a)</div>
+<div class="s-p"><strong>Преобразование:</strong> Intersect L with regular language R = a⁺b⁺a ∪ a⁺b⁺c⁺a. The bⁿ-branch yields {aⁿb^j a | j≥n≥1} (DCFL), the cⁿ-branch yields {aⁿb⁺cⁿa | n≥1} (DCFL). Their union requires a DPDA to decide, upon seeing b&#x27;s after a&#x27;s, whether to match a-count against b-total or against upcoming c-block — this split cannot be resolved deterministically since the lookahead is insufficient.</div>
+<div class="s-p"><strong>Аргумент результата:</strong> Each branch individually is DCFL, but their union (obtained via reg intersection from L) appears non-DCFL due to the need to nondeterministically choose matching strategy. However, a pure closure-property proof is incomplete — the non-DCFL status of the union requires a separate argument (e.g., pumping or Shallit&#x27;s lemma).</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Step 1: Intersect L with regular R = a⁺b⁺a ∪ a⁺b⁺c⁺a.</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Step 2: Obtain L∩R = {aⁿb^j a | j≥n≥1} ∪ {aⁿb⁺cⁿa | n≥1}.</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">Step 3: Each branch is DCFL, but their union requires nondeterminism to choose matching strategy.</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">Step 4: Pure closure argument is insufficient — additional argument needed (pumping/Shallit lemma).</div></div>
+<div class="s-p s-err"><strong>Ошибки:</strong></div><ul>
+<li>Incomplete pure closure proof: intersection with regular language yields union of two DCFLs, not a known non-DCFL language directly.</li>
+</ul>
 </div>
 <div class="s-panel" id="panel-2">
-<div class="s-meta">вердикт: <code>non_dcfl</code> · статус: <code>uncertain</code> · уверенность: 0.50</div>
-<div class="s-step"><div class="s-n">1</div><div class="s-t">Pumping analysis suggests non-DCFL but proof is incomplete</div></div>
-<div class="s-step"><div class="s-n">2</div><div class="s-t">Unable to find a clean pumping argument for all decompositions</div></div>
+<div class="s-meta">статус: <code>uncertain</code> · уверенность: 0.20</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Language L = {aⁿ b* (cⁿ|bⁿ) a c* | n &gt; 0} contains two branches: L1 = aⁿ b^k cⁿ a c^m and L2 = aⁿ b^(k+n) a c^m</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Attempts to find word pairs w, w&#x27; with common long prefix x and matching first symbols of suffixes y, z were unsuccessful</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">Transitions between branches (b→c vs b→b→a) create different first symbols of suffixes</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">Within Branch 2, suffixes also have different first symbols under natural decomposition</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t">DCFL pumping lemma method could not be applied to this language - language may be DCFL or requires alternative proof method</div></div>
+<div class="s-p s-err"><strong>Ошибки:</strong></div><ul>
+<li>Failed to find suitable word pair satisfying condition first(y)=first(z) with long common prefix</li>
+</ul>
 </div>
 <div class="s-panel" id="panel-3">
-<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+<div class="s-meta">вердикт: <code>non_dcfl</code> · статус: <code>success</code> · уверенность: 0.92</div>
+<div class="s-p"><strong>Бесконечное множество:</strong> M = {a^n b^n | n &gt;= 1} — бесконечное множество строк над {a,b,c}.</div>
+<div class="s-p"><strong>Разделяющий контекст:</strong> Для элемента u = a^p b^p разделяющий суффикс: w = c^p a.</div>
+<div class="s-p"><strong>Два элемента:</strong> u = a^p b^p и v = a^q b^q, где p ≠ q — два произвольных различных элемента M.</div>
+<div class="s-p"><strong>Аргумент:</strong> u·w = a^p b^p c^p a принадлежит L (ветвь cⁿ: n=p, k=p, m=0). v·w = a^q b^q c^p a НЕ принадлежит L: для ветви cⁿ нужно c^q, но суффикс содержит c^p (p≠q); для ветви bⁿ строка должна иметь вид a^q b^j a c^m, но символы c стоят перед a, что не соответствует формату. Таким образом, любые два различных элемента M разделимы, бесконечного однородного подмножества не существует, и по лемме Шэллита L не является DCFL.</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Определяем M = {a^n b^n | n &gt;= 1} — бесконечное множество</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Берём произвольные u = a^p b^p, v = a^q b^q из M, p &lt; q</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">Разделяющий суффикс: w = c^p a</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">u·w = a^p b^p c^p a ∈ L (ветвь 1: n=p, b*=b^p, cⁿ=c^p, a, c*=ε)</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t">v·w = a^q b^q c^p a ∉ L: ветвь 1 требует c^q (p≠q); ветвь 2 требует формат a^q b^j a c^m, но c^p стоит перед a</div></div>
+<div class="s-step"><div class="s-n">6</div><div class="s-t">Каждая пара элементов M разделима → нет бесконечного однородного подмножества</div></div>
+<div class="s-step"><div class="s-n">7</div><div class="s-t">По контрапозиции леммы Шэллита, L не является DCFL</div></div>
 </div>
 <div class="s-panel" id="panel-4">
-<div class="s-meta">вердикт: <code>non_dcfl</code> · статус: <code>success</code> · уверенность: 0.90</div>
-<div class="s-p"><strong>Дизъюнкция:</strong> cⁿ|bⁿ при общем n с префиксом aⁿb*</div>
-<div class="s-p"><strong>Пересекающиеся слова:</strong> Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.</div>
-<div class="s-p"><strong>Аргумент неоднозначности:</strong> Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...</div>
-<div class="s-p"><strong>Импликация для ДКСЯ:</strong> Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)</div>
-<div class="s-step"><div class="s-n">1</div><div class="s-t">Identified disjunction cⁿ|bⁿ as source of inherent ambiguity</div></div>
-<div class="s-step"><div class="s-n">2</div><div class="s-t">Constructed overlap words demonstrating ambiguous parse</div></div>
-<div class="s-step"><div class="s-n">3</div><div class="s-t">Applied inherent ambiguity theorem: L₁ ∪ L₂ with non-empty intersection</div></div>
-<div class="s-step"><div class="s-n">4</div><div class="s-t">Concluded: inherently ambiguous → not UnambCF → not DCFL</div></div>
+<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.85</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Branch L1 = {aⁿ b^m cⁿ a c^k | n&gt;0, m≥0, k≥0} always contains at least one &#x27;c&#x27; before the separator &#x27;a&#x27;</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Branch L2 = {aⁿ b^j a c^k | n&gt;0, j≥n, k≥0} has only b&#x27;s before the separator &#x27;a&#x27;</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">L1 ∩ L2 = ∅ as strings: the two branches are structurally disjoint</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">No overlap means no inherent ambiguity argument via the standard disjunction pattern</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t">The language may still be non-DCFL for other reasons (e.g., the b-split nondeterminism in L2), but inherent ambiguity is not the right tool</div></div>
+<div class="s-p s-err"><strong>Ошибки:</strong></div><ul>
+<li>Disjunction with shared variable detected but branches produce disjoint string sets — inherent ambiguity argument inapplicable</li>
+</ul>
 </div>
 <div class="s-sec">Oracle верификация (детали)</div>
 <table><thead><tr><th>Агент</th><th>Статус</th><th>Проверки</th><th>Проблемы</th></tr></thead><tbody>
-<tr><td>stack_strategy</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
-<tr><td>closure_reduction</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
+<tr><td>stack_strategy</td><td><code>error</code></td><td>—</td><td>exception during verification: &#x27;str&#x27; object has no attribute &#x27;get&#x27;</td></tr>
+<tr><td>closure_reduction</td><td><code>verified</code></td><td>3/3</td><td>—</td></tr>
 <tr><td>dcfl_pumping</td><td><code>not_verified</code></td><td>—</td><td>—</td></tr>
-<tr><td>shallit</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
-<tr><td>inh_ambiguity</td><td><code>verified</code></td><td>4/4</td><td>—</td></tr>
+<tr><td>shallit</td><td><code>verified</code></td><td>3/3</td><td>—</td></tr>
+<tr><td>inh_ambiguity</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
 </tbody></table>
 <div class="s-sec">Подсказки и наблюдения</div>
-<div class="s-step"><div class="s-n">💡</div><div class="s-t">Fallback reasoning (no LLM available)</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Ключевая идея: множество M = {aⁿbⁿ} позволяет построить бесконечно много разделяющих контекстов по лемме Шэллита</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Интуитивно: DPDA не может определить, относятся ли символы b к блоку b* или к bⁿ, не зная заранее ветвь</div></div>
 <div class="s-footer">
-  <span>confidence: 0.90</span>
+  <span>confidence: 0.92</span>
   <span class="s-pill">5 агентов отработали</span>
   <span style="display:flex;align-items:center;gap:5px"><span class="s-dot s-pass"></span>verified</span>
 </div>

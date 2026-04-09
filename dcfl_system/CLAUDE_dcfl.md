@@ -38,9 +38,10 @@ Full spec: dcfl_system/tz_dcfl_agent_system.md
 ## DCFL theory reminders
 - LR(k) grammars generate exactly DCFL
 - For every DCFL there exists an SLR(1) grammar
-- DCFL closed under: complement (~), inverse homomorphism (h⁻¹), ∩ REG
-- DCFL NOT closed under: union, intersection, concatenation, Kleene star, reversal, homomorphism
-- DCFL pumping lemma ≠ CFL pumping lemma (paired words with sync pumping)
+- DCFL closed under: complement (~), inverse homomorphism (h⁻¹), ∩ REG (via DPDA × DFA, not Table 1)
+- DCFL NOT closed under: union, intersection (DCFL∩DCFL), concatenation, Kleene star, reversal, homomorphism
+- DCFL pumping lemma ≠ CFL pumping lemma (two words, two conditions: prefix-only + synchronized suffix)
+- Shallit's lemma: ∀ infinite M ∃ infinite homogeneous M' ⊆ M (negation: ∃ M with no homogeneous subset)
 - Inherently ambiguous → not UnambCF → not DCFL
 - Format 2: analyze the LANGUAGE, not the grammar (ambiguous grammar ≠ non-DCFL language)
 
