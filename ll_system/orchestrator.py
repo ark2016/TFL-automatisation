@@ -621,6 +621,7 @@ def first_follow_oracle_node(state: PipelineState) -> dict:
                 g = (
                     proof_sketch.get("grammar")
                     or proof_sketch.get("ll_grammar")
+                    or proof_sketch.get("transformed_grammar")
                     or out.get("artifacts", {}).get("ll_grammar")
                     or out.get("grammar")
                 )
@@ -835,24 +836,36 @@ def _fallback_reasoning(state: PipelineState) -> dict:
     ff_min_k = ff_result.get("min_k")
     ff_error = ff_result.get("error")
 
+    input_format = state.get("input_format")
+
     if ff_found is True and ff_min_k is not None and not ff_error:
+        # Positive oracle is conclusive for all formats: a concrete LL grammar exists.
         return {
             "action": "done",
             "verdict": "ll",
             "k": ff_min_k,
             "confidence": 0.95,
+            "primary_agent": "first_follow_oracle",
+            "primary_method": "first_follow",
             "summary": f"Grammar is LL({ff_min_k}) (first/follow oracle)",
             "retry_plan": None,
         }
     if ff_found is False and not ff_error:
-        return {
-            "action": "done",
-            "verdict": "not_ll",
-            "k": None,
-            "confidence": 0.85,
-            "summary": "Grammar is not LL(k) for any k <= 10 (first/follow oracle)",
-            "retry_plan": None,
-        }
+        if input_format == 3:
+            # Format 3 checks a specific grammar — negative oracle IS conclusive.
+            return {
+                "action": "done",
+                "verdict": "not_ll",
+                "k": None,
+                "confidence": 0.85,
+                "primary_agent": "first_follow_oracle",
+                "primary_method": "first_follow",
+                "summary": "Grammar is not LL(k) for any k <= 10 (first/follow oracle)",
+                "retry_plan": None,
+            }
+        # Format 1/2: oracle ran on a candidate grammar proposed by a constructive agent.
+        # A negative result means that candidate grammar is not LL — it does NOT prove
+        # the language itself is not LL.  Continue to agent-based fallback below.
 
     # Check if any constructive agent returned a valid LL grammar.
     # Skip agents whose claim was refuted by the verifier.
@@ -864,11 +877,14 @@ def _fallback_reasoning(state: PipelineState) -> dict:
         if isinstance(out, dict) and _normalize_verdict(out.get("verdict")) == "ll":
             conf = _clamp_confidence(out.get("confidence", 0.5))
             if conf >= 0.7:
+                ps = out.get("proof_sketch") or {}
                 return {
                     "action": "done",
                     "verdict": "ll",
                     "k": out.get("k"),
                     "confidence": conf,
+                    "primary_agent": agent_name,
+                    "primary_method": ps.get("method", "ll_grammar_construction") if isinstance(ps, dict) else "ll_grammar_construction",
                     "summary": f"Agent '{agent_name}' found LL grammar",
                     "retry_plan": None,
                 }
@@ -883,11 +899,14 @@ def _fallback_reasoning(state: PipelineState) -> dict:
         if isinstance(out, dict) and _normalize_verdict(out.get("verdict")) == "not_ll":
             conf = _clamp_confidence(out.get("confidence", 0.5))
             if conf >= 0.7:
+                ps = out.get("proof_sketch") or {}
                 return {
                     "action": "done",
                     "verdict": "not_ll",
                     "k": None,
                     "confidence": conf,
+                    "primary_agent": agent_name,
+                    "primary_method": ps.get("method", "substitution") if isinstance(ps, dict) else "substitution",
                     "summary": f"Agent '{agent_name}' proved not LL",
                     "retry_plan": None,
                 }
@@ -932,6 +951,8 @@ def _fallback_reasoning(state: PipelineState) -> dict:
         "verdict": "uncertain",
         "k": None,
         "confidence": 0.0,
+        "primary_agent": None,
+        "primary_method": None,
         "summary": "Insufficient evidence to determine LL property",
         "retry_plan": None,
     }
@@ -1077,41 +1098,68 @@ def assemble_result_node(state: PipelineState) -> dict:
     confidence = _clamp_confidence(reasoning.get("confidence", 0.0))
 
     # Find best proof aligned with the final verdict.
-    # For "ll" verdict: prefer constructive agents; for "not_ll": only use destructive.
+    # Prefer primary_agent named by reasoning; fall back to set iteration.
+    primary_agent = reasoning.get("primary_agent", "")
     proof = None
     grammar = None
-    if verdict != "not_ll":
-        for agent_name in _CONSTRUCTIVE_AGENTS:
-            out = agent_results.get(agent_name, {})
-            if isinstance(out, dict):
-                ps = out.get("proof_sketch") or {}
-                g = ps.get("grammar") or ps.get("ll_grammar")
-                if g:
-                    grammar = g
-                    proof = {
-                        "method": ps.get("method", "ll_grammar_construction"),
-                        "details": ps,
-                    }
-                    break
-                # Also look for grammar at top level or in artifacts
-                if not grammar:
-                    grammar = (
-                        out.get("grammar")
-                        or out.get("artifacts", {}).get("ll_grammar")
-                    )
 
-    # For not_ll verdict: always use destructive proof (overrides any constructive)
+    def _extract_constructive_proof(agent_name: str) -> tuple[dict | None, dict | None]:
+        """Return (proof, grammar) from a constructive agent, or (None, None)."""
+        out = agent_results.get(agent_name, {})
+        if not isinstance(out, dict):
+            return None, None
+        ps = out.get("proof_sketch") or {}
+        g = (
+            ps.get("grammar")
+            or ps.get("ll_grammar")
+            or ps.get("transformed_grammar")
+            or out.get("grammar")
+            or out.get("artifacts", {}).get("ll_grammar")
+        )
+        if g:
+            return {"method": ps.get("method", "ll_grammar_construction"), "details": ps}, g
+        return None, None
+
+    def _extract_destructive_proof(agent_name: str) -> dict | None:
+        """Return proof dict from a destructive agent, or None."""
+        out = agent_results.get(agent_name, {})
+        if not isinstance(out, dict):
+            return None
+        if _normalize_verdict(out.get("verdict")) != "not_ll":
+            return None
+        ps = out.get("proof_sketch")
+        if ps:
+            return {
+                "method": ps.get("method", "substitution") if isinstance(ps, dict) else "substitution",
+                "details": ps,
+            }
+        return None
+
+    if verdict != "not_ll":
+        # Try primary agent first, then fall back to all constructive agents
+        candidates = (
+            [primary_agent] + [a for a in _CONSTRUCTIVE_AGENTS if a != primary_agent]
+            if primary_agent in _CONSTRUCTIVE_AGENTS
+            else list(_CONSTRUCTIVE_AGENTS)
+        )
+        for agent_name in candidates:
+            p, g = _extract_constructive_proof(agent_name)
+            if p is not None:
+                proof, grammar = p, g
+                break
+
     if verdict == "not_ll":
-        for agent_name in _DESTRUCTIVE_AGENTS:
-            out = agent_results.get(agent_name, {})
-            if isinstance(out, dict) and _normalize_verdict(out.get("verdict")) == "not_ll":
-                ps = out.get("proof_sketch")
-                if ps:
-                    proof = {
-                        "method": ps.get("method", "substitution") if isinstance(ps, dict) else "substitution",
-                        "details": ps,
-                    }
-                    break
+        # Try primary agent first, then all destructive agents
+        candidates = (
+            [primary_agent] + [a for a in _DESTRUCTIVE_AGENTS if a != primary_agent]
+            if primary_agent in _DESTRUCTIVE_AGENTS
+            else list(_DESTRUCTIVE_AGENTS)
+        )
+        for agent_name in candidates:
+            p = _extract_destructive_proof(agent_name)
+            if p is not None:
+                proof = p
+                break
 
     # Formalizer output → reasoning_summary
     formalizer_out = agent_results.get("formalizer") or {}

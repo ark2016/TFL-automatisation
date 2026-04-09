@@ -191,12 +191,15 @@ def verify_substitution_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append("No 'k' field in proof_sketch or witness")
 
-    # Check 3: for_all_k field
+    # Check 3: for_all_k must be True (proof must hold for all k, not just fixed k)
     checks_total += 1
-    if "for_all_k" in proof_sketch:
+    if proof_sketch.get("for_all_k") is True:
         checks_passed += 1
     else:
-        issues.append("Missing 'for_all_k' field")
+        issues.append(
+            f"'for_all_k' must be True for a valid not-LL proof; "
+            f"got {proof_sketch.get('for_all_k')!r}"
+        )
 
     # Check 4: witness structure
     witness = proof_sketch.get("witness")
@@ -475,12 +478,15 @@ def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append(f"Expected method='prefix_classes', got {proof_sketch.get('method')!r}")
 
-    # Check 2: for_all_k
+    # Check 2: for_all_k must be True (proof must hold for all k, not just fixed k)
     checks_total += 1
-    if "for_all_k" in proof_sketch:
+    if proof_sketch.get("for_all_k") is True:
         checks_passed += 1
     else:
-        issues.append("Missing 'for_all_k' field")
+        issues.append(
+            f"'for_all_k' must be True for a valid not-LL proof; "
+            f"got {proof_sketch.get('for_all_k')!r}"
+        )
 
     # Check 3: prefix_family with description
     checks_total += 1
