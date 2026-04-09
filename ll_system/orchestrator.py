@@ -620,6 +620,7 @@ def first_follow_oracle_node(state: PipelineState) -> dict:
                 proof_sketch = out.get("proof_sketch") or {}
                 g = (
                     proof_sketch.get("grammar")
+                    or proof_sketch.get("ll_grammar")
                     or out.get("artifacts", {}).get("ll_grammar")
                     or out.get("grammar")
                 )
@@ -968,6 +969,12 @@ def formalize_node(state: PipelineState) -> dict:
         return {}
 
     agent_results = state.get("agent_results", {})
+    # Compute proof_was_verified: at least one specialist claim was verified
+    claim_verification = state.get("claim_verification", {})
+    proof_was_verified = any(
+        isinstance(v, dict) and v.get("verification_status") == "verified"
+        for v in claim_verification.values()
+    )
     formalizer_input = {
         "ir": state["ir"],
         "reasoning_output": reasoning,
@@ -975,7 +982,8 @@ def formalize_node(state: PipelineState) -> dict:
             k: v for k, v in agent_results.items() if k in LL_SPECIALIST_NAMES
         },
         "first_follow_result": state.get("first_follow_result", {}),
-        "claim_verification": state.get("claim_verification", {}),
+        "claim_verification": claim_verification,
+        "proof_was_verified": proof_was_verified,
     }
 
     output = _run_agent(state, "formalizer", formalizer_input)
@@ -1059,16 +1067,20 @@ def assemble_result_node(state: PipelineState) -> dict:
         out = agent_results.get(agent_name, {})
         if isinstance(out, dict):
             ps = out.get("proof_sketch") or {}
-            if ps.get("grammar"):
-                grammar = ps["grammar"]
+            g = ps.get("grammar") or ps.get("ll_grammar")
+            if g:
+                grammar = g
                 proof = {
                     "method": ps.get("method", "ll_grammar_construction"),
                     "details": ps,
                 }
                 break
-            # Also look for grammar at top level
-            if not grammar and out.get("grammar"):
-                grammar = out["grammar"]
+            # Also look for grammar at top level or in artifacts
+            if not grammar:
+                grammar = (
+                    out.get("grammar")
+                    or out.get("artifacts", {}).get("ll_grammar")
+                )
 
     # For not_ll, get destructive proof
     if verdict == "not_ll" and proof is None:

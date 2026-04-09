@@ -463,3 +463,240 @@ class TestMakeResult:
         for status in ("verified", "refuted", "inconclusive", "error"):
             result = _make_result("a", status, 0, 0, [])
             assert result["verification_status"] == status
+
+    def test_make_result_has_status_alias(self):
+        """Regression Fix 4: result must carry both 'verification_status' and 'status'."""
+        result = _make_result("a", "verified", 3, 3, [])
+        assert "status" in result, "reasoning/formalizer prompts read 'status', not 'verification_status'"
+        assert result["status"] == result["verification_status"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: Fix 1a — grammar_builder uses 'll_grammar' in proof_sketch
+# ---------------------------------------------------------------------------
+
+
+class TestGrammarBuilderLlGrammarKey:
+    """Verify verify_ll_grammar_claim accepts 'll_grammar' as well as 'grammar'."""
+
+    def _make_claim(self, grammar_key: str) -> dict:
+        return {
+            "method": "ll_grammar_construction",
+            "k": 1,
+            grammar_key: GRAMMAR_LL1,
+        }
+
+    def test_grammar_key_verified(self):
+        result = verify_ll_grammar_claim(self._make_claim("grammar"), IR_SIMPLE)
+        assert result["verification_status"] != "error"
+
+    def test_ll_grammar_key_also_verified(self):
+        """Regression: prompt writes 'll_grammar', verifier was reading only 'grammar'."""
+        result = verify_ll_grammar_claim(self._make_claim("ll_grammar"), IR_SIMPLE)
+        assert result["verification_status"] != "inconclusive" or result["checks_passed"] > 0
+        # Must not report "No grammar provided"
+        assert not any("No grammar" in i for i in result["issues"])
+
+    def test_ll_grammar_key_checks_passed(self):
+        result = verify_ll_grammar_claim(self._make_claim("ll_grammar"), IR_SIMPLE)
+        assert result["checks_passed"] >= 1
+
+    def test_neither_key_gives_inconclusive(self):
+        result = verify_ll_grammar_claim({"method": "ll_grammar_construction", "k": 1}, IR_SIMPLE)
+        assert any("No grammar" in i for i in result["issues"])
+
+
+# ---------------------------------------------------------------------------
+# Regression: Fix 1b — grammar_transformer uses 'transformation_log' and 'conflicts'
+# ---------------------------------------------------------------------------
+
+
+class TestGrammarTransformerPromptFieldNames:
+    """Verify verify_grammar_transformation_claim accepts prompt-shaped output."""
+
+    BASE = {
+        "method": "grammar_transformation",
+        "k": 1,
+        "original_grammar": GRAMMAR_LL1,
+        "transformed_grammar": GRAMMAR_LL1,
+    }
+
+    def test_old_field_names_still_work(self):
+        ps = {**self.BASE, "transformation_steps": ["step A"], "conflicts_remaining": []}
+        result = verify_grammar_transformation_claim(ps, IR_SIMPLE)
+        assert not any("transformation_steps" in i or "transformation_log" in i for i in result["issues"])
+
+    def test_transformation_log_accepted(self):
+        """Regression: prompt writes 'transformation_log', verifier was reading 'transformation_steps'."""
+        ps = {
+            **self.BASE,
+            "transformation_log": [
+                {
+                    "step": "eliminate_left_recursion",
+                    "input_rules": [],
+                    "output_rules": [],
+                    "explanation": "applied LR elimination",
+                }
+            ],
+            "conflicts": [],
+        }
+        result = verify_grammar_transformation_claim(ps, IR_SIMPLE)
+        assert not any("No 'transformation_steps'" in i for i in result["issues"])
+
+    def test_conflicts_key_accepted(self):
+        """Regression: prompt writes 'conflicts' (empty list), verifier was reading 'conflicts_remaining'."""
+        ps = {**self.BASE, "transformation_log": ["step A"], "conflicts": []}
+        result = verify_grammar_transformation_claim(ps, IR_SIMPLE)
+        assert not any("non-empty" in i for i in result["issues"])
+
+    def test_non_empty_conflicts_still_fails(self):
+        ps = {**self.BASE, "transformation_log": ["step A"], "conflicts": [{"nt": "S"}]}
+        result = verify_grammar_transformation_claim(ps, IR_SIMPLE)
+        assert any("non-empty" in i for i in result["issues"])
+
+
+# ---------------------------------------------------------------------------
+# Regression: Fix 2 — substitution uses 'lookahead_v' and 'why_not_ll'
+# ---------------------------------------------------------------------------
+
+
+class TestSubstitutionPromptFieldNames:
+    """Verify verify_substitution_claim accepts prompt-shaped witness."""
+
+    BASE_WITNESS_OLD = {
+        "k": "k (arbitrary)",
+        "w1": "a^n",
+        "lookahead": "a^k",
+        "suffix_1": "b^n",
+        "suffix_2": "c^n",
+        "why_not_in_L": "incompatible continuations",
+    }
+
+    BASE_WITNESS_NEW = {
+        "k": "k (arbitrary)",
+        "w1": "a^n",
+        "lookahead_v": "a^k",
+        "suffix_1": "b^n",
+        "suffix_2": "c^n",
+        "why_not_ll": "incompatible continuations",
+    }
+
+    def _make_proof(self, witness: dict) -> dict:
+        return {"method": "substitution", "for_all_k": True, "witness": witness}
+
+    def test_old_field_names_still_work(self):
+        result = verify_substitution_claim(self._make_proof(self.BASE_WITNESS_OLD), IR_SIMPLE)
+        assert result["verification_status"] == "verified"
+
+    def test_lookahead_v_accepted(self):
+        """Regression: prompt writes 'lookahead_v', verifier required 'lookahead'."""
+        result = verify_substitution_claim(self._make_proof(self.BASE_WITNESS_NEW), IR_SIMPLE)
+        assert result["verification_status"] == "verified", result["issues"]
+
+    def test_why_not_ll_accepted(self):
+        """Regression: prompt writes 'why_not_ll', verifier required 'why_not_in_L'."""
+        result = verify_substitution_claim(self._make_proof(self.BASE_WITNESS_NEW), IR_SIMPLE)
+        assert not any("why_not_in_L" in i for i in result["issues"])
+
+    def test_prompt_shaped_payload_fully_verified(self):
+        """End-to-end: a payload shaped exactly like the prompt output must be verified."""
+        prompt_payload = {
+            "method": "substitution",
+            "for_all_k": True,
+            "witness": {
+                "k": "k (arbitrary)",
+                "n": "k + 1",
+                "w1": "a^{n-k}",
+                "lookahead_v": "a^k",
+                "suffix_1": "b^n",
+                "suffix_2": "c^n",
+                "word_1": "a^n b^n",
+                "word_2": "a^n c^n",
+                "word_1_in_L": True,
+                "word_2_in_L": True,
+                "why_not_ll": "После прочтения w₁ парсер в одном состоянии стека для обоих слов.",
+            },
+            "proof_explanation": "full formal proof",
+        }
+        result = verify_substitution_claim(prompt_payload, IR_SIMPLE)
+        assert result["verification_status"] == "verified", result["issues"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: Fix 3 — marker uses 'marker_symbol', 'marker_description', 'suggested_k'
+# ---------------------------------------------------------------------------
+
+
+class TestMarkerPromptFieldNames:
+    """Verify verify_marker_claim accepts prompt-shaped proof_sketch."""
+
+    def test_old_field_names_still_work(self):
+        ps = {
+            "method": "marker_detection",
+            "marker": "#",
+            "explanation": "The # separates left and right halves",
+            "k": 1,
+        }
+        result = verify_marker_claim(ps, IR_SIMPLE)
+        assert result["checks_passed"] >= 2
+
+    def test_marker_symbol_key_accepted(self):
+        """Regression: prompt writes 'marker_symbol', verifier was reading 'marker'."""
+        ps = {
+            "method": "marker_detection",
+            "marker_symbol": "c",
+            "marker_description": "The letter c separates the two subwords.",
+            "suggested_k": 1,
+        }
+        result = verify_marker_claim(ps, IR_SIMPLE)
+        assert not any("No 'marker'" in i for i in result["issues"]), result["issues"]
+
+    def test_marker_description_as_explanation(self):
+        """Regression: prompt writes 'marker_description', verifier read 'explanation'."""
+        ps = {
+            "method": "marker_detection",
+            "marker_symbol": "#",
+            "marker_description": "hash separates halves",
+            "suggested_k": 1,
+        }
+        result = verify_marker_claim(ps, IR_SIMPLE)
+        assert not any("explanation" in i.lower() for i in result["issues"])
+
+    def test_ll_usage_as_explanation(self):
+        """Regression: prompt also writes 'll_usage' — accept as explanation fallback."""
+        ps = {
+            "method": "marker_detection",
+            "marker_symbol": "#",
+            "ll_usage": "parser uses # to choose rule",
+            "suggested_k": 1,
+        }
+        result = verify_marker_claim(ps, IR_SIMPLE)
+        assert not any("explanation" in i.lower() for i in result["issues"])
+
+    def test_suggested_k_used_for_oracle(self):
+        """Regression: prompt writes 'suggested_k', verifier read 'k' for check_ll_k."""
+        ps = {
+            "method": "marker_detection",
+            "marker_symbol": "c",
+            "marker_description": "unique separator",
+            "suggested_k": 1,
+            "grammar": GRAMMAR_LL1,
+        }
+        result = verify_marker_claim(ps, IR_SIMPLE)
+        # With grammar + suggested_k, oracle should run and pass for GRAMMAR_LL1
+        assert result["checks_passed"] >= 3
+
+    def test_prompt_shaped_payload_checks_pass(self):
+        """End-to-end: exact prompt output shape must score checks."""
+        prompt_payload = {
+            "method": "marker_detection",
+            "marker_found": True,
+            "marker_symbol": "c",
+            "marker_type": "unique_separator",
+            "marker_position": "center",
+            "marker_description": "The letter c uniquely separates the two halves.",
+            "ll_usage": "An LL(1) parser can use the presence of 'c' to decide branching.",
+            "suggested_k": 1,
+        }
+        result = verify_marker_claim(prompt_payload, IR_SIMPLE)
+        assert result["checks_passed"] >= 2, result["issues"]

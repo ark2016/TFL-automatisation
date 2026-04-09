@@ -30,6 +30,7 @@ def _make_result(
     return {
         "agent": agent,
         "verification_status": status,  # "verified" | "refuted" | "inconclusive" | "error"
+        "status": status,               # alias used by reasoning/formalizer prompts
         "checks_passed": checks_passed,
         "checks_total": checks_total,
         "issues": issues,
@@ -80,8 +81,9 @@ def verify_ll_grammar_claim(proof_sketch: dict, ir: dict) -> dict:
     details: dict = {}
 
     # Check 1: grammar provided
+    # Prompt uses "ll_grammar"; accept both field names.
     checks_total += 1
-    grammar = proof_sketch.get("grammar")
+    grammar = proof_sketch.get("grammar") or proof_sketch.get("ll_grammar")
     if grammar is None:
         issues.append("No grammar provided in proof_sketch")
     else:
@@ -206,21 +208,34 @@ def verify_substitution_claim(proof_sketch: dict, ir: dict) -> dict:
         details["witness"] = witness
 
         # Check 5: required witness fields
-        required_witness_fields = ["w1", "lookahead", "suffix_1", "suffix_2", "why_not_in_L"]
-        missing = [f for f in required_witness_fields if f not in witness]
+        # Prompt uses "lookahead_v" and "why_not_ll"; accept both names.
+        def _has_field(w: dict, *names: str) -> bool:
+            return any(n in w for n in names)
+
+        required_witness_checks = [
+            ("w1",),
+            ("lookahead", "lookahead_v"),
+            ("suffix_1",),
+            ("suffix_2",),
+            ("why_not_in_L", "why_not_ll"),
+        ]
+        missing = [
+            names[0] for names in required_witness_checks
+            if not _has_field(witness, *names)
+        ]
         checks_total += 1
         if missing:
             issues.append(f"Witness is missing fields: {missing}")
         else:
             checks_passed += 1
 
-        # Check 6: why_not_in_L explanation non-empty
+        # Check 6: why_not_in_L (or why_not_ll) explanation non-empty
         checks_total += 1
-        why = witness.get("why_not_in_L", "")
+        why = witness.get("why_not_in_L") or witness.get("why_not_ll", "")
         if why and isinstance(why, str) and len(why.strip()) > 0:
             checks_passed += 1
         else:
-            issues.append("'why_not_in_L' explanation is missing or empty")
+            issues.append("'why_not_in_L' / 'why_not_ll' explanation is missing or empty")
 
     status = "verified" if not issues else "inconclusive"
     return _make_result(
@@ -274,21 +289,31 @@ def verify_grammar_transformation_claim(proof_sketch: dict, ir: dict) -> dict:
             checks_passed += 1
 
     # Check 3: transformation_steps listed
+    # Prompt uses "transformation_log" (list of step objects); accept both names.
     checks_total += 1
-    transformation_steps = proof_sketch.get("transformation_steps", [])
+    transformation_steps = (
+        proof_sketch.get("transformation_steps")
+        or proof_sketch.get("transformation_log")
+        or []
+    )
     if transformation_steps and isinstance(transformation_steps, list) and len(transformation_steps) > 0:
         checks_passed += 1
         details["transformation_steps"] = transformation_steps
     else:
-        issues.append("No 'transformation_steps' listed")
+        issues.append("No 'transformation_steps' / 'transformation_log' listed")
 
     # Check 4: conflicts_remaining is empty (claim of success)
+    # Prompt uses "conflicts"; accept both names.
     checks_total += 1
-    conflicts_remaining = proof_sketch.get("conflicts_remaining", [])
+    conflicts_remaining = (
+        proof_sketch.get("conflicts_remaining")
+        if "conflicts_remaining" in proof_sketch
+        else proof_sketch.get("conflicts", [])
+    )
     if isinstance(conflicts_remaining, list) and len(conflicts_remaining) == 0:
         checks_passed += 1
     else:
-        issues.append(f"'conflicts_remaining' is non-empty: {conflicts_remaining}")
+        issues.append(f"'conflicts_remaining' / 'conflicts' is non-empty: {conflicts_remaining}")
 
     # Check 5: run check_ll_k on transformed grammar if available
     k = proof_sketch.get("k")
@@ -348,25 +373,33 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
     details: dict = {}
 
     # Check 1: marker identified
+    # Prompt uses "marker_symbol"; accept both names.
     checks_total += 1
-    marker = proof_sketch.get("marker")
+    marker = proof_sketch.get("marker") or proof_sketch.get("marker_symbol")
     if marker and isinstance(marker, str) and len(marker.strip()) > 0:
         checks_passed += 1
         details["marker"] = marker
     else:
-        issues.append("No 'marker' symbol/string identified in proof_sketch")
+        issues.append("No 'marker' / 'marker_symbol' identified in proof_sketch")
 
     # Check 2: explanation provided
+    # Prompt uses "marker_description" and "ll_usage"; accept any of the three.
     checks_total += 1
-    explanation = proof_sketch.get("explanation", "")
+    explanation = (
+        proof_sketch.get("explanation")
+        or proof_sketch.get("marker_description")
+        or proof_sketch.get("ll_usage")
+        or ""
+    )
     if explanation and isinstance(explanation, str) and len(explanation.strip()) > 0:
         checks_passed += 1
     else:
-        issues.append("No 'explanation' provided in proof_sketch")
+        issues.append("No 'explanation' / 'marker_description' / 'll_usage' provided in proof_sketch")
 
     # Check 3: grammar provided (optional but preferred)
     grammar = proof_sketch.get("grammar")
-    k = proof_sketch.get("k")
+    # Prompt uses "suggested_k"; accept both names.
+    k = proof_sketch.get("k") or proof_sketch.get("suggested_k")
     if grammar is not None:
         checks_total += 1
         struct_issues = _validate_grammar_structure(grammar)
