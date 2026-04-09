@@ -586,6 +586,7 @@ def preprocess_node(state: PipelineState) -> dict:
                 "agents_used": [],
                 "agents_failed": [],
                 "specialist_outputs": {},
+                "reasoning_output": {},
                 "reasoning_summary": "Язык является регулярным, следовательно LL(1).",
                 "errors": [],
                 "retries": 0,
