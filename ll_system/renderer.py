@@ -44,6 +44,67 @@ def _render_prose_block(text: str) -> str:
     return ""
 
 
+def _esc_inline(text: str) -> str:
+    """Escape HTML, then apply **bold**, *italic*, `code` inline markdown."""
+    s = (text
+         .replace("&", "&amp;")
+         .replace("<", "&lt;")
+         .replace(">", "&gt;")
+         .replace('"', "&quot;"))
+    s = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', s)
+    s = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<em>\1</em>', s)
+    s = re.sub(r'`([^`]+)`', lambda m: f'<code>{html_module.escape(m.group(1))}</code>', s)
+    return s
+
+
+def _render_md_block(text: str) -> str:
+    """Convert a simple Markdown document to HTML.
+
+    Handles: ## / ### headers, **bold**, *italic*, `code`, - bullet lists,
+    blank lines (paragraph breaks), inline $math$ for KaTeX.
+    HTML entities are escaped; $ signs are preserved so KaTeX auto-renders.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    out: list[str] = []
+    in_list = False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            continue
+        if stripped.startswith("### "):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f'<h4 style="margin:14px 0 6px">{_esc_inline(stripped[4:])}</h4>')
+        elif stripped.startswith("## "):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f'<h3 style="margin:16px 0 8px">{_esc_inline(stripped[3:])}</h3>')
+        elif stripped.startswith("# "):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f'<h3 style="margin:16px 0 8px">{_esc_inline(stripped[2:])}</h3>')
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append(f"<li>{_esc_inline(stripped[2:])}</li>")
+        else:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            out.append(f"<p>{_esc_inline(line)}</p>")
+    if in_list:
+        out.append("</ul>")
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Verdict helpers
 # ---------------------------------------------------------------------------
@@ -398,11 +459,34 @@ def render_markdown(result: dict) -> str:
             sections.append(f"- {claim_note}")
         sections.append("")
 
-    # Reasoning summary
+    # Reasoning summary (formalizer's full proof or reasoning agent summary)
     reasoning = result.get("reasoning_summary")
     if reasoning:
-        sections.append("## Краткое изложение рассуждений\n")
+        # If content already starts with a markdown header, don't add our own
+        if not reasoning.lstrip().startswith("#"):
+            sections.append("## Решение\n")
         sections.append(f"{reasoning}\n")
+
+    # Reasoning agent recommendations
+    reasoning_out = result.get("reasoning_output") or {}
+    if isinstance(reasoning_out, dict):
+        ra_summary = reasoning_out.get("summary")
+        ra_just = reasoning_out.get("justification")
+        ra_pm = reasoning_out.get("primary_method")
+        ra_pa = reasoning_out.get("primary_agent")
+        if ra_summary or ra_just:
+            sections.append("## Рекомендации агента-рассуждателя\n")
+            meta = []
+            if ra_pa:
+                meta.append(f"агент: **{ra_pa}**")
+            if ra_pm:
+                meta.append(f"метод: **{ra_pm}**")
+            if meta:
+                sections.append(f"*{', '.join(meta)}*\n")
+            if ra_summary:
+                sections.append(f"{ra_summary}\n")
+            if ra_just:
+                sections.append(f"**Обоснование:** {ra_just}\n")
 
     # Agents used
     agents = result.get("agents_used") or []
@@ -410,7 +494,7 @@ def render_markdown(result: dict) -> str:
         sections.append("## Анализ агентов\n")
         sections.append(f"**Агенты (успешно):** {', '.join(agents)}\n")
 
-    # Specialist outputs summary
+    # Specialist outputs — verdict + proof_sketch details
     spec_outputs = result.get("specialist_outputs") or {}
     if isinstance(spec_outputs, dict) and spec_outputs:
         for agent_name, agent_out in spec_outputs.items():
@@ -424,6 +508,20 @@ def render_markdown(result: dict) -> str:
             if agent_conf is not None:
                 line += f", уверенность {_confidence_str(agent_conf)}"
             sections.append(line)
+            ps = agent_out.get("proof_sketch")
+            if isinstance(ps, dict):
+                method = ps.get("method")
+                if method:
+                    sections.append(f"  - Метод: `{method}`")
+                desc = ps.get("description") or ps.get("argument")
+                if desc:
+                    sections.append(f"  - {desc}")
+                witness = ps.get("witness")
+                if isinstance(witness, dict):
+                    for wk, wv in list(witness.items())[:4]:
+                        sections.append(f"  - {wk}: {wv}")
+                elif witness:
+                    sections.append(f"  - Свидетель: {witness}")
         sections.append("")
 
     # Failed agents
@@ -675,9 +773,23 @@ def render_html(result: dict) -> str:
             oracle_status = f"LL({oracle_k})" if is_ll_k else f"Не LL({oracle_k})"
             sol_parts.append(f'<div class="ll-p"><strong>Oracle (FIRST/FOLLOW):</strong> {_esc(oracle_status)}</div>')
 
+    # Reasoning agent primary info
+    reasoning_out = result.get("reasoning_output") or {}
+    if isinstance(reasoning_out, dict):
+        ra_pm = reasoning_out.get("primary_method")
+        ra_pa = reasoning_out.get("primary_agent")
+        if ra_pm or ra_pa:
+            meta_items = []
+            if ra_pa:
+                meta_items.append(f'Агент: <strong>{_esc(str(ra_pa))}</strong>')
+            if ra_pm:
+                meta_items.append(f'Метод: <strong>{_esc(str(ra_pm))}</strong>')
+            sol_parts.append(f'<div class="ll-meta" style="margin-top:8px">{" · ".join(meta_items)}</div>')
+
+    # Formalizer solution rendered as HTML (not raw-escaped)
     reasoning = result.get("reasoning_summary")
     if reasoning:
-        sol_parts.append(f'<div class="ll-box">{_esc(reasoning)}</div>')
+        sol_parts.append(f'<div class="ll-box">{_render_md_block(reasoning)}</div>')
 
     tabs.append(("Решение", "\n".join(sol_parts)))
 
@@ -769,22 +881,62 @@ def render_html(result: dict) -> str:
 
     spec_outputs = result.get("specialist_outputs") or {}
     if isinstance(spec_outputs, dict) and spec_outputs:
-        details_parts.append('<div class="ll-p" style="margin-top:12px"><strong>Специалисты:</strong></div><ul>')
+        details_parts.append('<div class="ll-p" style="margin-top:12px"><strong>Вывод специалистов:</strong></div>')
         for agent_name, agent_out in spec_outputs.items():
             if not isinstance(agent_out, dict):
                 continue
             agent_verdict = agent_out.get("verdict")
             agent_conf = agent_out.get("confidence")
-            item = f'<span class="ll-mono">{_esc(agent_name)}</span>'
-            if agent_verdict:
-                item += f': <code>{_esc(str(agent_verdict))}</code>'
+            v_color = _verdict_color(agent_verdict)
+            conf_str = ""
             if agent_conf is not None:
                 try:
-                    item += f', уверенность {int(float(agent_conf) * 100)}%'
+                    conf_str = f' <span style="color:#7f8c8d;font-size:12px">({int(float(agent_conf) * 100)}%)</span>'
                 except (TypeError, ValueError):
                     pass
-            details_parts.append(f'<li>{item}</li>')
-        details_parts.append('</ul>')
+            header = (
+                f'<div style="display:flex;align-items:center;gap:8px;margin-top:10px">'
+                f'<span class="ll-mono" style="font-weight:600">{_esc(agent_name)}</span>'
+            )
+            if agent_verdict:
+                header += (
+                    f'<span style="font-size:11px;padding:2px 8px;border-radius:4px;'
+                    f'background:{v_color};color:#fff">{_esc(str(agent_verdict))}</span>'
+                )
+            header += f'{conf_str}</div>'
+            details_parts.append(header)
+            ps = agent_out.get("proof_sketch")
+            if isinstance(ps, dict):
+                ps_items: list[str] = []
+                method = ps.get("method")
+                if method:
+                    ps_items.append(f'<strong>Метод:</strong> <code>{_esc(str(method))}</code>')
+                desc = ps.get("description") or ps.get("argument")
+                if desc:
+                    ps_items.append(_render_prose_block(str(desc)))
+                witness = ps.get("witness")
+                if isinstance(witness, dict):
+                    w_lines = []
+                    for wk, wv in list(witness.items())[:4]:
+                        w_lines.append(f'<li><em>{_esc(str(wk))}</em>: {_esc(str(wv))}</li>')
+                    if w_lines:
+                        ps_items.append(f'<strong>Свидетель:</strong><ul>{"".join(w_lines)}</ul>')
+                elif witness:
+                    ps_items.append(f'<strong>Свидетель:</strong> <span class="ll-mono">{_esc(str(witness))}</span>')
+                if ps_items:
+                    details_parts.append(f'<div class="ll-box" style="margin-top:4px">{"".join(ps_items)}</div>')
+
+    # Reasoning agent advice
+    reasoning_out = result.get("reasoning_output") or {}
+    if isinstance(reasoning_out, dict) and (reasoning_out.get("summary") or reasoning_out.get("justification")):
+        details_parts.append('<div class="ll-p" style="margin-top:16px"><strong>Советы агента-рассуждателя:</strong></div>')
+        ra_summary = reasoning_out.get("summary")
+        if ra_summary:
+            details_parts.append(f'<div class="ll-box" style="border-left:4px solid #2980b9">{_render_prose_block(str(ra_summary))}</div>')
+        ra_just = reasoning_out.get("justification")
+        if ra_just:
+            details_parts.append(f'<div class="ll-p"><strong>Обоснование:</strong></div>')
+            details_parts.append(f'<div class="ll-box">{_render_prose_block(str(ra_just))}</div>')
 
     retries = result.get("retries", 0)
     if retries:

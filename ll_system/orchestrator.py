@@ -1108,6 +1108,7 @@ def assemble_result_node(state: PipelineState) -> dict:
                 k: v for k, v in agent_results.items()
                 if k in LL_SPECIALIST_NAMES
             },
+            "reasoning_output": reasoning,
             "reasoning_summary": reasoning_summary,
             "errors": state.get("errors", []),
             "retries": state.get("retry_round", 0),
