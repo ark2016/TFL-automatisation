@@ -1,0 +1,11 @@
+{
+  "agent_name": "ambiguity_detector",
+  "verdict": "uncertain",
+  "confidence": 0.1,
+  "proof_sketch": null,
+  "artifacts": {
+    "ll_grammar": null,
+    "first_follow_table": null,
+    "counterexample_words": []
+  }
+}

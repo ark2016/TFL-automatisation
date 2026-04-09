@@ -1,0 +1,23 @@
+{
+  "agent_name": "substitution_agent",
+  "verdict": "not_ll",
+  "confidence": 0.95,
+  "proof_sketch": {
+    "method": "substitution",
+    "for_all_k": true,
+    "witness": {
+      "k": "k (произвольное)",
+      "w1": "a^{n+k} (n произвольное, n ≥ 1)",
+      "lookahead": "b^k",
+      "suffix_1": "b^n ∈ {aⁿbⁿ} после a^{n+k}b^k = a^{n+k}b^{n+k}",
+      "suffix_2": "c^n",
+      "substitution_result": "a^{n+k} b^k c^n",
+      "why_not_in_L": "Слово a^{n+k}b^k c^n не принадлежит ни {aⁿbⁿ}, ни {aⁿcⁿ}: в {aⁿbⁿ} нужно n=n+k и равное число b, в {aⁿcⁿ} нет символов b."
+    }
+  },
+  "artifacts": {
+    "ll_grammar": null,
+    "first_follow_table": null,
+    "counterexample_words": ["a^{n+k}b^k c^n"]
+  }
+}

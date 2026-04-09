@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang='ru'><head><meta charset='utf-8'>
+<title>LL — Результат анализа</title>
+<style>
+body{font-family:'Segoe UI',system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#2c3e50;background:#ecf0f1}
+.ll-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px;padding:16px 20px;background:#2c3e50;color:#ecf0f1;border-radius:8px}
+.ll-head-text{flex:1}
+.ll-task-label{font-size:12px;color:#bdc3c7;margin-bottom:4px}
+.ll-task{font-size:15px;line-height:1.6;color:#ecf0f1}
+.ll-badge{font-size:13px;font-weight:700;padding:6px 16px;border-radius:8px;white-space:nowrap;flex-shrink:0;align-self:flex-start}
+.ll-sec{font-size:16px;font-weight:600;color:#2c3e50;margin:24px 0 10px;padding-top:16px;border-top:1px solid #bdc3c7}
+.ll-sec:first-of-type{border-top:none;padding-top:0}
+.ll-p{font-size:14px;line-height:1.75;margin:6px 0}
+.ll-meta{font-size:12px;color:#7f8c8d;margin:4px 0 10px}
+.ll-box{background:#fff;border-radius:6px;padding:12px 16px;margin:10px 0;font-size:13px;line-height:1.7;border:1px solid #dfe6e9}
+.ll-mono,.ll-grammar{font-family:Consolas,'Courier New',monospace;font-size:13px}
+.ll-grammar{background:#fff;border-radius:6px;padding:12px 16px;border:1px solid #dfe6e9;margin:10px 0;white-space:pre;overflow-x:auto}
+.ll-tab{display:flex;gap:2px;margin:16px 0 0;flex-wrap:wrap;border-bottom:2px solid #bdc3c7}
+.ll-tab-btn{font-size:12px;padding:7px 16px;border-radius:6px 6px 0 0;background:#dfe6e9;color:#636e72;cursor:pointer;border:none;font-family:inherit;margin-bottom:-2px;border-bottom:2px solid transparent}
+.ll-tab-btn:hover{background:#b2bec3}
+.ll-tab-btn.active{background:#fff;color:#2c3e50;font-weight:600;border-bottom-color:#2980b9}
+.ll-panel{display:none;padding:14px 0}.ll-panel.active{display:block}
+.ll-step{display:flex;gap:10px;margin:10px 0}
+.ll-n{min-width:24px;height:24px;border-radius:50%;background:#dfe6e9;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#636e72;flex-shrink:0;margin-top:2px}
+.ll-t{font-size:14px;line-height:1.7}
+.ll-footer{display:flex;gap:16px;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid #bdc3c7;font-size:12px;color:#7f8c8d;flex-wrap:wrap}
+.ll-pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#d6eaf8;color:#1a5276}
+.ll-pill-warn{background:#fadbd8;color:#922b21}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+th,td{border:1px solid #bdc3c7;padding:6px 10px;text-align:left}
+th{background:#dfe6e9;font-weight:600}
+tr:nth-child(even) td{background:#f8f9fa}
+
+</style></head><body>
+<div class="ll-head">
+  <div class="ll-head-text">
+    <div class="ll-task-label">Задача (проверка LL-свойства · Формат 3: грамматика)</div>
+    <div class="ll-task">S -&gt; aA | b, A -&gt; aA | eps</div>
+  </div>
+  <span class="ll-badge" style="background:#2ecc71;color:#fff">LL(1)</span>
+</div>
+<div class="ll-meta">Уверенность: <strong>92%</strong></div>
+<div class="ll-sec">Результат</div>
+<div class="ll-tab">
+  <button class="ll-tab-btn active" onclick="llShowTab(0)">Решение</button>
+  <button class="ll-tab-btn" onclick="llShowTab(1)">Доказательство</button>
+  <button class="ll-tab-btn" onclick="llShowTab(2)">Грамматика/Таблица</button>
+  <button class="ll-tab-btn" onclick="llShowTab(3)">Детали</button>
+</div>
+<div class="ll-panel active" id="ll-panel-0">
+<div class="ll-p"><strong>Вердикт:</strong> LL(k)</div>
+<div class="ll-p"><strong>Минимальное k:</strong> 1</div>
+<div class="ll-p"><strong>Oracle (FIRST/FOLLOW):</strong> LL(1)</div>
+<div class="ll-box">Grammar is LL(1): no conflicts in parse table.</div>
+</div>
+<div class="ll-panel" id="ll-panel-1">
+<div class="ll-p"><strong>Метод:</strong> <span class="ll-mono">ll_grammar_construction</span></div>
+<div class="ll-box">Grammar has no FIRST/FOLLOW conflicts.</div>
+<div class="ll-box" style="border-left:4px solid #2ecc71"><strong>Заключение.</strong> Grammar is LL(1).</div>
+</div>
+<div class="ll-panel" id="ll-panel-2">
+<div class="ll-p"><strong>LL-грамматика G:</strong></div>
+<pre class="ll-grammar">S → a A | b
+A → a A | ε</pre>
+<div class="ll-p" style="margin-top:16px"><strong>Таблица FIRST<sub>1</sub>/FOLLOW<sub>1</sub>:</strong></div>
+<table><tr><th>Нетерминал</th><th>FIRST<sub>1</sub></th><th>FOLLOW<sub>1</sub></th></tr>
+<tr><td><span class="ll-mono">A</span></td><td>{ a, eps }</td><td>{ $ }</td></tr>
+<tr><td><span class="ll-mono">S</span></td><td>{ a, b }</td><td>{ $ }</td></tr>
+</table>
+<div class="ll-p" style="margin-top:16px"><strong>Таблица разбора LL(k):</strong></div>
+<table><tr><th>NT \ Lookahead</th><th>$</th><th>a</th><th>b</th></tr>
+<tr><td><span class="ll-mono">A</span></td><td><span class='ll-mono'>A -&gt; eps</span></td><td><span class='ll-mono'>A -&gt; aA</span></td><td><span class='ll-mono'></span></td></tr>
+<tr><td><span class="ll-mono">S</span></td><td><span class='ll-mono'></span></td><td><span class='ll-mono'>S -&gt; aA</span></td><td><span class='ll-mono'>S -&gt; b</span></td></tr>
+</table>
+</div>
+<div class="ll-panel" id="ll-panel-3">
+<div class="ll-p"><strong>Проверка утверждений:</strong></div>
+<div class="ll-p">Статус: <code>confirmed</code></div>
+<div class="ll-p">Oracle confirmed LL(1).</div>
+<div class="ll-p" style="margin-top:12px"><strong>Специалисты:</strong></div><ul>
+<li><span class="ll-mono">grammar_analyst</span>: <code>ll</code>, уверенность 95%</li>
+</ul>
+</div>
+<div class="ll-footer">
+  <span>confidence: 0.92</span>
+  <span class="ll-pill">2 агентов отработали</span>
+</div>
+<script>
+function llShowTab(n){
+  document.querySelectorAll('.ll-tab-btn').forEach((b,i)=>b.classList.toggle('active',i===n));
+  document.querySelectorAll('.ll-panel').forEach((p,i)=>p.classList.toggle('active',i===n));
+  if(window.renderMathInElement){
+    try{window.renderMathInElement(document.querySelector('.ll-panel.active'),{
+      delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},
+                  {left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],
+      throwOnError:false});
+    }catch(e){}
+  }
+}
+
+</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false});"></script>
+</body></html>

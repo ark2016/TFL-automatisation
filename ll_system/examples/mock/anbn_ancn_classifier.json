@@ -1,0 +1,8 @@
+{
+  "prediction": "not_ll",
+  "confidence": 0.9,
+  "reasoning": "Суффиксная дизъюнкция: язык является объединением {aⁿbⁿ} и {aⁿcⁿ} с общим префиксом aⁿ. Парсер, прочитав aⁿ, не может предсказать суффикс (bⁿ или cⁿ) за конечное число символов предпросмотра.",
+  "suggested_methods": ["substitution"],
+  "suggested_k": null,
+  "advisory_only": true
+}

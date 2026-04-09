@@ -1,0 +1,11 @@
+{
+  "agent_name": "prefix_classes_agent",
+  "verdict": "uncertain",
+  "confidence": 0.2,
+  "proof_sketch": null,
+  "artifacts": {
+    "ll_grammar": null,
+    "first_follow_table": null,
+    "counterexample_words": []
+  }
+}

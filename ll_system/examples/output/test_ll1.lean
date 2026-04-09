@@ -1,0 +1,15 @@
+-- Lean 4 stub (автоматически сгенерировано, требует доработки)
+-- Язык: S -> aA | b, A -> aA | eps
+-- Вердикт: LL(1)
+
+import Mathlib
+
+-- TODO: определить язык L как формальный язык над конечным алфавитом
+-- TODO: определить грамматику G и доказать, что L(G) = L
+-- TODO: доказать, что G является LL(1)-грамматикой:
+--   для каждого нетерминала A и каждой пары различных продукций A → α | β
+--   FIRST_1(α · FOLLOW_1(A)) ∩ FIRST_1(β · FOLLOW_1(A)) = ∅
+
+-- TODO: formalize LL grammar definition
+theorem grammar_is_ll : True := by
+  sorry

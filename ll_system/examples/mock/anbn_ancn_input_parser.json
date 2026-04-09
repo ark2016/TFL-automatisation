@@ -1,0 +1,13 @@
+{
+  "ir": {
+    "task_type": "ll_check_language",
+    "source_text": "L = {aⁿbⁿ} ∪ {aⁿcⁿ}. Является ли L LL(k)-языком?",
+    "language_spec": {
+      "kind": "natural",
+      "description": "Union of {a^n b^n | n >= 0} and {a^n c^n | n >= 0}"
+    },
+    "question": "is_ll"
+  },
+  "format": 1,
+  "parse_errors": []
+}

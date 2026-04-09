@@ -1,0 +1,11 @@
+{
+  "verdict": "not_ll",
+  "k": null,
+  "confidence": 0.95,
+  "summary": "Язык $L = \\{a^n b^n \\mid n \\geq 0\\} \\cup \\{a^n c^n \\mid n \\geq 0\\}$ не является LL(k) ни для какого $k$.",
+  "justification": "Метод подмены (доказан агентом substitution_agent): для произвольного $k$ рассмотрим слова $a^{n+k}b^{n+k}$ и $a^{n+k}c^{n+k}$, оба принадлежащих $L$. После чтения $a^{n+k}$ lookahead равен $b^k$ для первого и $c^k$ для второго. Поскольку lookaheads различны, LL(k)-парсер может их различить. Однако метод подмены показывает, что после чтения $a^{n+k}$ с lookahead $b^k$ парсер должен продолжить $b^n$, но не может принять $c^n$. Это противоречит детерминированности для слов $a^{n+k}b^{n+k}$ и требованию отклонить $a^{n+k}b^k c^n \\notin L$. Prefix classes agent подтверждает: для каждого $k$ существуют бесконечно много k-различимых префиксов.",
+  "primary_method": "substitution",
+  "primary_agent": "substitution_agent",
+  "action": "done",
+  "retry_plan": null
+}

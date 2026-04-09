@@ -1,0 +1,11 @@
+{
+  "verdict": "ll",
+  "k": 1,
+  "confidence": 0.85,
+  "summary": "Язык $L = \\{w b^* c w^R \\mid w \\in \\{a,b\\}^*\\}$ является LL(k)-языком. Маркер $c$ однозначно разделяет $w$ и $w^R$.",
+  "justification": "Агент marker_analyzer обнаружил явный маркер $c$, который является уникальным разделителем. Агент ll_grammar_builder предложил грамматику. Деструктивные агенты не нашли доказательств не-LL. Для точного k требуется проверка FIRST/FOLLOW: есть потенциальный конфликт при b, что может потребовать k=2.",
+  "primary_method": "marker_detection",
+  "primary_agent": "marker_analyzer",
+  "action": "done",
+  "retry_plan": null
+}

@@ -1,0 +1,8 @@
+{
+  "prediction": "ll",
+  "confidence": 0.85,
+  "reasoning": "Явный маркер c разделяет w и w^R. LL(1)-парсер: читая a или b — это часть w; читая c — начало обратной части. Маркер однозначно определяет переход.",
+  "suggested_methods": ["marker_detection", "ll_grammar_construction"],
+  "suggested_k": 1,
+  "advisory_only": true
+}

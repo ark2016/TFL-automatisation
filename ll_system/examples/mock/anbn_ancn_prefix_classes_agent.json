@@ -1,0 +1,16 @@
+{
+  "agent_name": "prefix_classes_agent",
+  "verdict": "not_ll",
+  "confidence": 0.75,
+  "proof_sketch": {
+    "method": "prefix_classes",
+    "for_all_k": true,
+    "description": "Для каждого k существуют бесконечно много попарно k-различимых префиксов: a, aa, aaa, ... Префикс aⁿ отличается от aᵐ (n≠m), так как после aⁿ необходимо читать bⁿ или cⁿ, а после aᵐ — bᵐ или cᵐ.",
+    "distinguishable_prefixes": ["a", "aa", "aaa", "..."]
+  },
+  "artifacts": {
+    "ll_grammar": null,
+    "first_follow_table": null,
+    "counterexample_words": []
+  }
+}

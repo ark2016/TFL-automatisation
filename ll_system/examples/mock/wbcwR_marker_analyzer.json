@@ -1,0 +1,28 @@
+{
+  "agent_name": "marker_analyzer",
+  "verdict": "ll",
+  "confidence": 0.9,
+  "proof_sketch": {
+    "method": "marker_detection",
+    "marker": "c",
+    "k": 1,
+    "explanation": "Символ c является уникальным разделителем: слева от c находится w b*, справа — w^R. LL-парсер при чтении c однозначно определяет конец входной части и начало зеркальной. Предложенная грамматика использует c как терминальный маркер перехода.",
+    "grammar": {
+      "nonterminals": ["S", "M"],
+      "terminals": ["a", "b", "c"],
+      "start": "S",
+      "rules": [
+        {"lhs": "S", "rhs": ["a", "S", "a"]},
+        {"lhs": "S", "rhs": ["b", "S", "b"]},
+        {"lhs": "S", "rhs": ["M"]},
+        {"lhs": "M", "rhs": ["b", "M"]},
+        {"lhs": "M", "rhs": ["c"]}
+      ]
+    }
+  },
+  "artifacts": {
+    "ll_grammar": null,
+    "first_follow_table": null,
+    "counterexample_words": []
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "task_type": "ll_check_grammar",
+  "source_text": "S -> aA | b, A -> aA | eps",
+  "verdict": "ll",
+  "k": 1,
+  "confidence": 0.92,
+  "proof": {
+    "method": "ll_grammar_construction",
+    "details": {
+      "summary": "Grammar has no FIRST/FOLLOW conflicts.",
+      "conclusion": "Grammar is LL(1)."
+    }
+  },
+  "grammar": {
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "A"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "b"
+        ]
+      },
+      {
+        "lhs": "A",
+        "rhs": [
+          "a",
+          "A"
+        ]
+      },
+      {
+        "lhs": "A",
+        "rhs": []
+      }
+    ]
+  },
+  "first_follow_result": {
+    "is_ll_k": true,
+    "k": 1,
+    "conflicts": [],
+    "first_sets": {
+      "S": [
+        "a",
+        "b"
+      ],
+      "A": [
+        "a",
+        "eps"
+      ]
+    },
+    "follow_sets": {
+      "S": [
+        "$"
+      ],
+      "A": [
+        "$"
+      ]
+    },
+    "parse_table": {
+      "S": {
+        "a": "S -> aA",
+        "b": "S -> b"
+      },
+      "A": {
+        "a": "A -> aA",
+        "$": "A -> eps"
+      }
+    }
+  },
+  "claim_verification": {
+    "verdict": "confirmed",
+    "note": "Oracle confirmed LL(1)."
+  },
+  "agents_used": [
+    "grammar_analyst",
+    "oracle"
+  ],
+  "agents_failed": [],
+  "specialist_outputs": {
+    "grammar_analyst": {
+      "verdict": "ll",
+      "confidence": 0.95
+    }
+  },
+  "reasoning_summary": "Grammar is LL(1): no conflicts in parse table.",
+  "errors": [],
+  "retries": 0
+}

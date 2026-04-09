@@ -1,0 +1,39 @@
+{
+  "agent_name": "ll_grammar_builder",
+  "verdict": "ll",
+  "confidence": 0.9,
+  "proof_sketch": {
+    "method": "ll_grammar_construction",
+    "k": 1,
+    "grammar": {
+      "nonterminals": ["S", "M"],
+      "terminals": ["a", "b", "c"],
+      "start": "S",
+      "rules": [
+        {"lhs": "S", "rhs": ["a", "S", "a"]},
+        {"lhs": "S", "rhs": ["b", "S", "b"]},
+        {"lhs": "S", "rhs": ["M"]},
+        {"lhs": "M", "rhs": ["b", "M"]},
+        {"lhs": "M", "rhs": ["c"]}
+      ]
+    },
+    "explanation": "Нетерминал S обрабатывает симметричную часть w...w^R. Маркер c однозначно определяет переход к нетерминалу M (обработка b*c). FIRST_1(S→aSa)={a}, FIRST_1(S→bSb)={b}, FIRST_1(S→M)={b,c}. Есть конфликт между S→bSb и S→M. Нужна грамматика с LL(2) или другая структура.",
+    "note": "Требуется LL(2) из-за конфликта b: S→bSb (продолжает w) vs S→M (b* перед c). FIRST_2: S→bSb первый символ после b - не c; S→M первый символ после b может быть c."
+  },
+  "artifacts": {
+    "ll_grammar": {
+      "nonterminals": ["S", "M"],
+      "terminals": ["a", "b", "c"],
+      "start": "S",
+      "rules": [
+        {"lhs": "S", "rhs": ["a", "S", "a"]},
+        {"lhs": "S", "rhs": ["b", "S", "b"]},
+        {"lhs": "S", "rhs": ["M"]},
+        {"lhs": "M", "rhs": ["b", "M"]},
+        {"lhs": "M", "rhs": ["c"]}
+      ]
+    },
+    "first_follow_table": null,
+    "counterexample_words": []
+  }
+}
