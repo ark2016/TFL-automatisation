@@ -1,0 +1,19 @@
+{
+  "task_type": "ll_check_grammar",
+  "source_text": "S → aAb | bBa; A → aA | ε; B → bB | ε. Is this grammar LL(1)?",
+  "grammar": {
+    "nonterminals": ["S", "A", "B"],
+    "terminals": ["a", "b"],
+    "start": "S",
+    "rules": [
+      {"lhs": "S", "rhs": ["a", "A", "b"]},
+      {"lhs": "S", "rhs": ["b", "B", "a"]},
+      {"lhs": "A", "rhs": ["a", "A"]},
+      {"lhs": "A", "rhs": []},
+      {"lhs": "B", "rhs": ["b", "B"]},
+      {"lhs": "B", "rhs": []}
+    ]
+  },
+  "question": "is_ll_k",
+  "k": 1
+}

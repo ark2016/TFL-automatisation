@@ -1,0 +1,17 @@
+{
+  "task_type": "ll_check_language",
+  "source_text": "L = {aⁿbⁿ | n≥0} ∪ {aⁿcⁿ | n≥0}. Is this language LL(k) for some k?",
+  "language_spec": {
+    "kind": "set_builder",
+    "alphabet": ["a", "b", "c"],
+    "variables": [
+      {"name": "n", "domain": {"type": "nat"}},
+      {"name": "choice", "domain": {"type": "enum", "values": ["b", "c"]}}
+    ],
+    "template": ["aⁿ", "Xⁿ"],
+    "constraints": [
+      {"comment": "X ∈ {b, c}, same n"}
+    ]
+  },
+  "question": "is_ll"
+}
