@@ -409,14 +409,9 @@ def left_factor(grammar: dict) -> dict:
             continue
         changed = _factor_once(nt)
         if changed:
-            # Re-add nt (may have more common prefixes) and new nts
+            # Re-add nt (may have more common prefixes) and the newly created nt
             worklist.append(nt)
-            # Add newly created nts that haven't been processed
-            for new_nt in all_nts:
-                if new_nt not in rules_for or new_nt in worklist:
-                    pass
-                # new nts added to all_nts above, add to worklist
-            worklist.append(all_nts[-1])  # the newly created nt
+            worklist.append(all_nts[-1])
 
     # Build result
     result_rules: list[tuple[str, list[str]]] = []

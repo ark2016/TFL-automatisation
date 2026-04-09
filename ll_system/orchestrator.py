@@ -772,9 +772,6 @@ def run_reasoning_node(state: PipelineState) -> dict:
     """Run the reasoning agent to synthesize a verdict."""
     log_msg(state, "run_reasoning_node...")
 
-    # Clear any stale retry_context from a prior round
-    state["retry_context"] = {}
-
     agent_results = state.get("agent_results", {})
     reasoning_input = {
         "ir": state["ir"],
@@ -952,7 +949,8 @@ def handle_retry_node(state: PipelineState) -> dict:
         "agents_to_retry": agents_to_retry,
         "retry_round": new_round,
         "retry_context": retry_plan,
-        "specialist_outputs": [],   # reset for new round (Annotated[list, add] accumulator)
+        "specialist_outputs": [],   # no-op for the accumulator; collect_specialists_node
+        # filters by dispatched agents so stale round-1 entries are ignored
     }
 
 
@@ -1041,6 +1039,7 @@ def assemble_result_node(state: PipelineState) -> dict:
                 "agents_used": ["first_follow_oracle"],
                 "agents_failed": [],
                 "specialist_outputs": {},
+                "reasoning_output": {},
                 "reasoning_summary": reasoning_summary,
                 "errors": state.get("errors", []),
                 "retries": 0,
@@ -1148,6 +1147,7 @@ def assemble_early_failure(state: PipelineState) -> dict:
             "agents_used": sorted(agent_results.keys()),
             "agents_failed": _collect_failed_agents(state),
             "specialist_outputs": specialist_outputs_out,
+            "reasoning_output": {},
             "reasoning_summary": detail,
             "errors": errors if errors else [detail],
             "retries": state.get("retry_round", 0),
@@ -1344,6 +1344,7 @@ def run_pipeline(
             "agents_used": [],
             "agents_failed": [],
             "specialist_outputs": {},
+            "reasoning_output": {},
             "reasoning_summary": "Graph produced no result",
             "errors": ["Graph produced no result"],
             "retries": 0,
