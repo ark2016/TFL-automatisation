@@ -634,11 +634,24 @@ def first_follow_oracle_node(state: PipelineState) -> dict:
         log_msg(state, "  no grammar available for oracle")
         return {"first_follow_result": {"is_ll_k": None, "reason": "no grammar available"}}
 
+    # Format 3 with a specific k: check exactly that k (not the minimum).
+    # ir["k"] == None means "find minimum k" — use find_min_ll_k.
+    requested_k = state["ir"].get("k") if state.get("input_format") == 3 else None
+
     try:
-        result = find_min_ll_k(grammar, max_k=10)
-        ff_result = dict(result.get("result_for_k") or {})
-        ff_result["found"] = result.get("found", False)
-        ff_result["min_k"] = result.get("k")
+        if requested_k is not None and isinstance(requested_k, int) and requested_k >= 1:
+            # User asked: "is this grammar LL(requested_k)?"
+            ck_result = check_ll_k(grammar, requested_k)
+            is_ll = bool(ck_result.get("is_ll_k"))
+            ff_result = dict(ck_result)
+            ff_result["found"] = is_ll
+            ff_result["min_k"] = requested_k if is_ll else None
+            ff_result["checked_k"] = requested_k
+        else:
+            result = find_min_ll_k(grammar, max_k=10)
+            ff_result = dict(result.get("result_for_k") or {})
+            ff_result["found"] = result.get("found", False)
+            ff_result["min_k"] = result.get("k")
         log_msg(
             state,
             f"  oracle: found={ff_result.get('found')} k={ff_result.get('min_k')}",
@@ -846,7 +859,7 @@ def _fallback_reasoning(state: PipelineState) -> dict:
             "k": ff_min_k,
             "confidence": 0.95,
             "primary_agent": "first_follow_oracle",
-            "primary_method": "first_follow",
+            "primary_method": "first_follow_oracle",
             "summary": f"Grammar is LL({ff_min_k}) (first/follow oracle)",
             "retry_plan": None,
         }
@@ -859,7 +872,7 @@ def _fallback_reasoning(state: PipelineState) -> dict:
                 "k": None,
                 "confidence": 0.85,
                 "primary_agent": "first_follow_oracle",
-                "primary_method": "first_follow",
+                "primary_method": "first_follow_oracle",
                 "summary": "Grammar is not LL(k) for any k <= 10 (first/follow oracle)",
                 "retry_plan": None,
             }
@@ -867,49 +880,74 @@ def _fallback_reasoning(state: PipelineState) -> dict:
         # A negative result means that candidate grammar is not LL — it does NOT prove
         # the language itself is not LL.  Continue to agent-based fallback below.
 
-    # Check if any constructive agent returned a valid LL grammar.
-    # Skip agents whose claim was refuted by the verifier.
-    for agent_name in _CONSTRUCTIVE_AGENTS:
-        v_status = verifications.get(agent_name, {}).get("verification_status")
-        if v_status == "refuted":
-            continue
-        out = agent_results.get(agent_name, {})
-        if isinstance(out, dict) and _normalize_verdict(out.get("verdict")) == "ll":
-            conf = _clamp_confidence(out.get("confidence", 0.5))
-            if conf >= 0.7:
-                ps = out.get("proof_sketch") or {}
-                return {
-                    "action": "done",
-                    "verdict": "ll",
-                    "k": out.get("k"),
-                    "confidence": conf,
-                    "primary_agent": agent_name,
-                    "primary_method": ps.get("method", "ll_grammar_construction") if isinstance(ps, dict) else "ll_grammar_construction",
-                    "summary": f"Agent '{agent_name}' found LL grammar",
-                    "retry_plan": None,
-                }
+    def _best_agent_result(
+        agent_names: set[str],
+        expected_verdict: str,
+        default_method: str,
+    ) -> dict | None:
+        """Return the best fallback result from a set of agents.
 
-    # Check destructive agents.
-    # Skip agents whose claim was refuted by the verifier.
-    for agent_name in _DESTRUCTIVE_AGENTS:
-        v_status = verifications.get(agent_name, {}).get("verification_status")
-        if v_status == "refuted":
-            continue
-        out = agent_results.get(agent_name, {})
-        if isinstance(out, dict) and _normalize_verdict(out.get("verdict")) == "not_ll":
+        Priority: verified + conf>=0.7 > unverified + conf>=0.7.
+        Skips refuted agents.
+        """
+        candidates = []
+        for name in agent_names:
+            v_status = verifications.get(name, {}).get("verification_status")
+            if v_status == "refuted":
+                continue
+            out = agent_results.get(name, {})
+            if not isinstance(out, dict):
+                continue
+            if _normalize_verdict(out.get("verdict")) != expected_verdict:
+                continue
             conf = _clamp_confidence(out.get("confidence", 0.5))
-            if conf >= 0.7:
-                ps = out.get("proof_sketch") or {}
-                return {
-                    "action": "done",
-                    "verdict": "not_ll",
-                    "k": None,
-                    "confidence": conf,
-                    "primary_agent": agent_name,
-                    "primary_method": ps.get("method", "substitution") if isinstance(ps, dict) else "substitution",
-                    "summary": f"Agent '{agent_name}' proved not LL",
-                    "retry_plan": None,
-                }
+            if conf < 0.7:
+                continue
+            is_verified = v_status == "verified"
+            candidates.append((not is_verified, -conf, name, out))  # sort: verified first, then higher conf
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: (x[0], x[1]))
+        _, _, agent_name, out = candidates[0]
+        ps = out.get("proof_sketch") or {}
+        method = ps.get("method", default_method) if isinstance(ps, dict) else default_method
+        return {
+            "action": "done",
+            "verdict": expected_verdict,
+            "k": out.get("k") if expected_verdict == "ll" else None,
+            "confidence": _clamp_confidence(out.get("confidence", 0.5)),
+            "primary_agent": agent_name,
+            "primary_method": method,
+            "summary": f"Agent '{agent_name}' "
+                       f"{'found LL grammar' if expected_verdict == 'll' else 'proved not LL'}",
+            "retry_plan": None,
+        }
+
+    # Check constructive agents (ll verdict), then destructive (not_ll).
+    # Verified claims have priority within each group, and destructive verified
+    # beats constructive unverified — check verified destructive before unverified constructive.
+    verified_constructive = _best_agent_result(
+        _CONSTRUCTIVE_AGENTS, "ll", "ll_grammar_construction"
+    )
+    verified_destructive = _best_agent_result(
+        _DESTRUCTIVE_AGENTS, "not_ll", "substitution"
+    )
+
+    # A verified destructive proof beats an unverified constructive claim.
+    if verified_constructive and not verifications.get(
+        verified_constructive.get("primary_agent", ""), {}
+    ).get("verification_status") == "verified":
+        # constructive is unverified — check if destructive is verified
+        if verified_destructive and verifications.get(
+            verified_destructive.get("primary_agent", ""), {}
+        ).get("verification_status") == "verified":
+            return verified_destructive
+
+    if verified_constructive:
+        return verified_constructive
+    if verified_destructive:
+        return verified_destructive
 
     # Count verified vs refuted claims
     verified_count = sum(
@@ -1135,7 +1173,25 @@ def assemble_result_node(state: PipelineState) -> dict:
             }
         return None
 
-    if verdict != "not_ll":
+    if primary_agent == "first_follow_oracle":
+        # Oracle is the primary evidence — build proof from first_follow_result
+        ff = state.get("first_follow_result", {})
+        proof = {
+            "method": "first_follow_oracle",
+            "details": {
+                "is_ll_k": ff.get("is_ll_k"),
+                "min_k": ff.get("min_k"),
+                "checked_k": ff.get("checked_k"),
+                "conflicts": ff.get("conflicts", []),
+            },
+        }
+        # Also pull grammar from constructive agents if available (for display)
+        for agent_name in _CONSTRUCTIVE_AGENTS:
+            _, g = _extract_constructive_proof(agent_name)
+            if g is not None:
+                grammar = g
+                break
+    elif verdict != "not_ll":
         # Try primary agent first, then fall back to all constructive agents
         candidates = (
             [primary_agent] + [a for a in _CONSTRUCTIVE_AGENTS if a != primary_agent]
@@ -1148,7 +1204,7 @@ def assemble_result_node(state: PipelineState) -> dict:
                 proof, grammar = p, g
                 break
 
-    if verdict == "not_ll":
+    if verdict == "not_ll" and primary_agent != "first_follow_oracle":
         # Try primary agent first, then all destructive agents
         candidates = (
             [primary_agent] + [a for a in _DESTRUCTIVE_AGENTS if a != primary_agent]

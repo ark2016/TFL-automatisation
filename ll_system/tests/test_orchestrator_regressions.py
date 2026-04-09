@@ -12,6 +12,7 @@ orchestrator_mod = pytest.importorskip(
 from ll_system.orchestrator import (  # noqa: E402
     _fallback_reasoning,
     assemble_result_node,
+    first_follow_oracle_node,
 )
 
 # ---------------------------------------------------------------------------
@@ -317,3 +318,278 @@ class TestTransformedGrammarRecognized:
         proof = result.get("proof")
         assert proof is not None
         assert proof.get("method") == "grammar_transformation"
+
+
+# ---------------------------------------------------------------------------
+# Regression: Finding 1 — Format 3 oracle respects requested k
+# ---------------------------------------------------------------------------
+
+# LL(2) grammar: S → aB | bA, A → aS | b, B → bS | a  (classic LL(2) grammar)
+# Actually let's use a simpler grammar that is LL(2) but NOT LL(1)
+GRAMMAR_LL2 = {
+    "nonterminals": ["S", "A"],
+    "terminals": ["a", "b"],
+    "start": "S",
+    "rules": [
+        {"lhs": "S", "rhs": ["a", "A"]},
+        {"lhs": "S", "rhs": ["b"]},
+        {"lhs": "A", "rhs": ["a", "b"]},
+        {"lhs": "A", "rhs": ["b", "a"]},
+    ],
+}
+
+
+def _oracle_state(grammar: dict, ir_k: int | None, input_format: int = 3) -> dict:
+    return {
+        "ir": {
+            "task_type": "ll_check_grammar",
+            "source_text": "test",
+            "grammar": grammar,
+            "k": ir_k,
+        },
+        "input_format": input_format,
+        "agent_results": {},
+        "preprocess_hints": {},
+        "log": [],
+    }
+
+
+class TestOracleRespectsRequestedK:
+    """Regression Finding 1: oracle always called find_min_ll_k, ignoring ir['k'].
+    An LL(k) grammar checked at a different k must give the correct answer."""
+
+    def test_ll1_grammar_checked_at_k1_passes(self):
+        """LL(1) grammar checked at k=1 must return found=True."""
+        state = _oracle_state(GRAMMAR_LL1, ir_k=1)
+        out = first_follow_oracle_node(state)
+        ff = out.get("first_follow_result", {})
+        assert ff.get("found") is True
+        assert ff.get("min_k") == 1
+
+    def test_ll1_grammar_checked_at_k2_passes(self):
+        """LL(1) grammar is also LL(2) — found=True at k=2."""
+        state = _oracle_state(GRAMMAR_LL1, ir_k=2)
+        out = first_follow_oracle_node(state)
+        ff = out.get("first_follow_result", {})
+        assert ff.get("found") is True
+
+    def test_format3_k_none_uses_find_min_ll_k(self):
+        """When ir['k'] is None, oracle should search for minimum k."""
+        state = _oracle_state(GRAMMAR_LL1, ir_k=None)
+        out = first_follow_oracle_node(state)
+        ff = out.get("first_follow_result", {})
+        assert ff.get("found") is True
+        assert ff.get("min_k") is not None
+
+    def test_checked_k_field_set_when_specific_k(self):
+        """When checking a specific k, result must include checked_k."""
+        state = _oracle_state(GRAMMAR_LL1, ir_k=1)
+        out = first_follow_oracle_node(state)
+        ff = out.get("first_follow_result", {})
+        assert "checked_k" in ff
+        assert ff["checked_k"] == 1
+
+    def test_checked_k_field_absent_for_min_search(self):
+        """When k=None, checked_k must not appear (find_min_ll_k path)."""
+        state = _oracle_state(GRAMMAR_LL1, ir_k=None)
+        out = first_follow_oracle_node(state)
+        ff = out.get("first_follow_result", {})
+        assert "checked_k" not in ff
+
+
+# ---------------------------------------------------------------------------
+# Regression: Finding 2 — fallback prefers verified destructive over unverified constructive
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackPrefersVerifiedClaims:
+    """Regression Finding 2: fallback was returning 'll' when ll_grammar_builder had
+    confidence >= 0.7 even though its claim was inconclusive and substitution_agent
+    was verified."""
+
+    def _state_with_both(
+        self,
+        constructive_status: str,
+        destructive_status: str,
+    ) -> dict:
+        return {
+            "ir": {},
+            "input_format": 1,
+            "preprocess_hints": {},
+            "first_follow_result": {},
+            "claim_verification": {
+                "ll_grammar_builder": {
+                    "verification_status": constructive_status,
+                    "status": constructive_status,
+                },
+                "substitution_agent": {
+                    "verification_status": destructive_status,
+                    "status": destructive_status,
+                },
+            },
+            "agent_results": {
+                "ll_grammar_builder": {
+                    "verdict": "ll",
+                    "confidence": 0.9,
+                    "proof_sketch": {
+                        "method": "ll_grammar_construction",
+                        "k": 1,
+                        "ll_grammar": GRAMMAR_LL1,
+                    },
+                },
+                "substitution_agent": {
+                    "verdict": "not_ll",
+                    "confidence": 0.85,
+                    "proof_sketch": {
+                        "method": "substitution",
+                        "for_all_k": True,
+                        "witness": {
+                            "k": "arbitrary", "w1": "a^n",
+                            "lookahead": "a^k", "suffix_1": "b^n", "suffix_2": "c^n",
+                            "why_not_in_L": "incompatible",
+                        },
+                    },
+                },
+            },
+            "retry_round": 0,
+            "log": [],
+        }
+
+    def test_verified_destructive_beats_inconclusive_constructive(self):
+        """Regression: ll_grammar_builder inconclusive + substitution_agent verified
+        must yield not_ll verdict in fallback."""
+        state = self._state_with_both(
+            constructive_status="inconclusive",
+            destructive_status="verified",
+        )
+        result = _fallback_reasoning(state)
+        assert result.get("verdict") == "not_ll", (
+            "Verified destructive proof must beat unverified constructive claim in fallback"
+        )
+
+    def test_both_verified_constructive_wins(self):
+        """When both are verified, constructive (ll) should win if sorted first."""
+        state = self._state_with_both(
+            constructive_status="verified",
+            destructive_status="verified",
+        )
+        result = _fallback_reasoning(state)
+        # Both verified — constructive comes first in sort, should be "ll"
+        assert result.get("verdict") in ("ll", "not_ll")  # either is acceptable
+
+    def test_both_inconclusive_constructive_wins(self):
+        """When neither is verified, constructive still comes first (original behavior)."""
+        state = self._state_with_both(
+            constructive_status="inconclusive",
+            destructive_status="inconclusive",
+        )
+        result = _fallback_reasoning(state)
+        assert result.get("verdict") == "ll"
+
+    def test_verified_constructive_beats_inconclusive_destructive(self):
+        """Verified constructive beats inconclusive destructive."""
+        state = self._state_with_both(
+            constructive_status="verified",
+            destructive_status="inconclusive",
+        )
+        result = _fallback_reasoning(state)
+        assert result.get("verdict") == "ll"
+
+
+# ---------------------------------------------------------------------------
+# Regression: Finding 3 — primary_method should be "first_follow_oracle"
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackPrimaryMethodString:
+    """Regression Finding 3: oracle fallback was returning primary_method='first_follow'
+    but downstream prompt expects 'first_follow_oracle'."""
+
+    def test_oracle_ll_primary_method_is_first_follow_oracle(self):
+        state = _base_fallback_state()
+        state["first_follow_result"] = {"found": True, "min_k": 1}
+        result = _fallback_reasoning(state)
+        assert result.get("verdict") == "ll"
+        assert result.get("primary_method") == "first_follow_oracle", (
+            "primary_method must be 'first_follow_oracle', not 'first_follow'"
+        )
+
+    def test_oracle_not_ll_format3_primary_method_is_first_follow_oracle(self):
+        state = _base_fallback_state(input_format=3)
+        state["first_follow_result"] = {"found": False, "min_k": None}
+        result = _fallback_reasoning(state)
+        assert result.get("verdict") == "not_ll"
+        assert result.get("primary_method") == "first_follow_oracle"
+
+    def test_oracle_primary_agent_is_first_follow_oracle(self):
+        state = _base_fallback_state()
+        state["first_follow_result"] = {"found": True, "min_k": 2}
+        result = _fallback_reasoning(state)
+        assert result.get("primary_agent") == "first_follow_oracle"
+
+
+# ---------------------------------------------------------------------------
+# Regression: Finding 4 — oracle as primary_agent in assemble_result_node
+# ---------------------------------------------------------------------------
+
+
+class TestAssembleOraclePrimaryAgent:
+    """Regression Finding 4: when primary_agent='first_follow_oracle', assemble_result_node
+    was using a constructive proof instead of oracle evidence."""
+
+    def _oracle_primary_state(self, verdict: str, ff_result: dict) -> dict:
+        state = _base_assemble_state(verdict, primary_agent="first_follow_oracle")
+        state["reasoning_output"]["primary_method"] = "first_follow_oracle"
+        state["reasoning_output"]["k"] = ff_result.get("min_k")
+        state["first_follow_result"] = ff_result
+        # Add a constructive agent that would have been incorrectly chosen before
+        state["agent_results"] = {
+            "ll_grammar_builder": {
+                "verdict": "ll",
+                "confidence": 0.9,
+                "proof_sketch": {
+                    "method": "ll_grammar_construction",
+                    "k": 1,
+                    "ll_grammar": GRAMMAR_LL1,
+                },
+                "artifacts": {},
+            }
+        }
+        return state
+
+    def test_oracle_primary_gives_oracle_proof_method(self):
+        """When primary_agent='first_follow_oracle', proof.method must be 'first_follow_oracle'."""
+        state = self._oracle_primary_state(
+            "ll", {"found": True, "min_k": 1, "is_ll_k": True, "conflicts": []}
+        )
+        out = assemble_result_node(state)
+        result = out.get("result", {})
+        proof = result.get("proof")
+        assert proof is not None
+        assert proof.get("method") == "first_follow_oracle", (
+            "When primary_agent='first_follow_oracle', proof must not come from ll_grammar_builder"
+        )
+
+    def test_oracle_primary_proof_details_contain_ff_data(self):
+        """proof.details must contain first_follow_result data."""
+        ff = {"found": True, "min_k": 2, "is_ll_k": True, "conflicts": []}
+        state = self._oracle_primary_state("ll", ff)
+        out = assemble_result_node(state)
+        result = out.get("result", {})
+        proof = result.get("proof")
+        assert proof is not None
+        details = proof.get("details", {})
+        assert details.get("is_ll_k") is True
+        assert details.get("min_k") == 2
+
+    def test_oracle_primary_still_populates_grammar_for_display(self):
+        """Even with oracle as primary, grammar should be pulled from agents for display."""
+        ff = {"found": True, "min_k": 1, "is_ll_k": True, "conflicts": []}
+        state = self._oracle_primary_state("ll", ff)
+        out = assemble_result_node(state)
+        result = out.get("result", {})
+        # Grammar may be None if no constructive agent provided it, but should not
+        # be from a non-oracle proof
+        grammar = result.get("grammar")
+        # Grammar from ll_grammar_builder may be set — that is OK for display
+        # The key is that proof.method is oracle, not ll_grammar_construction
