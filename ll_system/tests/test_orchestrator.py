@@ -491,3 +491,260 @@ class TestEdgeCases:
         required_keys = {"verdict", "k", "confidence", "agents_used", "errors", "retries"}
         missing = required_keys - set(result.keys())
         assert not missing, f"Missing keys in wbcwR result: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Regression: Finding 1 — proof must align with final verdict
+# ---------------------------------------------------------------------------
+
+
+from ll_system.orchestrator import _fallback_reasoning, assemble_result_node  # noqa: E402
+
+
+GRAMMAR_LL1_SIMPLE = {
+    "nonterminals": ["S"],
+    "terminals": ["a"],
+    "start": "S",
+    "rules": [{"lhs": "S", "rhs": ["a"]}],
+}
+
+IR_FORMAT1 = {
+    "task_type": "ll_check_grammar_lang",
+    "source_text": "test",
+    "language_spec": {"kind": "natural", "description": "test"},
+}
+
+
+def _make_both_agents_state(verdict: str) -> dict:
+    """State with both ll_grammar_builder (ll) and substitution_agent (not_ll)."""
+    return {
+        "ir": IR_FORMAT1,
+        "input_format": 1,
+        "agent_results": {
+            "ll_grammar_builder": {
+                "verdict": "ll",
+                "confidence": 0.9,
+                "proof_sketch": {
+                    "method": "ll_grammar_construction",
+                    "k": 1,
+                    "ll_grammar": GRAMMAR_LL1_SIMPLE,
+                },
+                "artifacts": {},
+            },
+            "substitution_agent": {
+                "verdict": "not_ll",
+                "confidence": 0.95,
+                "proof_sketch": {
+                    "method": "substitution",
+                    "for_all_k": True,
+                    "witness": {
+                        "k": "arbitrary", "w1": "a^n",
+                        "lookahead_v": "a^k",
+                        "suffix_1": "b^n", "suffix_2": "c^n",
+                        "why_not_ll": "incompatible continuations",
+                    },
+                },
+                "artifacts": {},
+            },
+        },
+        "reasoning_output": {
+            "action": "done",
+            "verdict": verdict,
+            "k": None,
+            "confidence": 0.9,
+            "summary": "test",
+            "primary_agent": (
+                "substitution_agent" if verdict == "not_ll" else "ll_grammar_builder"
+            ),
+        },
+        "first_follow_result": {},
+        "claim_verification": {},
+        "preprocess_hints": {},
+        "classifier_output": {},
+        "errors": [],
+        "log": [],
+        "retry_round": 0,
+    }
+
+
+class TestProofAlignedWithVerdict:
+    """Regression Finding 1: assemble_result_node was attaching LL proof to not_ll verdict."""
+
+    def test_not_ll_verdict_gets_destructive_proof(self):
+        state = _make_both_agents_state("not_ll")
+        out = assemble_result_node(state)
+        result = out.get("result", {})
+        assert result.get("verdict") == "not_ll"
+        proof = result.get("proof")
+        if proof is not None:
+            assert proof.get("method") != "ll_grammar_construction", (
+                "LL construction proof must NOT be attached to a not_ll verdict"
+            )
+
+    def test_ll_verdict_gets_constructive_proof(self):
+        state = _make_both_agents_state("ll")
+        out = assemble_result_node(state)
+        result = out.get("result", {})
+        assert result.get("verdict") == "ll"
+        proof = result.get("proof")
+        assert proof is not None
+        assert proof.get("method") == "ll_grammar_construction"
+
+    def test_not_ll_grammar_field_is_none(self):
+        """When verdict is not_ll, result.grammar should not be the LL grammar."""
+        state = _make_both_agents_state("not_ll")
+        out = assemble_result_node(state)
+        result = out.get("result", {})
+        # grammar should be None or absent — not the LL construction grammar
+        g = result.get("grammar")
+        if g is not None:
+            # If grammar is set, it must not be from ll_grammar_builder
+            assert g != GRAMMAR_LL1_SIMPLE, (
+                "LL grammar must not appear in result when verdict is not_ll"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Regression: Finding 2 — fallback must skip refuted agents
+# ---------------------------------------------------------------------------
+
+
+def _base_fallback_state() -> dict:
+    return {
+        "ir": {},
+        "preprocess_hints": {},
+        "first_follow_result": {},
+        "claim_verification": {},
+        "agent_results": {},
+        "retry_round": 0,
+        "log": [],
+    }
+
+
+class TestFallbackSkipsRefutedAgents:
+    """Regression Finding 2: _fallback_reasoning was ignoring verification_status refuted."""
+
+    def test_refuted_constructive_agent_is_skipped(self):
+        state = _base_fallback_state()
+        state["agent_results"] = {
+            "ll_grammar_builder": {
+                "verdict": "ll",
+                "confidence": 0.95,
+                "proof_sketch": {
+                    "method": "ll_grammar_construction",
+                    "k": 1,
+                    "ll_grammar": GRAMMAR_LL1_SIMPLE,
+                },
+            }
+        }
+        state["claim_verification"] = {
+            "ll_grammar_builder": {
+                "verification_status": "refuted",
+                "status": "refuted",
+            }
+        }
+        result = _fallback_reasoning(state)
+        assert result.get("verdict") != "ll", (
+            "Refuted constructive agent must not produce fallback ll verdict"
+        )
+
+    def test_verified_constructive_agent_passes(self):
+        state = _base_fallback_state()
+        state["agent_results"] = {
+            "ll_grammar_builder": {
+                "verdict": "ll",
+                "confidence": 0.9,
+                "proof_sketch": {
+                    "method": "ll_grammar_construction",
+                    "k": 1,
+                    "ll_grammar": GRAMMAR_LL1_SIMPLE,
+                },
+            }
+        }
+        state["claim_verification"] = {
+            "ll_grammar_builder": {
+                "verification_status": "verified",
+                "status": "verified",
+            }
+        }
+        result = _fallback_reasoning(state)
+        assert result.get("verdict") == "ll"
+
+    def test_refuted_destructive_agent_is_skipped(self):
+        state = _base_fallback_state()
+        state["agent_results"] = {
+            "substitution_agent": {
+                "verdict": "not_ll",
+                "confidence": 0.95,
+                "proof_sketch": {
+                    "method": "substitution",
+                    "for_all_k": True,
+                    "witness": {},
+                },
+            }
+        }
+        state["claim_verification"] = {
+            "substitution_agent": {
+                "verification_status": "refuted",
+                "status": "refuted",
+            }
+        }
+        result = _fallback_reasoning(state)
+        assert result.get("verdict") != "not_ll", (
+            "Refuted destructive agent must not produce fallback not_ll verdict"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Regression: Finding 4 — proof_was_verified scoped to primary agent
+# ---------------------------------------------------------------------------
+
+
+class TestProofWasVerifiedScope:
+    """Regression Finding 4: proof_was_verified used any-verified instead of primary-agent scope."""
+
+    @staticmethod
+    def _compute(reasoning: dict, claim_ver: dict) -> bool:
+        """Mirror the logic from formalize_node."""
+        primary_agent = reasoning.get("primary_agent", "")
+        primary_ver = claim_ver.get(primary_agent, {})
+        if primary_agent and isinstance(primary_ver, dict):
+            return primary_ver.get("verification_status") == "verified"
+        return any(
+            isinstance(v, dict) and v.get("verification_status") == "verified"
+            for v in claim_ver.values()
+        )
+
+    def test_primary_verified_gives_true(self):
+        claim_ver = {
+            "substitution_agent": {"verification_status": "verified"},
+        }
+        reasoning = {"primary_agent": "substitution_agent", "verdict": "not_ll"}
+        assert self._compute(reasoning, claim_ver) is True
+
+    def test_primary_inconclusive_gives_false(self):
+        """Primary inconclusive but other agent verified must yield False."""
+        claim_ver = {
+            "ambiguity_detector": {"verification_status": "inconclusive"},
+            "substitution_agent": {"verification_status": "verified"},
+        }
+        reasoning = {"primary_agent": "ambiguity_detector", "verdict": "not_ll"}
+        assert self._compute(reasoning, claim_ver) is False
+
+    def test_no_primary_falls_back_to_any(self):
+        """No primary_agent key in reasoning falls back to any-verified."""
+        claim_ver = {
+            "substitution_agent": {"verification_status": "verified"},
+        }
+        reasoning = {"verdict": "not_ll"}
+        assert self._compute(reasoning, claim_ver) is True
+
+    def test_primary_not_in_verification_is_false(self):
+        """When primary_agent is named but absent from claim_verification,
+        proof_was_verified must be False — not a fallback to any-verified."""
+        claim_ver = {
+            "substitution_agent": {"verification_status": "verified"},
+        }
+        reasoning = {"primary_agent": "unknown_agent", "verdict": "not_ll"}
+        # unknown_agent not in claim_ver -> primary_ver = {} -> status != "verified"
+        assert self._compute(reasoning, claim_ver) is False

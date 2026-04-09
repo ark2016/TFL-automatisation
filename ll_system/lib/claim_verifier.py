@@ -441,6 +441,161 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Additional method verifiers
+# ---------------------------------------------------------------------------
+
+def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
+    """Verify a prefix_classes method claim (not-LL proof).
+
+    Checks (structural):
+    1. method == "prefix_classes"
+    2. for_all_k field present
+    3. prefix_family present with non-empty description/parametrization
+    4. distinguishability_argument present with why_distinguishable
+
+    proof_sketch fields expected:
+    {
+        "method": "prefix_classes",
+        "for_all_k": bool,
+        "prefix_family": {"parametrization": str, "description": str, ...},
+        "distinguishability_argument": {"why_distinguishable": str, ...},
+        "conclusion": str
+    }
+    """
+    agent = "prefix_classes_agent"
+    checks_passed = 0
+    checks_total = 0
+    issues: list[str] = []
+    details: dict = {}
+
+    # Check 1: method
+    checks_total += 1
+    if proof_sketch.get("method") == "prefix_classes":
+        checks_passed += 1
+    else:
+        issues.append(f"Expected method='prefix_classes', got {proof_sketch.get('method')!r}")
+
+    # Check 2: for_all_k
+    checks_total += 1
+    if "for_all_k" in proof_sketch:
+        checks_passed += 1
+    else:
+        issues.append("Missing 'for_all_k' field")
+
+    # Check 3: prefix_family with description
+    checks_total += 1
+    pf = proof_sketch.get("prefix_family")
+    if isinstance(pf, dict) and (pf.get("description") or pf.get("parametrization")):
+        checks_passed += 1
+        details["prefix_family"] = pf
+    else:
+        issues.append("Missing or empty 'prefix_family' (need 'description' or 'parametrization')")
+
+    # Check 4: distinguishability_argument with why_distinguishable
+    checks_total += 1
+    da = proof_sketch.get("distinguishability_argument")
+    why = (da or {}).get("why_distinguishable", "") if isinstance(da, dict) else ""
+    if isinstance(da, dict) and why and len(why.strip()) > 0:
+        checks_passed += 1
+        details["distinguishability_argument"] = da
+    else:
+        issues.append(
+            "Missing 'distinguishability_argument' or empty 'why_distinguishable'"
+        )
+
+    status = "verified" if not issues else "inconclusive"
+    return _make_result(
+        agent=agent,
+        status=status,
+        checks_passed=checks_passed,
+        checks_total=checks_total,
+        issues=issues,
+        details=details,
+    )
+
+
+def verify_essential_ambiguity_claim(proof_sketch: dict, ir: dict) -> dict:
+    """Verify an essential_ambiguity method claim (not-LL proof).
+
+    Checks (structural):
+    1. method == "essential_ambiguity"
+    2. essentially_ambiguous == True
+    3. witness_word non-empty
+    4. two_parse_structures is a list with >= 2 entries
+    5. why_every_grammar_ambiguous non-empty
+
+    proof_sketch fields expected:
+    {
+        "method": "essential_ambiguity",
+        "essentially_ambiguous": bool,
+        "witness_word": str,
+        "two_parse_structures": [{"structure_id":1, ...}, {"structure_id":2, ...}],
+        "why_every_grammar_ambiguous": str,
+        "proof_explanation": str
+    }
+    """
+    agent = "ambiguity_detector"
+    checks_passed = 0
+    checks_total = 0
+    issues: list[str] = []
+    details: dict = {}
+
+    # Check 1: method
+    checks_total += 1
+    if proof_sketch.get("method") == "essential_ambiguity":
+        checks_passed += 1
+    else:
+        issues.append(f"Expected method='essential_ambiguity', got {proof_sketch.get('method')!r}")
+
+    # Check 2: essentially_ambiguous flag
+    checks_total += 1
+    if proof_sketch.get("essentially_ambiguous") is True:
+        checks_passed += 1
+    else:
+        issues.append(
+            f"'essentially_ambiguous' must be True, got {proof_sketch.get('essentially_ambiguous')!r}"
+        )
+
+    # Check 3: witness_word
+    checks_total += 1
+    witness_word = proof_sketch.get("witness_word", "")
+    if witness_word and isinstance(witness_word, str) and len(witness_word.strip()) > 0:
+        checks_passed += 1
+        details["witness_word"] = witness_word
+    else:
+        issues.append("'witness_word' is missing or empty")
+
+    # Check 4: two_parse_structures with >= 2 entries
+    checks_total += 1
+    two_ps = proof_sketch.get("two_parse_structures")
+    if isinstance(two_ps, list) and len(two_ps) >= 2:
+        checks_passed += 1
+        details["two_parse_structures"] = two_ps
+    else:
+        issues.append(
+            f"'two_parse_structures' must have >= 2 entries, got: {two_ps!r}"
+        )
+
+    # Check 5: why_every_grammar_ambiguous
+    checks_total += 1
+    why = proof_sketch.get("why_every_grammar_ambiguous", "")
+    if why and isinstance(why, str) and len(why.strip()) > 0:
+        checks_passed += 1
+    else:
+        issues.append("'why_every_grammar_ambiguous' is missing or empty")
+
+    status = "verified" if not issues else "inconclusive"
+    return _make_result(
+        agent=agent,
+        status=status,
+        checks_passed=checks_passed,
+        checks_total=checks_total,
+        issues=issues,
+        details=details,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public dispatcher
 # ---------------------------------------------------------------------------
 
@@ -452,6 +607,8 @@ def verify_ll_claim(agent_result: dict, ir: dict) -> dict:
     - "substitution" → verify_substitution_claim
     - "grammar_transformation" → verify_grammar_transformation_claim
     - "marker_detection" → verify_marker_claim
+    - "prefix_classes" → verify_prefix_classes_claim
+    - "essential_ambiguity" → verify_essential_ambiguity_claim
     - anything else → inconclusive
 
     Returns standard result dict (same structure as _make_result).
@@ -491,6 +648,8 @@ def verify_ll_claim(agent_result: dict, ir: dict) -> dict:
         "substitution": verify_substitution_claim,
         "grammar_transformation": verify_grammar_transformation_claim,
         "marker_detection": verify_marker_claim,
+        "prefix_classes": verify_prefix_classes_claim,
+        "essential_ambiguity": verify_essential_ambiguity_claim,
     }
     verifier = dispatch.get(method)
     if verifier:

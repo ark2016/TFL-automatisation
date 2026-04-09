@@ -447,16 +447,21 @@ def render_markdown(result: dict) -> str:
                 sections.append(conflicts_md)
                 sections.append("")
 
-    # Claim verification
+    # Claim verification — per-agent map: {agent_name: {verification_status, issues, ...}}
     claim_ver = result.get("claim_verification")
     if isinstance(claim_ver, dict) and claim_ver:
         sections.append("## Проверка утверждений\n")
-        claim_verdict = claim_ver.get("verdict", "")
-        claim_note = claim_ver.get("note") or claim_ver.get("explanation", "")
-        if claim_verdict:
-            sections.append(f"- Статус: **{claim_verdict}**")
-        if claim_note:
-            sections.append(f"- {claim_note}")
+        for agent_name, vdata in claim_ver.items():
+            if not isinstance(vdata, dict):
+                continue
+            vstatus = vdata.get("verification_status") or vdata.get("status", "?")
+            vissues = vdata.get("issues") or []
+            checks_ok = vdata.get("checks_passed", "?")
+            checks_tot = vdata.get("checks_total", "?")
+            line = f"- **{agent_name}**: {vstatus} ({checks_ok}/{checks_tot} проверок)"
+            if vissues:
+                line += " — " + "; ".join(str(i) for i in vissues[:2])
+            sections.append(line)
         sections.append("")
 
     # Reasoning summary (formalizer's full proof or reasoning agent summary)
@@ -871,13 +876,28 @@ def render_html(result: dict) -> str:
 
     claim_ver = result.get("claim_verification")
     if isinstance(claim_ver, dict) and claim_ver:
-        details_parts.append('<div class="ll-p"><strong>Проверка утверждений:</strong></div>')
-        claim_verdict = claim_ver.get("verdict", "")
-        claim_note = claim_ver.get("note") or claim_ver.get("explanation", "")
-        if claim_verdict:
-            details_parts.append(f'<div class="ll-p">Статус: <code>{_esc(claim_verdict)}</code></div>')
-        if claim_note:
-            details_parts.append(f'<div class="ll-p">{_esc(claim_note)}</div>')
+        details_parts.append('<div class="ll-p"><strong>Проверка утверждений:</strong></div><ul>')
+        for agent_name, vdata in claim_ver.items():
+            if not isinstance(vdata, dict):
+                continue
+            vstatus = vdata.get("verification_status") or vdata.get("status", "?")
+            checks_ok = vdata.get("checks_passed", "?")
+            checks_tot = vdata.get("checks_total", "?")
+            vissues = vdata.get("issues") or []
+            status_color = {
+                "verified": "#27ae60",
+                "refuted": "#e74c3c",
+                "inconclusive": "#f39c12",
+            }.get(vstatus, "#7f8c8d")
+            item = (
+                f'<span class="ll-mono" style="font-weight:600">{_esc(agent_name)}</span>: '
+                f'<span style="color:{status_color};font-weight:600">{_esc(vstatus)}</span>'
+                f' ({_esc(str(checks_ok))}/{_esc(str(checks_tot))} проверок)'
+            )
+            if vissues:
+                item += f' — <span style="color:#7f8c8d;font-size:12px">{_esc("; ".join(str(i) for i in vissues[:2]))}</span>'
+            details_parts.append(f'<li>{item}</li>')
+        details_parts.append('</ul>')
 
     spec_outputs = result.get("specialist_outputs") or {}
     if isinstance(spec_outputs, dict) and spec_outputs:

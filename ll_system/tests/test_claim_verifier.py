@@ -8,6 +8,8 @@ from ll_system.lib.claim_verifier import (
     verify_substitution_claim,
     verify_grammar_transformation_claim,
     verify_marker_claim,
+    verify_prefix_classes_claim,
+    verify_essential_ambiguity_claim,
     _make_result,
 )
 
@@ -700,3 +702,160 @@ class TestMarkerPromptFieldNames:
         }
         result = verify_marker_claim(prompt_payload, IR_SIMPLE)
         assert result["checks_passed"] >= 2, result["issues"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: Finding 3 — prefix_classes and essential_ambiguity verifiers
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyPrefixClassesClaim:
+    """Regression: prefix_classes_agent was falling through to 'No verifier' inconclusive."""
+
+    VALID_PS = {
+        "method": "prefix_classes",
+        "for_all_k": True,
+        "prefix_family": {
+            "parametrization": "u_n = a^{n+k}",
+            "parameter_range": "n >= 1",
+            "description": "Family of prefixes u_n = a^{n+k}",
+        },
+        "distinguishability_argument": {
+            "fixed_k": "arbitrary k >= 1",
+            "lookahead_v": "a^k",
+            "why_distinguishable": "u_n and u_m require different completions for n != m",
+        },
+        "conclusion": "Infinitely many prefix classes for each k — not LL(k)",
+    }
+
+    def test_valid_claim_verified(self):
+        result = verify_prefix_classes_claim(self.VALID_PS, IR_SIMPLE)
+        assert result["verification_status"] == "verified", result["issues"]
+
+    def test_checks_passed_all_four(self):
+        result = verify_prefix_classes_claim(self.VALID_PS, IR_SIMPLE)
+        assert result["checks_passed"] == 4
+
+    def test_missing_for_all_k(self):
+        ps = {**self.VALID_PS}
+        del ps["for_all_k"]
+        result = verify_prefix_classes_claim(ps, IR_SIMPLE)
+        assert any("for_all_k" in i for i in result["issues"])
+
+    def test_missing_prefix_family(self):
+        ps = {**self.VALID_PS}
+        del ps["prefix_family"]
+        result = verify_prefix_classes_claim(ps, IR_SIMPLE)
+        assert any("prefix_family" in i for i in result["issues"])
+
+    def test_empty_why_distinguishable(self):
+        ps = {**self.VALID_PS, "distinguishability_argument": {"why_distinguishable": ""}}
+        result = verify_prefix_classes_claim(ps, IR_SIMPLE)
+        assert any("why_distinguishable" in i for i in result["issues"])
+
+    def test_dispatched_via_verify_ll_claim(self):
+        """Regression: verify_ll_claim was returning 'No verifier for method prefix_classes'."""
+        agent_result = {
+            "agent_name": "prefix_classes_agent",
+            "verdict": "not_ll",
+            "confidence": 0.88,
+            "proof_sketch": self.VALID_PS,
+            "artifacts": {},
+        }
+        result = verify_ll_claim(agent_result, IR_SIMPLE)
+        assert "No verifier" not in " ".join(result.get("issues", []))
+        assert result["verification_status"] == "verified"
+
+    def test_prompt_shaped_payload(self):
+        """End-to-end: payload exactly as prompt outputs must be verified."""
+        ps = {
+            "method": "prefix_classes",
+            "for_all_k": True,
+            "prefix_family": {
+                "parametrization": "u_n = a^{n+k} для n >= 1 (при фиксированном k)",
+                "parameter_range": "n >= 1, любое n",
+                "description": "Рассматриваем семейство префиксов u_n = a^{n+k}",
+            },
+            "distinguishability_argument": {
+                "fixed_k": "arbitrary k >= 1",
+                "lookahead_v": "a^k",
+                "for_n": "n (arbitrary > 0)",
+                "for_m": "m != n",
+                "completion_for_n": "a^{n+k}",
+                "completion_for_m": "a^{m+k}",
+                "word_un_v_sn": "a^{2(n+k)} in L",
+                "word_um_v_sn": "a^{n+k+m+k} — may differ",
+                "why_distinguishable": "u_n и u_m требуют разных продолжений: "
+                                       "a^{n+k} ∈ L(u_n), но a^{n+k} ∉ L(u_m).",
+            },
+            "conclusion": "Для каждого k классов бесконечно много → L не LL(k).",
+            "proof_explanation": "Полное доказательство на русском.",
+        }
+        result = verify_prefix_classes_claim(ps, IR_SIMPLE)
+        assert result["verification_status"] == "verified", result["issues"]
+
+
+class TestVerifyEssentialAmbiguityClaim:
+    """Regression: ambiguity_detector was falling through to 'No verifier' inconclusive."""
+
+    VALID_PS = {
+        "method": "essential_ambiguity",
+        "essentially_ambiguous": True,
+        "witness_word": "a^n b^n c^n",
+        "two_parse_structures": [
+            {
+                "structure_id": 1,
+                "description": "i=j branch",
+                "derivation_sketch": "S => A c^n => a^n b^n c^n",
+            },
+            {
+                "structure_id": 2,
+                "description": "j=k branch",
+                "derivation_sketch": "S => a^n B => a^n b^n c^n",
+            },
+        ],
+        "why_every_grammar_ambiguous": "Every grammar generates two parse trees for the witness word.",
+        "proof_explanation": "Full proof.",
+        "ogden_used": False,
+    }
+
+    def test_valid_claim_verified(self):
+        result = verify_essential_ambiguity_claim(self.VALID_PS, IR_SIMPLE)
+        assert result["verification_status"] == "verified", result["issues"]
+
+    def test_checks_passed_all_five(self):
+        result = verify_essential_ambiguity_claim(self.VALID_PS, IR_SIMPLE)
+        assert result["checks_passed"] == 5
+
+    def test_essentially_ambiguous_false_fails(self):
+        ps = {**self.VALID_PS, "essentially_ambiguous": False}
+        result = verify_essential_ambiguity_claim(ps, IR_SIMPLE)
+        assert any("essentially_ambiguous" in i for i in result["issues"])
+
+    def test_empty_witness_word_fails(self):
+        ps = {**self.VALID_PS, "witness_word": ""}
+        result = verify_essential_ambiguity_claim(ps, IR_SIMPLE)
+        assert any("witness_word" in i for i in result["issues"])
+
+    def test_only_one_parse_structure_fails(self):
+        ps = {**self.VALID_PS, "two_parse_structures": [self.VALID_PS["two_parse_structures"][0]]}
+        result = verify_essential_ambiguity_claim(ps, IR_SIMPLE)
+        assert any("two_parse_structures" in i or ">= 2" in i for i in result["issues"])
+
+    def test_empty_why_fails(self):
+        ps = {**self.VALID_PS, "why_every_grammar_ambiguous": ""}
+        result = verify_essential_ambiguity_claim(ps, IR_SIMPLE)
+        assert any("why_every_grammar_ambiguous" in i for i in result["issues"])
+
+    def test_dispatched_via_verify_ll_claim(self):
+        """Regression: verify_ll_claim was returning 'No verifier for method essential_ambiguity'."""
+        agent_result = {
+            "agent_name": "ambiguity_detector",
+            "verdict": "not_ll",
+            "confidence": 0.85,
+            "proof_sketch": self.VALID_PS,
+            "artifacts": {},
+        }
+        result = verify_ll_claim(agent_result, IR_SIMPLE)
+        assert "No verifier" not in " ".join(result.get("issues", []))
+        assert result["verification_status"] == "verified"

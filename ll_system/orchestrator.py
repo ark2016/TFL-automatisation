@@ -854,8 +854,12 @@ def _fallback_reasoning(state: PipelineState) -> dict:
             "retry_plan": None,
         }
 
-    # Check if any constructive agent returned a valid LL grammar
+    # Check if any constructive agent returned a valid LL grammar.
+    # Skip agents whose claim was refuted by the verifier.
     for agent_name in _CONSTRUCTIVE_AGENTS:
+        v_status = verifications.get(agent_name, {}).get("verification_status")
+        if v_status == "refuted":
+            continue
         out = agent_results.get(agent_name, {})
         if isinstance(out, dict) and _normalize_verdict(out.get("verdict")) == "ll":
             conf = _clamp_confidence(out.get("confidence", 0.5))
@@ -869,8 +873,12 @@ def _fallback_reasoning(state: PipelineState) -> dict:
                     "retry_plan": None,
                 }
 
-    # Check destructive agents
+    # Check destructive agents.
+    # Skip agents whose claim was refuted by the verifier.
     for agent_name in _DESTRUCTIVE_AGENTS:
+        v_status = verifications.get(agent_name, {}).get("verification_status")
+        if v_status == "refuted":
+            continue
         out = agent_results.get(agent_name, {})
         if isinstance(out, dict) and _normalize_verdict(out.get("verdict")) == "not_ll":
             conf = _clamp_confidence(out.get("confidence", 0.5))
@@ -969,12 +977,20 @@ def formalize_node(state: PipelineState) -> dict:
         return {}
 
     agent_results = state.get("agent_results", {})
-    # Compute proof_was_verified: at least one specialist claim was verified
+    # Compute proof_was_verified based on the primary agent chosen by reasoning.
+    # If the primary agent's claim was verified, the proof is verified.
+    # Fall back to any-verified only when primary_agent is not identified.
     claim_verification = state.get("claim_verification", {})
-    proof_was_verified = any(
-        isinstance(v, dict) and v.get("verification_status") == "verified"
-        for v in claim_verification.values()
-    )
+    primary_agent = reasoning.get("primary_agent", "")
+    primary_ver = claim_verification.get(primary_agent, {})
+    if primary_agent and isinstance(primary_ver, dict):
+        proof_was_verified = primary_ver.get("verification_status") == "verified"
+    else:
+        # No primary agent identified — fall back conservatively to all-verified check
+        proof_was_verified = any(
+            isinstance(v, dict) and v.get("verification_status") == "verified"
+            for v in claim_verification.values()
+        )
     formalizer_input = {
         "ir": state["ir"],
         "reasoning_output": reasoning,
@@ -1060,30 +1076,32 @@ def assemble_result_node(state: PipelineState) -> dict:
     verdict = _normalize_verdict(raw_verdict) or "uncertain"
     confidence = _clamp_confidence(reasoning.get("confidence", 0.0))
 
-    # Find best proof from constructive agents
+    # Find best proof aligned with the final verdict.
+    # For "ll" verdict: prefer constructive agents; for "not_ll": only use destructive.
     proof = None
     grammar = None
-    for agent_name in _CONSTRUCTIVE_AGENTS:
-        out = agent_results.get(agent_name, {})
-        if isinstance(out, dict):
-            ps = out.get("proof_sketch") or {}
-            g = ps.get("grammar") or ps.get("ll_grammar")
-            if g:
-                grammar = g
-                proof = {
-                    "method": ps.get("method", "ll_grammar_construction"),
-                    "details": ps,
-                }
-                break
-            # Also look for grammar at top level or in artifacts
-            if not grammar:
-                grammar = (
-                    out.get("grammar")
-                    or out.get("artifacts", {}).get("ll_grammar")
-                )
+    if verdict != "not_ll":
+        for agent_name in _CONSTRUCTIVE_AGENTS:
+            out = agent_results.get(agent_name, {})
+            if isinstance(out, dict):
+                ps = out.get("proof_sketch") or {}
+                g = ps.get("grammar") or ps.get("ll_grammar")
+                if g:
+                    grammar = g
+                    proof = {
+                        "method": ps.get("method", "ll_grammar_construction"),
+                        "details": ps,
+                    }
+                    break
+                # Also look for grammar at top level or in artifacts
+                if not grammar:
+                    grammar = (
+                        out.get("grammar")
+                        or out.get("artifacts", {}).get("ll_grammar")
+                    )
 
-    # For not_ll, get destructive proof
-    if verdict == "not_ll" and proof is None:
+    # For not_ll verdict: always use destructive proof (overrides any constructive)
+    if verdict == "not_ll":
         for agent_name in _DESTRUCTIVE_AGENTS:
             out = agent_results.get(agent_name, {})
             if isinstance(out, dict) and _normalize_verdict(out.get("verdict")) == "not_ll":
