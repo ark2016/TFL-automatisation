@@ -1,0 +1,214 @@
+{
+  "task_type": "ll_check_language",
+  "source_text": "L = {aⁿbⁿ | n≥0} ∪ {aⁿcⁿ | n≥0}. Is this language LL(k) for some k?",
+  "verdict": "not_ll",
+  "k": null,
+  "confidence": 0.95,
+  "proof": {
+    "method": "substitution",
+    "details": {
+      "method": "substitution",
+      "for_all_k": true,
+      "witness": {
+        "k": "k (произвольное)",
+        "w1": "a^{n+k} (n произвольное, n ≥ 1)",
+        "lookahead": "b^k",
+        "suffix_1": "b^n ∈ {aⁿbⁿ} после a^{n+k}b^k = a^{n+k}b^{n+k}",
+        "suffix_2": "c^n",
+        "substitution_result": "a^{n+k} b^k c^n",
+        "why_not_in_L": "Слово a^{n+k}b^k c^n не принадлежит ни {aⁿbⁿ}, ни {aⁿcⁿ}: в {aⁿbⁿ} нужно n=n+k и равное число b, в {aⁿcⁿ} нет символов b."
+      }
+    }
+  },
+  "grammar": null,
+  "first_follow_result": {
+    "is_ll_k": null,
+    "reason": "no grammar available"
+  },
+  "claim_verification": {
+    "ll_grammar_builder": {
+      "agent": "ll_grammar_builder",
+      "verification_status": "inconclusive",
+      "checks_passed": 0,
+      "checks_total": 0,
+      "issues": [
+        "Agent returned uncertain verdict"
+      ],
+      "details": {}
+    },
+    "marker_analyzer": {
+      "agent": "marker_analyzer",
+      "verification_status": "inconclusive",
+      "checks_passed": 0,
+      "checks_total": 0,
+      "issues": [
+        "Agent returned uncertain verdict"
+      ],
+      "details": {}
+    },
+    "grammar_transformer": {
+      "agent": "grammar_transformer",
+      "verification_status": "inconclusive",
+      "checks_passed": 0,
+      "checks_total": 0,
+      "issues": [
+        "Agent returned uncertain verdict"
+      ],
+      "details": {}
+    },
+    "substitution_agent": {
+      "agent": "substitution_agent",
+      "verification_status": "verified",
+      "checks_passed": 6,
+      "checks_total": 6,
+      "issues": [],
+      "details": {
+        "witness": {
+          "k": "k (произвольное)",
+          "w1": "a^{n+k} (n произвольное, n ≥ 1)",
+          "lookahead": "b^k",
+          "suffix_1": "b^n ∈ {aⁿbⁿ} после a^{n+k}b^k = a^{n+k}b^{n+k}",
+          "suffix_2": "c^n",
+          "substitution_result": "a^{n+k} b^k c^n",
+          "why_not_in_L": "Слово a^{n+k}b^k c^n не принадлежит ни {aⁿbⁿ}, ни {aⁿcⁿ}: в {aⁿbⁿ} нужно n=n+k и равное число b, в {aⁿcⁿ} нет символов b."
+        }
+      }
+    },
+    "ambiguity_detector": {
+      "agent": "ambiguity_detector",
+      "verification_status": "inconclusive",
+      "checks_passed": 0,
+      "checks_total": 0,
+      "issues": [
+        "Agent returned uncertain verdict"
+      ],
+      "details": {}
+    },
+    "prefix_classes_agent": {
+      "agent": "prefix_classes_agent",
+      "verification_status": "inconclusive",
+      "checks_passed": 0,
+      "checks_total": 0,
+      "issues": [
+        "No verifier for method 'prefix_classes'"
+      ],
+      "details": {}
+    }
+  },
+  "agents_used": [
+    "ambiguity_detector",
+    "formalizer",
+    "grammar_transformer",
+    "ll_grammar_builder",
+    "marker_analyzer",
+    "prefix_classes_agent",
+    "substitution_agent"
+  ],
+  "agents_failed": [],
+  "specialist_outputs": {
+    "ll_grammar_builder": {
+      "agent_name": "ll_grammar_builder",
+      "verdict": "uncertain",
+      "confidence": 0.05,
+      "proof_sketch": null,
+      "artifacts": {
+        "ll_grammar": null,
+        "first_follow_table": null,
+        "counterexample_words": []
+      }
+    },
+    "marker_analyzer": {
+      "agent_name": "marker_analyzer",
+      "verdict": "uncertain",
+      "confidence": 0.05,
+      "proof_sketch": null,
+      "artifacts": {
+        "ll_grammar": null,
+        "first_follow_table": null,
+        "counterexample_words": []
+      }
+    },
+    "grammar_transformer": {
+      "agent_name": "grammar_transformer",
+      "verdict": "uncertain",
+      "confidence": 0.1,
+      "proof_sketch": null,
+      "artifacts": {
+        "ll_grammar": null,
+        "first_follow_table": null,
+        "counterexample_words": []
+      }
+    },
+    "substitution_agent": {
+      "agent_name": "substitution_agent",
+      "verdict": "not_ll",
+      "confidence": 0.95,
+      "proof_sketch": {
+        "method": "substitution",
+        "for_all_k": true,
+        "witness": {
+          "k": "k (произвольное)",
+          "w1": "a^{n+k} (n произвольное, n ≥ 1)",
+          "lookahead": "b^k",
+          "suffix_1": "b^n ∈ {aⁿbⁿ} после a^{n+k}b^k = a^{n+k}b^{n+k}",
+          "suffix_2": "c^n",
+          "substitution_result": "a^{n+k} b^k c^n",
+          "why_not_in_L": "Слово a^{n+k}b^k c^n не принадлежит ни {aⁿbⁿ}, ни {aⁿcⁿ}: в {aⁿbⁿ} нужно n=n+k и равное число b, в {aⁿcⁿ} нет символов b."
+        }
+      },
+      "artifacts": {
+        "ll_grammar": null,
+        "first_follow_table": null,
+        "counterexample_words": [
+          "a^{n+k}b^k c^n"
+        ]
+      }
+    },
+    "ambiguity_detector": {
+      "agent_name": "ambiguity_detector",
+      "verdict": "uncertain",
+      "confidence": 0.3,
+      "proof_sketch": null,
+      "artifacts": {
+        "ll_grammar": null,
+        "first_follow_table": null,
+        "counterexample_words": []
+      }
+    },
+    "prefix_classes_agent": {
+      "agent_name": "prefix_classes_agent",
+      "verdict": "not_ll",
+      "confidence": 0.75,
+      "proof_sketch": {
+        "method": "prefix_classes",
+        "for_all_k": true,
+        "description": "Для каждого k существуют бесконечно много попарно k-различимых префиксов: a, aa, aaa, ... Префикс aⁿ отличается от aᵐ (n≠m), так как после aⁿ необходимо читать bⁿ или cⁿ, а после aᵐ — bᵐ или cᵐ.",
+        "distinguishable_prefixes": [
+          "a",
+          "aa",
+          "aaa",
+          "..."
+        ]
+      },
+      "artifacts": {
+        "ll_grammar": null,
+        "first_follow_table": null,
+        "counterexample_words": []
+      }
+    }
+  },
+  "reasoning_output": {
+    "verdict": "not_ll",
+    "k": null,
+    "confidence": 0.95,
+    "summary": "Язык $L = \\{a^n b^n \\mid n \\geq 0\\} \\cup \\{a^n c^n \\mid n \\geq 0\\}$ не является LL(k) ни для какого $k$.",
+    "justification": "Метод подмены (доказан агентом substitution_agent): для произвольного $k$ рассмотрим слова $a^{n+k}b^{n+k}$ и $a^{n+k}c^{n+k}$, оба принадлежащих $L$. После чтения $a^{n+k}$ lookahead равен $b^k$ для первого и $c^k$ для второго. Поскольку lookaheads различны, LL(k)-парсер может их различить. Однако метод подмены показывает, что после чтения $a^{n+k}$ с lookahead $b^k$ парсер должен продолжить $b^n$, но не может принять $c^n$. Это противоречит детерминированности для слов $a^{n+k}b^{n+k}$ и требованию отклонить $a^{n+k}b^k c^n \\notin L$. Prefix classes agent подтверждает: для каждого $k$ существуют бесконечно много k-различимых префиксов.",
+    "primary_method": "substitution",
+    "primary_agent": "substitution_agent",
+    "action": "done",
+    "retry_plan": null
+  },
+  "reasoning_summary": "## Решение\n\n**Задача:** Определить, является ли язык $L = \\{a^n b^n \\mid n \\geq 0\\} \\cup \\{a^n c^n \\mid n \\geq 0\\}$ LL(k)-языком.\n\n**Вердикт:** Язык **не является LL(k) ни для какого $k$**.\n\n### Доказательство (метод подмены)\n\nПредположим, что $L$ является LL(k) для некоторого $k$. Зафиксируем произвольное $n > k$.\n\nРассмотрим два слова:\n- $w_1 = a^{n+k}b^{n+k} \\in L$ (из $\\{a^n b^n\\}$)\n- $w_2 = a^{n+k}c^{n+k} \\in L$ (из $\\{a^n c^n\\}$)\n\nПосле чтения $a^{n+k}$ LL(k)-парсер смотрит на следующие $k$ символов:\n- В $w_1$: lookahead = $b^k$\n- В $w_2$: lookahead = $c^k$\n\nLookaheads различны, поэтому парсер может различить продолжения. Однако рассмотрим:\n- $u = a^{n+k}$, lookahead $v = b^k$, суффикс $s_1 = b^n$ → $uv s_1 = a^{n+k}b^{n+k} \\in L$\n- Подмена: суффикс $s_2 = c^n$ → $uv s_2 = a^{n+k}b^k c^n$\n\nНо $a^{n+k}b^k c^n \\notin L$: это слово не входит в $\\{a^m b^m\\}$ (числа $b$ и $a$ различны при $k > 0$) и не входит в $\\{a^m c^m\\}$ (присутствует $b$). Противоречие с предположением LL(k). $\\square$",
+  "errors": [],
+  "retries": 0
+}

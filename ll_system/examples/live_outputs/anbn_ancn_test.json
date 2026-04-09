@@ -1,0 +1,28 @@
+{
+  "task_type": "ll_check_language",
+  "source_text": "L = {aⁿbⁿ | n≥0} ∪ {aⁿcⁿ | n≥0}. Is this language LL(k) for some k?",
+  "verdict": "uncertain",
+  "k": null,
+  "confidence": 0.0,
+  "proof": null,
+  "grammar": null,
+  "first_follow_result": {
+    "is_ll_k": null,
+    "reason": "no grammar available"
+  },
+  "claim_verification": {},
+  "agents_used": [],
+  "agents_failed": [],
+  "specialist_outputs": {},
+  "reasoning_output": {
+    "action": "done",
+    "verdict": "uncertain",
+    "k": null,
+    "confidence": 0.0,
+    "summary": "Insufficient evidence to determine LL property",
+    "retry_plan": null
+  },
+  "reasoning_summary": "Insufficient evidence to determine LL property",
+  "errors": [],
+  "retries": 2
+}

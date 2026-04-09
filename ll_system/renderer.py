@@ -57,19 +57,52 @@ def _esc_inline(text: str) -> str:
     return s
 
 
-def _render_md_block(text: str) -> str:
-    """Convert a simple Markdown document to HTML.
-
-    Handles: ## / ### headers, **bold**, *italic*, `code`, - bullet lists,
-    blank lines (paragraph breaks), inline $math$ for KaTeX.
-    HTML entities are escaped; $ signs are preserved so KaTeX auto-renders.
-    """
-    if not text or not isinstance(text, str):
+def _render_md_lines(text: str) -> str:
+    """Line-by-line MD→HTML conversion (no display-math handling here)."""
+    if not text:
         return ""
     out: list[str] = []
     in_list = False
+    table_rows: list[str] = []
+
+    def _flush_table() -> None:
+        if not table_rows:
+            return
+        html = ['<table style="border-collapse:collapse;margin:8px 0">']
+        for ri, row in enumerate(table_rows):
+            cells = [c.strip() for c in row.strip().strip("|").split("|")]
+            tag = "th" if ri == 0 else "td"
+            cell_style = "padding:4px 12px;border:1px solid #ccc;"
+            if ri == 0:
+                cell_style += "background:#f5f5f5;font-weight:bold;"
+            html.append(
+                "<tr>"
+                + "".join(
+                    f'<{tag} style="{cell_style}">{_esc_inline(c)}</{tag}>'
+                    for c in cells
+                )
+                + "</tr>"
+            )
+        html.append("</table>")
+        out.append("\n".join(html))
+        table_rows.clear()
+
     for line in text.split("\n"):
         stripped = line.strip()
+        is_pipe_row = stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
+        is_separator = is_pipe_row and all(c in "|-: " for c in stripped)
+
+        if is_pipe_row and not is_separator:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            table_rows.append(line)
+            continue
+        if is_separator and table_rows:
+            continue  # skip alignment row
+        if table_rows:
+            _flush_table()
+
         if not stripped:
             if in_list:
                 out.append("</ul>")
@@ -100,9 +133,40 @@ def _render_md_block(text: str) -> str:
                 out.append("</ul>")
                 in_list = False
             out.append(f"<p>{_esc_inline(line)}</p>")
+
+    if table_rows:
+        _flush_table()
     if in_list:
         out.append("</ul>")
     return "\n".join(out)
+
+
+def _render_md_block(text: str) -> str:
+    """Convert a simple Markdown document to HTML.
+
+    Handles: ## / ### headers, **bold**, *italic*, `code`, - bullet lists,
+    blank lines (paragraph breaks), inline $math$ for KaTeX,
+    display math $$...$$ blocks (including multi-line aligned), pipe tables.
+
+    Display-math blocks are emitted verbatim (no HTML escaping) so that
+    KaTeX auto-render can find the $$...$$  delimiters and the & alignment
+    operators inside \\begin{aligned} are not mangled to &amp;.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    # Split into alternating [plain, math, plain, math, ...] segments.
+    # Use non-greedy DOTALL so each $$...$$ block is captured individually.
+    segments = re.split(r"(\$\$.*?\$\$)", text, flags=re.DOTALL)
+    parts: list[str] = []
+    for idx, seg in enumerate(segments):
+        if idx % 2 == 1:
+            # Display-math block — preserve as-is so KaTeX gets raw LaTeX.
+            parts.append(
+                f'<div style="text-align:center;margin:1em 0;overflow-x:auto">{seg}</div>'
+            )
+        else:
+            parts.append(_render_md_lines(seg))
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------

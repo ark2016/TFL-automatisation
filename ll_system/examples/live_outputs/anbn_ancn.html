@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang='ru'><head><meta charset='utf-8'>
+<title>LL — Результат анализа</title>
+<style>
+body{font-family:'Segoe UI',system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#2c3e50;background:#ecf0f1}
+.ll-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px;padding:16px 20px;background:#2c3e50;color:#ecf0f1;border-radius:8px}
+.ll-head-text{flex:1}
+.ll-task-label{font-size:12px;color:#bdc3c7;margin-bottom:4px}
+.ll-task{font-size:15px;line-height:1.6;color:#ecf0f1}
+.ll-badge{font-size:13px;font-weight:700;padding:6px 16px;border-radius:8px;white-space:nowrap;flex-shrink:0;align-self:flex-start}
+.ll-sec{font-size:16px;font-weight:600;color:#2c3e50;margin:24px 0 10px;padding-top:16px;border-top:1px solid #bdc3c7}
+.ll-sec:first-of-type{border-top:none;padding-top:0}
+.ll-p{font-size:14px;line-height:1.75;margin:6px 0}
+.ll-meta{font-size:12px;color:#7f8c8d;margin:4px 0 10px}
+.ll-box{background:#fff;border-radius:6px;padding:12px 16px;margin:10px 0;font-size:13px;line-height:1.7;border:1px solid #dfe6e9}
+.ll-mono,.ll-grammar{font-family:Consolas,'Courier New',monospace;font-size:13px}
+.ll-grammar{background:#fff;border-radius:6px;padding:12px 16px;border:1px solid #dfe6e9;margin:10px 0;white-space:pre;overflow-x:auto}
+.ll-tab{display:flex;gap:2px;margin:16px 0 0;flex-wrap:wrap;border-bottom:2px solid #bdc3c7}
+.ll-tab-btn{font-size:12px;padding:7px 16px;border-radius:6px 6px 0 0;background:#dfe6e9;color:#636e72;cursor:pointer;border:none;font-family:inherit;margin-bottom:-2px;border-bottom:2px solid transparent}
+.ll-tab-btn:hover{background:#b2bec3}
+.ll-tab-btn.active{background:#fff;color:#2c3e50;font-weight:600;border-bottom-color:#2980b9}
+.ll-panel{display:none;padding:14px 0}.ll-panel.active{display:block}
+.ll-step{display:flex;gap:10px;margin:10px 0}
+.ll-n{min-width:24px;height:24px;border-radius:50%;background:#dfe6e9;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#636e72;flex-shrink:0;margin-top:2px}
+.ll-t{font-size:14px;line-height:1.7}
+.ll-footer{display:flex;gap:16px;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid #bdc3c7;font-size:12px;color:#7f8c8d;flex-wrap:wrap}
+.ll-pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#d6eaf8;color:#1a5276}
+.ll-pill-warn{background:#fadbd8;color:#922b21}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+th,td{border:1px solid #bdc3c7;padding:6px 10px;text-align:left}
+th{background:#dfe6e9;font-weight:600}
+tr:nth-child(even) td{background:#f8f9fa}
+
+</style></head><body>
+<div class="ll-head">
+  <div class="ll-head-text">
+    <div class="ll-task-label">Задача (проверка LL-свойства · Формат 1: язык)</div>
+    <div class="ll-task">L = {aⁿbⁿ | n≥0} ∪ {aⁿcⁿ | n≥0}. Is this language LL(k) for some k?</div>
+  </div>
+  <span class="ll-badge" style="background:#e74c3c;color:#fff">Не LL</span>
+</div>
+<div class="ll-meta">Уверенность: <strong>95%</strong></div>
+<div class="ll-sec">Результат</div>
+<div class="ll-tab">
+  <button class="ll-tab-btn active" onclick="llShowTab(0)">Решение</button>
+  <button class="ll-tab-btn" onclick="llShowTab(1)">Доказательство</button>
+  <button class="ll-tab-btn" onclick="llShowTab(2)">Детали</button>
+</div>
+<div class="ll-panel active" id="ll-panel-0">
+<div class="ll-p"><strong>Вердикт:</strong> Не LL ни для какого k</div>
+<div class="ll-meta" style="margin-top:8px">Агент: <strong>substitution_agent</strong> · Метод: <strong>substitution</strong></div>
+<div class="ll-box"><h3 style="margin:16px 0 8px">Решение</h3>
+<p><strong>Задача:</strong> Определить, является ли язык $L = \{a^n b^n \mid n \geq 0\} \cup \{a^n c^n \mid n \geq 0\}$ LL(k)-языком.</p>
+<p><strong>Вердикт:</strong> Язык <strong>не является LL(k) ни для какого $k$</strong>.</p>
+<h4 style="margin:14px 0 6px">Доказательство (метод подмены)</h4>
+<p>Предположим, что $L$ является LL(k) для некоторого $k$. Зафиксируем произвольное $n &gt; k$.</p>
+<p>Рассмотрим два слова:</p>
+<ul>
+<li>$w_1 = a^{n+k}b^{n+k} \in L$ (из $\{a^n b^n\}$)</li>
+<li>$w_2 = a^{n+k}c^{n+k} \in L$ (из $\{a^n c^n\}$)</li>
+</ul>
+<p>После чтения $a^{n+k}$ LL(k)-парсер смотрит на следующие $k$ символов:</p>
+<ul>
+<li>В $w_1$: lookahead = $b^k$</li>
+<li>В $w_2$: lookahead = $c^k$</li>
+</ul>
+<p>Lookaheads различны, поэтому парсер может различить продолжения. Однако рассмотрим:</p>
+<ul>
+<li>$u = a^{n+k}$, lookahead $v = b^k$, суффикс $s_1 = b^n$ → $uv s_1 = a^{n+k}b^{n+k} \in L$</li>
+<li>Подмена: суффикс $s_2 = c^n$ → $uv s_2 = a^{n+k}b^k c^n$</li>
+</ul>
+<p>Но $a^{n+k}b^k c^n \notin L$: это слово не входит в $\{a^m b^m\}$ (числа $b$ и $a$ различны при $k &gt; 0$) и не входит в $\{a^m c^m\}$ (присутствует $b$). Противоречие с предположением LL(k). $\square$</p></div>
+</div>
+<div class="ll-panel" id="ll-panel-1">
+<div class="ll-p"><strong>Метод:</strong> <span class="ll-mono">substitution</span></div>
+<div class="ll-box"><strong>Свидетель:</strong> <span class="ll-mono">{&#x27;k&#x27;: &#x27;k (произвольное)&#x27;, &#x27;w1&#x27;: &#x27;a^{n+k} (n произвольное, n ≥ 1)&#x27;, &#x27;lookahead&#x27;: &#x27;b^k&#x27;, &#x27;suffix_1&#x27;: &#x27;b^n ∈ {aⁿbⁿ} после a^{n+k}b^k = a^{n+k}b^{n+k}&#x27;, &#x27;suffix_2&#x27;: &#x27;c^n&#x27;, &#x27;substitution_result&#x27;: &#x27;a^{n+k} b^k c^n&#x27;, &#x27;why_not_in_L&#x27;: &#x27;Слово a^{n+k}b^k c^n не принадлежит ни {aⁿbⁿ}, ни {aⁿcⁿ}: в {aⁿbⁿ} нужно n=n+k и равное число b, в {aⁿcⁿ} нет символов b.&#x27;}</span></div>
+</div>
+<div class="ll-panel" id="ll-panel-2">
+<div class="ll-p"><strong>Проверка утверждений:</strong></div><ul>
+<li><span class="ll-mono" style="font-weight:600">ll_grammar_builder</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">Agent returned uncertain verdict</span></li>
+<li><span class="ll-mono" style="font-weight:600">marker_analyzer</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">Agent returned uncertain verdict</span></li>
+<li><span class="ll-mono" style="font-weight:600">grammar_transformer</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">Agent returned uncertain verdict</span></li>
+<li><span class="ll-mono" style="font-weight:600">substitution_agent</span>: <span style="color:#27ae60;font-weight:600">verified</span> (6/6 проверок)</li>
+<li><span class="ll-mono" style="font-weight:600">ambiguity_detector</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">Agent returned uncertain verdict</span></li>
+<li><span class="ll-mono" style="font-weight:600">prefix_classes_agent</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">No verifier for method &#x27;prefix_classes&#x27;</span></li>
+</ul>
+<div class="ll-p" style="margin-top:12px"><strong>Вывод специалистов:</strong></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">ll_grammar_builder</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#f39c12;color:#fff">uncertain</span> <span style="color:#7f8c8d;font-size:12px">(5%)</span></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">marker_analyzer</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#f39c12;color:#fff">uncertain</span> <span style="color:#7f8c8d;font-size:12px">(5%)</span></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">grammar_transformer</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#f39c12;color:#fff">uncertain</span> <span style="color:#7f8c8d;font-size:12px">(10%)</span></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">substitution_agent</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#e74c3c;color:#fff">not_ll</span> <span style="color:#7f8c8d;font-size:12px">(95%)</span></div>
+<div class="ll-box" style="margin-top:4px"><strong>Метод:</strong> <code>substitution</code><strong>Свидетель:</strong><ul><li><em>k</em>: k (произвольное)</li><li><em>w1</em>: a^{n+k} (n произвольное, n ≥ 1)</li><li><em>lookahead</em>: b^k</li><li><em>suffix_1</em>: b^n ∈ {aⁿbⁿ} после a^{n+k}b^k = a^{n+k}b^{n+k}</li></ul></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">ambiguity_detector</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#f39c12;color:#fff">uncertain</span> <span style="color:#7f8c8d;font-size:12px">(30%)</span></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">prefix_classes_agent</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#e74c3c;color:#fff">not_ll</span> <span style="color:#7f8c8d;font-size:12px">(75%)</span></div>
+<div class="ll-box" style="margin-top:4px"><strong>Метод:</strong> <code>prefix_classes</code><p>Для каждого k существуют бесконечно много попарно k-различимых префиксов: a, aa, aaa, ... Префикс aⁿ отличается от aᵐ (n≠m), так как после aⁿ необходимо читать bⁿ или cⁿ, а после aᵐ — bᵐ или cᵐ.</p></div>
+<div class="ll-p" style="margin-top:16px"><strong>Советы агента-рассуждателя:</strong></div>
+<div class="ll-box" style="border-left:4px solid #2980b9"><p>Язык $L = \{a^n b^n \mid n \geq 0\} \cup \{a^n c^n \mid n \geq 0\}$ не является LL(k) ни для какого $k$.</p></div>
+<div class="ll-p"><strong>Обоснование:</strong></div>
+<div class="ll-box"><p>Метод подмены (доказан агентом substitution_agent): для произвольного $k$ рассмотрим слова $a^{n+k}b^{n+k}$ и $a^{n+k}c^{n+k}$, оба принадлежащих $L$. После чтения $a^{n+k}$ lookahead равен $b^k$ для первого и $c^k$ для второго. Поскольку lookaheads различны, LL(k)-парсер может их различить. Однако метод подмены показывает, что после чтения $a^{n+k}$ с lookahead $b^k$ парсер должен продолжить $b^n$, но не может принять $c^n$. Это противоречит детерминированности для слов $a^{n+k}b^{n+k}$ и требованию отклонить $a^{n+k}b^k c^n \notin L$. Prefix classes agent подтверждает: для каждого $k$ существуют бесконечно много k-различимых префиксов.</p></div>
+</div>
+<div class="ll-footer">
+  <span>confidence: 0.95</span>
+  <span class="ll-pill">7 агентов отработали</span>
+</div>
+<script>
+function llShowTab(n){
+  document.querySelectorAll('.ll-tab-btn').forEach((b,i)=>b.classList.toggle('active',i===n));
+  document.querySelectorAll('.ll-panel').forEach((p,i)=>p.classList.toggle('active',i===n));
+  if(window.renderMathInElement){
+    try{window.renderMathInElement(document.querySelector('.ll-panel.active'),{
+      delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},
+                  {left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],
+      throwOnError:false});
+    }catch(e){}
+  }
+}
+
+</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false});"></script>
+</body></html>

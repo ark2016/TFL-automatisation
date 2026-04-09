@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang='ru'><head><meta charset='utf-8'>
+<title>LL — Результат анализа</title>
+<style>
+body{font-family:'Segoe UI',system-ui,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#2c3e50;background:#ecf0f1}
+.ll-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px;padding:16px 20px;background:#2c3e50;color:#ecf0f1;border-radius:8px}
+.ll-head-text{flex:1}
+.ll-task-label{font-size:12px;color:#bdc3c7;margin-bottom:4px}
+.ll-task{font-size:15px;line-height:1.6;color:#ecf0f1}
+.ll-badge{font-size:13px;font-weight:700;padding:6px 16px;border-radius:8px;white-space:nowrap;flex-shrink:0;align-self:flex-start}
+.ll-sec{font-size:16px;font-weight:600;color:#2c3e50;margin:24px 0 10px;padding-top:16px;border-top:1px solid #bdc3c7}
+.ll-sec:first-of-type{border-top:none;padding-top:0}
+.ll-p{font-size:14px;line-height:1.75;margin:6px 0}
+.ll-meta{font-size:12px;color:#7f8c8d;margin:4px 0 10px}
+.ll-box{background:#fff;border-radius:6px;padding:12px 16px;margin:10px 0;font-size:13px;line-height:1.7;border:1px solid #dfe6e9}
+.ll-mono,.ll-grammar{font-family:Consolas,'Courier New',monospace;font-size:13px}
+.ll-grammar{background:#fff;border-radius:6px;padding:12px 16px;border:1px solid #dfe6e9;margin:10px 0;white-space:pre;overflow-x:auto}
+.ll-tab{display:flex;gap:2px;margin:16px 0 0;flex-wrap:wrap;border-bottom:2px solid #bdc3c7}
+.ll-tab-btn{font-size:12px;padding:7px 16px;border-radius:6px 6px 0 0;background:#dfe6e9;color:#636e72;cursor:pointer;border:none;font-family:inherit;margin-bottom:-2px;border-bottom:2px solid transparent}
+.ll-tab-btn:hover{background:#b2bec3}
+.ll-tab-btn.active{background:#fff;color:#2c3e50;font-weight:600;border-bottom-color:#2980b9}
+.ll-panel{display:none;padding:14px 0}.ll-panel.active{display:block}
+.ll-step{display:flex;gap:10px;margin:10px 0}
+.ll-n{min-width:24px;height:24px;border-radius:50%;background:#dfe6e9;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#636e72;flex-shrink:0;margin-top:2px}
+.ll-t{font-size:14px;line-height:1.7}
+.ll-footer{display:flex;gap:16px;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid #bdc3c7;font-size:12px;color:#7f8c8d;flex-wrap:wrap}
+.ll-pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#d6eaf8;color:#1a5276}
+.ll-pill-warn{background:#fadbd8;color:#922b21}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+th,td{border:1px solid #bdc3c7;padding:6px 10px;text-align:left}
+th{background:#dfe6e9;font-weight:600}
+tr:nth-child(even) td{background:#f8f9fa}
+
+</style></head><body>
+<div class="ll-head">
+  <div class="ll-head-text">
+    <div class="ll-task-label">Задача (проверка LL-свойства · Формат 2: язык + грамматика)</div>
+    <div class="ll-task">Проверить, задаёт ли данная грамматика LL-язык: S → SabS | cSc | a</div>
+  </div>
+  <span class="ll-badge" style="background:#2ecc71;color:#fff">LL(1)</span>
+</div>
+<div class="ll-meta">Уверенность: <strong>97%</strong></div>
+<div class="ll-sec">Результат</div>
+<div class="ll-tab">
+  <button class="ll-tab-btn active" onclick="llShowTab(0)">Решение</button>
+  <button class="ll-tab-btn" onclick="llShowTab(1)">Доказательство</button>
+  <button class="ll-tab-btn" onclick="llShowTab(2)">Грамматика/Таблица</button>
+  <button class="ll-tab-btn" onclick="llShowTab(3)">Детали</button>
+</div>
+<div class="ll-panel active" id="ll-panel-0">
+<div class="ll-p"><strong>Вердикт:</strong> LL(k)</div>
+<div class="ll-p"><strong>Минимальное k:</strong> 1</div>
+<div class="ll-p"><strong>Oracle (FIRST/FOLLOW):</strong> LL(1)</div>
+<div class="ll-meta" style="margin-top:8px">Агент: <strong>grammar_transformer</strong> · Метод: <strong>grammar_transformation</strong></div>
+<div class="ll-box"><h3 style="margin:16px 0 8px">Задача</h3>
+<p>Проверить, задаёт ли грамматика $G$:</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$S \to SabS \mid cSc \mid a$$</div>
+<p>язык, являющийся LL-языком. Если да — указать минимальное $k$ и построить LL$(k)$-грамматику.</p>
+<p>---</p>
+<h3 style="margin:16px 0 8px">Анализ</h3>
+<p>Грамматика $G$ содержит <strong>прямую левую рекурсию</strong> ($S \to SabS$), что немедленно исключает LL-разбор в исходном виде. Тем не менее, левая рекурсия — свойство конкретной грамматики, а не языка. Вопрос состоит в том, существует ли <strong>эквивалентная</strong> LL$(k)$-грамматика.</p>
+<p>Анализ порождаемых цепочек:</p>
+<ul>
+<li>Базовые «атомы»: $a$ и $c \cdot S \cdot c$ (вложенные $c$-обёртки).</li>
+<li>Правило $S \to SabS$ позволяет соединять атомы разделителем $ab$.</li>
+<li>Язык $L(G)$ состоит из цепочек вида $T_1 \cdot ab \cdot T_2 \cdot ab \cdots ab \cdot T_n$ ($n \geq 1$), где каждый $T_i$ — атом: либо $a$, либо $c \cdot S \cdot c$.</li>
+</ul>
+<p>Исходная грамматика <strong>неоднозначна</strong> (правило $S \to SabS$ допускает левую и правую ассоциативность), однако это неоднозначность конкретной грамматики, а не языка. Язык допускает однозначную грамматику с фиксированной ассоциативностью.</p>
+<p>---</p>
+<h3 style="margin:16px 0 8px">Иерархия языков</h3>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$\text{REG} \subsetneq \text{LL}(1) \subsetneq \text{LL}(k) \subsetneq \text{DCFL} \subsetneq \text{CFL} \subsetneq \text{CSL}$$</div>
+<p>Данный язык: <strong>является LL$(1)$</strong>.</p>
+<p>Язык не является регулярным (вложенные $c$-скобки требуют стека для подсчёта глубины). Он принадлежит классу LL$(1) \subsetneq \text{DCFL} \subsetneq \text{CFL}$: существует эквивалентная LL$(1)$-грамматика, построенная ниже.</p>
+<p>---</p>
+<h3 style="margin:16px 0 8px">Доказательство: $L(G)$ является LL$(1)$-языком</h3>
+<p><strong>Метод:</strong> Построение эквивалентной LL$(1)$-грамматики (трансформация грамматики).</p>
+<h4 style="margin:14px 0 6px">Шаг 1. Ключевое наблюдение о структуре языка</h4>
+<p>Стандартное устранение левой рекурсии из $G$ даёт грамматику $G_1$:</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$S \to cScS' \mid aS', \quad S' \to abSS' \mid \varepsilon.$$</div>
+<p>Для $G_1$ при $k = 1$:</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$\mathrm{FIRST}(S' \to abSS') = \{a\}, \quad \mathrm{FOLLOW}(S') = \{a, c, \$\}.$$</div>
+<p>Пересечение $\{a\} \cap \{a, c, \$\} = \{a\} \neq \varnothing$ — формальный конфликт.</p>
+<p>Однако этот конфликт является <strong>артефактом</strong>: символ $a$ попадает в $\mathrm{FOLLOW}(S')$ исключительно через $\mathrm{FIRST}(S') = \{a\}$ (из правила $S' \to abSS'$), то есть $a$ после $S'$ — всегда начало нового блока $ab\ldots$, а не внешнего контекста. Тем не менее, для <strong>строгого</strong> LL$(1)$-доказательства необходима грамматика без формальных конфликтов.</p>
+<p><strong>Ключевой приём:</strong> выделить «атом» $T = a \mid cSc$ в отдельный нетерминал. Это изменяет $\mathrm{FOLLOW}(S')$ и устраняет конфликт.</p>
+<h4 style="margin:14px 0 6px">Шаг 2. Построение LL$(1)$-грамматики $G'$</h4>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$G' = (\{S, T, S'\},\; \{a, b, c\},\; P',\; S)$$</div>
+<p>Правила вывода $P'$:</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$\begin{aligned}
+S &\to T \cdot S' \\
+T &\to c \cdot S \cdot c \\
+T &\to a \\
+S' &\to a \cdot b \cdot T \cdot S' \\
+S' &\to \varepsilon
+\end{aligned}$$</div>
+<h4 style="margin:14px 0 6px">Шаг 3. Эквивалентность $L(G') = L(G)$</h4>
+<p>Грамматика $G'$ порождает цепочки вида $T_1 (ab \cdot T_i)^*$, где $T_i \in L(T)$:</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$S \Rightarrow T \cdot S' \Rightarrow^* T_1 \cdot ab \cdot T_2 \cdot ab \cdots ab \cdot T_n.$$</div>
+<p>Это в точности те же цепочки, что порождает исходная грамматика $G$ (с правоассоциативной группировкой оператора $ab$). Каждый шаг трансформации сохраняет множество порождаемых терминальных цепочек:</p>
+<ul>
+<li>$L(G') = \{T_1 \cdot (ab \cdot T_i)^* \mid n \geq 1,\; T_i \in \{a\} \cup c \cdot L(G') \cdot c\} = L(G).$</li>
+</ul>
+<h4 style="margin:14px 0 6px">Шаг 4. Вычисление FIRST и FOLLOW для $G'$</h4>
+<p><strong>Множества FIRST:</strong></p>
+<table style="border-collapse:collapse;margin:8px 0">
+<tr><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">Нетерминал</th><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">$\mathrm{FIRST}$</th></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$T$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{a, c\}$</td></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$S$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{a, c\}$</td></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$S'$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{a, \varepsilon\}$</td></tr>
+</table>
+<p><strong>Вычисление FOLLOW:</strong></p>
+<ul>
+<li>$\mathrm{FOLLOW}(S)$: $S$ — стартовый символ, поэтому $\$ \in \mathrm{FOLLOW}(S)$. В правиле $T \to cSc$ после $S$ стоит $c$, поэтому $c \in \mathrm{FOLLOW}(S)$. Итого: $\mathrm{FOLLOW}(S) = \{c, \$\}$.</li>
+</ul>
+<ul>
+<li>$\mathrm{FOLLOW}(S')$: $S'$ стоит в конце правил $S \to TS'$ и $S' \to abTS'$, поэтому $\mathrm{FOLLOW}(S') = \mathrm{FOLLOW}(S) = \{c, \$\}$.</li>
+</ul>
+<ul>
+<li>$\mathrm{FOLLOW}(T)$: $T$ встречается в $S \to TS'$ и $S' \to abTS'$; после $T$ стоит $S'$. $\mathrm{FIRST}(S') \setminus \{\varepsilon\} = \{a\} \subseteq \mathrm{FOLLOW}(T)$. Поскольку $\varepsilon \in \mathrm{FIRST}(S')$, то $\mathrm{FOLLOW}(S') \subseteq \mathrm{FOLLOW}(T)$. Итого: $\mathrm{FOLLOW}(T) = \{a, c, \$\}$.</li>
+</ul>
+<p><strong>Сводная таблица FIRST/FOLLOW:</strong></p>
+<table style="border-collapse:collapse;margin:8px 0">
+<tr><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">Нетерминал</th><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">$\mathrm{FIRST}$</th><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">$\mathrm{FOLLOW}$</th></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$S$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{a, c\}$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{c, \$\}$</td></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$T$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{a, c\}$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{a, c, \$\}$</td></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$S'$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{a, \varepsilon\}$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\{c, \$\}$</td></tr>
+</table>
+<h4 style="margin:14px 0 6px">Шаг 5. Проверка условий LL$(1)$</h4>
+<p>Для каждого нетерминала проверяем, что множества Director попарно не пересекаются.</p>
+<p><strong>Нетерминал $S$:</strong> единственное правило $S \to TS'$. Конфликтов нет. $\checkmark$</p>
+<p><strong>Нетерминал $T$:</strong> два правила.</p>
+<ul>
+<li>$T \to cSc$: не аннулируемо, $\mathrm{Director}(T \to cSc) = \mathrm{FIRST}(cSc) = \{c\}$.</li>
+<li>$T \to a$: не аннулируемо, $\mathrm{Director}(T \to a) = \{a\}$.</li>
+<li>Пересечение: $\{c\} \cap \{a\} = \varnothing$. $\checkmark$</li>
+</ul>
+<p><strong>Нетерминал $S'$:</strong> два правила.</p>
+<ul>
+<li>$S' \to abTS'$: не аннулируемо, $\mathrm{Director}(S' \to abTS') = \mathrm{FIRST}(abTS') = \{a\}$.</li>
+<li>$S' \to \varepsilon$: аннулируемо, $\mathrm{Director}(S' \to \varepsilon) = \mathrm{FOLLOW}(S') = \{c, \$\}$.</li>
+<li>Пересечение: $\{a\} \cap \{c, \$\} = \varnothing$. $\checkmark$</li>
+</ul>
+<p>Все условия LL$(1)$ выполнены — грамматика $G'$ является <strong>строго LL$(1)$</strong>.</p>
+<h4 style="margin:14px 0 6px">Шаг 6. Таблица LL$(1)$-разбора</h4>
+<p>| | $a$ | $b$ | $c$ | $\</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$ |
+|---|---|---|---|---|
+| $S$ | $T \cdot S'$ | — | $T \cdot S'$ | — |
+| $T$ | $a$ | — | $c \cdot S \cdot c$ | — |
+| $S'$ | $a \cdot b \cdot T \cdot S'$ | — | $\varepsilon$ | $\varepsilon$ |
+
+Все записи единственны — таблица детерминирована.
+
+### Шаг 7. Примеры выводов в $G'$
+
+**Слово $a$:**
+$$</div>
+<p>S \Rightarrow T \cdot S' \Rightarrow a \cdot S' \Rightarrow a.</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$
+
+**Слово $cac$:**
+$$</div>
+<p>S \Rightarrow T \cdot S' \Rightarrow c \cdot S \cdot c \cdot S' \Rightarrow c \cdot T \cdot S' \cdot c \cdot S' \Rightarrow c \cdot a \cdot S' \cdot c \cdot S' \Rightarrow c \cdot a \cdot c.</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$
+
+**Слово $aaba$:**
+$$</div>
+<p>S \Rightarrow T \cdot S' \Rightarrow a \cdot S' \Rightarrow a \cdot ab \cdot T \cdot S' \Rightarrow a \cdot ab \cdot a \cdot S' \Rightarrow aaba.</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$
+
+### Шаг 8. Замечание об ошибочном аргументе
+
+Агент `prefix_classes_agent` заявил, что язык не является LL$(k)$ ни для какого $k$, ссылаясь на бесконечное семейство $k$-различимых префиксов $c^{n+k}$. Этот аргумент **некорректен**: LL-аналог теоремы Майхилла–Нероды применяется к классам эквивалентности **левых сентенциальных форм** (определяемых состоянием стека парсера), а не к классам эквивалентности входных префиксов. LL$(k)$-парсер различает префиксы $c^n$ и $c^m$ ($n \neq m$) через **глубину стека** (количество вложенных вызовов $T \to cSc$), что является штатным механизмом КС-разбора. Бесконечное число различимых входных префиксов допустимо для LL$(k)$-языков — именно так работают все языки со вложенными структурами (например, $\{a^n b^n\}$). Oracle подтвердил отсутствие конфликтов в таблице разбора $G'$.
+
+$\blacksquare$
+
+---
+
+## Вывод
+
+Язык $L(G)$, порождённый грамматикой $S \to SabS \mid cSc \mid a$, **является LL$(1)$-языком**.
+
+Эквивалентная LL$(1)$-грамматика:
+$$</div>
+<p>S \to T \cdot S', \quad T \to c \cdot S \cdot c \mid a, \quad S' \to a \cdot b \cdot T \cdot S' \mid \varepsilon.$$</p>
+<p>Ключевой приём: выделение «атома» $T$ (базового выражения: либо $a$, либо $c$-обёртка $cSc$) в отдельный нетерминал изменяет $\mathrm{FOLLOW}(S')$ с $\{a, c, \$\}$ до $\{c, \$\}$, устраняя конфликт $\mathrm{FIRST}(S' \to abTS') \cap \mathrm{FOLLOW}(S') = \{a\} \cap \{c, \$\} = \varnothing$.</p>
+<p>Доказательство верифицировано: грамматика $G'$ прошла все 5 проверок верификатора, oracle подтвердил $k = 1$ и отсутствие конфликтов в таблице разбора.</p></div>
+</div>
+<div class="ll-panel" id="ll-panel-1">
+<div class="ll-p"><strong>Метод:</strong> <span class="ll-mono">grammar_transformation</span></div>
+</div>
+<div class="ll-panel" id="ll-panel-2">
+<div class="ll-p"><strong>LL-грамматика G:</strong></div>
+<pre class="ll-grammar">S → T S&#x27;
+T → c S c | a
+S&#x27; → a b T S&#x27; | ε</pre>
+<div class="ll-p" style="margin-top:16px"><strong>Таблица FIRST<sub>1</sub>/FOLLOW<sub>1</sub>:</strong></div>
+<table><tr><th>Нетерминал</th><th>FIRST<sub>1</sub></th><th>FOLLOW<sub>1</sub></th></tr>
+<tr><td><span class="ll-mono">S</span></td><td>{ a, c }</td><td>{ $, c }</td></tr>
+<tr><td><span class="ll-mono">S&#x27;</span></td><td>{ , a }</td><td>{ $, c }</td></tr>
+<tr><td><span class="ll-mono">T</span></td><td>{ a, c }</td><td>{ $, a, c }</td></tr>
+</table>
+<div class="ll-p" style="margin-top:16px"><strong>Таблица разбора LL(k):</strong></div>
+<table><tr><th>NT \ Lookahead</th><th>$</th><th>a</th><th>c</th></tr>
+<tr><td><span class="ll-mono">S</span></td><td><span class='ll-mono'></span></td><td><span class='ll-mono'>[&#x27;T&#x27;, &quot;S&#x27;&quot;]</span></td><td><span class='ll-mono'>[&#x27;T&#x27;, &quot;S&#x27;&quot;]</span></td></tr>
+<tr><td><span class="ll-mono">S&#x27;</span></td><td><span class='ll-mono'></span></td><td><span class='ll-mono'>[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;T&#x27;, &quot;S&#x27;&quot;]</span></td><td><span class='ll-mono'></span></td></tr>
+<tr><td><span class="ll-mono">T</span></td><td><span class='ll-mono'></span></td><td><span class='ll-mono'>[&#x27;a&#x27;]</span></td><td><span class='ll-mono'>[&#x27;c&#x27;, &#x27;S&#x27;, &#x27;c&#x27;]</span></td></tr>
+</table>
+</div>
+<div class="ll-panel" id="ll-panel-3">
+<div class="ll-p"><strong>Проверка утверждений:</strong></div><ul>
+<li><span class="ll-mono" style="font-weight:600">ll_grammar_builder</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">Agent returned uncertain verdict</span></li>
+<li><span class="ll-mono" style="font-weight:600">marker_analyzer</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">Agent returned uncertain verdict</span></li>
+<li><span class="ll-mono" style="font-weight:600">grammar_transformer</span>: <span style="color:#27ae60;font-weight:600">verified</span> (5/5 проверок)</li>
+<li><span class="ll-mono" style="font-weight:600">substitution_agent</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">Agent returned uncertain verdict</span></li>
+<li><span class="ll-mono" style="font-weight:600">ambiguity_detector</span>: <span style="color:#f39c12;font-weight:600">inconclusive</span> (0/0 проверок) — <span style="color:#7f8c8d;font-size:12px">Agent returned uncertain verdict</span></li>
+<li><span class="ll-mono" style="font-weight:600">prefix_classes_agent</span>: <span style="color:#27ae60;font-weight:600">verified</span> (4/4 проверок)</li>
+</ul>
+<div class="ll-p" style="margin-top:12px"><strong>Вывод специалистов:</strong></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">ll_grammar_builder</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#f39c12;color:#fff">uncertain</span> <span style="color:#7f8c8d;font-size:12px">(25%)</span></div>
+<div class="ll-box" style="margin-top:4px"><strong>Метод:</strong> <code>ll_grammar_construction</code></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">marker_analyzer</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#f39c12;color:#fff">uncertain</span> <span style="color:#7f8c8d;font-size:12px">(15%)</span></div>
+<div class="ll-box" style="margin-top:4px"><strong>Метод:</strong> <code>marker_detection</code></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">grammar_transformer</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#2ecc71;color:#fff">ll</span> <span style="color:#7f8c8d;font-size:12px">(88%)</span></div>
+<div class="ll-box" style="margin-top:4px"><strong>Метод:</strong> <code>grammar_transformation</code></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">substitution_agent</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#f39c12;color:#fff">uncertain</span> <span style="color:#7f8c8d;font-size:12px">(15%)</span></div>
+<div class="ll-box" style="margin-top:4px"><strong>Метод:</strong> <code>substitution</code></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">ambiguity_detector</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#f39c12;color:#fff">uncertain</span> <span style="color:#7f8c8d;font-size:12px">(15%)</span></div>
+<div class="ll-box" style="margin-top:4px"><strong>Метод:</strong> <code>essential_ambiguity</code></div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><span class="ll-mono" style="font-weight:600">prefix_classes_agent</span><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:#e74c3c;color:#fff">not_ll</span> <span style="color:#7f8c8d;font-size:12px">(92%)</span></div>
+<div class="ll-box" style="margin-top:4px"><strong>Метод:</strong> <code>prefix_classes</code></div>
+<div class="ll-p" style="margin-top:16px"><strong>Советы агента-рассуждателя:</strong></div>
+<div class="ll-box" style="border-left:4px solid #2980b9"><p>Язык L, порождённый грамматикой S → SabS | cSc | a, является LL(1)-языком. Агент grammar_transformer построил эквивалентную LL(1)-грамматику G&#39;: S → TS&#39;, T → cSc | a, S&#39; → abTS&#39; | ε. Ключевая идея: язык состоит из цепочек вида T(abT)*, где T — «атом» (либо &#39;a&#39;, либо c-обёрнутое выражение cSc). Введение отдельного нетерминала T для атомов устраняет конфликт FIRST/FOLLOW, возникавший при стандартном устранении левой рекурсии. Oracle (first_follow) подтвердил отсутствие конфликтов в таблице разбора: FIRST(T→a) = {a}, FIRST(T→cSc) = {c} — пересечение пусто; FIRST(S&#39;→abTS&#39;) = {a}, FOLLOW(S&#39;) = {c, $} — пересечение пусто. Верификация grammar_transformer прошла все 5 проверок. Агент prefix_classes_agent заявил не-LL статус, однако его доказательство содержит ошибку: аргумент о бесконечном числе k-различимых префиксов c^{n+k} некорректно применяет LL-аналог теоремы Нероды — при наличии рекурсивного правила T → cSc парсер различает эти префиксы через состояние стека (глубину вложенности), что допустимо для LL(k)-разбора и не противоречит конечности множества управляющих состояний таблицы разбора.</p></div>
+<div class="ll-p"><strong>Обоснование:</strong></div>
+<div class="ll-box"><p>Теорема: Язык L, порождённый грамматикой G: S → SabS | cSc | a, является LL(1)-языком.</p><p>Доказательство. Построим эквивалентную LL(1)-грамматику.</p><p>Шаг 1. Анализ структуры языка. Правило S → SabS с базовыми случаями S → a и S → cSc порождает цепочки вида T₁ ab T₂ ab ... ab Tₙ (n ≥ 1), где каждый Tᵢ — «атом»: либо терминал &#39;a&#39;, либо вложенная c-обёртка cSc. Выделим атомы в отдельный нетерминал T.</p><p>Шаг 2. Построение грамматики G&#39;:<br>  S  → T S&#39;<br>  T  → c S c<br>  T  → a<br>  S&#39; → a b T S&#39;<br>  S&#39; → ε</p><p>Шаг 3. Эквивалентность L(G&#39;) = L(G). Грамматика G&#39; порождает S ⟹ T S&#39; ⟹* T₁ (ab Tᵢ)* — ровно те же цепочки, что и исходная грамматика с правоассоциативной группировкой оператора &#39;ab&#39;.</p><p>Шаг 4. Вычисление FIRST и FOLLOW:<br>  FIRST(S) = FIRST(T) = {a, c}<br>  FIRST(S&#39;) = {a, ε}<br>  FIRST(T) = {a, c}<br>  FOLLOW(S) = {c, $}  (S встречается в T → cSc, после S стоит &#39;c&#39;; S — стартовый символ, $ ∈ FOLLOW(S))<br>  FOLLOW(T) = {a, c, $}  (после T стоит S&#39;, FIRST(S&#39;)\{ε} = {a}; ε ∈ FIRST(S&#39;) ⟹ FOLLOW(S&#39;) ⊆ FOLLOW(T))<br>  FOLLOW(S&#39;) = FOLLOW(S) = {c, $}  (S&#39; стоит в конце правил для S и S&#39;)</p><p>Шаг 5. Проверка условий LL(1):<br>  Нетерминал S: единственное правило S → TS&#39;. Конфликтов нет. ✓<br>  Нетерминал T: Director(T → cSc) = {c}, Director(T → a) = {a}. Пересечение: {c} ∩ {a} = ∅. ✓<br>  Нетерминал S&#39;: Director(S&#39; → abTS&#39;) = FIRST(abTS&#39;) = {a}. Director(S&#39; → ε) = FOLLOW(S&#39;) = {c, $}. Пересечение: {a} ∩ {c, $} = ∅. ✓</p><p>Все записи таблицы разбора единственны — грамматика G&#39; является LL(1).</p><p>Таблица разбора:<br>  S:  при &#39;a&#39; → TS&#39;, при &#39;c&#39; → TS&#39;<br>  T:  при &#39;a&#39; → a, при &#39;c&#39; → cSc<br>  S&#39;: при &#39;a&#39; → abTS&#39;, при &#39;c&#39; → ε, при $ → ε</p><p>Поскольку L(G&#39;) = L(G) и G&#39; является LL(1)-грамматикой, язык L является LL(1). ∎</p><p>Замечание: исходная грамматика неоднозначна (правило S → SabS допускает левую и правую ассоциативность), но это неоднозначность конкретной грамматики, а не языка. Стандартное устранение левой рекурсии (S → cScS&#39; | aS&#39;, S&#39; → abSS&#39; | ε) даёт грамматику с ложным FIRST/FOLLOW конфликтом для S&#39; при k=1, поскольку FOLLOW(S&#39;) = {a, c, $} ∋ &#39;a&#39; = FIRST(S&#39; → abSS&#39;). Ключевой приём — выделение атома T, что изменяет FOLLOW(S&#39;) на {c, $} и устраняет конфликт.</p></div>
+</div>
+<div class="ll-footer">
+  <span>confidence: 0.97</span>
+  <span class="ll-pill">7 агентов отработали</span>
+</div>
+<script>
+function llShowTab(n){
+  document.querySelectorAll('.ll-tab-btn').forEach((b,i)=>b.classList.toggle('active',i===n));
+  document.querySelectorAll('.ll-panel').forEach((p,i)=>p.classList.toggle('active',i===n));
+  if(window.renderMathInElement){
+    try{window.renderMathInElement(document.querySelector('.ll-panel.active'),{
+      delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},
+                  {left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],
+      throwOnError:false});
+    }catch(e){}
+  }
+}
+
+</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false});"></script>
+</body></html>
