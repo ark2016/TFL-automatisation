@@ -141,47 +141,28 @@ S' &\to \varepsilon
 </ul>
 <p>Все условия LL$(1)$ выполнены — грамматика $G'$ является <strong>строго LL$(1)$</strong>.</p>
 <h4 style="margin:14px 0 6px">Шаг 6. Таблица LL$(1)$-разбора</h4>
-<p>| | $a$ | $b$ | $c$ | $\</p>
-<div style="text-align:center;margin:1em 0;overflow-x:auto">$$ |
-|---|---|---|---|---|
-| $S$ | $T \cdot S'$ | — | $T \cdot S'$ | — |
-| $T$ | $a$ | — | $c \cdot S \cdot c$ | — |
-| $S'$ | $a \cdot b \cdot T \cdot S'$ | — | $\varepsilon$ | $\varepsilon$ |
-
-Все записи единственны — таблица детерминирована.
-
-### Шаг 7. Примеры выводов в $G'$
-
-**Слово $a$:**
-$$</div>
-<p>S \Rightarrow T \cdot S' \Rightarrow a \cdot S' \Rightarrow a.</p>
-<div style="text-align:center;margin:1em 0;overflow-x:auto">$$
-
-**Слово $cac$:**
-$$</div>
-<p>S \Rightarrow T \cdot S' \Rightarrow c \cdot S \cdot c \cdot S' \Rightarrow c \cdot T \cdot S' \cdot c \cdot S' \Rightarrow c \cdot a \cdot S' \cdot c \cdot S' \Rightarrow c \cdot a \cdot c.</p>
-<div style="text-align:center;margin:1em 0;overflow-x:auto">$$
-
-**Слово $aaba$:**
-$$</div>
-<p>S \Rightarrow T \cdot S' \Rightarrow a \cdot S' \Rightarrow a \cdot ab \cdot T \cdot S' \Rightarrow a \cdot ab \cdot a \cdot S' \Rightarrow aaba.</p>
-<div style="text-align:center;margin:1em 0;overflow-x:auto">$$
-
-### Шаг 8. Замечание об ошибочном аргументе
-
-Агент `prefix_classes_agent` заявил, что язык не является LL$(k)$ ни для какого $k$, ссылаясь на бесконечное семейство $k$-различимых префиксов $c^{n+k}$. Этот аргумент **некорректен**: LL-аналог теоремы Майхилла–Нероды применяется к классам эквивалентности **левых сентенциальных форм** (определяемых состоянием стека парсера), а не к классам эквивалентности входных префиксов. LL$(k)$-парсер различает префиксы $c^n$ и $c^m$ ($n \neq m$) через **глубину стека** (количество вложенных вызовов $T \to cSc$), что является штатным механизмом КС-разбора. Бесконечное число различимых входных префиксов допустимо для LL$(k)$-языков — именно так работают все языки со вложенными структурами (например, $\{a^n b^n\}$). Oracle подтвердил отсутствие конфликтов в таблице разбора $G'$.
-
-$\blacksquare$
-
----
-
-## Вывод
-
-Язык $L(G)$, порождённый грамматикой $S \to SabS \mid cSc \mid a$, **является LL$(1)$-языком**.
-
-Эквивалентная LL$(1)$-грамматика:
-$$</div>
-<p>S \to T \cdot S', \quad T \to c \cdot S \cdot c \mid a, \quad S' \to a \cdot b \cdot T \cdot S' \mid \varepsilon.$$</p>
+<table style="border-collapse:collapse;margin:8px 0">
+<tr><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;"></th><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">$a$</th><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">$b$</th><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">$c$</th><th style="padding:4px 12px;border:1px solid #ccc;background:#f5f5f5;font-weight:bold;">$\$$</th></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$S$</td><td style="padding:4px 12px;border:1px solid #ccc;">$T \cdot S'$</td><td style="padding:4px 12px;border:1px solid #ccc;">—</td><td style="padding:4px 12px;border:1px solid #ccc;">$T \cdot S'$</td><td style="padding:4px 12px;border:1px solid #ccc;">—</td></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$T$</td><td style="padding:4px 12px;border:1px solid #ccc;">$a$</td><td style="padding:4px 12px;border:1px solid #ccc;">—</td><td style="padding:4px 12px;border:1px solid #ccc;">$c \cdot S \cdot c$</td><td style="padding:4px 12px;border:1px solid #ccc;">—</td></tr>
+<tr><td style="padding:4px 12px;border:1px solid #ccc;">$S'$</td><td style="padding:4px 12px;border:1px solid #ccc;">$a \cdot b \cdot T \cdot S'$</td><td style="padding:4px 12px;border:1px solid #ccc;">—</td><td style="padding:4px 12px;border:1px solid #ccc;">$\varepsilon$</td><td style="padding:4px 12px;border:1px solid #ccc;">$\varepsilon$</td></tr>
+</table>
+<p>Все записи единственны — таблица детерминирована.</p>
+<h4 style="margin:14px 0 6px">Шаг 7. Примеры выводов в $G'$</h4>
+<p><strong>Слово $a$:</strong></p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$S \Rightarrow T \cdot S' \Rightarrow a \cdot S' \Rightarrow a.$$</div>
+<p><strong>Слово $cac$:</strong></p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$S \Rightarrow T \cdot S' \Rightarrow c \cdot S \cdot c \cdot S' \Rightarrow c \cdot T \cdot S' \cdot c \cdot S' \Rightarrow c \cdot a \cdot S' \cdot c \cdot S' \Rightarrow c \cdot a \cdot c.$$</div>
+<p><strong>Слово $aaba$:</strong></p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$S \Rightarrow T \cdot S' \Rightarrow a \cdot S' \Rightarrow a \cdot ab \cdot T \cdot S' \Rightarrow a \cdot ab \cdot a \cdot S' \Rightarrow aaba.$$</div>
+<h4 style="margin:14px 0 6px">Шаг 8. Замечание об ошибочном аргументе</h4>
+<p>Агент <code>prefix_classes_agent</code> заявил, что язык не является LL$(k)$ ни для какого $k$, ссылаясь на бесконечное семейство $k$-различимых префиксов $c^{n+k}$. Этот аргумент <strong>некорректен</strong>: LL-аналог теоремы Майхилла–Нероды применяется к классам эквивалентности <strong>левых сентенциальных форм</strong> (определяемых состоянием стека парсера), а не к классам эквивалентности входных префиксов. LL$(k)$-парсер различает префиксы $c^n$ и $c^m$ ($n \neq m$) через <strong>глубину стека</strong> (количество вложенных вызовов $T \to cSc$), что является штатным механизмом КС-разбора. Бесконечное число различимых входных префиксов допустимо для LL$(k)$-языков — именно так работают все языки со вложенными структурами (например, $\{a^n b^n\}$). Oracle подтвердил отсутствие конфликтов в таблице разбора $G'$.</p>
+<p>$\blacksquare$</p>
+<p>---</p>
+<h3 style="margin:16px 0 8px">Вывод</h3>
+<p>Язык $L(G)$, порождённый грамматикой $S \to SabS \mid cSc \mid a$, <strong>является LL$(1)$-языком</strong>.</p>
+<p>Эквивалентная LL$(1)$-грамматика:</p>
+<div style="text-align:center;margin:1em 0;overflow-x:auto">$$S \to T \cdot S', \quad T \to c \cdot S \cdot c \mid a, \quad S' \to a \cdot b \cdot T \cdot S' \mid \varepsilon.$$</div>
 <p>Ключевой приём: выделение «атома» $T$ (базового выражения: либо $a$, либо $c$-обёртка $cSc$) в отдельный нетерминал изменяет $\mathrm{FOLLOW}(S')$ с $\{a, c, \$\}$ до $\{c, \$\}$, устраняя конфликт $\mathrm{FIRST}(S' \to abTS') \cap \mathrm{FOLLOW}(S') = \{a\} \cap \{c, \$\} = \varnothing$.</p>
 <p>Доказательство верифицировано: грамматика $G'$ прошла все 5 проверок верификатора, oracle подтвердил $k = 1$ и отсутствие конфликтов в таблице разбора.</p></div>
 </div>

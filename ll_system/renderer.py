@@ -154,19 +154,52 @@ def _render_md_block(text: str) -> str:
     """
     if not text or not isinstance(text, str):
         return ""
-    # Split into alternating [plain, math, plain, math, ...] segments.
-    # Use non-greedy DOTALL so each $$...$$ block is captured individually.
-    segments = re.split(r"(\$\$.*?\$\$)", text, flags=re.DOTALL)
-    parts: list[str] = []
-    for idx, seg in enumerate(segments):
-        if idx % 2 == 1:
-            # Display-math block — preserve as-is so KaTeX gets raw LaTeX.
-            parts.append(
-                f'<div style="text-align:center;margin:1em 0;overflow-x:auto">{seg}</div>'
+
+    # Line-based detection: a display-math block starts only when a line's
+    # stripped content begins with $$.  This avoids false matches on $\$$
+    # inside pipe-table cells (where $$ appears mid-line after a leading |).
+    lines = text.split("\n")
+    out_html: list[str] = []
+    plain_lines: list[str] = []
+
+    def _flush_plain() -> None:
+        if plain_lines:
+            out_html.append(_render_md_lines("\n".join(plain_lines)))
+            plain_lines.clear()
+
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+
+        if stripped.startswith("$$"):
+            _flush_plain()
+            math_lines = [lines[i]]
+
+            if stripped.endswith("$$") and len(stripped) > 4:
+                # Complete single-line block: $$...$$
+                i += 1
+            else:
+                # Multi-line block (e.g. $$\begin{aligned}...\end{aligned}$$)
+                i += 1
+                while i < len(lines):
+                    math_lines.append(lines[i])
+                    if lines[i].strip().endswith("$$"):
+                        i += 1
+                        break
+                    i += 1
+
+            out_html.append(
+                '<div style="text-align:center;margin:1em 0;overflow-x:auto">'
+                + "\n".join(math_lines)
+                + "</div>"
             )
-        else:
-            parts.append(_render_md_lines(seg))
-    return "\n".join(parts)
+            continue
+
+        plain_lines.append(lines[i])
+        i += 1
+
+    _flush_plain()
+    return "\n".join(out_html)
 
 
 # ---------------------------------------------------------------------------
