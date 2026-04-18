@@ -9,3 +9,7 @@ nul
 .codex_tmp
 .tfl_lab_runs/
 .playwright-mcp/
+
+# Run artifacts from all agent pipelines — regenerable, not source
+**/examples/output/
+**/examples/live_outputs/
