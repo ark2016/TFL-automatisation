@@ -6,3 +6,6 @@ __pycache__/
 dist/
 build/
 nul
+.codex_tmp
+.tfl_lab_runs/
+.playwright-mcp/

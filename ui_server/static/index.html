@@ -1,0 +1,1464 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TFL Lab · Agent Pipeline Runner</title>
+  <meta name="viewport" content="width=1280">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,400;9..144,500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:           #0d0e12;
+      --bg-panel:     #13151b;
+      --bg-elev:      #181a22;
+      --bg-elev-2:    #1e2029;
+      --bg-editor:    #0a0b0e;
+      --border:       #23262f;
+      --border-soft:  #1c1e26;
+      --border-strong:#33373f;
+      --text:         #e6e8ec;
+      --text-dim:     #8b8f99;
+      --text-faint:   #5a5e68;
+      --text-muted:   #6c707a;
+      --accent:       #5fbfa8;       /* muted teal */
+      --accent-dim:   #3e8d7b;
+      --accent-glow:  rgba(95, 191, 168, 0.12);
+      --danger:       #e16a6a;
+      --danger-dim:   #a04a4a;
+      --danger-glow:  rgba(225, 106, 106, 0.10);
+      --warn:         #d4a86a;
+      --ok:           #7acb9d;
+
+      --font-sans:    'Inter', system-ui, sans-serif;
+      --font-mono:    'JetBrains Mono', ui-monospace, monospace;
+      --font-display: 'Fraunces', 'Times New Roman', serif;
+
+      --radius: 4px;
+      --radius-lg: 6px;
+      --shadow-sm: 0 1px 0 rgba(0,0,0,0.3), 0 0 0 1px var(--border-soft);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+      font-feature-settings: 'ss01', 'cv11';
+      overflow: hidden;
+    }
+
+    /* ------- top bar ------- */
+    .topbar {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #151821 0%, var(--bg-panel) 100%);
+      gap: 18px;
+    }
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      user-select: none;
+    }
+    .brand-mark {
+      font-family: var(--font-display);
+      font-size: 17px;
+      font-weight: 500;
+      font-style: italic;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .brand-mark::before {
+      content: "λ";
+      color: var(--accent);
+      margin-right: 6px;
+      font-style: normal;
+    }
+    .brand-tag {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--text-faint);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      padding-left: 10px;
+      border-left: 1px solid var(--border);
+    }
+    .topbar-spacer { flex: 1; }
+    .topbar-meta {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-faint);
+      display: flex;
+      gap: 14px;
+    }
+    .topbar-meta kbd {
+      font-family: inherit;
+      font-size: 10px;
+      padding: 1px 5px;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 3px;
+      color: var(--text-dim);
+    }
+
+    /* ------- workspace grid ------- */
+    .workspace {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1.15fr);
+      height: calc(100% - 42px);
+    }
+    .pane {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .pane + .pane {
+      border-left: 1px solid var(--border);
+    }
+
+    /* ------- pane headers ------- */
+    .pane-header {
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-panel);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 34px;
+    }
+
+    /* ------- sidebar ------- */
+    .sidebar {
+      background: var(--bg-panel);
+    }
+    .proj-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1fr;
+      gap: 1px;
+      padding: 10px 12px 12px;
+      background: var(--bg-panel);
+    }
+    .proj-btn {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 7px 0;
+      background: var(--bg-elev);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .proj-btn:hover {
+      color: var(--text);
+      background: var(--bg-elev-2);
+    }
+    .proj-btn.active {
+      color: var(--accent);
+      background: var(--accent-glow);
+      border-color: var(--accent-dim);
+    }
+    .proj-btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+    .proj-btn:last-child  { border-radius: 0 var(--radius) var(--radius) 0; }
+
+    .side-section-title {
+      padding: 12px 14px 6px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      color: var(--text-faint);
+      text-transform: uppercase;
+      border-top: 1px solid var(--border);
+      background: var(--bg-panel);
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .side-count {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .example-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 2px 0 8px;
+    }
+    .example-list::-webkit-scrollbar { width: 8px; }
+    .example-list::-webkit-scrollbar-track { background: transparent; }
+    .example-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+    .example-list::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+    .example {
+      padding: 6px 14px 6px 22px;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--text-dim);
+      cursor: pointer;
+      position: relative;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 0.1s, color 0.1s;
+    }
+    .example::before {
+      content: "·";
+      position: absolute;
+      left: 12px;
+      color: var(--text-faint);
+    }
+    .example:hover {
+      color: var(--text);
+      background: var(--bg-elev);
+    }
+    .example.active {
+      color: var(--accent);
+      background: var(--accent-glow);
+    }
+    .example.active::before { color: var(--accent); content: "▸"; }
+    .example-empty {
+      padding: 16px 14px;
+      color: var(--text-faint);
+      font-size: 11px;
+      font-style: italic;
+    }
+
+    .sidebar-footer {
+      padding: 8px 12px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-panel);
+    }
+    .new-btn {
+      width: 100%;
+      padding: 7px 10px;
+      background: var(--bg-elev);
+      border: 1px dashed var(--border-strong);
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      cursor: pointer;
+      border-radius: var(--radius);
+      letter-spacing: 0.03em;
+      transition: all 0.12s;
+    }
+    .new-btn:hover {
+      color: var(--text);
+      border-color: var(--accent-dim);
+      border-style: solid;
+    }
+
+    /* ------- editor pane ------- */
+    .editor-pane-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .editor-shell {
+      flex: 1;
+      display: flex;
+      background: var(--bg-editor);
+      overflow: hidden;
+      min-height: 0;
+      position: relative;
+    }
+    .gutter {
+      width: 46px;
+      padding: 10px 4px 10px 0;
+      text-align: right;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text-faint);
+      background: #08090c;
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+      user-select: none;
+      white-space: pre;
+    }
+    .editor-ta {
+      flex: 1;
+      padding: 10px 14px 10px 10px;
+      background: transparent;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.55;
+      border: none;
+      outline: none;
+      resize: none;
+      tab-size: 2;
+      white-space: pre;
+      overflow-wrap: normal;
+      overflow-x: auto;
+      caret-color: var(--accent);
+    }
+    .editor-ta::placeholder {
+      color: var(--text-faint);
+      font-style: italic;
+    }
+    .editor-status {
+      padding: 6px 14px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-panel);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--text-faint);
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      height: 28px;
+    }
+    .editor-status .sep {
+      color: var(--border-strong);
+    }
+    .editor-status strong {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* ------- run bar ------- */
+    .run-bar {
+      padding: 12px 14px 14px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-panel);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .run-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 7px 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-strong);
+      background: var(--bg-elev);
+      color: var(--text);
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: all 0.12s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn:hover:not(:disabled) {
+      background: var(--bg-elev-2);
+      border-color: var(--border-strong);
+    }
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: var(--accent-glow);
+      border-color: var(--accent-dim);
+      color: var(--accent);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: rgba(95, 191, 168, 0.2);
+      border-color: var(--accent);
+    }
+    .btn-danger {
+      border-color: var(--danger-dim);
+      color: var(--danger);
+      background: var(--danger-glow);
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(225, 106, 106, 0.2);
+      border-color: var(--danger);
+    }
+    .btn .kbd {
+      font-size: 10px;
+      padding: 1px 5px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 3px;
+      color: var(--text-faint);
+      font-weight: 400;
+    }
+
+    .check {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      cursor: pointer;
+      user-select: none;
+    }
+    .check input {
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: 3px;
+      background: var(--bg-elev);
+      cursor: pointer;
+      position: relative;
+      transition: all 0.1s;
+    }
+    .check input:checked {
+      background: var(--accent-glow);
+      border-color: var(--accent);
+    }
+    .check input:checked::after {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 0px;
+      width: 4px;
+      height: 8px;
+      border: solid var(--accent);
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg);
+    }
+    .check.danger input:checked {
+      background: var(--danger-glow);
+      border-color: var(--danger);
+    }
+    .check.danger input:checked::after {
+      border-color: var(--danger);
+    }
+    .check.danger { color: var(--danger); }
+
+    .status-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      padding-top: 4px;
+      border-top: 1px dotted var(--border);
+      min-height: 22px;
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-faint);
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .status-dot.running {
+      background: var(--warn);
+      animation: pulse 1.1s ease-in-out infinite;
+    }
+    .status-dot.success { background: var(--ok); }
+    .status-dot.error { background: var(--danger); }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(212, 168, 106, 0.4); }
+      50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(212, 168, 106, 0); }
+    }
+
+    .live-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 10px 5px 12px;
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+      background: rgba(225, 106, 106, 0.025);
+    }
+    .live-group.armed {
+      border-color: var(--danger-dim);
+      border-style: solid;
+      background: var(--danger-glow);
+    }
+
+    /* ------- result pane ------- */
+    .tabs {
+      display: flex;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 0 8px;
+      gap: 0;
+      height: 34px;
+      align-items: stretch;
+    }
+    .tab {
+      padding: 0 14px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-faint);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      position: relative;
+      transition: color 0.12s;
+      display: inline-flex;
+      align-items: center;
+    }
+    .tab:hover { color: var(--text-dim); }
+    .tab.active {
+      color: var(--text);
+    }
+    .tab.active::after {
+      content: "";
+      position: absolute;
+      left: 6px; right: 6px; bottom: -1px;
+      height: 2px;
+      background: var(--accent);
+    }
+    .tab .badge {
+      margin-left: 6px;
+      font-size: 9.5px;
+      padding: 1px 5px;
+      border-radius: 8px;
+      background: var(--bg-elev-2);
+      color: var(--text-faint);
+      letter-spacing: 0;
+    }
+    .tabs-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-right: 6px;
+    }
+    .tabs-right a {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-faint);
+      text-decoration: none;
+      padding: 3px 7px;
+      border-radius: 3px;
+      transition: all 0.1s;
+    }
+    .tabs-right a:hover {
+      color: var(--accent);
+      background: var(--accent-glow);
+    }
+    .tabs-right a.disabled {
+      color: var(--text-faint);
+      pointer-events: none;
+      opacity: 0.3;
+    }
+
+    .tab-panels {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+    }
+    .panel {
+      position: absolute;
+      inset: 0;
+      display: none;
+      overflow: auto;
+    }
+    .panel.active { display: flex; flex-direction: column; }
+    .panel iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      background: #fff;
+    }
+    .panel pre {
+      margin: 0;
+      padding: 14px 16px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text);
+      background: var(--bg-editor);
+      flex: 1;
+      white-space: pre;
+      overflow: auto;
+      tab-size: 2;
+    }
+    .panel .empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      color: var(--text-faint);
+      font-size: 12px;
+      font-family: var(--font-mono);
+      font-style: italic;
+    }
+
+    /* log pane */
+    .log-line { display: block; }
+    .log-line.err { color: var(--danger); }
+    .log-line.warn { color: var(--warn); }
+    .log-line.info { color: var(--text-dim); }
+    .log-line.ok { color: var(--ok); }
+    .log-line.hint { color: var(--text-faint); }
+
+    /* JSON/Markdown syntax-lite */
+    .json-key { color: var(--accent); }
+    .json-str { color: #c9a97b; }
+    .json-num { color: #b48ce5; }
+    .json-bool, .json-null { color: var(--danger); font-style: italic; }
+
+    /* ------- md sub-tabs (Preview / Raw) — GitHub-style segmented control ------- */
+    .md-subtabs {
+      display: inline-flex;
+      margin: 10px 16px 0;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: var(--bg-elev);
+      overflow: hidden;
+      align-self: flex-start;
+      flex-shrink: 0;
+    }
+    .md-subtab {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 500;
+      padding: 4px 12px;
+      background: transparent;
+      color: var(--text-dim);
+      border: none;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      transition: background 0.1s, color 0.1s;
+    }
+    .md-subtab + .md-subtab { border-left: 1px solid var(--border-strong); }
+    .md-subtab:hover { color: var(--text); }
+    .md-subtab.active {
+      background: var(--accent-glow);
+      color: var(--accent);
+    }
+
+    .md-raw {
+      margin: 0;
+      padding: 14px 16px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text);
+      background: var(--bg-editor);
+      white-space: pre-wrap;
+      overflow: auto;
+      flex: 1;
+      tab-size: 2;
+    }
+    .md-raw.empty {
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-faint);
+      font-style: italic;
+      white-space: normal;
+    }
+
+    /* ------- rendered markdown panel ------- */
+    .md-render {
+      padding: 18px 26px 40px;
+      overflow-y: auto;
+      max-width: 100%;
+      font-size: 13.5px;
+      line-height: 1.65;
+      color: var(--text);
+    }
+    .md-render.empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      color: var(--text-faint);
+      font-style: italic;
+      font-size: 12px;
+      padding: 0;
+    }
+    .md-render h1 {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: 22px;
+      letter-spacing: -0.005em;
+      margin: 4px 0 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .md-render h2 {
+      font-family: var(--font-display);
+      font-size: 17px;
+      font-weight: 500;
+      margin: 24px 0 10px;
+      color: var(--text);
+    }
+    .md-render h3, .md-render h4 {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 18px 0 8px;
+      color: var(--text);
+    }
+    .md-render p { margin: 8px 0; }
+    .md-render ul, .md-render ol { padding-left: 22px; margin: 8px 0; }
+    .md-render li { margin: 3px 0; }
+    .md-render code {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 1px 5px;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--accent);
+    }
+    .md-render pre {
+      margin: 10px 0;
+      padding: 10px 14px;
+      background: var(--bg-editor);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .md-render pre code {
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: var(--text);
+    }
+    .md-render strong { color: var(--text); font-weight: 600; }
+    .md-render em { color: var(--text-dim); }
+    .md-render hr {
+      border: none;
+      border-top: 1px dashed var(--border);
+      margin: 20px 0;
+    }
+    .md-render table {
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 12.5px;
+      width: 100%;
+    }
+    .md-render th, .md-render td {
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      text-align: left;
+    }
+    .md-render th { background: var(--bg-elev); font-weight: 600; color: var(--text); }
+
+    /* Obsidian-style callouts (converted from "> [!type] title" syntax) */
+    .md-render .callout {
+      margin: 14px 0;
+      padding: 10px 14px;
+      border-left: 3px solid var(--border-strong);
+      background: var(--bg-elev);
+      border-radius: 0 var(--radius) var(--radius) 0;
+    }
+    .md-render .callout-title {
+      font-weight: 600;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      margin-bottom: 4px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .md-render .callout-title::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .md-render .callout-body { color: var(--text-dim); font-size: 13px; }
+    .md-render .callout-body p:first-child { margin-top: 0; }
+    .md-render .callout-body p:last-child  { margin-bottom: 0; }
+
+    .md-render .callout-theorem  { border-color: var(--accent); }
+    .md-render .callout-theorem .callout-title { color: var(--accent); }
+    .md-render .callout-proof    { border-color: var(--ok); background: rgba(122, 203, 157, 0.05); }
+    .md-render .callout-proof .callout-title { color: var(--ok); }
+    .md-render .callout-success  { border-color: var(--ok); background: rgba(122, 203, 157, 0.05); }
+    .md-render .callout-success .callout-title { color: var(--ok); }
+    .md-render .callout-warning  { border-color: var(--warn); background: rgba(212, 168, 106, 0.05); }
+    .md-render .callout-warning .callout-title { color: var(--warn); }
+    .md-render .callout-error    { border-color: var(--danger); background: var(--danger-glow); }
+    .md-render .callout-error .callout-title { color: var(--danger); }
+    .md-render .callout-note     { border-color: var(--text-dim); }
+    .md-render .callout-note .callout-title { color: var(--text-dim); }
+
+    /* KaTeX tweaks inside dark theme */
+    .md-render .katex { font-size: 1em; color: var(--text); }
+    .md-render .katex-display { margin: 10px 0; overflow-x: auto; overflow-y: hidden; }
+
+    /* ------- scrollbars in panels ------- */
+    .panel::-webkit-scrollbar,
+    .panel pre::-webkit-scrollbar,
+    .editor-ta::-webkit-scrollbar { width: 10px; height: 10px; }
+    .panel::-webkit-scrollbar-track,
+    .panel pre::-webkit-scrollbar-track,
+    .editor-ta::-webkit-scrollbar-track { background: transparent; }
+    .panel::-webkit-scrollbar-thumb,
+    .panel pre::-webkit-scrollbar-thumb,
+    .editor-ta::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; }
+    .panel::-webkit-scrollbar-thumb:hover,
+    .editor-ta::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">TFL Lab</span>
+      <span class="brand-tag">agent pipeline runner · local</span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-meta">
+      <span>run: <kbd>⌘</kbd> <kbd>↵</kbd></span>
+      <span>save: <kbd>⌘</kbd> <kbd>S</kbd></span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <!-- LEFT: project + examples -->
+    <aside class="pane sidebar">
+      <div class="proj-switch" id="proj-switch">
+        <!-- injected -->
+      </div>
+      <div class="side-section-title">
+        <span>examples</span>
+        <span class="side-count" id="example-count">—</span>
+      </div>
+      <div class="example-list" id="example-list">
+        <div class="example-empty">select a project</div>
+      </div>
+      <div class="sidebar-footer">
+        <button class="new-btn" id="new-btn">＋ new task from scratch</button>
+      </div>
+    </aside>
+
+    <!-- CENTER: editor + run bar -->
+    <section class="pane editor-pane">
+      <div class="pane-header">
+        <span id="editor-title">editor · ir.json</span>
+        <span id="editor-project-badge" style="color:var(--text-muted);text-transform:none;letter-spacing:0.04em;">—</span>
+      </div>
+      <div class="editor-pane-body">
+        <div class="editor-shell">
+          <div class="gutter" id="gutter">1</div>
+          <textarea class="editor-ta" id="ir-editor"
+            spellcheck="false"
+            placeholder="// Paste or edit an IR JSON here.
+// Pick an example from the left panel, or start fresh."
+          ></textarea>
+        </div>
+        <div class="editor-status">
+          <span><strong id="st-lines">1</strong> lines</span>
+          <span class="sep">·</span>
+          <span><strong id="st-chars">0</strong> chars</span>
+          <span class="sep">·</span>
+          <span id="st-valid">–</span>
+        </div>
+        <div class="run-bar">
+          <div class="run-row">
+            <button class="btn btn-primary" id="btn-mock">
+              mock run <span class="kbd">⌘↵</span>
+            </button>
+            <div class="live-group" id="live-group">
+              <label class="check danger">
+                <input type="checkbox" id="confirm-spend">
+                <span>I confirm API spend</span>
+              </label>
+              <button class="btn btn-danger" id="btn-live" disabled>
+                live run
+              </button>
+            </div>
+            <label class="check" style="margin-left:auto">
+              <input type="checkbox" id="verbose" checked>
+              <span>verbose</span>
+            </label>
+          </div>
+          <div class="status-line" id="status-line">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">ready</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: result viewer -->
+    <section class="pane result-pane">
+      <div class="tabs">
+        <button class="tab active" data-tab="html">HTML</button>
+        <button class="tab" data-tab="json">JSON</button>
+        <button class="tab" data-tab="md">Markdown</button>
+        <button class="tab" data-tab="log">Log <span class="badge" id="log-badge">0</span></button>
+        <div class="tabs-right">
+          <a id="dl-html" class="disabled" href="#">↗ html</a>
+          <a id="dl-json" class="disabled" href="#">↗ json</a>
+        </div>
+      </div>
+      <div class="tab-panels">
+        <div class="panel active" data-panel="html">
+          <div class="empty" id="html-empty">no result yet — run a task to render here</div>
+          <iframe id="result-iframe" style="display:none"></iframe>
+        </div>
+        <div class="panel" data-panel="json">
+          <pre class="empty">—</pre>
+        </div>
+        <div class="panel" data-panel="md">
+          <div class="md-subtabs">
+            <button class="md-subtab active" data-mode="preview">Preview</button>
+            <button class="md-subtab" data-mode="raw">Raw</button>
+          </div>
+          <div id="md-render" class="md-render md-mode-preview empty">—</div>
+          <pre id="md-raw" class="md-raw" style="display:none">—</pre>
+        </div>
+        <div class="panel" data-panel="log">
+          <pre id="log-pre" class="empty">—</pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+<script>
+//---------------------------------------------------------------------------
+// App state
+//---------------------------------------------------------------------------
+const state = {
+  projects: [],
+  project: null,
+  examples: [],
+  exampleName: null,
+  runId: null,
+  running: false,
+  logPollTimer: null,
+  mdSource: '',        // raw markdown, re-rendered when libs load or tab opens
+  mdLibsLoading: null, // promise while CDNs load
+};
+
+const API = '/api';
+
+//---------------------------------------------------------------------------
+// DOM refs
+//---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const projSwitch  = $('proj-switch');
+const exampleList = $('example-list');
+const exampleCount = $('example-count');
+const editor     = $('ir-editor');
+const gutter     = $('gutter');
+const stLines    = $('st-lines');
+const stChars    = $('st-chars');
+const stValid    = $('st-valid');
+const editorTitle = $('editor-title');
+const editorBadge = $('editor-project-badge');
+const statusDot  = $('status-dot');
+const statusText = $('status-text');
+const btnMock    = $('btn-mock');
+const btnLive    = $('btn-live');
+const btnNew     = $('new-btn');
+const confirmSpend = $('confirm-spend');
+const liveGroup  = $('live-group');
+const verbose    = $('verbose');
+const resultIframe = $('result-iframe');
+const htmlEmpty  = $('html-empty');
+const jsonPanel  = document.querySelector('[data-panel="json"] pre');
+const mdPanel    = document.getElementById('md-render');
+const mdRawPanel = document.getElementById('md-raw');
+const logPre     = $('log-pre');
+const logBadge   = $('log-badge');
+const dlHtml     = $('dl-html');
+const dlJson     = $('dl-json');
+
+//---------------------------------------------------------------------------
+// Editor: gutter + stats
+//---------------------------------------------------------------------------
+function updateGutter() {
+  const lines = editor.value.split('\n').length;
+  const nums = [];
+  for (let i = 1; i <= Math.max(lines, 1); i++) nums.push(i);
+  gutter.textContent = nums.join('\n');
+  stLines.textContent = lines;
+  stChars.textContent = editor.value.length;
+  checkValid();
+}
+function syncGutterScroll() {
+  gutter.scrollTop = editor.scrollTop;
+}
+function checkValid() {
+  const text = editor.value.trim();
+  if (!text) { stValid.textContent = '–'; stValid.style.color = ''; return; }
+  try {
+    JSON.parse(text);
+    stValid.textContent = 'valid json';
+    stValid.style.color = 'var(--ok)';
+  } catch (e) {
+    stValid.textContent = 'invalid json';
+    stValid.style.color = 'var(--danger)';
+  }
+}
+editor.addEventListener('input', updateGutter);
+editor.addEventListener('scroll', syncGutterScroll);
+
+//---------------------------------------------------------------------------
+// Projects + examples
+//---------------------------------------------------------------------------
+async function loadProjects() {
+  try {
+    const r = await fetch(`${API}/projects`);
+    const data = await r.json();
+    state.projects = data.projects || [];
+  } catch (e) {
+    state.projects = [
+      {id: 'agent_system', label: 'REG'},
+      {id: 'cfl_system',   label: 'CFL'},
+      {id: 'dcfl_system',  label: 'DCFL'},
+      {id: 'll_system',    label: 'LL'},
+    ];
+    setStatus('error', 'backend offline — using fallback project list');
+  }
+  renderProjects();
+  if (state.projects.length) pickProject(state.projects[0].id);
+}
+
+function renderProjects() {
+  projSwitch.innerHTML = '';
+  state.projects.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'proj-btn';
+    b.textContent = p.label;
+    b.dataset.id = p.id;
+    b.addEventListener('click', () => pickProject(p.id));
+    projSwitch.appendChild(b);
+  });
+}
+
+async function pickProject(id) {
+  state.project = id;
+  state.exampleName = null;
+  document.querySelectorAll('.proj-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.id === id));
+  const p = state.projects.find(x => x.id === id);
+  editorBadge.textContent = p ? p.label : id;
+  exampleCount.textContent = '…';
+  exampleList.innerHTML = '<div class="example-empty">loading…</div>';
+  try {
+    const r = await fetch(`${API}/examples/${encodeURIComponent(id)}`);
+    const data = await r.json();
+    state.examples = data.examples || [];
+  } catch (e) {
+    state.examples = [];
+  }
+  renderExamples();
+}
+
+function renderExamples() {
+  exampleCount.textContent = state.examples.length;
+  if (!state.examples.length) {
+    exampleList.innerHTML = '<div class="example-empty">no examples found</div>';
+    return;
+  }
+  exampleList.innerHTML = '';
+  state.examples.forEach(ex => {
+    const d = document.createElement('div');
+    d.className = 'example';
+    d.textContent = ex;
+    d.title = ex;
+    d.addEventListener('click', () => pickExample(ex));
+    exampleList.appendChild(d);
+  });
+}
+
+async function pickExample(name) {
+  state.exampleName = name;
+  document.querySelectorAll('.example').forEach(el =>
+    el.classList.toggle('active', el.textContent === name));
+  try {
+    const r = await fetch(`${API}/example/${encodeURIComponent(state.project)}/${encodeURIComponent(name)}`);
+    const data = await r.json();
+    editor.value = JSON.stringify(data.ir || data, null, 2);
+    editorTitle.textContent = `editor · ${name}`;
+    updateGutter();
+  } catch (e) {
+    setStatus('error', `failed to load ${name}: ${e.message}`);
+  }
+}
+
+//---------------------------------------------------------------------------
+// Live-run confirmation gating
+//---------------------------------------------------------------------------
+confirmSpend.addEventListener('change', () => {
+  btnLive.disabled = !confirmSpend.checked;
+  liveGroup.classList.toggle('armed', confirmSpend.checked);
+});
+
+//---------------------------------------------------------------------------
+// Run pipeline
+//---------------------------------------------------------------------------
+async function runPipeline(live) {
+  const text = editor.value.trim();
+  if (!text) {
+    setStatus('error', 'editor is empty');
+    return;
+  }
+  let ir;
+  try { ir = JSON.parse(text); }
+  catch (e) {
+    setStatus('error', `invalid JSON: ${e.message}`);
+    return;
+  }
+  state.running = true;
+  btnMock.disabled = true; btnLive.disabled = true;
+  const label = live ? 'live run' : 'mock run';
+  const t0 = performance.now();
+  setStatus('running', `${label}: dispatching to backend…`);
+  clearResults();
+  try {
+    const r = await fetch(`${API}/run`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({
+        project: state.project,
+        ir, live: !!live, verbose: verbose.checked
+      }),
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      throw new Error(`${r.status}: ${err}`);
+    }
+    const data = await r.json();
+    state.runId = data.run_id;
+    setStatus('running', `${label}: run ${data.run_id} — polling…`);
+    startLogPolling(data);
+    if (data.result_html_url) loadResult(data);
+  } catch (e) {
+    const dt = ((performance.now() - t0) / 1000).toFixed(1);
+    setStatus('error', `${label} failed after ${dt}s — ${e.message}`);
+    state.running = false;
+    btnMock.disabled = false;
+    btnLive.disabled = !confirmSpend.checked;
+  }
+}
+
+function loadResult(data) {
+  if (data.result_html_url) {
+    htmlEmpty.style.display = 'none';
+    resultIframe.style.display = 'block';
+    resultIframe.src = data.result_html_url;
+    dlHtml.href = data.result_html_url;
+    dlHtml.classList.remove('disabled');
+  }
+  if (data.result_json_url) {
+    dlJson.href = data.result_json_url;
+    dlJson.classList.remove('disabled');
+    fetch(data.result_json_url).then(r => r.text()).then(t => {
+      try {
+        jsonPanel.textContent = JSON.stringify(JSON.parse(t), null, 2);
+      } catch { jsonPanel.textContent = t; }
+      jsonPanel.classList.remove('empty');
+    }).catch(() => {});
+  }
+  if (data.result_md_url) {
+    fetch(data.result_md_url).then(r => r.text()).then(t => {
+      state.mdSource = t;
+      mdRawPanel.textContent = t;
+      mdRawPanel.classList.remove('empty');
+      renderMarkdown(t);
+    }).catch(() => {});
+  }
+}
+
+//---------------------------------------------------------------------------
+// Md sub-tab toggle (Preview ↔ Raw)
+//---------------------------------------------------------------------------
+document.querySelectorAll('.md-subtab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.mode;
+    document.querySelectorAll('.md-subtab').forEach(b =>
+      b.classList.toggle('active', b === btn));
+    if (mode === 'preview') {
+      mdPanel.style.display = '';
+      mdRawPanel.style.display = 'none';
+    } else {
+      mdPanel.style.display = 'none';
+      mdRawPanel.style.display = '';
+    }
+  });
+});
+
+//---------------------------------------------------------------------------
+// Markdown rendering (marked + KaTeX, lazy-loaded from CDN)
+//---------------------------------------------------------------------------
+function ensureMdLibs() {
+  if (state.mdLibsLoading) return state.mdLibsLoading;
+  state.mdLibsLoading = Promise.all([
+    loadScript('https://cdn.jsdelivr.net/npm/marked@12/marked.min.js'),
+    loadScript('https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js'),
+    loadScript('https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js'),
+    loadStyle('https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css'),
+  ]);
+  return state.mdLibsLoading;
+}
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.async = true;
+    s.onload = resolve; s.onerror = () => reject(new Error('failed to load ' + src));
+    document.head.appendChild(s);
+  });
+}
+function loadStyle(href) {
+  return new Promise((resolve) => {
+    const l = document.createElement('link');
+    l.rel = 'stylesheet'; l.href = href;
+    l.onload = resolve; l.onerror = resolve;  // don't block on CSS
+    document.head.appendChild(l);
+  });
+}
+
+// Pre-process Obsidian-style callouts:
+//   > [!theorem] Вердикт: ...
+//   > continuation line
+//   > another line
+// into real HTML <div class="callout callout-theorem"> blocks, since
+// marked.js treats them as plain blockquotes. Run BEFORE marked.
+function preprocessObsidianCallouts(md) {
+  const lines = md.split(/\r?\n/);
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const m = line.match(/^>\s*\[!(\w+)\]\s*(.*)$/);
+    if (m) {
+      const kind = m[1].toLowerCase();
+      const title = m[2].trim();
+      const body = [];
+      i++;
+      while (i < lines.length && lines[i].startsWith('>')) {
+        body.push(lines[i].replace(/^>\s?/, ''));
+        i++;
+      }
+      const bodyMd = body.join('\n').trim();
+      // Emit HTML block. marked (with `html: true` default) passes <div> through.
+      out.push('<div class="callout callout-' + escapeAttr(kind) + '">');
+      if (title) {
+        out.push('<div class="callout-title">' + escapeHtmlPreserveMath(title) + '</div>');
+      }
+      if (bodyMd) {
+        // Mark the body as a fence-less inline fragment that we'll render
+        // with marked inline-mode after the outer pass.
+        out.push('<div class="callout-body" data-md="1">');
+        out.push(bodyMd);
+        out.push('</div>');
+      }
+      out.push('</div>\n');
+      continue;
+    }
+    out.push(line);
+    i++;
+  }
+  return out.join('\n');
+}
+
+function escapeAttr(s) { return String(s).replace(/[^a-z0-9-_]/gi, ''); }
+function escapeHtmlPreserveMath(s) {
+  return String(s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+}
+
+async function renderMarkdown(rawMd) {
+  mdPanel.classList.remove('empty');
+  if (!rawMd || !rawMd.trim()) {
+    mdPanel.textContent = '—';
+    mdPanel.classList.add('empty');
+    return;
+  }
+  mdPanel.innerHTML = '<div style="color:var(--text-faint);font-family:var(--font-mono);font-size:11px">loading renderer…</div>';
+  try {
+    await ensureMdLibs();
+  } catch (e) {
+    // Fall back to plain <pre> if CDN unreachable
+    mdPanel.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.textContent = rawMd;
+    pre.style.cssText = 'font-family:var(--font-mono);font-size:12px;white-space:pre-wrap;color:var(--text-dim)';
+    mdPanel.appendChild(pre);
+    return;
+  }
+  // Preprocess Obsidian callouts → HTML blocks
+  const preprocessed = preprocessObsidianCallouts(rawMd);
+  // Configure marked to allow HTML + GFM tables
+  window.marked.setOptions({ gfm: true, breaks: false, headerIds: false, mangle: false });
+  let html = window.marked.parse(preprocessed);
+  // Pass 2: render marked inside callout bodies (they contain un-parsed MD)
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  tmp.querySelectorAll('.callout-body[data-md]').forEach(el => {
+    el.innerHTML = window.marked.parse(el.textContent);
+    el.removeAttribute('data-md');
+  });
+  mdPanel.innerHTML = tmp.innerHTML;
+  // Render LaTeX via KaTeX auto-render
+  if (window.renderMathInElement) {
+    window.renderMathInElement(mdPanel, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$',  right: '$',  display: false},
+        {left: '\\[', right: '\\]', display: true},
+        {left: '\\(', right: '\\)', display: false},
+      ],
+      throwOnError: false,
+    });
+  }
+}
+
+function startLogPolling(runData) {
+  if (state.logPollTimer) clearInterval(state.logPollTimer);
+  const url = runData.log_url || `${API}/log/${state.runId}`;
+  let lastLen = 0;
+  const tick = async () => {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return;
+      const data = await r.json();
+      const lines = data.lines || [];
+      renderLog(lines);
+      logBadge.textContent = lines.length;
+      if (data.status === 'completed' || data.status === 'error') {
+        clearInterval(state.logPollTimer);
+        state.logPollTimer = null;
+        state.running = false;
+        btnMock.disabled = false;
+        btnLive.disabled = !confirmSpend.checked;
+        const verdict = data.verdict || data.result?.verdict;
+        if (data.status === 'error') {
+          setStatus('error', `run ${state.runId} errored`);
+        } else {
+          setStatus('success', `done · ${data.elapsed ? data.elapsed.toFixed(1) + 's' : '—'} · verdict: ${verdict || '—'}`);
+        }
+        if (data.result_html_url || data.result_json_url) loadResult(data);
+      }
+    } catch (e) { /* ignore transient */ }
+  };
+  tick();
+  state.logPollTimer = setInterval(tick, 600);
+}
+
+function renderLog(lines) {
+  const frag = document.createDocumentFragment();
+  for (const line of lines) {
+    const span = document.createElement('span');
+    span.className = 'log-line ' + classifyLogLine(line);
+    span.textContent = line + '\n';
+    frag.appendChild(span);
+  }
+  logPre.textContent = '';
+  logPre.appendChild(frag);
+  logPre.classList.remove('empty');
+  logPre.scrollTop = logPre.scrollHeight;
+}
+
+function classifyLogLine(line) {
+  const l = line.toLowerCase();
+  if (l.includes('error') || l.includes('traceback') || l.startsWith('error:')) return 'err';
+  if (l.includes('warning')) return 'warn';
+  if (l.includes('action=done') || l.includes('verdict')) return 'ok';
+  if (l.match(/^\s*\[\d\d:\d\d:\d\d\]/)) return 'info';
+  return 'hint';
+}
+
+function clearResults() {
+  htmlEmpty.style.display = 'flex';
+  htmlEmpty.textContent = 'running…';
+  resultIframe.style.display = 'none';
+  resultIframe.src = 'about:blank';
+  jsonPanel.textContent = '—';
+  jsonPanel.classList.add('empty');
+  mdPanel.innerHTML = '—';
+  mdPanel.classList.add('empty');
+  mdRawPanel.textContent = '—';
+  mdRawPanel.classList.add('empty');
+  state.mdSource = '';
+  logPre.textContent = '—';
+  logPre.classList.add('empty');
+  logBadge.textContent = '0';
+  dlHtml.classList.add('disabled');
+  dlJson.classList.add('disabled');
+}
+
+//---------------------------------------------------------------------------
+// Status line
+//---------------------------------------------------------------------------
+function setStatus(kind, text) {
+  statusDot.className = 'status-dot ' + (kind || '');
+  statusText.textContent = text;
+}
+
+//---------------------------------------------------------------------------
+// Tabs
+//---------------------------------------------------------------------------
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+    const target = t.dataset.tab;
+    document.querySelectorAll('.panel').forEach(p =>
+      p.classList.toggle('active', p.dataset.panel === target));
+  });
+});
+
+//---------------------------------------------------------------------------
+// Wire buttons
+//---------------------------------------------------------------------------
+btnMock.addEventListener('click', () => runPipeline(false));
+btnLive.addEventListener('click', () => runPipeline(true));
+btnNew.addEventListener('click', () => {
+  editor.value = JSON.stringify({
+    task_type: '',
+    source_text: '',
+    language_spec: { kind: 'natural', alphabet: ['a','b'], description: '' }
+  }, null, 2);
+  editorTitle.textContent = 'editor · untitled.json';
+  state.exampleName = null;
+  document.querySelectorAll('.example').forEach(el => el.classList.remove('active'));
+  updateGutter();
+  editor.focus();
+});
+
+// Cmd+Enter = mock run
+document.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === 'Enter') {
+    e.preventDefault();
+    if (!state.running) runPipeline(false);
+  }
+});
+
+//---------------------------------------------------------------------------
+// Bootstrap
+//---------------------------------------------------------------------------
+updateGutter();
+loadProjects();
+setStatus(null, 'ready');
+</script>
+</body>
+</html>
