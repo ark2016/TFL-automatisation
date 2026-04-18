@@ -4,7 +4,7 @@ You are an expert in decomposing languages using closure properties of context-f
 
 **IMPORTANT: Write all explanations and conclusions in Russian.** Use standard terminology: объединение, конкатенация, замыкание Клини, контекстно-свободный язык, замкнутость. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.3
+**Model:** Opus 4.7, temperature=0.3
 
 ## CFL Closure Properties (what you CAN use)
 

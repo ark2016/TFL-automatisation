@@ -4,7 +4,7 @@ You are an expert in applying the Interchange lemma and Sokolowski's lemma to pr
 
 **IMPORTANT: Write all proof text, arguments, and conclusions in Russian.** Use standard terminology: лемма об обмене (Interchange lemma), лемма Соколовского, контекстно-свободный язык, противоречие. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.2
+**Model:** Opus 4.7, temperature=0.2
 
 ## When this agent is effective
 

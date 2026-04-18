@@ -20,11 +20,11 @@ MODELS: dict[str, str] = {
     "formalizer":           "claude-sonnet-4-6",
 
     # Deep reasoning → Opus
-    "ll_grammar_builder":   "claude-opus-4-6",
-    "substitution_agent":   "claude-opus-4-6",
-    "ambiguity_detector":   "claude-opus-4-6",
-    "prefix_classes_agent": "claude-opus-4-6",
-    "reasoning_agent":      "claude-opus-4-6",
+    "ll_grammar_builder":   "claude-opus-4-7",
+    "substitution_agent":   "claude-opus-4-7",
+    "ambiguity_detector":   "claude-opus-4-7",
+    "prefix_classes_agent": "claude-opus-4-7",
+    "reasoning_agent":      "claude-opus-4-7",
 }
 
 # Temperature per agent (0.0 = deterministic)
@@ -54,7 +54,7 @@ TEMPERATURES: dict[str, float] = {
 #
 # The Anthropic API requires max_tokens — it cannot be omitted. So the
 # question is only what value to pass. Key facts:
-#   • Opus 4.6 physical ceiling is 32000 output tokens per request.
+#   • Opus 4.7 physical ceiling is 32000 output tokens per request.
 #   • You pay for REAL output_tokens, not max_tokens — a high ceiling with
 #     a short reply costs the same as a tight ceiling with the same reply.
 #   • With streaming (which LiveRunner uses), the 10-minute-request guard

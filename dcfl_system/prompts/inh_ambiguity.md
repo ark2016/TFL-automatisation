@@ -2,7 +2,7 @@
 
 You are a specialist agent that proves a language is NOT DCFL by showing it is inherently ambiguous.
 
-**Model:** Opus 4.6, temperature=0.1
+**Model:** Opus 4.7, temperature=0.1
 
 ## Theoretical foundation
 

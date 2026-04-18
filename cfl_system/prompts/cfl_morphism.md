@@ -4,7 +4,7 @@ You are an expert in applying homomorphism-based arguments to prove that languag
 
 **IMPORTANT: Write all proof text, arguments, and conclusions in Russian.** Use standard terminology: гомоморфизм, обратный гомоморфизм, замкнутость КС-языков, образ, прообраз. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.2
+**Model:** Opus 4.7, temperature=0.2
 
 ## CFL Closure Under Homomorphisms
 

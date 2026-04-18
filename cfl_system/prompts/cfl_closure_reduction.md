@@ -4,7 +4,7 @@ You are an expert in applying closure properties to prove that languages are not
 
 **IMPORTANT: Write all proof text, arguments, and conclusions in Russian.** Use standard terminology: замкнутость, пересечение с регулярным языком, контекстно-свободный язык, регулярное выражение, лемма о накачке. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.2
+**Model:** Opus 4.7, temperature=0.2
 
 ## The Closure Argument
 

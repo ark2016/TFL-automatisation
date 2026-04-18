@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CFL Agent System — Architecture v2</title>
+<style>
+body { margin: 0; padding: 20px; background: #f8f7f4; font-family: system-ui, sans-serif; }
+@media (prefers-color-scheme: dark) { body { background: #1a1a18; } }
+svg { max-width: 720px; margin: 0 auto; display: block; }
+
+/* Light mode colors */
+:root {
+  --purple-fill: #EEEDFE; --purple-stroke: #534AB7; --purple-title: #3C3489; --purple-sub: #534AB7;
+  --teal-fill: #E1F5EE; --teal-stroke: #0F6E56; --teal-title: #085041; --teal-sub: #0F6E56;
+  --coral-fill: #FAECE7; --coral-stroke: #993C1D; --coral-title: #712B13; --coral-sub: #993C1D;
+  --blue-fill: #E6F1FB; --blue-stroke: #185FA5; --blue-title: #0C447C; --blue-sub: #185FA5;
+  --amber-fill: #FAEEDA; --amber-stroke: #854F0B; --amber-title: #633806; --amber-sub: #854F0B;
+  --gray-fill: #F1EFE8; --gray-stroke: #5F5E5A; --gray-title: #444441; --gray-sub: #5F5E5A;
+  --text-primary: #2C2C2A; --text-secondary: #888780; --border: #B4B2A9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --purple-fill: #3C3489; --purple-stroke: #AFA9EC; --purple-title: #CECBF6; --purple-sub: #AFA9EC;
+    --teal-fill: #085041; --teal-stroke: #5DCAA5; --teal-title: #9FE1CB; --teal-sub: #5DCAA5;
+    --coral-fill: #712B13; --coral-stroke: #F0997B; --coral-title: #F5C4B3; --coral-sub: #F0997B;
+    --blue-fill: #0C447C; --blue-stroke: #85B7EB; --blue-title: #B5D4F4; --blue-sub: #85B7EB;
+    --amber-fill: #633806; --amber-stroke: #FAC775; --amber-title: #FAEEDA; --amber-sub: #FAC775;
+    --gray-fill: #444441; --gray-stroke: #B4B2A9; --gray-title: #D3D1C7; --gray-sub: #B4B2A9;
+    --text-primary: #D3D1C7; --text-secondary: #888780; --border: #5F5E5A;
+  }
+}
+</style>
+</head>
+<body>
+<svg width="100%" viewBox="0 0 700 1420">
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<!-- __start__ -->
+<rect x="290" y="16" width="120" height="34" rx="17" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.5"/>
+<text x="350" y="33" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--gray-title)">__start__</text>
+<line x1="350" y1="50" x2="350" y2="72" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- validate_ir_node -->
+<rect x="205" y="72" width="290" height="52" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5"/>
+<text x="350" y="90" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">validate_ir_node</text>
+<text x="350" y="108" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--purple-sub)">Parse, detect format 1 vs 2</text>
+<text x="296" y="138" font-size="12" fill="var(--text-secondary)">ok</text>
+<line x1="350" y1="124" x2="350" y2="148" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<!-- fail edge -->
+<line x1="495" y1="98" x2="646" y2="98" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3"/>
+<line x1="646" y1="98" x2="646" y2="1248" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<text x="512" y="92" font-size="12" fill="var(--text-secondary)">fail</text>
+
+<!-- analyze_hypothesis_node -->
+<rect x="205" y="148" width="290" height="52" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5"/>
+<text x="350" y="166" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">analyze_hypothesis_node</text>
+<text x="350" y="184" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--purple-sub)">Structural patterns, memory</text>
+<line x1="350" y1="200" x2="350" y2="220" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- run_classifier_node (ADVISORY — dashed border) -->
+<rect x="205" y="220" width="290" height="52" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5" stroke-dasharray="5 3"/>
+<text x="350" y="238" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">run_classifier_node</text>
+<text x="350" y="256" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--purple-sub)">Advisory only — no dispatch gate</text>
+<line x1="350" y1="272" x2="350" y2="292" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- language_preprocess_node -->
+<rect x="205" y="292" width="290" height="52" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.5"/>
+<text x="350" y="310" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--teal-title)">language_preprocess_node</text>
+<text x="350" y="328" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--teal-sub)">Format 2 filter + bounded test</text>
+<line x1="350" y1="344" x2="350" y2="364" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- setup_dispatch_node -->
+<rect x="225" y="364" width="250" height="40" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5"/>
+<text x="350" y="384" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">setup_dispatch_node</text>
+<line x1="350" y1="404" x2="350" y2="426" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+
+<!-- ===== SPECIALIST CONTAINER ===== -->
+<rect x="55" y="426" width="590" height="232" rx="12" fill="none" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="6 4"/>
+<text x="350" y="444" text-anchor="middle" font-size="12" fill="var(--text-secondary)">specialist agents — all dispatched regardless of classifier</text>
+
+<!-- Row 1 -->
+<rect x="72" y="456" width="176" height="44" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.5"/>
+<text x="160" y="471" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--teal-title)">cfg_builder</text>
+<text x="160" y="489" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--teal-sub)">Build CFG for L</text>
+
+<rect x="262" y="456" width="176" height="44" rx="8" fill="var(--coral-fill)" stroke="var(--coral-stroke)" stroke-width="0.5"/>
+<text x="350" y="471" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--coral-title)">pumping_cfl</text>
+<text x="350" y="489" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--coral-sub)">Bar-Hillel lemma</text>
+
+<rect x="452" y="456" width="176" height="44" rx="8" fill="var(--coral-fill)" stroke="var(--coral-stroke)" stroke-width="0.5"/>
+<text x="540" y="471" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--coral-title)">ogden</text>
+<text x="540" y="489" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--coral-sub)">Marked positions</text>
+
+<!-- Row 2 -->
+<rect x="72" y="510" width="176" height="44" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.5"/>
+<text x="160" y="525" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--teal-title)">pda_builder</text>
+<text x="160" y="543" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--teal-sub)">Build PDA for L</text>
+
+<rect x="262" y="510" width="176" height="44" rx="8" fill="var(--coral-fill)" stroke="var(--coral-stroke)" stroke-width="0.5"/>
+<text x="350" y="525" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--coral-title)">closure_reduction</text>
+<text x="350" y="543" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--coral-sub)">L ∩ REG → pump</text>
+
+<rect x="452" y="510" width="176" height="44" rx="8" fill="var(--coral-fill)" stroke="var(--coral-stroke)" stroke-width="0.5"/>
+<text x="540" y="525" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--coral-title)">interchange</text>
+<text x="540" y="543" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--coral-sub)">Sokolowski lemma</text>
+
+<!-- Row 3 -->
+<rect x="72" y="564" width="176" height="44" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.5"/>
+<text x="160" y="579" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--teal-title)">decomposition</text>
+<text x="160" y="597" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--teal-sub)">L₁ ∪ L₂, L₁ · L₂</text>
+
+<rect x="262" y="564" width="176" height="44" rx="8" fill="var(--coral-fill)" stroke="var(--coral-stroke)" stroke-width="0.5"/>
+<text x="350" y="579" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--coral-title)">morphism</text>
+<text x="350" y="597" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--coral-sub)">h(L) reduction</text>
+
+<rect x="452" y="564" width="176" height="44" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.5"/>
+<text x="540" y="579" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--teal-title)">parikh</text>
+<text x="540" y="597" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--teal-sub)">Commutative image</text>
+
+<!-- Legend -->
+<rect x="100" y="626" width="10" height="10" rx="2" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.5"/>
+<text x="116" y="635" font-size="12" fill="var(--text-secondary)">constructive (prove CFL)</text>
+<rect x="340" y="626" width="10" height="10" rx="2" fill="var(--coral-fill)" stroke="var(--coral-stroke)" stroke-width="0.5"/>
+<text x="356" y="635" font-size="12" fill="var(--text-secondary)">destructive (prove ¬CFL)</text>
+
+<!-- ===== END CONTAINER ===== -->
+<line x1="350" y1="658" x2="350" y2="678" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+
+<!-- collect_specialists_node -->
+<rect x="205" y="678" width="290" height="40" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5"/>
+<text x="350" y="698" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">collect_specialists_node</text>
+<line x1="350" y1="718" x2="350" y2="736" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- build_oracle_node -->
+<rect x="205" y="736" width="290" height="50" rx="8" fill="var(--blue-fill)" stroke="var(--blue-stroke)" stroke-width="0.5"/>
+<text x="350" y="754" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--blue-title)">build_oracle_node</text>
+<text x="350" y="772" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--blue-sub)">CYK oracle from proposed CFG</text>
+<line x1="350" y1="786" x2="350" y2="802" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- verify_claims_node -->
+<rect x="205" y="802" width="290" height="50" rx="8" fill="var(--blue-fill)" stroke="var(--blue-stroke)" stroke-width="0.5"/>
+<text x="350" y="820" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--blue-title)">verify_claims_node</text>
+<text x="350" y="838" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--blue-sub)">Pumping, Parikh, closures</text>
+<line x1="350" y1="852" x2="350" y2="868" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- oracle_test_node -->
+<rect x="205" y="868" width="290" height="50" rx="8" fill="var(--blue-fill)" stroke="var(--blue-stroke)" stroke-width="0.5"/>
+<text x="350" y="886" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--blue-title)">oracle_test_node</text>
+<text x="350" y="904" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--blue-sub)">CFG vs word generator</text>
+<line x1="350" y1="918" x2="350" y2="934" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- run_proof_checker_node -->
+<rect x="205" y="934" width="290" height="40" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5"/>
+<text x="350" y="954" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">run_proof_checker_node</text>
+<line x1="350" y1="974" x2="350" y2="992" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<!-- run_reasoning_node -->
+<rect x="205" y="992" width="290" height="52" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5"/>
+<text x="350" y="1010" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">run_reasoning_node</text>
+<text x="350" y="1028" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--purple-sub)">Aggregate verdicts, decide</text>
+
+<!-- Branch labels -->
+<text x="96" y="1062" font-size="12" fill="var(--text-secondary)">done</text>
+<text x="300" y="1062" font-size="12" fill="var(--text-secondary)">invert</text>
+<text x="450" y="1062" font-size="12" fill="var(--text-secondary)">retry</text>
+
+<!-- Branch arrows -->
+<line x1="264" y1="1044" x2="116" y2="1078" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<line x1="350" y1="1044" x2="326" y2="1078" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<line x1="436" y1="1044" x2="540" y2="1078" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+
+<!-- formalize_node -->
+<rect x="36" y="1078" width="160" height="40" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5"/>
+<text x="116" y="1098" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">formalize_node</text>
+
+<!-- invert_hypothesis_node -->
+<rect x="226" y="1078" width="200" height="40" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.5"/>
+<text x="326" y="1098" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--purple-title)">invert_hypothesis_node</text>
+
+<!-- retry_planner_node (AMBER — selective) -->
+<rect x="445" y="1078" width="190" height="52" rx="8" fill="var(--amber-fill)" stroke="var(--amber-stroke)" stroke-width="0.5"/>
+<text x="540" y="1096" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--amber-title)">retry_planner_node</text>
+<text x="540" y="1114" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--amber-sub)">Selective agent dispatch</text>
+
+<!-- retry → setup_dispatch (selective loop) -->
+<line x1="635" y1="1104" x2="660" y2="1104" stroke="var(--amber-stroke)" stroke-width="0.5" stroke-dasharray="4 3"/>
+<line x1="660" y1="1104" x2="660" y2="384" stroke="var(--amber-stroke)" stroke-width="0.5" stroke-dasharray="4 3"/>
+<line x1="660" y1="384" x2="475" y2="384" stroke="var(--amber-stroke)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+<text x="652" y="740" text-anchor="end" font-size="11" fill="var(--amber-sub)" transform="rotate(-90 652 740)">selected agents only</text>
+
+<!-- retry fail -->
+<text x="548" y="1146" font-size="12" fill="var(--text-secondary)">fail</text>
+<line x1="540" y1="1130" x2="540" y2="1248" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+
+<!-- formalize → assemble_result -->
+<line x1="116" y1="1118" x2="116" y2="1248" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+<!-- invert → assemble_result -->
+<line x1="326" y1="1118" x2="126" y2="1248" stroke="var(--text-secondary)" stroke-width="0.5" stroke-dasharray="4 3" marker-end="url(#a)"/>
+
+<!-- assemble_result_node -->
+<rect x="26" y="1248" width="200" height="40" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.5"/>
+<text x="126" y="1268" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--gray-title)">assemble_result_node</text>
+
+<!-- assemble_early_failure -->
+<rect x="436" y="1248" width="220" height="40" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.5"/>
+<text x="546" y="1268" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--gray-title)">assemble_early_failure</text>
+
+<!-- Both → __end__ -->
+<line x1="126" y1="1288" x2="350" y2="1330" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+<line x1="546" y1="1288" x2="350" y2="1330" stroke="var(--text-secondary)" stroke-width="1.5" marker-end="url(#a)"/>
+
+<rect x="290" y="1330" width="120" height="34" rx="17" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.5"/>
+<text x="350" y="1347" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="var(--gray-title)">__end__</text>
+
+</svg>
+</body>
+</html>

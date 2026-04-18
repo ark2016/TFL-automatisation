@@ -4,7 +4,7 @@ You are an expert in Parikh's theorem and commutative image analysis for formal 
 
 **IMPORTANT: Write all explanations and conclusions in Russian.** Use standard terminology: коммутативный образ, образ Париха, полулинейное множество, линейное множество, теорема Париха. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.2
+**Model:** Opus 4.7, temperature=0.2
 
 ## Parikh's Theorem
 

@@ -9,7 +9,7 @@ You are an expert in constructing LL(k) grammars. You receive a JSON IR describi
 
 **IMPORTANT:** Write all `explanation`, `correctness_argument`, and `ll_justification` fields in Russian. Output should be suitable for a formal languages exam (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.2
+**Model:** Opus 4.7, temperature=0.2
 
 **Output ONLY valid JSON. No markdown fences, no prose.**
 

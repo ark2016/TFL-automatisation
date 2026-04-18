@@ -404,7 +404,7 @@ assemble_result_node      assemble_early_failure
   "explanation": "..."
 }
 ```
-**Модель:** Opus 4.6 (temperature=0.2).
+**Модель:** Opus 4.7 (temperature=0.2).
 
 #### 4.5.2. pda_builder (constructive, LLM)
 
@@ -434,7 +434,7 @@ assemble_result_node      assemble_early_failure
   "explanation": "..."
 }
 ```
-**Модель:** Opus 4.6 (temperature=0.2).
+**Модель:** Opus 4.7 (temperature=0.2).
 
 #### 4.5.3. decomposition (constructive, LLM)
 
@@ -456,7 +456,7 @@ assemble_result_node      assemble_early_failure
   "explanation": "..."
 }
 ```
-**Модель:** Opus 4.6 (temperature=0.3).
+**Модель:** Opus 4.7 (temperature=0.3).
 
 **Важно:** НЕ все декомпозиции корректны. {ww} сам по себе НЕ КС. Агент
 должен обосновать, что каждая компонента КС, и что операция сохраняет КС.
@@ -517,7 +517,7 @@ LLM анализирует коммутативный образ.
   "conclusion": "L is not context-free"
 }
 ```
-**Модель:** Opus 4.6 (temperature=0.1).
+**Модель:** Opus 4.7 (temperature=0.1).
 
 #### 4.5.6. ogden (destructive, LLM)
 
@@ -541,7 +541,7 @@ LLM анализирует коммутативный образ.
   "conclusion": "L is not context-free (by Ogden's lemma)"
 }
 ```
-**Модель:** Opus 4.6 (temperature=0.1).
+**Модель:** Opus 4.7 (temperature=0.1).
 
 #### 4.5.7. closure_reduction (destructive, LLM)
 
@@ -570,7 +570,7 @@ LLM анализирует коммутативный образ.
   "conclusion": "L ∩ R is not CFL, R is regular, therefore L is not CFL"
 }
 ```
-**Модель:** Opus 4.6 (temperature=0.2).
+**Модель:** Opus 4.7 (temperature=0.2).
 
 #### 4.5.8. interchange (destructive, LLM)
 
@@ -594,7 +594,7 @@ n слов, для которых interchange (обмен подсловами) 
   "conclusion": "L is not context-free"
 }
 ```
-**Модель:** Opus 4.6 (temperature=0.2).
+**Модель:** Opus 4.7 (temperature=0.2).
 
 #### 4.5.9. morphism (destructive, LLM)
 
@@ -616,7 +616,7 @@ n слов, для которых interchange (обмен подсловами) 
   "conclusion": "..."
 }
 ```
-**Модель:** Opus 4.6 (temperature=0.2).
+**Модель:** Opus 4.7 (temperature=0.2).
 
 ---
 

@@ -8,7 +8,7 @@ Edit this file to change models or behavior.
 # ---------------------------------------------------------------------------
 # Model assignments per agent (§4 spec table)
 # ---------------------------------------------------------------------------
-# Available: "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"
+# Available: "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"
 
 MODELS = {
     # Fast / structured tasks → Sonnet
@@ -16,17 +16,17 @@ MODELS = {
     "classifier":       "claude-sonnet-4-6",
 
     # Deep reasoning → Opus
-    "re_builder":       "claude-opus-4-6",
-    "dfa_builder":      "claude-opus-4-6",
-    "pumping_agent":    "claude-opus-4-6",
-    "nerode_agent":     "claude-opus-4-6",
-    "closure_agent":    "claude-opus-4-6",
-    "grammar_analyzer": "claude-opus-4-6",
-    "reasoning_agent":  "claude-opus-4-6",
-    "formalizer":       "claude-opus-4-6",
+    "re_builder":       "claude-opus-4-7",
+    "dfa_builder":      "claude-opus-4-7",
+    "pumping_agent":    "claude-opus-4-7",
+    "nerode_agent":     "claude-opus-4-7",
+    "closure_agent":    "claude-opus-4-7",
+    "grammar_analyzer": "claude-opus-4-7",
+    "reasoning_agent":  "claude-opus-4-7",
+    "formalizer":       "claude-opus-4-7",
 
     # Verification & retry planning
-    "proof_checker":    "claude-opus-4-6",
+    "proof_checker":    "claude-opus-4-7",
     "retry_planner":    "claude-sonnet-4-6",
 
     # Quick validation / summarization → Haiku (logs & translation only)

@@ -1,0 +1,16 @@
+{
+  "task_type": "ll_check_grammar_lang",
+  "source_text": "Проверить, задаёт ли данная грамматика LL-язык: S → SabS | cSc | a",
+  "language_spec": {
+    "kind": "grammar",
+    "nonterminals": ["S"],
+    "terminals": ["a", "b", "c"],
+    "start": "S",
+    "rules": [
+      {"lhs": "S", "rhs": ["S", "a", "b", "S"]},
+      {"lhs": "S", "rhs": ["c", "S", "c"]},
+      {"lhs": "S", "rhs": ["a"]}
+    ]
+  },
+  "question": "is_ll_language"
+}

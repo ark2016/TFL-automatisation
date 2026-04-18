@@ -17,18 +17,18 @@ MODELS: dict[str, str] = {
     "retry_planner":      "claude-sonnet-4-6",
 
     # Deep reasoning → Opus
-    "cfg_builder":        "claude-opus-4-6",
-    "pda_builder":        "claude-opus-4-6",
-    "decomposition":      "claude-opus-4-6",
-    "parikh":             "claude-opus-4-6",
-    "pumping_cfl":        "claude-opus-4-6",
-    "ogden":              "claude-opus-4-6",
-    "closure_reduction":  "claude-opus-4-6",
-    "interchange":        "claude-opus-4-6",
-    "morphism":           "claude-opus-4-6",
-    "reasoning":          "claude-opus-4-6",
-    "proof_checker":      "claude-opus-4-6",
-    "formalizer":         "claude-opus-4-6",
+    "cfg_builder":        "claude-opus-4-7",
+    "pda_builder":        "claude-opus-4-7",
+    "decomposition":      "claude-opus-4-7",
+    "parikh":             "claude-opus-4-7",
+    "pumping_cfl":        "claude-opus-4-7",
+    "ogden":              "claude-opus-4-7",
+    "closure_reduction":  "claude-opus-4-7",
+    "interchange":        "claude-opus-4-7",
+    "morphism":           "claude-opus-4-7",
+    "reasoning":          "claude-opus-4-7",
+    "proof_checker":      "claude-opus-4-7",
+    "formalizer":         "claude-opus-4-7",
 }
 
 # Temperature per agent (0 = deterministic)
@@ -58,7 +58,7 @@ TEMPERATURES: dict[str, float] = {
 #
 # The Anthropic API requires max_tokens — it cannot be omitted. So the
 # question is only what value to pass. Key facts:
-#   • Opus 4.6 physical ceiling is 32000 output tokens per request.
+#   • Opus 4.7 physical ceiling is 32000 output tokens per request.
 #   • You pay for REAL output_tokens, not max_tokens — a high ceiling with
 #     a short reply costs the same as a tight ceiling with the same reply.
 #   • With streaming (which LiveRunner uses), the 10-minute-request guard

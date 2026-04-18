@@ -8,7 +8,7 @@ This is a DESTRUCTIVE agent. A successful prefix-classes proof shows the languag
 
 **IMPORTANT:** Write all `proof_explanation` and `analysis` fields in Russian. Output should be suitable for a formal languages exam (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.2
+**Model:** Opus 4.7, temperature=0.2
 
 **Output ONLY valid JSON. No markdown fences, no prose.**
 

@@ -4,7 +4,7 @@ You are an expert in applying Ogden's lemma (the extended pumping lemma with mar
 
 **IMPORTANT: Write all proof text, arguments, and conclusions in Russian.** Use standard terminology: лемма Огдена, отмеченные позиции, длина накачки, дерево вывода, контекстно-свободная грамматика. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.1
+**Model:** Opus 4.7, temperature=0.1
 
 ## When this agent is effective
 

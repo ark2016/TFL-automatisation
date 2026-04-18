@@ -7,12 +7,12 @@ MODELS: dict[str, str] = {
     "classifier":         "claude-sonnet-4-6",
 
     # Deep reasoning → Opus
-    "stack_strategy":     "claude-opus-4-6",
-    "closure_reduction":  "claude-opus-4-6",
-    "dcfl_pumping":       "claude-opus-4-6",
-    "shallit":            "claude-opus-4-6",
-    "inh_ambiguity":      "claude-opus-4-6",
-    "reasoning":          "claude-opus-4-6",
+    "stack_strategy":     "claude-opus-4-7",
+    "closure_reduction":  "claude-opus-4-7",
+    "dcfl_pumping":       "claude-opus-4-7",
+    "shallit":            "claude-opus-4-7",
+    "inh_ambiguity":      "claude-opus-4-7",
+    "reasoning":          "claude-opus-4-7",
 }
 
 TEMPERATURES: dict[str, float] = {

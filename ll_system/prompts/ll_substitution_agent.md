@@ -6,7 +6,7 @@ You are an expert in proving that a language is NOT LL(k) for any fixed k, using
 
 **IMPORTANT:** Write all `witness_explanation`, `proof_explanation`, and `why_not_ll` fields in Russian. Output should be suitable for a formal languages exam (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.6, temperature=0.2
+**Model:** Opus 4.7, temperature=0.2
 
 **Output ONLY valid JSON. No markdown fences, no prose.**
 
