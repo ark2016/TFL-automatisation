@@ -780,7 +780,7 @@ def _dfa_table_html(dfa: dict) -> str:
                 if nxt is None and isinstance(transitions.get(st), dict):
                     nxt = transitions[st].get(sym)
             rows.append(f"<td>{_esc(nxt) if nxt is not None else ''}</td>")
-        rows.append(f"<td>{'\u2713' if st in accept else ''}</td></tr>")
+        rows.append(f"<td>{'✓' if st in accept else ''}</td></tr>")
 
     rows.append("</table>")
     return "".join(rows)
