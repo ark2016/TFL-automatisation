@@ -26,4 +26,12 @@ pumping-lemma = "pumping_lemma.cli:main"
 inverse-homomorphism = "reverse_morfism.main:main"
 
 [tool.setuptools.packages.find]
-include = ["pumping_lemma*", "reverse_morfism*", "agent_system*", "cfl_system*"]
+include = [
+    "pumping_lemma*",
+    "reverse_morfism*",
+    "agent_system*",
+    "cfl_system*",
+    "dcfl_system*",
+    "ll_system*",
+    "ui_server*",
+]
