@@ -469,7 +469,7 @@ def _panel_status_line(output: dict) -> str:
             bits.append(f"уверенность: {float(conf):.2f}")
         except (TypeError, ValueError):
             pass
-    return f'<div class="s-meta">{" \u00b7 ".join(bits)}</div>'
+    return f'<div class="s-meta">{" · ".join(bits)}</div>'
 
 
 def _render_evidence_steps(output: dict, parts: list[str]) -> None:
