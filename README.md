@@ -316,6 +316,10 @@ The 3 skipped tests exercise MockRunner against `%TEMP%` on Windows and skip in 
 
 ---
 
+## License
+
+[MIT](LICENSE) — use, modify, distribute freely. Provided as-is, with no warranty.
+
 ## Acknowledgements
 
 Built for the Theory of Formal Languages course at **МГТУ им. Н.Э. Баумана, ИУ-9**.
