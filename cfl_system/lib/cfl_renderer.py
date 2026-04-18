@@ -132,13 +132,54 @@ def _md_table_to_html(md: str) -> str:
         return f"<pre>{_esc(md)}</pre>"
 
     def _split_row(row: str) -> list[str]:
-        # Strip leading/trailing pipes, split on pipes, strip each cell
+        """Split a markdown table row on `|` while preserving:
+          • `\\|` escape sequences (literal pipe)
+          • `|` characters inside inline LaTeX delimited by `$...$`
+            (e.g. `$|vx|$`, `$w_1 \\mid b$` — `$...$` guards pipes)
+
+        Without these guards, formulas like `$|vx|$` would split a single
+        cell into three — shifting every subsequent cell and producing a
+        table with far too many columns.
+        """
         row = row.strip()
         if row.startswith("|"):
             row = row[1:]
         if row.endswith("|"):
             row = row[:-1]
-        return [cell.strip() for cell in row.split("|")]
+
+        cells: list[str] = []
+        buf: list[str] = []
+        in_math = False       # inside $...$
+        in_display = False    # inside $$...$$
+        i = 0
+        while i < len(row):
+            ch = row[i]
+            # Check for $$ first (display math)
+            if ch == "$" and i + 1 < len(row) and row[i + 1] == "$":
+                in_display = not in_display
+                buf.append("$$")
+                i += 2
+                continue
+            if ch == "$" and not in_display:
+                in_math = not in_math
+                buf.append(ch)
+                i += 1
+                continue
+            # Escaped pipe \|
+            if ch == "\\" and i + 1 < len(row) and row[i + 1] == "|":
+                buf.append("|")
+                i += 2
+                continue
+            # Pipe outside math → column separator
+            if ch == "|" and not in_math and not in_display:
+                cells.append("".join(buf).strip())
+                buf = []
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+        cells.append("".join(buf).strip())
+        return cells
 
     header = _split_row(lines[0])
     # lines[1] is the separator — skip it
