@@ -280,7 +280,7 @@ class LLMRunner:
         Returns a short natural-language assessment (1-3 sentences).
         Used for intermediate progress output.
         """
-        model = self.model_map.get("validator", "claude-haiku-4-5-20251001")
+        model = self.model_map.get("validator", "claude-haiku-4-5")
         if isinstance(data, (dict, list)):
             data_str = json.dumps(data, indent=2, ensure_ascii=False)
         else:

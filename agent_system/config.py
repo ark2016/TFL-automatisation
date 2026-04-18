@@ -8,7 +8,7 @@ Edit this file to change models or behavior.
 # ---------------------------------------------------------------------------
 # Model assignments per agent (§4 spec table)
 # ---------------------------------------------------------------------------
-# Available: "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"
+# Available: "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"
 
 MODELS = {
     # Fast / structured tasks → Sonnet
@@ -30,8 +30,8 @@ MODELS = {
     "retry_planner":    "claude-sonnet-4-6",
 
     # Quick validation / summarization → Haiku (logs & translation only)
-    "validator":        "claude-haiku-4-5-20251001",
-    "summarizer":       "claude-haiku-4-5-20251001",
+    "validator":        "claude-haiku-4-5",
+    "summarizer":       "claude-haiku-4-5",
 }
 
 # ---------------------------------------------------------------------------

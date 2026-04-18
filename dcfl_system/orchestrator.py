@@ -179,7 +179,7 @@ class LiveRunner:
         self.prompts_dir = Path(__file__).parent / "prompts"
         self.verbose = verbose
         self._prompt_cache: dict[str, str] = {}
-        self._json_repair_model = "claude-haiku-4-5-20251001"
+        self._json_repair_model = "claude-haiku-4-5"
 
     def _load_prompt(self, agent_name: str) -> str:
         if agent_name in self._prompt_cache:

@@ -163,7 +163,37 @@ class LiveRunner:
         # conversion — ideal for turning "Opus wrote prose around its JSON"
         # into pure JSON. One repair call ≈ $0.01 vs ≈ $0.25 for a full
         # Opus retry, and it's faster too (~2s vs ~30s).
-        self._json_repair_model = "claude-haiku-4-5-20251001"
+        self._json_repair_model = "claude-haiku-4-5"
+
+    @staticmethod
+    def _model_accepts_temperature(model: str) -> bool:
+        """Whether the API accepts the `temperature` parameter for this model.
+
+        Thinking-capable Claude models (Opus 4.7, likely future ones) deprecated
+        the `temperature` field — passing it causes a 400 Bad Request. Sonnet 4.x
+        and Haiku 4.x still accept it. Keep this a small allow-list of known
+        deprecations so we fail closed when new models arrive.
+        """
+        if not model:
+            return True
+        # Known models that REJECT temperature. Extend as Anthropic releases more.
+        rejects = ("claude-opus-4-7",)
+        return not any(model.startswith(p) for p in rejects)
+
+    def _build_request_kwargs(self, model: str, max_tokens: int,
+                              temperature: float, system_prompt: str,
+                              user_msg: str) -> dict:
+        """Build kwargs for messages.stream / messages.create, dropping
+        `temperature` for models that no longer accept it."""
+        kwargs = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_msg}],
+        }
+        if self._model_accepts_temperature(model):
+            kwargs["temperature"] = temperature
+        return kwargs
 
     def _repair_json_with_haiku(self, agent_name: str, raw_text: str, was_truncated: bool) -> dict | None:
         """Ask Haiku to extract/repair valid JSON from a specialist's raw output.
@@ -208,14 +238,13 @@ class LiveRunner:
         )
 
         t0 = _time.monotonic()
+        repair_max_tokens = min(len(raw_text) // 2 + 2000, 8000)
+        request_kwargs = self._build_request_kwargs(
+            model=self._json_repair_model, max_tokens=repair_max_tokens,
+            temperature=0.0, system_prompt=system, user_msg=user_msg,
+        )
         try:
-            response = self.client.messages.create(
-                model=self._json_repair_model,
-                max_tokens=min(len(raw_text) // 2 + 2000, 8000),
-                temperature=0.0,
-                system=system,
-                messages=[{"role": "user", "content": user_msg}],
-            )
+            response = self.client.messages.create(**request_kwargs)
         except Exception as exc:
             logger.warning("[%s] JSON repair (Haiku) failed: %s", agent_name, exc)
             return None
@@ -313,14 +342,15 @@ class LiveRunner:
             # Always stream. Non-streaming requests are rejected by the SDK
             # when max_tokens × projected latency exceeds 10 minutes; streaming
             # lifts that cap and handles long proofs / audits reliably.
+            # temperature is dropped automatically for models that don't
+            # accept it (e.g. Opus 4.7 — adaptive thinking, picks its own).
+            request_kwargs = self._build_request_kwargs(
+                model=model, max_tokens=max_tokens,
+                temperature=temperature, system_prompt=system_prompt,
+                user_msg=user_msg,
+            )
             try:
-                with self.client.messages.stream(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_msg}],
-                ) as stream:
+                with self.client.messages.stream(**request_kwargs) as stream:
                     for chunk in stream.text_stream:
                         raw_text += chunk
                     final_msg = stream.get_final_message()

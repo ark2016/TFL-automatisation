@@ -158,7 +158,7 @@ class LiveRunner:
         # Haiku is ~15x cheaper than Opus and excellent at structural text
         # conversion — ideal for turning "Opus wrote prose around its JSON"
         # into pure JSON.
-        self._json_repair_model = "claude-haiku-4-5-20251001"
+        self._json_repair_model = "claude-haiku-4-5"
 
     def _repair_json_with_haiku(
         self, agent_name: str, raw_text: str, was_truncated: bool
