@@ -21,8 +21,21 @@ Answer these questions first in your reasoning field, then make your classificat
 
 These rules override your own analysis. Check them first:
 
-1. **Grammar + regular filter:** Only two kinds of filters are actually regular: (a) regex filters, and (b) a threshold or modular condition on a **single** counter (|a| ≥ k, |a| ≡ r (mod m)). For these, if `kind == "grammar_filter"`, the filter defines a regular language and CFL ∩ REG = CFL -> verdict `"cfl"`, confidence `0.85`.
-   An equality or inequality **between two counters** (|a| = |b|, |a| ≠ |b|, etc.) is itself a non-regular CFL filter. CFL ∩ CFL is NOT closed under intersection in general, so `L(G) ∩ F` may fail to be context-free (concrete counterexample: `task_grammar_filter_49`, see Example 2 below — grammar with counting-filter |a|=|b| gives a language whose "stratum by nesting depth" reduction is Ogden-provably non-CFL). Do NOT auto-classify this as `"cfl"`. -> verdict `"uncertain"`, confidence ≤ `0.5`, and note in `reasoning` that destructive agents (closure_reduction / interchange / pumping) must decide.
+1. **Grammar + regular filter:** The following filter kinds are regular: (a) regex filters; (b) a
+   threshold or modular condition on a **single** counter (|a| ≥ k, |a| ≡ r (mod m)); (c) a
+   threshold or modular condition on a **linear combination of counters** (e.g. |w|_a − |w|_b ≡ 0
+   (mod 3), or 2|a| + |b| ≥ k) — this is still regular because a DFA can track the linear
+   combination mod its period / up to the threshold with finite state, no stack needed; (d) any
+   **Boolean combination** (AND/OR/NOT) of filters of kinds (a)-(c), since regular languages are
+   closed under Boolean operations. For any of these, if `kind == "grammar_filter"`, the filter
+   defines a regular language and CFL ∩ REG = CFL -> verdict `"cfl"`, confidence `0.85`.
+   An **equality or inequality between two unbounded counters** (|a| = |b|, |a| ≤ |b|, |a| ≠ |b|,
+   etc.) is NOT regular — it is itself a non-regular CFL filter. CFL ∩ CFL is NOT closed under
+   intersection in general, so `L(G) ∩ F` may fail to be context-free (concrete counterexample:
+   `task_grammar_filter_49`, see Example 2 below — grammar with counting-filter |a|=|b| gives a
+   language whose "stratum by nesting depth" reduction is Ogden-provably non-CFL). Do NOT
+   auto-classify this as `"cfl"`. -> verdict `"uncertain"`, confidence ≤ `0.5`, and note in
+   `reasoning` that destructive agents (closure_reduction / interchange / pumping) must decide.
 
 2. **Crossed dependencies:** If the language requires matching two independent pairs across each other (e.g., w₁...w₂...w₁...w₂ with w₁, w₂ from overlapping alphabets), this is a strong signal of non-CFL. -> verdict `"non_cfl"`, confidence `0.75`.
 

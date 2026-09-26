@@ -60,7 +60,8 @@ each αᵢ (docs/THEORY.md §3.1/§3.5):
 - **k ≥ 2 (strong LL(k)):** a plain union is WRONG — the two sets must be combined with
   **k-concatenation**, not union: Director(αᵢ) = FIRST_k(αᵢ) ⊕_k FOLLOW_k(A), where
   `X ⊕_k Y = {(xy) truncated to k symbols | x ∈ X, y ∈ Y}` (`k_concat` in `lib/first_follow.py`).
-  Using `FIRST_k(αᵢ) ∪ FOLLOW_k(A)` at k ≥ 2 checks the wrong, strictly weaker condition.
+  Using `FIRST_k(αᵢ) ∪ FOLLOW_k(A)` at k ≥ 2 checks a different (incomparable) condition — it can
+  both miss real conflicts and invent spurious ones.
 - **Full LL(k) (not just strong LL(k)):** even `⊕_k` with a single *global* FOLLOW_k(A) is not the
   complete test — the full Aho–Ullman test replaces the global FOLLOW_k(A) with the *local* follow
   sets σ(A) (docs/THEORY.md §3.1; `compute_local_follow_sets` in `lib/first_follow.py`), each a

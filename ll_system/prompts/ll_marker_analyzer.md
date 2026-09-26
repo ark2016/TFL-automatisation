@@ -63,7 +63,9 @@ matching `w^R` — this needs unbounded lookahead to tell `M` apart from any sma
 fixed k works (docs/THEORY.md §3.4, bounded-flexibility lemma). This language is DCFL but not
 LL(k) for any k. Do NOT report `"ll"` just because a unique symbol exists — check whether an
 *unbounded* repetition sits immediately against that symbol; if so, return `"uncertain"` and note
-that `substitution` / `prefix_classes` should decide it, not this agent.
+that `substitution` (not `prefix_classes`) should decide it — this language is itself a DCFL, and
+`prefix_classes` proves not_ll only via Theorem 4.7.4 [Sh] (not DCFL ⇒ not LL), which cannot fire
+here — this agent should not suggest `prefix_classes`.
 
 ---
 

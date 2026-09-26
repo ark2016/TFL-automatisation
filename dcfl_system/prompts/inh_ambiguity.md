@@ -85,8 +85,8 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
   at all (the `b*` and `b^n` merge into one bigger `b` block, and nothing separates them).
 - **The branches are disjoint for n >= 1.** In branch 1, the block immediately preceding the `a`
   is `c^n` with n >= 1, i.e. there is at least one `c` right before `a`. In branch 2, the symbol
-  immediately preceding `a` is always `b` (or, if `m = 0`, `a` itself follows `a^n` — but that
-  requires n... — in any case branch 2 never has a `c` adjacent to the mandatory `a`). So no word
+  immediately preceding `a` is always `b` (or, if `m = 0`, `a` itself follows `a^n` directly);
+  either way branch 2 never has a `c` adjacent to the mandatory `a`. So no word
   can be parsed via both branches at once: a word with >=1 `c` right before the `a` can only come
   from branch 1, a word without can only come from branch 2. There is no overlap word to build an
   ambiguity argument on.
@@ -113,7 +113,7 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
     "Объединение двух дизъюнктных однозначных КС-языков однозначно — метод существенной неоднозначности неприменим",
     "Возвращаем not_applicable; для non-DCFL нужен другой метод (dcfl_pumping, THEORY.md §1.8)"
   ],
-  "confidence": 0.85,
+  "confidence": 0.0,
   "errors": []
 }
 ```

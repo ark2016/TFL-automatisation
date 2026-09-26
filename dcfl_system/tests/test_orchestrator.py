@@ -40,9 +40,13 @@ MOCK_DIR = EXAMPLES_DIR / "mock"
 #   dcfl_pumping now succeeds with a complete Yu pumping proof (confidence
 #   0.9) instead of the old incomplete "uncertain 0.5" attempt.
 #
-# In all three cases the fallback/consolidation logic reduces to "single
-# successful destructive agent, confidence 0.9" (verified by running the
-# actual pipeline against the corrected mocks below -- not hand-picked).
+# In all three cases the expected verdict/confidence below are copied
+# verbatim from each task's `*_reasoning.json` mock (MockRunner finds and
+# returns that file directly, so the reasoning node never falls back to
+# `_fallback_reasoning` in these parametrized tests). See
+# `test_fallback_reasoning_matches_specialist_mocks` below for a check that
+# does exercise `_fallback_reasoning` directly against the specialist mocks
+# (with the reasoning mock unavailable).
 TASKS = [
     ("task_wvaavRwR", "non_dcfl", 0.9),
     ("task_u1au2_u3au4", "non_dcfl", 0.9),
@@ -79,6 +83,38 @@ def test_confidence_correct(task_filename, expected_verdict, expected_confidence
     result = _run_task(task_filename)
     assert result["confidence"] == pytest.approx(expected_confidence, abs=0.01), (
         f"Expected confidence={expected_confidence}, got {result['confidence']}"
+    )
+
+
+class _NoReasoningMockRunner(MockRunner):
+    """MockRunner that pretends no reasoning mock exists, forcing the
+    orchestrator's reasoning node to fall back to `_fallback_reasoning`
+    (heuristic consolidation over the specialist mock outputs)."""
+
+    def run_agent(self, agent_name: str, input_data: dict | None = None):
+        if agent_name == "reasoning":
+            return None
+        return super().run_agent(agent_name, input_data)
+
+
+@pytest.mark.parametrize(
+    "task_filename,expected_verdict,expected_confidence",
+    TASKS[:3],  # only the three non-DCFL exam tasks; task_grammar_aSSb has no single dominant specialist
+)
+def test_fallback_reasoning_matches_specialist_mocks(
+    task_filename, expected_verdict, expected_confidence
+):
+    """With the reasoning mock unavailable, `_fallback_reasoning` must pick
+    the highest-confidence specialist verdict from the specialist mocks
+    directly, reproducing the same non_dcfl/0.9 result as the reasoning mock."""
+    ir = _load_ir(task_filename)
+    mock = _NoReasoningMockRunner(str(MOCK_DIR), ir["task_id"])
+    result = run_pipeline(ir, mock_runner=mock)
+    assert result["verdict"] == expected_verdict, (
+        f"Fallback reasoning: expected verdict={expected_verdict}, got {result['verdict']}"
+    )
+    assert result["confidence"] == pytest.approx(expected_confidence, abs=0.01), (
+        f"Fallback reasoning: expected confidence={expected_confidence}, got {result['confidence']}"
     )
 
 

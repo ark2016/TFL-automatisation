@@ -167,8 +167,9 @@ length; hence width ≤ Σ (over flexible X) `β(X) =: W_G`. ∎
 `n + k` symbols, so by the left-part property (THEORY.md §3.3 (C)) their leftmost derivations agree
 up to a common sentential form `aⁿbʳδ` with `1 ≤ r ≤ k`, `L(δ) ⊆ b*`, `δ ⇒* b^{k−r}` (from the
 `aⁿbᵏ` derivation) and `δ ⇒* b^{n−r}` (from the `aⁿbⁿ` derivation). Every word `x` of `L(δ)` extends
-to `L(G)` by at most `k` further `b`'s (beyond `aⁿbʳx`, any `b`-count keeps `i = n` fixed while `j`
-must stay ≤ `n`, and `x` itself already ranges only over the bounded window forced by `r ≤ k`), so
+to `L(G)` by at most `n − r − |x|` further `b`'s (bounded) — since `i = n` is fixed and `j` must
+stay `≤ n`, the whole word so far already has `r + |x|` b's, so only `n − r − |x|` more can follow
+before `j` would exceed `n`, so
 the lemma applies: `{|x| : x ∈ L(δ)} ∋ k−r, n−r` lies in an interval of width `W_G`, i.e.
 `(n−r) − (k−r) = n − k ≤ W_G`. But `n > k + W_G` gives `n − k > W_G` — contradiction. Hence no
 LL(k)-grammar for L exists, for any k (`n` was chosen as a function of `k`, so `"for_all_k": true`).

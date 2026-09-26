@@ -189,8 +189,10 @@ flexibility constant) force the same leftmost-derivation prefix `b^M c b^r δ` w
 both `b^{k−r}` and `b^{M−r}` — impossible once `M − k` exceeds the grammar's constant `W_G`. Do
 **not** apply hard rule 4 to `L'`: the presence of a unique marker `c` is necessary but not
 sufficient once an unbounded run sits directly against it. Verdict for `L'`: `"not_ll"`,
-`suggested_methods: ["prefix_classes", "substitution"]` (the destructive agents should use the
-bounded-flexibility lemma, not the pumping lemma).
+`suggested_methods: ["substitution"]` only — `L'` is itself a DCFL (see above), and `prefix_classes`
+proves not_ll via Theorem 4.7.4 [Sh] through the contrapositive "not DCFL ⇒ not LL"; it cannot fire
+on a language that IS DCFL, so it must not be suggested here. The destructive agent should use the
+bounded-flexibility lemma (THEORY.md §3.4), not the pumping lemma.
 
 ### Example 3: Left-Recursive Grammar (Format 2) — uncertain
 
