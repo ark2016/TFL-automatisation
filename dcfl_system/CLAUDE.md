@@ -40,7 +40,7 @@ Single source of truth for formulations: `docs/THEORY.md` §1. One-line summarie
 file itself before touching any prompt, dataclass or oracle check that depends on them.
 
 - LR(k) grammars generate exactly DCFL
-- For every DCFL there exists an SLR(1) grammar
+- Every DCFL has an LR(1) grammar (Knuth); L$ is LR(0)
 - DCFL closed under: complement (~), inverse homomorphism (h⁻¹), ∩ REG (via DPDA × DFA, not Table 1),
   right quotient with regular (L/R), MIN(L), MAX(L), haspref(L), L_$ ([GG]; THEORY.md §1.3–1.4)
 - DCFL NOT closed under: union, intersection (DCFL∩DCFL), concatenation, Kleene star, reversal, homomorphism
@@ -55,6 +55,8 @@ file itself before touching any prompt, dataclass or oracle check that depends o
   L_$ ∩ R ∉ CFL для регулярного R ⇒ L ∉ DCFL.
 - Inherently ambiguous → not UnambCF → not DCFL
 - Format 2: analyze the LANGUAGE, not the grammar (ambiguous grammar ≠ non-DCFL language)
+- exam examples: wvaavRwR, u1au2_u3au4, anb_cnbn are all NON-DCFL (THEORY.md §1.6–1.8); the old
+  dcfl reference verdicts were wrong
 
 ## Current status
 All phases through live LLM integration are implemented (models: see `config.py`).

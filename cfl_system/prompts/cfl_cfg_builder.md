@@ -144,22 +144,26 @@ Return **only** valid JSON. No markdown fences, no extra text.
 }
 ```
 
-### Example 2: Grammar + filter (task_grammar_filter_49)
+### Example 2: Grammar + REGULAR filter, product construction (task_grammar_filter_49, modified filter)
 
-**Task:** L(G) ∩ {w : |w|_a = |w|_b}, where G: S → aSbb | ε | bbSa | aA, A → aA | a
+**Task:** L(G) ∩ {w : |w|_a ≡ 0 (mod 2)}, where G: S → aSbb | ε | bbSa | aA, A → aA | a
+
+Note: |w|_a ≡ 0 (mod 2) is a modular condition on a *single* counter, hence regular (unlike |w|_a = |w|_b,
+which compares two counters and is itself a non-regular CFL filter — see docs/THEORY.md §2.3; for that filter
+this agent must NOT invent a "modified grammar", it must return `status: "failure"` or rely on the destructive
+agents, per Hard rule 1 in `cfl_classifier.md`).
 
 **Reasoning (Chain-of-Thought):**
-1. The grammar G generates words over {a, b}. I need to find which words of G satisfy |a| = |b|.
-2. Analyze each rule's a-b balance:
-   - S → aSbb: adds 1 'a' and 2 'b's (+1a, +2b)
-   - S → ε: adds nothing
-   - S → bbSa: adds 2 'b's and 1 'a' (+1a, +2b)
-   - S → aA: adds 1 'a' (+1a)
-   - A → aA: adds 1 'a' (+1a)
-   - A → a: adds 1 'a' (+1a)
-3. For |a| = |b|: S → aSbb adds +1a, +2b (net: +1b excess). S → bbSa adds +1a, +2b (same). S → aA leads to only a's.
-4. To achieve balance: need to use S → aSbb or S → bbSa (each adding 1a+2b) combined in a way that balances.
-5. After careful analysis, the intersection may be captured by a modified grammar.
+1. The filter is recognized by a 2-state DFA D over {a,b}: states {0,1} = parity of a's read so far, start/accept
+   state 0, transition on 'a' flips the state, transition on 'b' is a self-loop.
+2. Since the filter is regular, CFL ∩ REG = CFL, and the standard Bar-Hillel product construction builds a
+   grammar for L(G) ∩ L(D) directly: index every nonterminal X of G by a pair of DFA states (p, q), where
+   X[p,q] generates exactly the strings that D would read starting in state p and leave in state q.
+3. For a rule X → x1...xk, thread the DFA states through the right-hand side: consuming a terminal moves the
+   state per D's transition function (deterministically); consuming a nonterminal Y is replaced by Y[p,q] for
+   the (unconstrained) pair of states it enters/leaves in this instantiation.
+4. The start symbol of the new grammar is S[0,0] — start in state 0 (nothing read), end in state 0 (accepting,
+   i.e. even number of a's).
 
 **Output:**
 ```json
@@ -170,26 +174,56 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "evidence": {
     "grammar": {
       "terminals": ["a", "b"],
-      "nonterminals": ["S", "T"],
-      "start": "S",
+      "nonterminals": ["S00", "S01", "S10", "S11", "A00", "A01", "A10", "A11"],
+      "start": "S00",
       "rules": [
-        {"lhs": "S", "rhs": ["a", "T", "b", "b", "a", "T", "b", "b"]},
-        {"lhs": "S", "rhs": ["b", "b", "T", "a", "b", "b", "T", "a"]},
-        {"lhs": "S", "rhs": ["a", "T", "b", "b", "b", "b", "T", "a"]},
-        {"lhs": "S", "rhs": ["b", "b", "T", "a", "a", "T", "b", "b"]},
-        {"lhs": "S", "rhs": []},
-        {"lhs": "T", "rhs": ["S"]}
+        {"lhs": "S00", "rhs": ["a", "S10", "b", "b"]},
+        {"lhs": "S01", "rhs": ["a", "S11", "b", "b"]},
+        {"lhs": "S10", "rhs": ["a", "S00", "b", "b"]},
+        {"lhs": "S11", "rhs": ["a", "S01", "b", "b"]},
+        {"lhs": "S00", "rhs": ["b", "b", "S01", "a"]},
+        {"lhs": "S01", "rhs": ["b", "b", "S00", "a"]},
+        {"lhs": "S10", "rhs": ["b", "b", "S11", "a"]},
+        {"lhs": "S11", "rhs": ["b", "b", "S10", "a"]},
+        {"lhs": "S00", "rhs": []},
+        {"lhs": "S11", "rhs": []},
+        {"lhs": "S00", "rhs": ["a", "A10"]},
+        {"lhs": "S01", "rhs": ["a", "A11"]},
+        {"lhs": "S10", "rhs": ["a", "A00"]},
+        {"lhs": "S11", "rhs": ["a", "A01"]},
+        {"lhs": "A00", "rhs": ["a", "A10"]},
+        {"lhs": "A01", "rhs": ["a", "A11"]},
+        {"lhs": "A10", "rhs": ["a", "A00"]},
+        {"lhs": "A11", "rhs": ["a", "A01"]},
+        {"lhs": "A01", "rhs": ["a"]},
+        {"lhs": "A10", "rhs": ["a"]}
       ]
     },
-    "explanation": "Каждое правило исходной грамматики S → aSbb и S → bbSa добавляет 1 'a' и 2 'b' (дисбаланс +1b). Чтобы получить |a| = |b|, нужно комбинировать правила парами так, чтобы общий дисбаланс обнулялся. Грамматика модифицирована для порождения только сбалансированных слов.",
-    "strategy_used": "modification",
+    "explanation": "X[p,q] порождает ровно те слова из L(X), после чтения которых 2-состояньный автомат чётности числа 'a' переходит из состояния p в состояние q (0 = чётно, 1 = нечётно; 'a' переключает состояние, 'b' — самопетля). Каждое правило исходной грамматики протягивается через все допустимые состояния: например, S → aSbb даёт Spq → a S(1−p)q bb, потому что первая 'a' меняет состояние с p на 1−p, а обе 'b' не меняют состояние на выходе из S. Стартовый символ S00 — состояние 0 в начале и в конце, то есть |w|_a чётно. Итоговая грамматика — это в точности произведение G и ДКА фильтра (Бар-Хиллел), поэтому L(S00) = L(G) ∩ {w : |w|_a ≡ 0 (mod 2)} по построению, без дополнительных предположений.",
+    "strategy_used": "product_construction",
     "sample_derivations": [
-      {"word": "", "derivation": "S => ε"},
-      {"word": "abbbba", "derivation": "S => aSbb·bbSa => a·ε·bb·bb·ε·a = abbbba"}
+      {"word": "", "derivation": "S00 => ε"},
+      {"word": "aabbbb", "derivation": "S00 => a S10 bb => a (a S00 bb) bb => a a ε bb bb = aabbbb"},
+      {"word": "aa", "derivation": "S00 => a A10 => a a"}
     ]
   },
-  "confidence": 0.70,
-  "errors": ["Correctness requires oracle verification — grammar may not cover all balanced words of L(G)"]
+  "confidence": 0.9,
+  "errors": ["Рекомендуется прогон через CYK-оракул на выборке слов для контроля, но корректность следует напрямую из построения произведения с ДКА — оракул не обязателен для доказательства."]
+}
+```
+
+**When the filter is |w|_a = |w|_b (two-counter equality) instead:** this product construction does NOT apply —
+there is no finite DFA for that filter, so no finite state set to index nonterminals by. The correct response is
+honest failure, deferring to the destructive agents:
+
+```json
+{
+  "agent": "cfg_builder",
+  "status": "failure",
+  "verdict": null,
+  "evidence": null,
+  "confidence": 0.0,
+  "errors": ["Фильтр |w|_a = |w|_b сравнивает два счётчика и не является регулярным, поэтому продукт-конструкция G × ДКА неприменима (CFL ∩ CFL не замкнуто, docs/THEORY.md §2.3). Требуется деструктивное доказательство (closure_reduction / Огден), а не построение грамматики."]
 }
 ```
 

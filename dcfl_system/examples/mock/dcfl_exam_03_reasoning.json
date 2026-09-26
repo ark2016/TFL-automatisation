@@ -1,14 +1,13 @@
 {
   "action": "done",
   "verdict": "non_dcfl",
-  "confidence": 0.5,
+  "confidence": 0.9,
   "primary_evidence": "dcfl_pumping",
-  "summary": "inh_ambiguity agent's essential-ambiguity argument was retracted: the two candidate branches L1={aⁿb^m cⁿ a c*} and L2={aⁿb^j a c* | j>=n} do not overlap and are each individually unambiguous (docs/THEORY.md §1.5, §2), so it does not certify non-DCFL. shallit and closure_reduction both return not_applicable (dead class D infinite / no suitable regular filter found). The only remaining directional evidence is dcfl_pumping, which itself reports an incomplete pumping argument at confidence 0.5 — not a rigorous proof. Reporting non_dcfl with low confidence (0.5) as a best-guess pending a full Yu pumping lemma or L_$ ∩ R argument (docs/THEORY.md §1.1, §1.3).",
+  "summary": "L = {a^n b^m c^n a c^l} ∪ {a^n b^{m+n} a c^l}, n>=1 не является DCFL. inh_ambiguity вернул not_applicable: ранее заявленное пересечение ветвей a^n b^n a ложно — при n>=1 ветви c^n и b^n дизъюнктны (в первой перед 'a' стоит c^n, во второй c перед 'a' нет), каждая ветвь по отдельности однозначна, поэтому существенная неоднозначность не устанавливается (THEORY.md §1.8). stack_strategy вернул fail (дизъюнкция требует недетерминированного выбора ветви), shallit и closure_reduction вернули not_applicable. Агент dcfl_pumping построил полное доказательство по лемме Ю: для слов xy=a^n b^n c^n a (ветвь c^n) и xz=a^n b^n a (ветвь b^n, m=0) с общим префиксом x=a^n b^{n-1} оба условия леммы нарушены для произвольного p, так как окно накачки размера <=p не достаёт до блока c^n. Итог: verdict=non_dcfl, primary_evidence=dcfl_pumping, confidence=0.9 (THEORY.md §1.8).",
   "retry_plan": null,
   "hints_for_human": [
-    "Существенная неоднозначность (inh_ambiguity) для этого языка не установлена — ветви не пересекаются и каждая однозначна",
-    "Нужна полная лемма Ю (THEORY.md §1.1) или конструкция L_$ ∩ R (§1.3) для строгого доказательства non_dcfl",
-    "Текущий вердикт основан только на неполном (confidence 0.5) аргументе dcfl_pumping"
+    "inh_ambiguity ошибался: пример пересечения ветвей a^n b^n a на деле лежит только во второй ветви — ветви дизъюнктны при n>=1",
+    "Корректный метод для non_dcfl здесь — лемма Ю (dcfl_pumping), а не существенная неоднозначность"
   ],
   "errors": []
 }

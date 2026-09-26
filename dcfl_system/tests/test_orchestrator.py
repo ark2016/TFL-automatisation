@@ -21,15 +21,32 @@ EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 MOCK_DIR = EXAMPLES_DIR / "mock"
 
 # (ir_filename, expected_verdict, expected_confidence)
+#
+# docs/THEORY.md Part II §1.6-1.8 (round 2): all three exam languages below
+# are actually non-DCFL; the round-1 reference verdicts ("dcfl 0.92" / "dcfl
+# 0.88" / the incomplete "non_dcfl 0.5") were wrong or incomplete:
+#
+# - task_wvaavRwR (§1.6): stack_strategy now fails ('aa' is not a true phase
+#   separator — it also occurs inside w and inside v), dcfl_pumping succeeds
+#   with a full Yu two-word pumping proof (confidence 0.9) -> reasoning
+#   picks dcfl_pumping as primary_evidence, verdict=non_dcfl.
+# - task_u1au2_u3au4 (§1.7): stack_strategy fails (no fixed separating
+#   occurrence of 'a'), shallit succeeds via Theorem 4.7.4 on the derived
+#   language L2 = {u3au4 | |u3|>=|u4|} (all Nerode classes finite,
+#   confidence 0.9) -> reasoning picks shallit as primary_evidence.
+# - task_anb_cnbn (§1.8): inh_ambiguity is corrected to not_applicable (the
+#   two branches c^n / b^n are disjoint for n>=1 and each individually
+#   unambiguous, so essential ambiguity is not established), and
+#   dcfl_pumping now succeeds with a complete Yu pumping proof (confidence
+#   0.9) instead of the old incomplete "uncertain 0.5" attempt.
+#
+# In all three cases the fallback/consolidation logic reduces to "single
+# successful destructive agent, confidence 0.9" (verified by running the
+# actual pipeline against the corrected mocks below -- not hand-picked).
 TASKS = [
-    ("task_wvaavRwR", "dcfl", 0.92),
-    ("task_u1au2_u3au4", "dcfl", 0.88),
-    # dcfl_exam_03_inh_ambiguity mock was corrected (its essential-ambiguity
-    # argument was invalid: the two branches don't overlap and are each
-    # individually unambiguous — docs/THEORY.md §1.5/§2), so the only
-    # remaining directional evidence is dcfl_pumping's own incomplete,
-    # low-confidence attempt (0.5) — the fallback reasoner picks that up.
-    ("task_anb_cnbn", "non_dcfl", 0.5),
+    ("task_wvaavRwR", "non_dcfl", 0.9),
+    ("task_u1au2_u3au4", "non_dcfl", 0.9),
+    ("task_anb_cnbn", "non_dcfl", 0.9),
     ("task_grammar_aSSb", "dcfl", 0.55),
 ]
 

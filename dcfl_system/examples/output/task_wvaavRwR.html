@@ -42,29 +42,24 @@ th{background:#f5f5f5;font-weight:600}
     <div class="s-label-sm">Задача (анализ детерминированности КС-языка)</div>
     <div class="s-task">Проверить язык на детерминизм: {wvaav^Rw^R | w ∈ (aa*b)*a &amp; v ∈ b(ab|aa)*}</div>
   </div>
-  <span class="s-badge s-dcfl">ДКСЯ</span>
+  <span class="s-badge s-nondcfl">НЕ ДКСЯ</span>
 </div>
 <div class="s-banner-ok"><strong>✓ Oracle верификация пройдена</strong> (1 из 1 агентов верифицировано)</div>
 <div class="s-sec">Основное доказательство</div>
 <div class="s-main-proof">
-<div class="s-p"><strong>Метод:</strong> stack_strategy</div>
-<table><thead><tr><th>#</th><th>Фаза</th><th>Действие</th><th>Что</th><th>Триггер</th></tr></thead><tbody>
-<tr><td>1</td><td>push_w</td><td>push</td><td>символы w</td><td>конец w (определяется по regex (aa*b)*a)</td></tr>
-<tr><td>2</td><td>push_v</td><td>push</td><td>символы v поверх w</td><td>встретили &#x27;aa&#x27; — разделитель</td></tr>
-<tr><td>3</td><td>pop_v^R</td><td>compare</td><td>сравниваем с v^R из стека</td><td>v закончился (стек дошёл до маркера w)</td></tr>
-<tr><td>4</td><td>pop_w^R</td><td>compare</td><td>сравниваем с w^R из стека</td><td>стек пуст</td></tr>
-</tbody></table>
-<div class="s-p"><strong>Разделитель:</strong> aa (разделяет v и v^R, чётко маркирует переход)</div>
-<div class="s-p"><strong>Аргумент детерминированности:</strong> Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на &#x27;a&#x27;, за которым идёт символ из v ∈ b(ab|aa)*, т.е. &#x27;b&#x27;. Это однозначно определяет точку переключения.</div>
-<div class="s-p"><strong>Конечное управление:</strong> Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний</div>
-<div class="s-p"><strong>Regex → состояния ДКА:</strong></div><ul>
-<li>(aa*b)*a → 3 состояния ДКА</li>
-<li>b(ab|aa)* → 4 состояния ДКА</li>
-</ul>
+<div class="s-p"><strong>Метод:</strong> dcfl_pumping</div>
+<div class="s-p"><strong>Слово w:</strong> w = xy = W1 = (ab)^n aa (ba)^n ∈ L</div>
+<div class="s-p"><strong>Слово w′:</strong> w&#x27; = xz = W2 = (ab)^n aab (ab)^n aa (ba)^n baa (ba)^n ∈ L</div>
+<div class="s-p"><strong>Общий префикс x:</strong> x = W1 без последней буквы = (ab)^n aa (ba)^{n-1} b, |x| = 4n + 1 &gt; p</div>
+<div class="s-p"><strong>Суффикс y:</strong> y = a</div>
+<div class="s-p"><strong>Суффикс z:</strong> z = a b aa (ba)^n baa (ba)^n</div>
+<div class="s-p"><strong>Первые буквы совпадают:</strong> первая буква y и первая буква z — обе &#x27;a&#x27;</div>
+<div class="s-p"><strong>Условие (1): пара (x2, x4) в любом месте x:</strong> Пара (x2,x4) с окном &lt;=p где угодно в x: если она несимметрична относительно границ блоков (ab)^n / aa / (ba)^{n-1}, накачка ломает либо палиндромность W1, либо принадлежность левой половины X = (a+b)*ab(ab|aa)*. Единственные симметричные пары дают W1^(i) = (ab)^m aa (ba)^m, m=n+(i-1)s, но тогда W2^(i) с той же накачкой применённой к первому вхождению (ab)^n (а второе вхождение (ab)^n перед финальным aa(ba)^n baa(ba)^n остаётся нетронутым) теряет палиндромность, так как левая половина длины 2m+3 не совпадает по структуре с фиксированной правой частью — значит W2^(i) не в L. Условие (1) не выполняется ни для одной пары.</div>
+<div class="s-p"><strong>Условие (2): x2 в последних p символах x:</strong> x2 лежит в последних p символах x, т.е. внутри хвоста (ba)^{n-1}b, y2 в {ε,a}. При i!=1 длина хвоста перестаёт быть равна 2n, а единственное &#x27;aa&#x27; в x стоит на фиксированной позиции 2n+1 сразу после (ab)^n — палиндром с центром именно там требует хвост длины ровно 2n; при i=0 хвост короче 2n и центр смещается внутрь чередующегося блока (ab)^n, где подстроки &#x27;aa&#x27; нет. Значит W1^(i) не в L при i!=1 — условие (2) не выполняется.</div>
 </div>
 <div class="s-box" style="background:#e3f2fd;border-left:4px solid #1976d2;margin:12px 0">
 <div class="s-p"><strong>Итог рассуждения:</strong></div>
-<div style="white-space:pre-wrap">Agent &#x27;stack_strategy&#x27; verdict: dcfl</div>
+<div style="white-space:pre-wrap">L = {w v aa v^R w^R} не является DCFL. stack_strategy вернул fail: кандидат в разделители &#x27;aa&#x27; не является истинным разделителем — он встречается и внутри w (блоки a+b), и внутри v (пары aa), поэтому граница фаз v/v^R не отличима детерминированным ДМПА (THEORY.md §1.6). shallit вернул not_applicable: мёртвый класс D бесконечен (слова вне Pref(X·aa·X^R), например bb, bbb, ...), поэтому теорема 4.7.4 выполняется тривиально и ничего не доказывает. closure_reduction и inh_ambiguity вернули not_applicable. Единственное успешное доказательство дал dcfl_pumping: по двухсловной лемме Ю (THEORY.md §1.1) для слов W1=(ab)^n aa (ba)^n и W2=(ab)^n aab (ab)^n aa (ba)^n baa (ba)^n с общим префиксом x=(ab)^n aa (ba)^{n-1}b оба условия леммы нарушены для произвольного p — значит L не является DCFL (confidence=0.9).</div>
 </div>
 <div class="s-sec">Методы специалистов</div>
 <div class="s-tab">
@@ -75,49 +70,60 @@ th{background:#f5f5f5;font-weight:600}
   <button class="s-tab-btn" onclick="showTab(4)">Существ. неоднозначность</button>
 </div>
 <div class="s-panel active" id="panel-0">
-<div class="s-meta">вердикт: <code>dcfl</code> · статус: <code>success</code> · уверенность: 0.92</div>
-<table><thead><tr><th>#</th><th>Фаза</th><th>Действие</th><th>Что</th><th>Триггер</th></tr></thead><tbody>
-<tr><td>1</td><td>push_w</td><td>push</td><td>символы w</td><td>конец w (определяется по regex (aa*b)*a)</td></tr>
-<tr><td>2</td><td>push_v</td><td>push</td><td>символы v поверх w</td><td>встретили &#x27;aa&#x27; — разделитель</td></tr>
-<tr><td>3</td><td>pop_v^R</td><td>compare</td><td>сравниваем с v^R из стека</td><td>v закончился (стек дошёл до маркера w)</td></tr>
-<tr><td>4</td><td>pop_w^R</td><td>compare</td><td>сравниваем с w^R из стека</td><td>стек пуст</td></tr>
-</tbody></table>
-<div class="s-p"><strong>Разделитель:</strong> aa (разделяет v и v^R, чётко маркирует переход)</div>
-<div class="s-p"><strong>Аргумент детерминированности:</strong> Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на &#x27;a&#x27;, за которым идёт символ из v ∈ b(ab|aa)*, т.е. &#x27;b&#x27;. Это однозначно определяет точку переключения.</div>
-<div class="s-p"><strong>Конечное управление:</strong> Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний</div>
-<div class="s-p"><strong>Regex → состояния ДКА:</strong></div><ul>
-<li>(aa*b)*a → 3 состояния ДКА</li>
-<li>b(ab|aa)* → 4 состояния ДКА</li>
+<div class="s-meta">статус: <code>fail</code> · уверенность: 0.20</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Кандидат в разделители фаз — подстрока &#x27;aa&#x27; между v и v^R</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Проверка правила про разделители (THEORY.md §1.6, prompts/stack_strategy.md): разделитель обязан НЕ встречаться внутри значений переменных</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">&#x27;aa&#x27; встречается внутри w (блоки a⁺b дают подряд идущие буквы a при длине блока &gt;= 2) и внутри v (v ∈ b(ab|aa)* содержит вхождения &#x27;aa&#x27; как часть альтернативы)</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">ДМПА не может достоверно отличить настоящую границу фаз v/v^R от случайного вхождения &#x27;aa&#x27; внутри w или v — детерминированная стековая стратегия с этим разделителем не строится</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t">Возврат fail: ни &#x27;aa&#x27;, ни другой очевидный разделитель для этого языка не найден</div></div>
+<div class="s-p s-err"><strong>Ошибки:</strong></div><ul>
+<li>&#x27;aa&#x27; не является истинным разделителем: встречается внутри w (блоки a⁺b) и внутри v (пары aa) — см. THEORY.md §1.6</li>
 </ul>
-<div class="s-step"><div class="s-n">1</div><div class="s-t">Identified separator &#x27;aa&#x27; between v and v^R</div></div>
-<div class="s-step"><div class="s-n">2</div><div class="s-t">Constructed 4-phase stack strategy: push_w, push_v, pop_v^R, pop_w^R</div></div>
-<div class="s-step"><div class="s-n">3</div><div class="s-t">Verified deterministic switching via regex boundary analysis</div></div>
-<div class="s-step"><div class="s-n">4</div><div class="s-t">DFA state counts: 3 for (aa*b)*a, 4 for b(ab|aa)*</div></div>
 </div>
 <div class="s-panel" id="panel-1">
 <div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
 </div>
 <div class="s-panel" id="panel-2">
-<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+<div class="s-meta">вердикт: <code>non_dcfl</code> · статус: <code>success</code> · уверенность: 0.90</div>
+<div class="s-p"><strong>Слово w:</strong> w = xy = W1 = (ab)^n aa (ba)^n ∈ L</div>
+<div class="s-p"><strong>Слово w′:</strong> w&#x27; = xz = W2 = (ab)^n aab (ab)^n aa (ba)^n baa (ba)^n ∈ L</div>
+<div class="s-p"><strong>Общий префикс x:</strong> x = W1 без последней буквы = (ab)^n aa (ba)^{n-1} b, |x| = 4n + 1 &gt; p</div>
+<div class="s-p"><strong>Суффикс y:</strong> y = a</div>
+<div class="s-p"><strong>Суффикс z:</strong> z = a b aa (ba)^n baa (ba)^n</div>
+<div class="s-p"><strong>Первые буквы совпадают:</strong> первая буква y и первая буква z — обе &#x27;a&#x27;</div>
+<div class="s-p"><strong>Условие (1): пара (x2, x4) в любом месте x:</strong> Пара (x2,x4) с окном &lt;=p где угодно в x: если она несимметрична относительно границ блоков (ab)^n / aa / (ba)^{n-1}, накачка ломает либо палиндромность W1, либо принадлежность левой половины X = (a+b)*ab(ab|aa)*. Единственные симметричные пары дают W1^(i) = (ab)^m aa (ba)^m, m=n+(i-1)s, но тогда W2^(i) с той же накачкой применённой к первому вхождению (ab)^n (а второе вхождение (ab)^n перед финальным aa(ba)^n baa(ba)^n остаётся нетронутым) теряет палиндромность, так как левая половина длины 2m+3 не совпадает по структуре с фиксированной правой частью — значит W2^(i) не в L. Условие (1) не выполняется ни для одной пары.</div>
+<div class="s-p"><strong>Условие (2): x2 в последних p символах x:</strong> x2 лежит в последних p символах x, т.е. внутри хвоста (ba)^{n-1}b, y2 в {ε,a}. При i!=1 длина хвоста перестаёт быть равна 2n, а единственное &#x27;aa&#x27; в x стоит на фиксированной позиции 2n+1 сразу после (ab)^n — палиндром с центром именно там требует хвост длины ровно 2n; при i=0 хвост короче 2n и центр смещается внутрь чередующегося блока (ab)^n, где подстроки &#x27;aa&#x27; нет. Значит W1^(i) не в L при i!=1 — условие (2) не выполняется.</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">Берём n &gt; p + 2, x = (ab)^n aa (ba)^{n-1} b, y = a, z = a b aa (ba)^n baa (ba)^n</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">xy = W1 = (ab)^n aa (ba)^n ∈ L, xz = W2 = (ab)^n aab (ab)^n aa (ba)^n baa (ba)^n ∈ L (W1 — префикс W2), первые буквы y и z совпадают (&#x27;a&#x27;)</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">Условие (2): единственное &#x27;aa&#x27; в x стоит на фиксированной позиции сразу после (ab)^n — накачка меняющая длину хвоста (i!=1) не может сохранить палиндром</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">Условие (1): несимметричные пары ломают палиндромность или принадлежность X; симметричные пары в W1 портят палиндромность W2 при m != n</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t">Оба условия нарушены для произвольного p ⇒ по лемме Ю L не является DCFL</div></div>
+<div class="s-step"><div class="s-n">6</div><div class="s-t">Разделитель &#x27;aa&#x27; в этом языке — ложный: он встречается и внутри w (блоки a+b), и внутри v (пары aa), поэтому stack_strategy для этого языка неприменим (THEORY.md §1.6)</div></div>
 </div>
 <div class="s-panel" id="panel-3">
 <div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">L = {x aa x^R | x ∈ X}, X = (a⁺b)* ab (ab|aa)* — сильно упорядоченный по структуре язык</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Мёртвый класс D = {u | ни для какого z uz ∈ L} бесконечен: любое слово вне Pref(X·aa·X^R) (например, bb, bbb, ... — начинающееся не с блока a⁺b) не продолжается ни до какого слова из L и остаётся мёртвым для любого продолжения</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">По ограничению метода (THEORY.md §1.2/§1.6): теорема 4.7.4 выполняется автоматически из-за бесконечного D и ничего не доказывает — техника nerode_classes неприменима</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">prefix_continuation тоже не даёт очевидного регулярного R: обращение строки не согласовано с блоками (a·(aab)^R = abaa != aab·a), перекодировка через обратный гомоморфизм не проходит</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t">Возврат not_applicable; для этого языка работает лемма Ю (агент dcfl_pumping), а не теорема 4.7.4</div></div>
 </div>
 <div class="s-panel" id="panel-4">
 <div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
 </div>
 <div class="s-sec">Oracle верификация (детали)</div>
 <table><thead><tr><th>Агент</th><th>Статус</th><th>Проверки</th><th>Проблемы</th></tr></thead><tbody>
-<tr><td>stack_strategy</td><td><code>verified</code></td><td>7/7</td><td>—</td></tr>
+<tr><td>stack_strategy</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
 <tr><td>closure_reduction</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
-<tr><td>dcfl_pumping</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
+<tr><td>dcfl_pumping</td><td><code>verified</code></td><td>8/8</td><td>—</td></tr>
 <tr><td>shallit</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
 <tr><td>inh_ambiguity</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
 </tbody></table>
 <div class="s-sec">Подсказки и наблюдения</div>
-<div class="s-step"><div class="s-n">💡</div><div class="s-t">Fallback reasoning (no LLM available)</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">&#x27;aa&#x27; не разделитель: встречается внутри w и внутри v — stack_strategy для этого языка неприменим</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Работает только лемма Ю (dcfl_pumping): общий префикс x надо брать длиннее половины первого слова</div></div>
 <div class="s-footer">
-  <span>confidence: 0.92</span>
+  <span>confidence: 0.90</span>
   <span class="s-pill">5 агентов отработали</span>
   <span style="display:flex;align-items:center;gap:5px"><span class="s-dot s-pass"></span>verified</span>
 </div>

@@ -149,59 +149,68 @@ Return **only** valid JSON. No markdown fences, no extra text.
 
 ## Solved Examples
 
-### Example 1: {w b* c w^R | w ∈ {a,b}*} — LL(1) with marker
+### Example 1: {w b c w^R | w ∈ {a,b}*} — LL(1) with marker
 
 **Reasoning:**
-1. The language has the form `w · (b*) · c · w^R`. The symbol `c` is unique — it does not appear in `w` (wait: actually `b` appears in `w` domain `{a,b}*`, but `c` does NOT).
-2. Strategy: read `w` left-to-right, push each symbol onto a conceptual stack (grammar recursive nesting), upon seeing `c` switch to matching `w^R`.
-3. For the b* part: since `b` can appear in both `w` and the `b*` separator, we need to handle this carefully. The marker `c` is unambiguous. After `c`, we expect `w^R`.
-4. Grammar (LL(1)):
-   - `S → W b* c W'` where `W` and `W'` are mirror rules.
-   - Let `S → A c A`, `A → a A a | b A b | b* ` — but this creates ambiguity with b*.
-   - Simplest LL(1) grammar: treat `w` as `{a,b}*` so `w ∈ {a,b}*`.
+1. The language has the form `w · b · c · w^R` — a single literal `b` (not an unbounded `b*`)
+   sits between `w` and the unique marker `c` (docs/THEORY.md §3.4: with an unbounded `b*` there
+   instead, the language is DCFL but provably NOT LL(k) for any k — see the classifier's
+   "Example 2b" trap; a single literal `b` avoids that trap entirely).
+2. Strategy: peel matching symbols of `w` / `w^R` off both ends (`S → aSa | bT` decides on the
+   *first* unconsumed symbol of `w`), and once the literal separator `b` has been consumed by
+   `S → bT`, `T` continues to peel the *remaining* symbols of `w` (`T → aSab | bTb`) until it hits
+   the center marker `c` (`T → c`).
+3. Grammar (LL(1)): `S → aSa | bT`, `T → c | aSab | bTb`. No nonterminal derives ε, so there is
+   nothing to check against FOLLOW — the two alternatives of each nonterminal are chosen purely by
+   their (pairwise disjoint) FIRST sets.
 
 **Output:**
 ```json
 {
   "agent_name": "ll_grammar_builder",
   "verdict": "ll",
-  "confidence": 0.85,
+  "confidence": 0.9,
   "proof_sketch": {
     "method": "ll_grammar_construction",
     "k": 1,
     "ll_grammar": {
-      "nonterminals": ["S", "W"],
+      "nonterminals": ["S", "T"],
       "terminals": ["a", "b", "c"],
       "start": "S",
       "rules": [
-        {"lhs": "S", "rhs": ["W", "c", "W"]},
-        {"lhs": "W", "rhs": ["a", "W", "a"]},
-        {"lhs": "W", "rhs": ["b", "W", "b"]},
-        {"lhs": "W", "rhs": []}
+        {"lhs": "S", "rhs": ["a", "S", "a"]},
+        {"lhs": "S", "rhs": ["b", "T"]},
+        {"lhs": "T", "rhs": ["c"]},
+        {"lhs": "T", "rhs": ["a", "S", "a", "b"]},
+        {"lhs": "T", "rhs": ["b", "T", "b"]}
       ]
     },
     "first_sets": {
-      "S": ["a", "b", "c"],
-      "W": ["a", "b", "ε"]
+      "S": ["a", "b"],
+      "T": ["a", "b", "c"]
     },
     "follow_sets": {
-      "S": ["$"],
-      "W": ["c", "a", "b", "$"]
+      "S": ["a", "$"],
+      "T": ["a", "b", "$"]
     },
-    "ll_justification": "Для нетерминала W: правило W → aWa начинается с 'a', W → bWb начинается с 'b', W → ε требует заглядывания в FOLLOW(W). FOLLOW(W) = {c, a, b, $}. Конфликт: FIRST(bWb) ∩ FOLLOW(W) содержит 'b'. Это означает, что данная грамматика не LL(1) из-за неоднозначности b в W. Для языка {w b* c w^R} с w ∈ {a,b}* требуется более тщательный анализ.",
-    "correctness_argument": "Грамматика S → W c W порождает язык {x c y | x = rev(y), x,y ∈ {a,b}*} = {w c w^R | w ∈ {a,b}*}. Правило W рекурсивно строит палиндром вокруг c.",
+    "parse_table": {
+      "S": {"a": ["a", "S", "a"], "b": ["b", "T"]},
+      "T": {"c": ["c"], "a": ["a", "S", "a", "b"], "b": ["b", "T", "b"]}
+    },
+    "ll_justification": "Для S: FIRST(aSa) = {a}, FIRST(bT) = {b} — не пересекаются, правил с ε нет. Для T: FIRST(c) = {c}, FIRST(aSab) = {a}, FIRST(bTb) = {b} — попарно не пересекаются, правил с ε тоже нет. Значит выбор альтернативы в любой позиции определяется одним символом lookahead без обращения к FOLLOW: таблица разбора LL(1) без конфликтов.",
+    "correctness_argument": "Грамматика снимает пары символов w/w^R с внешних концов: S → aSa | bT срабатывает на первом ещё не обработанном символе w (a — рекурсия продолжается вокруг ядра; b — литерный разделитель найден, дальше работает T). Внутри T дальнейшие символы w обрабатываются парами через aSab / bTb (снова снаружи внутрь), пока не встретится центр c (T → c). Индукцией по |w|: L(S) = {w b c w^R | w ∈ {a,b}*}. Проверка: w=ε → S⇒bT⇒bc='bc'; w=a → S⇒aSa⇒a(bT)a⇒abca; w=b → S⇒bT⇒b(bTb)⇒b(bcb)='bbcb'; w=ab → S⇒aSa⇒a(bT)a, T⇒bTb⇒b(c)b='bcb' ⇒ 'abbcba'.",
     "sample_derivations": [
-      {"word": "c", "derivation": "S => W c W => c"},
-      {"word": "ac a", "derivation": "S => W c W => a W a c a W a => ... aca"},
-      {"word": "abcba", "derivation": "S => W c W => a W a c a W a => a b W b a c a b W b a => abcba"}
+      {"word": "bc", "derivation": "S => bT => bc"},
+      {"word": "abca", "derivation": "S => aSa => a(bT)a => a b T a => a b c a = abca"},
+      {"word": "bbcb", "derivation": "S => bT => b T => b(bTb) => b b T b => b b c b = bbcb"}
     ]
   },
   "artifacts": {
-    "ll_grammar": {"nonterminals": ["S","W"], "terminals": ["a","b","c"], "start": "S", "rules": [{"lhs":"S","rhs":["W","c","W"]},{"lhs":"W","rhs":["a","W","a"]},{"lhs":"W","rhs":["b","W","b"]},{"lhs":"W","rhs":[]}]},
-    "first_follow_table": {"W": {"FIRST": ["a","b","ε"], "FOLLOW": ["c","a","b","$"]}},
+    "ll_grammar": {"nonterminals": ["S","T"], "terminals": ["a","b","c"], "start": "S", "rules": [{"lhs":"S","rhs":["a","S","a"]},{"lhs":"S","rhs":["b","T"]},{"lhs":"T","rhs":["c"]},{"lhs":"T","rhs":["a","S","a","b"]},{"lhs":"T","rhs":["b","T","b"]}]},
+    "first_follow_table": {"S": {"FIRST": ["a","b"], "FOLLOW": ["a","$"]}, "T": {"FIRST": ["a","b","c"], "FOLLOW": ["a","b","$"]}},
     "counterexample_words": []
   },
-  "errors": ["Note: the b/ε conflict in W may require LL(2) or language reformulation without b* in the separator"]
+  "errors": []
 }
 ```
 

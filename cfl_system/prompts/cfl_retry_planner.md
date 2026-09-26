@@ -125,8 +125,7 @@ Retry the agent contradicted by oracle/checker/majority.
 - `recompute_parikh`: previous computation had error.
 
 ### interchange
-- `try_sokolowski`: interchange lemma failed, try alternative.
-- `different_word_set`: choose different words for interchange analysis.
+- `different_word_set`: choose a denser word set embedded in a more rigid template for interchange analysis.
 
 ### morphism
 - `try_inverse_homomorphism`: direct didn't work, try inverse.

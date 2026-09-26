@@ -21,7 +21,8 @@ Answer these questions first in your reasoning field, then make your classificat
 
 These rules override your own analysis. Check them first:
 
-1. **Grammar + regular filter:** If `kind == "grammar_filter"` and the filter condition is a comparison of symbol counts (|a| = |b|, |a| mod k = r, etc.) or a regular expression, then the filter defines a regular language. CFL ∩ REG = CFL. -> verdict `"cfl"`, confidence `0.85`.
+1. **Grammar + regular filter:** Only two kinds of filters are actually regular: (a) regex filters, and (b) a threshold or modular condition on a **single** counter (|a| ≥ k, |a| ≡ r (mod m)). For these, if `kind == "grammar_filter"`, the filter defines a regular language and CFL ∩ REG = CFL -> verdict `"cfl"`, confidence `0.85`.
+   An equality or inequality **between two counters** (|a| = |b|, |a| ≠ |b|, etc.) is itself a non-regular CFL filter. CFL ∩ CFL is NOT closed under intersection in general, so `L(G) ∩ F` may fail to be context-free (concrete counterexample: `task_grammar_filter_49`, see Example 2 below — grammar with counting-filter |a|=|b| gives a language whose "stratum by nesting depth" reduction is Ogden-provably non-CFL). Do NOT auto-classify this as `"cfl"`. -> verdict `"uncertain"`, confidence ≤ `0.5`, and note in `reasoning` that destructive agents (closure_reduction / interchange / pumping) must decide.
 
 2. **Crossed dependencies:** If the language requires matching two independent pairs across each other (e.g., w₁...w₂...w₁...w₂ with w₁, w₂ from overlapping alphabets), this is a strong signal of non-CFL. -> verdict `"non_cfl"`, confidence `0.75`.
 
@@ -118,7 +119,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
 }
 ```
 
-### Example 2: Grammar + regular filter — CFL (task_grammar_filter_49)
+### Example 2: Grammar + counting filter |a|=|b| — uncertain, not auto-CFL (task_grammar_filter_49)
 
 **Input:**
 ```json
@@ -160,9 +161,9 @@ Return **only** valid JSON. No markdown fences, no extra text.
 **Output:**
 ```json
 {
-  "verdict": "cfl",
-  "confidence": 0.75,
-  "reasoning": "The grammar G is context-free by definition. The filter condition |a|=|b| defines the language {w : count_a(w) = count_b(w)}, which is itself context-free (accepted by a PDA tracking a-b balance). However, CFL is NOT closed under intersection in general. The key question is whether L(G) ∩ {w : |a|=|b|} is CFL. Since the filter {w : |a|=|b|} can also be expressed as a DCFL, and certain structured intersections of CFL with counting constraints remain CFL, this likely remains CFL. But this requires verification — the cfg_builder should attempt to construct a grammar for the intersection directly.",
+  "verdict": "uncertain",
+  "confidence": 0.45,
+  "reasoning": "The grammar G is context-free by definition, but the filter |a|=|b| is an equality between two counters, not a threshold/modular condition on one counter and not a regex — so it is a non-regular CFL filter, and CFL ∩ CFL is NOT closed under intersection in general (Hard rule 1 exception). Structurally: every application of S→aSbb / S→bbSa adds one 'a' and two 'b', so |a|=|b| forces the nesting depth n and the central block a^n (n≥2, or the empty derivation) to be tied together — this is exactly the kind of two-linked-quantities pattern that intersecting with a regular set (b*a*b*a*) reduces to a provably non-CFL language via Ogden's lemma (see docs/THEORY.md §2.3). I cannot decide CFL vs non-CFL from surface features alone; the destructive agents (closure_reduction with the regular witness b*a*b*a*, then Ogden's lemma) must settle this.",
   "advisory_only": true
 }
 ```
@@ -178,12 +179,12 @@ Return **only** valid JSON. No markdown fences, no extra text.
 ### Strong CFL signals:
 - Palindrome constructions: {ww^R}, {vww^Rv}
 - Nested bracket structures: balanced parentheses variants
-- Grammar + regular filter (CFL ∩ REG = CFL)
+- Grammar + regex filter, or grammar + threshold/modular condition on a single counter (CFL ∩ REG = CFL)
 - Single counting constraint: {a^n b^n}, {a^n b^(2n)}
 - Bounded language passing stratification test
 
 ### Uncertain (use "uncertain"):
-- Grammar + non-regular filter
+- Grammar + non-regular filter, including equality/inequality between two symbol counters (|a|=|b|, |a|≠|b|)
 - Complex decomposition where CFL status of components is unclear
 - Mixed signals from structural analysis
 

@@ -172,3 +172,72 @@ def test_tz_ll_substitution_section_references_branch_argument():
 def test_tz_ll_does_not_claim_ll_cap_reg_equals_ll():
     text = TZ_MD.read_text(encoding="utf-8")
     assert "LL ∩ REG = LL" not in text
+
+
+# ---------------------------------------------------------------------------
+# (e) docs/THEORY.md §3.4 — {w b* c w^R} is DCFL but NOT LL; the LL(1) example
+#     is the single-literal-b variant {w b c w^R}. Prompts must not present
+#     {w b* c w^R} as a positive LL example outside of an explicit trap
+#     discussion, and ll_grammar_builder must carry the corrected grammar
+#     (S -> aSa | bT, T -> c | aSab | bTb) as its Example 1 witness.
+# ---------------------------------------------------------------------------
+
+CLASSIFIER_MD = PROMPTS_DIR / "ll_classifier.md"
+MARKER_ANALYZER_MD = PROMPTS_DIR / "ll_marker_analyzer.md"
+GRAMMAR_BUILDER_MD = PROMPTS_DIR / "ll_grammar_builder.md"
+
+# Any of these normalized forms of "w b* c w^R" flag a stale/wrong LL claim.
+_WBSCWR_PATTERNS = ("w b* c w^r", "w b* c wᴿ")
+
+# Lines that legitimately discuss {w b* c w^R} as the DCFL-not-LL trap (not a
+# positive LL claim) — identified by nearby trap vocabulary on the same line.
+_TRAP_MARKERS = (
+    "not_ll", "not ll", "dcfl", "ловушк", "bounded-flexibility",
+    "ограниченной гибкости", "trap", "b\\*c w\\^r", "unbounded",
+)
+
+
+def _wbscwr_lines_outside_trap(text: str) -> list[str]:
+    lines = text.splitlines()
+    bad = []
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if any(p in low for p in _WBSCWR_PATTERNS):
+            # Look at a small window around the occurrence (the trap
+            # discussion is usually a paragraph, not confined to one line).
+            window = "\n".join(lines[max(0, i - 2): i + 6]).lower()
+            if not any(marker in window for marker in _TRAP_MARKERS):
+                bad.append(line)
+    return bad
+
+
+def test_classifier_wbscwr_only_appears_in_trap_context():
+    text = CLASSIFIER_MD.read_text(encoding="utf-8")
+    bad = _wbscwr_lines_outside_trap(text)
+    assert not bad, f"'{{w b* c w^R}}' used as plain LL example outside trap section: {bad}"
+
+
+def test_marker_analyzer_wbscwr_only_appears_in_trap_context():
+    text = MARKER_ANALYZER_MD.read_text(encoding="utf-8")
+    bad = _wbscwr_lines_outside_trap(text)
+    assert not bad, f"'{{w b* c w^R}}' used as plain LL example outside trap section: {bad}"
+
+
+def test_grammar_builder_wbscwr_only_appears_in_trap_context():
+    text = GRAMMAR_BUILDER_MD.read_text(encoding="utf-8")
+    bad = _wbscwr_lines_outside_trap(text)
+    assert not bad, f"'{{w b* c w^R}}' used as plain LL example outside trap section: {bad}"
+
+
+def test_grammar_builder_example1_has_corrected_grammar():
+    text = GRAMMAR_BUILDER_MD.read_text(encoding="utf-8")
+    assert "aSab" in text, "Example 1 must use the corrected grammar S -> aSa|bT, T -> c|aSab|bTb"
+
+
+def test_classifier_and_substitution_mention_bounded_flexibility_trap():
+    classifier_text = CLASSIFIER_MD.read_text(encoding="utf-8")
+    substitution_text = SUBSTITUTION_MD.read_text(encoding="utf-8")
+    assert "b* c w" in classifier_text or "b* c w" in classifier_text.lower()
+    assert "ограниченной гибкости" in substitution_text.lower() or \
+        "bounded flexibility" in substitution_text.lower() or \
+        "bounded-flexibility" in substitution_text.lower()

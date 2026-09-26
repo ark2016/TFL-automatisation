@@ -195,31 +195,35 @@ Return **only** valid JSON. No markdown fences, no extra text.
 }
 ```
 
-### Example 2: Grammar + filter — CFL (verified constructive proof)
+### Example 2: Grammar + counting filter — NON-CFL (task_grammar_filter_49, verified destructive proof)
 
 **Input summary:**
-- classifier_hint: cfl (0.75)
-- cfg_builder: success (grammar for intersection)
-- oracle_test: pass (50 positive, 50 negative)
-- proof_checker: verified [cfg_builder]
-- All destructive agents: failure
+- classifier_hint: uncertain (0.45) — |a|=|b| is a two-counter equality, not a regular filter (Hard rule 1 exception)
+- cfg_builder: failure — |a|=|b| is not regular, product construction with a filter DFA does not apply
+  (oracle also found a counterexample for any hand-modified grammar, e.g. "abbbba" ∉ L(G) since it is not derivable
+  from G at all: G only derives words of the form (blocks) with a strict a/bb nesting pattern)
+- closure_reduction: success — R = b*a*b*a*, (L(G) ∩ F) ∩ R = {b²ᵐa²ⁿ⁻ᵐb²ⁿ⁻²ᵐaᵐ | n ≥ 2, 0 ≤ m ≤ n} ∪ {ε},
+  proved non-CFL by Ogden's lemma (witness z = b²ᵖa³ᵖb²ᵖaᵖ, marked positions in the first b-block)
+- proof_checker: verified [closure_reduction]
+- pumping_cfl: inconclusive (direct pumping on L(G) ∩ F unreliable — recommends closure_reduction, consistent)
 
 **Output:**
 ```json
 {
   "agent": "reasoning",
   "decision": "done",
-  "verdict": "cfl",
-  "confidence": 0.90,
-  "primary_evidence": "cfg_builder",
-  "supporting_evidence": [],
+  "verdict": "non_cfl",
+  "confidence": 0.93,
+  "primary_evidence": "closure_reduction",
+  "supporting_evidence": ["cfg_builder"],
   "contradictions": [],
-  "summary": "Язык L(G) ∩ {w : |a| = |b|} является контекстно-свободным. Построена КС-грамматика G', порождающая ровно L. Oracle-тестирование подтвердило корректность: 50 положительных и 50 отрицательных тестов пройдены без контрпримеров.",
-  "primary_justification": "Теорема: L = L(G) ∩ {w : |w|_a = |w|_b} является контекстно-свободным языком.\n\nДоказательство. Построим КС-грамматику G' такую, что L(G') = L. [Грамматика G' из cfg_builder]. Корректность подтверждена автоматическим тестированием (CYK-парсер проверил 50 положительных и 50 отрицательных примеров). ∎",
+  "summary": "Язык L(G) ∩ {w : |w|_a = |w|_b} НЕ является контекстно-свободным. Фильтр |a|=|b| сравнивает два счётчика и сам не регулярен, поэтому закон CFL ∩ REG здесь неприменим (CFL ∩ CFL не замкнуто относительно пересечения) — попытка cfg_builder построить грамматику провалилась. Пересечение с регулярным языком R = b*a*b*a* сводит задачу к языку {b²ᵐa²ⁿ⁻ᵐb²ⁿ⁻²ᵐaᵐ}, для которого лемма Огдена даёт прямое противоречие.",
+  "primary_justification": "Теорема: L = L(G) ∩ {w : |w|_a = |w|_b} не является контекстно-свободным.\n\nДоказательство (closure_reduction + лемма Огдена). Каждое применение правил S → aSbb / S → bbSa добавляет 1 'a' и 2 'b'; из |a| = |b| следует, что глубина вложенности n и центральный блок a^n (n ≥ 2, либо ε) — две связанные величины. Пересекая L(G) ∩ F с регулярным R = b*a*b*a*, получаем L' = {b²ᵐa²ⁿ⁻ᵐb²ⁿ⁻²ᵐaᵐ | n ≥ 2, 0 ≤ m ≤ n} ∪ {ε} (CFL ∩ REG = CFL, поэтому если L(G) ∩ F было бы КС, то и L' было бы КС). Применяем лемму Огдена к z = b²ᵖa³ᵖb²ᵖaᵖ (m = p, n = 2p) с помеченным первым блоком b²ᵖ: любое разбиение uvwxy с накачиваемой позицией в vx либо выбрасывает слово из b*a*b*a* при i = 2, либо при i = 0 нарушает баланс B₁ = 2B₄ (если x — в первых трёх блоках) или одновременно требует s = 2t и t = 0, s = 0 — противоречие (если x = aᵗ в последнем блоке). Все случаи невозможны ⇒ L' ∉ CFL ⇒ L(G) ∩ F ∉ CFL. ∎",
   "retry_plan": null,
   "hints_for_human": [
-    "Грамматика G' проверена oracle на 100 словах без контрпримеров",
-    "Деструктивные агенты (накачка, Огден, замыкание) не нашли доказательств не-КС — косвенное подтверждение КС-статуса"
+    "cfg_builder честно вернул failure вместо придуманной «модифицированной грамматики» — фильтр |a|=|b| не регулярен",
+    "Классификатор дал uncertain (0.45), а не автоматический cfl — так и должно быть для сравнения двух счётчиков",
+    "См. docs/THEORY.md §2.3 для полного разбора"
   ],
   "errors": []
 }

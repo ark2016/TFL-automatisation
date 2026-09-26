@@ -1,49 +1,17 @@
 {
   "agent_name": "stack_strategy",
-  "status": "success",
-  "verdict": "dcfl",
-  "proof_sketch": {
-    "kind": "stack_strategy",
-    "phases": [
-      {
-        "name": "push_w",
-        "action": "push",
-        "what": "символы w",
-        "trigger": "конец w (определяется по regex (aa*b)*a)"
-      },
-      {
-        "name": "push_v",
-        "action": "push",
-        "what": "символы v поверх w",
-        "trigger": "встретили 'aa' — разделитель"
-      },
-      {
-        "name": "pop_v^R",
-        "action": "compare",
-        "what": "сравниваем с v^R из стека",
-        "trigger": "v закончился (стек дошёл до маркера w)"
-      },
-      {
-        "name": "pop_w^R",
-        "action": "compare",
-        "what": "сравниваем с w^R из стека",
-        "trigger": "стек пуст"
-      }
-    ],
-    "separator": "aa (разделяет v и v^R, чётко маркирует переход)",
-    "finite_control": "Состояния DPDA отслеживают позицию в регулярных выражениях (aa*b)*a и b(ab|aa)* — конечное число состояний",
-    "determinism_argument": "Переключение push_w→push_v детерминировано: w ∈ (aa*b)*a заканчивается на 'a', за которым идёт символ из v ∈ b(ab|aa)*, т.е. 'b'. Это однозначно определяет точку переключения.",
-    "regex_in_states": [
-      "(aa*b)*a → 3 состояния ДКА",
-      "b(ab|aa)* → 4 состояния ДКА"
-    ]
-  },
+  "status": "fail",
+  "verdict": null,
+  "proof_sketch": null,
   "evidence": [
-    "Identified separator 'aa' between v and v^R",
-    "Constructed 4-phase stack strategy: push_w, push_v, pop_v^R, pop_w^R",
-    "Verified deterministic switching via regex boundary analysis",
-    "DFA state counts: 3 for (aa*b)*a, 4 for b(ab|aa)*"
+    "Кандидат в разделители фаз — подстрока 'aa' между v и v^R",
+    "Проверка правила про разделители (THEORY.md §1.6, prompts/stack_strategy.md): разделитель обязан НЕ встречаться внутри значений переменных",
+    "'aa' встречается внутри w (блоки a⁺b дают подряд идущие буквы a при длине блока >= 2) и внутри v (v ∈ b(ab|aa)* содержит вхождения 'aa' как часть альтернативы)",
+    "ДМПА не может достоверно отличить настоящую границу фаз v/v^R от случайного вхождения 'aa' внутри w или v — детерминированная стековая стратегия с этим разделителем не строится",
+    "Возврат fail: ни 'aa', ни другой очевидный разделитель для этого языка не найден"
   ],
-  "confidence": 0.92,
-  "errors": []
+  "confidence": 0.2,
+  "errors": [
+    "'aa' не является истинным разделителем: встречается внутри w (блоки a⁺b) и внутри v (пары aa) — см. THEORY.md §1.6"
+  ]
 }

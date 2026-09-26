@@ -62,7 +62,7 @@ Return **only** valid JSON:
       "agent": "closure",
       "claim": "L ∩ a*b* = {aⁿbⁿ | n ≥ 0}",
       "verdict": "WRONG",
-      "error": "The grammar derives bb via A→bb, so bb ∈ L ∩ a*b* but bb ∉ {aⁿbⁿ}. Similarly aa ∈ L ∩ a*b*. The actual intersection is {aᵐbᵏ | m ≡ k (mod 2)}, which is regular.",
+      "error": "The grammar derives bb via A→bb, so bb ∈ L ∩ a*b* but bb ∉ {aⁿbⁿ}. Similarly aa ∈ L ∩ a*b*. The actual intersection is {aᵐbᵏ | m ≡ k (mod 2), m ≤ 3k+2}, which is itself non-regular (words a^(3k+2) are pairwise distinguishable by context b^k) — so the final verdict 'not regular' may survive, but this proof of it is invalid and must be rewritten with the correct intersection and a Nerode argument.",
       "severity": "critical"
     },
     {
@@ -75,7 +75,7 @@ Return **only** valid JSON:
   ],
   "overall_valid": false,
   "critical_errors": ["Closure proof based on false intersection claim"],
-  "suggestions": ["Try a different intersection language, e.g. b*a*b* or words containing 'bab'"]
+  "suggestions": ["Recompute the intersection correctly ({aᵐbᵏ | m ≡ k (mod 2), m ≤ 3k+2}) and re-derive non-regularity via Myhill-Nerode on a^(3k+2) with context b^k, instead of relying on the false {aⁿbⁿ} claim"]
 }
 ```
 

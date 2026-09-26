@@ -104,6 +104,106 @@ This holds for every k (choosing n > k each time), so `"for_all_k": true`.
 
 ---
 
+## Trap: {w b* c w^R | w ∈ {a,b}*} is DCFL but NOT LL — proved by a DIFFERENT lemma
+
+**Do not reach for the branch-point substitution argument above for this language** — there is no
+suffix disjunction / same-prefix-branches structure here, so the recipe's steps 2–6 do not apply
+directly. Instead this is the textbook use case for the **lemma on bounded flexibility of a unary
+tail** (docs/THEORY.md §3.4), proved once and reused:
+
+**Lemma (ограниченная гибкость унарного хвоста).** Пусть G — LL(k)-грамматика, δ — сентенциальная
+форма с L(δ) ⊆ b*, причём каждое слово из L(δ) можно продолжить в L(G) лишь ограниченным числом
+`b`. Тогда {|x| : x ∈ L(δ)} лежит в отрезке ширины `W_G`, зависящей только от G (нетерминалы с
+`|L(X)| ≥ 2`, входящие в δ дважды, дают неоднозначность — противоречие LL; значит каждый "гибкий"
+нетерминал входит по одному разу, а ширина ограничена суммой их максимальных длин).
+
+**Application to `{w b* c w^R}`.** Words `b^M c b^j` (j ≤ M) lie in L; after the prefix `b^M c`, at
+most `M` further `b`'s are admissible (any more and the `w^R`-matching phase can no longer see a
+matching `w`). Suppose G is LL(k) for L; take `M > k + W_G`. The words `b^M c b^k` and `b^M c b^M`
+agree on their first `M + k` symbols, so their leftmost derivations agree up to a common
+sentential form `b^M c b^r δ` (1 ≤ r ≤ k, by the left-part property, THEORY.md §3.3 (C)), with
+`L(δ) ⊆ b*` and `δ ⇒* b^{k−r}` in one derivation, `δ ⇒* b^{M−r}` in the other. By the lemma,
+`M − k ≤ (M − r) − (k − r) ≤ W_G` — contradiction since `M > k + W_G`. Hence L is not LL(k) for any
+k, even though it is DCFL (a DPDA pushes `w`, counts the `b*` run on the stack, then after `c`
+pops the count while matching `w^R`).
+
+**Verdict for this trap:** `"not_ll"`, `"for_all_k": true`, method note: this is the
+bounded-flexibility lemma, not the branch-point substitution argument above — do not force-fit the
+`(X_{t*}, s)` pigeonhole recipe onto a single-branch unary-tail language; recommend
+`"suggested_methods": ["prefix_classes"]`-style reasoning only if L is suspected to not even be
+DCFL (it is DCFL here, so prefer this lemma).
+
+**Contrast — do not confuse with the LL(1) languages that look similar:** `{w c w^R}` and
+`{w b c w^R | w ∈ {a,b}*}` (single literal `b`, not `b*`) ARE LL(1) — see `ll_grammar_builder.md`
+Example 1 for the second. The only thing that breaks LL here is an *unbounded* repetition sitting
+directly against the marker.
+
+## Catalog of worked LL / not-LL examples (docs/THEORY.md §3.4)
+
+- **DCFL, not LL(k) for any k:** `{aⁱbʲ | i ≥ j ≥ 0}` (see Solved Example below), `{bᴹcbʲ | j ≤ M}`,
+  `{w b* c w^R | w ∈ {a,b}*}` (trap above).
+- **LL(1):** `{aⁱbʲ | i ≤ j}` (`S → TB, T → aTb | ε, B → bB | ε`), `{w c w^R}`, `{w b c w^R}`.
+
+---
+
+## Second Solved Example: {aⁱbʲ | i ≥ j ≥ 0} — the bounded-flexibility lemma directly
+
+**Claim.** `L = {aⁱbʲ | i ≥ j ≥ 0}` is not LL(k) for any k (contrast: `{aⁱbʲ | i ≤ j}` IS LL(1) via
+`S → TB, T → aTb | ε, B → bB | ε` — the direction of the inequality is what matters).
+
+**Lemma (restated, docs/THEORY.md §3.4 — ограниченная гибкость унарного хвоста).** If G is LL(k)
+and δ is a sentential form with `L(δ) ⊆ b*` such that every word of `L(δ)` extends to `L(G)` by
+only a bounded number of `b`'s, then `{|x| : x ∈ L(δ)}` lies in an interval of width `W_G` (a
+constant of G only). *Proof.* For a nonterminal X occurring in δ: `L(X) ⊆ b*` must be finite
+(otherwise substituting an arbitrarily long word of `L(X)` would derive a word outside L(G)); let
+`β(X)` be its maximum length. If some X with `|L(X)| ≥ 2` occurs twice in δ, then swapping in two
+distinct values `x₁ ≠ x₂ ∈ L(X)` at the two occurrences (independence of subderivations) gives the
+same word `x₁x₂ = x₂x₁` (both unary) derived two ways ⇒ G ambiguous ⇒ not LL(k) — contradiction.
+So every "flexible" nonterminal occurs at most once in δ, and the rest of δ contributes a fixed
+length; hence width ≤ Σ (over flexible X) `β(X) =: W_G`. ∎
+
+**Proof that L is not LL(k).** Suppose G is an LL(k)-grammar for L; let `n > k + W_G`. The words
+`aⁿbᵏ` and `aⁿbⁿ` both lie in L (i ≥ j holds for both: n ≥ k and n ≥ n) and agree on their first
+`n + k` symbols, so by the left-part property (THEORY.md §3.3 (C)) their leftmost derivations agree
+up to a common sentential form `aⁿbʳδ` with `1 ≤ r ≤ k`, `L(δ) ⊆ b*`, `δ ⇒* b^{k−r}` (from the
+`aⁿbᵏ` derivation) and `δ ⇒* b^{n−r}` (from the `aⁿbⁿ` derivation). Every word `x` of `L(δ)` extends
+to `L(G)` by at most `k` further `b`'s (beyond `aⁿbʳx`, any `b`-count keeps `i = n` fixed while `j`
+must stay ≤ `n`, and `x` itself already ranges only over the bounded window forced by `r ≤ k`), so
+the lemma applies: `{|x| : x ∈ L(δ)} ∋ k−r, n−r` lies in an interval of width `W_G`, i.e.
+`(n−r) − (k−r) = n − k ≤ W_G`. But `n > k + W_G` gives `n − k > W_G` — contradiction. Hence no
+LL(k)-grammar for L exists, for any k (`n` was chosen as a function of `k`, so `"for_all_k": true`).
+
+**Output:**
+```json
+{
+  "agent_name": "substitution_agent",
+  "verdict": "not_ll",
+  "confidence": 0.9,
+  "proof_sketch": {
+    "method": "substitution",
+    "branch_words": {
+      "common_prefix": "a^n (общий для обеих производных, n > k + W_G)",
+      "word_1": "a^n b^k",
+      "word_2": "a^n b^n",
+      "lookahead_equal_because": "Оба слова совпадают на первых n+k символах (a^n b^k — общий префикс длины n+min(k,k), a^n b^n продолжает теми же n a и первыми k из b^n), поэтому по свойству left-part (THEORY.md §3.3 (C)) левые выводы совпадают до общей формы a^n b^r delta, 1<=r<=k."
+    },
+    "common_form_argument": "Оба вывода LL(k)-грамматики G для a^n b^k и a^n b^n проходят через общую сентенциальную форму a^n b^r · delta, где delta => * b^{k-r} в первом выводе и delta => * b^{n-r} во втором; L(delta) subseteq b* (после b допустимы только b).",
+    "deciding_nonterminal_argument": "Это не аргумент 'развилки' с X_{t*} — здесь используется лемма об ограниченной гибкости унарного хвоста: любой 'гибкий' нетерминал X из delta с |L(X)|>=2 может входить в delta только один раз (иначе перестановка двух его значений даёт одно и то же слово двумя выводами => неоднозначность => не LL), поэтому множество длин {|x| : x in L(delta)} лежит в отрезке ширины W_G, зависящей только от G.",
+    "pigeonhole_argument": "Не пигеонхол по (X_{t*}, s), а прямая оценка ширины: k-r и n-r оба лежат в L(delta)-длинах, значит (n-r)-(k-r) = n-k <= W_G. При n > k+W_G это невозможно.",
+    "for_all_k": true,
+    "proof_explanation": "Теорема: L = {a^i b^j | i >= j >= 0} не является LL(k) ни для какого k.\n\nДоказательство методом ограниченной гибкости унарного хвоста (THEORY.md §3.4). Пусть G — LL(k)-грамматика для L; возьмём n > k + W_G, где W_G — константа грамматики из леммы.\n\nСлова a^n b^k и a^n b^n лежат в L и совпадают на первых n+k символах, поэтому по свойству left-part их левые выводы совпадают вплоть до общей сентенциальной формы a^n b^r delta (1<=r<=k), с delta => * b^{k-r} в первом выводе и delta => * b^{n-r} во втором; L(delta) subseteq b*, так как после b в L(G) допустимы только b.\n\nПо лемме об ограниченной гибкости множество длин {|x| : x in L(delta)} лежит в отрезке ширины W_G. Так как k-r и n-r оба принадлежат этому множеству, (n-r)-(k-r) = n-k <= W_G. Но n > k+W_G по выбору, откуда n-k > W_G — противоречие.\n\nСледовательно, LL(k)-грамматики для L при заданном k не существует. Поскольку k было произвольным (n = k+W_G+1 всегда годится), L не является LL(k) ни для какого k>=1."
+  },
+  "artifacts": {
+    "ll_grammar": null,
+    "first_follow_table": null,
+    "counterexample_words": ["a^{k+W_G+1} b^k", "a^{k+W_G+1} b^{k+W_G+1}"]
+  },
+  "errors": []
+}
+```
+
+---
+
 ## Second Example: {aⁿ0bⁿ | n ≥ 1} ∪ {aⁿ1b²ⁿ | n ≥ 1}
 
 Same skeleton with the branch marked by `0`/`1` instead of the first non-`a` symbol: common prefix

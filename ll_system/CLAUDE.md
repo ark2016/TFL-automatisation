@@ -64,6 +64,9 @@ Full spec: `ll_system/tz_ll_agent_system.md`
     distinction only matters at the level of *grammars* (a grammar can be LL(k) without being
     SLL(k), e.g. `S → aAaa | bAba, A → b | ε`), never at the level of languages.
 - Hierarchy (strict): REG ⊂ LL(1) ⊊ LL(k) ⊊ LL(k+1) ⊊ ⋃_k LL(k) ⊊ DCFL = LR(1) ⊂ CFL
+- Catalog of worked LL / not-LL examples (`docs/THEORY.md` §3.4): DCFL-not-LL —
+  `{aⁱbʲ | i ≥ j}`, `{bᴹcbʲ | j ≤ M}`, `{w b* c w^R}`; LL(1) — `{aⁱbʲ | i ≤ j}` (`S → TB, T → aTb | ε,
+  B → bB | ε`), `{w c w^R}`, `{w b c w^R}`
 - LaTeX: use `b·a^i` not `ba^i`, no `\,`
 
 ## Current status
