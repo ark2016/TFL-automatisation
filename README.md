@@ -128,7 +128,8 @@ Opus response → _extract_json (3 strategies: whole / fenced / braces)
 ```
 
 - **Streaming API** is mandatory — non-streaming requests are rejected by the Anthropic SDK when `max_tokens × projected latency > 10 min`, which the older 4096-token runs silently hit on formalizer / proof_checker.
-- **Temperature handled per model.** Opus 4.7 (adaptive thinking) deprecated `temperature`; LiveRunner drops it for that model via an allow-list.
+- **Request parameters per model.** Opus 5.5 / Sonnet 5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; only legacy models (Haiku 4.5) get `temperature`. See `LiveRunner._build_request_kwargs()`.
+- **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`).
 
 ---
 
@@ -232,13 +233,13 @@ All four pipelines use the same three-tier model stack:
 
 | Role | Model (alias) | Rate (input / output) | Used by |
 |---|---|---|---|
-| Heavy reasoning | `claude-opus-4-7` | $5 / $25 per MTok | All specialists, reasoning, proof_checker, formalizer |
-| Fast structured | `claude-sonnet-4-6` | $3 / $15 per MTok | `classifier`, `retry_planner`, `input_parser` |
+| Heavy reasoning | `claude-opus-5-5` (effort `high`) | $4 / $20 per MTok | All specialists, reasoning, proof_checker, formalizer |
+| Fast structured | `claude-sonnet-5` (effort `medium`) | $2 / $10 per MTok | `classifier`, `retry_planner`, `input_parser` |
 | JSON repair | `claude-haiku-4-5` | $1 / $5 per MTok | `_repair_json_with_haiku` hook in `LiveRunner` |
 
-**Actual run cost** of the CFL pipeline on a medium problem (`task_w1bw2w3_ticket50.json`, closure_reduction + pumping, proof_checker verified): **≈ $2–3**. Simple problems (single-path, short proof) come in at **≈ $1**.
+**Actual run cost** of the CFL pipeline on a medium problem (`task_w1bw2w3_ticket50.json`, closure_reduction + pumping, proof_checker verified) was **≈ $2–3** on Opus 4.7 (without thinking); simple problems (single-path, short proof) came in at **≈ $1**. Opus 5.5 is cheaper per token but always thinks, so re-measure after the migration and tune `EFFORT` per agent.
 
-> Opus 4.7 uses **adaptive thinking** — it picks its reasoning depth per query and does **not** accept the `temperature` parameter. `LiveRunner._model_accepts_temperature()` is an allow-list that drops the field for models that reject it.
+> Opus 5.5 **always** uses adaptive thinking (it can't be disabled) and defaults to effort `medium` when none is sent, so every agent has an explicit level in `EFFORT`. Thinking tokens count toward `max_tokens`, hence `MAX_TOKENS = 64000` with streaming. Sampling parameters (`temperature`) are rejected with a 400 and are only sent to legacy models.
 
 ---
 
@@ -329,4 +330,4 @@ The 3 skipped tests exercise MockRunner against `%TEMP%` on Windows and skip in 
 
 Built for the Theory of Formal Languages course at **МГТУ им. Н.Э. Баумана, ИУ-9**.
 
-Powered by [Claude](https://www.anthropic.com/claude) (Opus 4.7 / Sonnet 4.6 / Haiku 4.5) via the Anthropic API, orchestrated through [LangGraph](https://langchain-ai.github.io/langgraph/).
+Powered by [Claude](https://www.anthropic.com/claude) (Opus 5.5 / Sonnet 5 / Haiku 4.5) via the Anthropic API, orchestrated through [LangGraph](https://langchain-ai.github.io/langgraph/).

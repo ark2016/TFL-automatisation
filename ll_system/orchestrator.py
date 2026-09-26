@@ -125,7 +125,8 @@ class LiveRunner:
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from ll_system.config import (
-            MODELS, TEMPERATURES, MAX_TOKENS, MAX_TOKENS_PER_AGENT,
+            MODELS, TEMPERATURES, EFFORT, DEFAULT_EFFORT, REFUSAL_FALLBACK,
+            MAX_TOKENS, MAX_TOKENS_PER_AGENT,
             LLM_JSON_RETRIES, PROMPT_FILES, ANTHROPIC_API_KEY,
         )
         import anthropic
@@ -147,6 +148,9 @@ class LiveRunner:
         self.client = anthropic.Anthropic(api_key=resolved_key)
         self.models = MODELS
         self.temperatures = TEMPERATURES
+        self.efforts = EFFORT
+        self.default_effort = DEFAULT_EFFORT
+        self.refusal_fallback = REFUSAL_FALLBACK
         self.max_tokens = MAX_TOKENS
         self.max_tokens_per_agent = MAX_TOKENS_PER_AGENT
         self.json_retries = LLM_JSON_RETRIES
@@ -159,6 +163,60 @@ class LiveRunner:
         # conversion — ideal for turning "Opus wrote prose around its JSON"
         # into pure JSON.
         self._json_repair_model = "claude-haiku-4-5"
+
+    # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
+    # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
+    # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
+    # Opus 4.7+, Sonnet 5 and Opus 5.x reject `temperature` with a 400, so
+    # thinking models never get sampling parameters.
+    _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
+    # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
+    _FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
+
+    @classmethod
+    def _is_adaptive_model(cls, model: str) -> bool:
+        """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
+        return bool(model) and not cls._LEGACY_MODEL_RE.search(model)
+
+    def _build_request_kwargs(self, model: str, max_tokens: int,
+                              temperature: float, system_prompt: str,
+                              user_msg: str, effort: str | None = None) -> dict:
+        """Build kwargs for messages.stream / messages.create.
+
+        Thinking models get `thinking: adaptive` + an explicit effort level
+        (Opus 5.5 would silently default to "medium"); legacy models get
+        `temperature` instead.
+        """
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_msg}],
+        }
+        if self._is_adaptive_model(model):
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": effort or self.default_effort}
+            if self.refusal_fallback and model.startswith(self._FALLBACK_MODEL_PREFIXES):
+                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
+                kwargs["extra_body"] = {"fallbacks": "default"}
+        else:
+            kwargs["temperature"] = temperature
+        return kwargs
+
+    @staticmethod
+    def _refusal_error(agent_name: str, final_msg: Any) -> dict:
+        """agent_error dict for a safety-classifier decline (stop_reason="refusal")."""
+        details = getattr(final_msg, "stop_details", None)
+        category = getattr(details, "category", None) if details else None
+        explanation = getattr(details, "explanation", None) if details else None
+        msg = f"Model refused (stop_reason=refusal, category={category})"
+        if explanation:
+            msg += f": {explanation}"
+        logger.error("[%s] %s", agent_name, msg)
+        return {
+            "agent": agent_name, "status": "agent_error", "verdict": None,
+            "confidence": 0.0, "evidence": {}, "errors": [msg],
+        }
 
     def _repair_json_with_haiku(
         self, agent_name: str, raw_text: str, was_truncated: bool
@@ -197,13 +255,11 @@ class LiveRunner:
 
         t0 = _time.monotonic()
         try:
-            response = self.client.messages.create(
+            response = self.client.messages.create(**self._build_request_kwargs(
                 model=self._json_repair_model,
                 max_tokens=min(len(raw_text) // 2 + 2000, 8000),
-                temperature=0.0,
-                system=system,
-                messages=[{"role": "user", "content": user_msg}],
-            )
+                temperature=0.0, system_prompt=system, user_msg=user_msg,
+            ))
         except Exception as exc:
             logger.warning("[%s] JSON repair (Haiku) failed: %s", agent_name, exc)
             return None
@@ -249,8 +305,9 @@ class LiveRunner:
             logger.warning("Skipping agent '%s': %s", agent_name, exc)
             return None
 
-        model = self.models.get(agent_name, "claude-sonnet-4-6")
+        model = self.models.get(agent_name, "claude-sonnet-5")
         temperature = self.temperatures.get(agent_name, 0.0)
+        effort = self.efforts.get(agent_name, self.default_effort)
         max_tokens = self.max_tokens_per_agent.get(agent_name, self.max_tokens)
         user_content = json.dumps(input_data or {}, ensure_ascii=False, indent=2)
 
@@ -294,14 +351,15 @@ class LiveRunner:
             # Always stream. Non-streaming requests are rejected by the SDK
             # when max_tokens x projected latency exceeds 10 minutes; streaming
             # lifts that cap and handles long proofs reliably.
+            # Thinking models get adaptive thinking + this agent's effort;
+            # temperature is only sent to legacy models (Haiku 4.5).
+            request_kwargs = self._build_request_kwargs(
+                model=model, max_tokens=max_tokens,
+                temperature=temperature, system_prompt=system_prompt,
+                user_msg=user_msg, effort=effort,
+            )
             try:
-                with self.client.messages.stream(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_msg}],
-                ) as stream:
+                with self.client.messages.stream(**request_kwargs) as stream:
                     for chunk in stream.text_stream:
                         raw_text += chunk
                     final_msg = stream.get_final_message()
@@ -329,11 +387,16 @@ class LiveRunner:
                     else ""
                 )
                 print(
-                    f"[{agent_name}] model={model} "
+                    f"[{agent_name}] model={final_msg.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
                     f"time={elapsed:.1f}s max={max_tokens}{extra}",
                     file=sys.stderr, flush=True,
                 )
+
+            # A safety-classifier decline is not a parse problem: retrying or
+            # JSON-repairing the (empty/partial) text cannot help.
+            if stop_reason == "refusal":
+                return self._refusal_error(agent_name, final_msg)
 
             parsed, parse_error = _extract_json_with_error(raw_text)
             if parsed is not None:

@@ -6,7 +6,7 @@ This is a CONSTRUCTIVE agent. A successful transformation to LL form proves the 
 
 **IMPORTANT:** Write all `explanation`, `transformation_log`, and `ll_justification` fields in Russian. Output should be suitable for a formal languages exam (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Sonnet 4.6, temperature=0.2
+**Model:** Sonnet 5, effort=medium
 
 **Output ONLY valid JSON. No markdown fences, no prose.**
 

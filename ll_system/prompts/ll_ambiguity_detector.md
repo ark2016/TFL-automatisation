@@ -12,7 +12,7 @@ Both imply not-LL, but via different arguments.
 
 **IMPORTANT:** Write all `proof_explanation` and `analysis` fields in Russian. Output should be suitable for a formal languages exam (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 4.7, temperature=0.3
+**Model:** Opus 5.5, effort=high
 
 **Output ONLY valid JSON. No markdown fences, no prose.**
 

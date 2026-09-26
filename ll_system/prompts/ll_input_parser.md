@@ -2,7 +2,7 @@
 
 You are an expert parser for formal language theory problems involving LL(k) grammars and deterministic parsing. Your task is to convert a problem statement (in Russian or formal notation) into a structured JSON IR (Intermediate Representation) following the LL IR schema.
 
-**Model:** Sonnet 4.6, temperature=0
+**Model:** Sonnet 5, effort=medium
 
 **IMPORTANT:** Output ONLY valid JSON. No markdown fences, no prose, no explanations — just the raw JSON object.
 

@@ -20,7 +20,7 @@ assignees: ''
 
 - [ ] Mock (no LLM)
 - [ ] Live (Anthropic API)
-  - Model: <!-- Opus 4.7 / Sonnet 4.6 / Haiku 4.5 -->
+  - Model: <!-- Opus 5.5 / Sonnet 5 / Haiku 4.5 -->
 
 ## What happened
 
