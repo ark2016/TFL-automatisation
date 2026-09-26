@@ -241,19 +241,26 @@ def check_stratification(
     n_dims = len(bounding_words)
     semi = check_semilinearity(exponent_vectors, n_dims)
 
-    is_stratified = semi["is_semilinear"]
-    if is_stratified is True:
-        is_cfl = True
+    # Ginsburg–Spanier: a bounded language is CFL iff its exponent set is a
+    # finite union of STRATIFIED linear sets. Semilinearity is necessary but
+    # not sufficient ({a^n b^n c^n} is bounded and semilinear, not CFL), and
+    # here it is judged from a finite sample of words. So this check can
+    # only give hints — never is_cfl=True/False on its own.
+    semilinear = semi["is_semilinear"]
+    is_stratified = None
+    is_cfl = None
+    if semilinear is True:
         explanation = (
-            f"Exponent vectors form a semilinear set ({len(exponent_vectors)} "
+            f"Sampled exponent vectors look semilinear ({len(exponent_vectors)} "
             f"vectors over {n_dims} dimensions). {semi['explanation']} "
-            f"Consistent with CFL (Ginsburg–Spanier)."
+            f"Necessary but not sufficient for CFL (Ginsburg–Spanier needs a "
+            f"stratified semilinear set) — hint only."
         )
-    elif is_stratified is False:
-        is_cfl = False
+    elif semilinear is False:
         explanation = (
-            f"Exponent vectors are NOT semilinear. {semi['explanation']} "
-            f"By contrapositive of Ginsburg–Spanier, the language is not CFL."
+            f"Sampled exponent vectors do not look semilinear. "
+            f"{semi['explanation']} A finite sample cannot prove "
+            f"non-semilinearity — hint only."
         )
     else:
         is_cfl = None
@@ -265,6 +272,7 @@ def check_stratification(
     return {
         "is_stratified": is_stratified,
         "is_cfl": is_cfl,
+        "looks_semilinear": semilinear,
         "exponent_vectors": sorted(exponent_vectors),
         "explanation": explanation,
     }

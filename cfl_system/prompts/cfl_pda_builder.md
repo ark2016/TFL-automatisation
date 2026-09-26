@@ -66,6 +66,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
       "accept_states": ["q_accept"],
       "transitions": [
         {"from": "q0", "input": "a", "stack_top": "Z", "to": "q0", "push": ["A", "Z"]},
+        {"from": "q0", "input": "a", "stack_top": "A", "to": "q0", "push": ["A", "A"]},
         {"from": "q0", "input": "b", "stack_top": "A", "to": "q1", "push": []},
         {"from": "q1", "input": "b", "stack_top": "A", "to": "q1", "push": []},
         {"from": "q1", "input": null, "stack_top": "Z", "to": "q_accept", "push": []}

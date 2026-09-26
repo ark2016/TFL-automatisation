@@ -235,15 +235,16 @@ def _determine_quick_verdict(
     if parikh_precheck and parikh_precheck.get("is_semilinear") is False:
         return "non_cfl", "Parikh image is not semilinear, so the language cannot be context-free."
 
-    # If the filter is uncomputable (natural language / complex), we cannot
-    # safely give a quick CFL verdict even if the grammar part looks CFL.
-    # Bail out early so bounded/Parikh analysis on the grammar alone
-    # doesn't produce a misleading verdict.
-    filter_uncomputable = (
+    # Unless the filter is known to be regular, the bounded/stratification
+    # analysis below — which only sees the grammar, not grammar ∩ filter —
+    # says nothing about L. A non-regular filter (e.g. {a^6n b^6n c^6n} as
+    # grammar ∩ non-regular filter) or an uncomputable one (natural
+    # language) must not yield a quick verdict.
+    filter_not_regular = (
         filter_analysis is not None
-        and filter_analysis.get("filter_is_regular") is None
+        and filter_analysis.get("filter_is_regular") is not True
     )
-    if filter_uncomputable:
+    if filter_not_regular:
         return None, None
 
     # Grammar + regular filter -> CFL (CFL intersect REG = CFL)

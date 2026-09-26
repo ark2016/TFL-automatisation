@@ -227,6 +227,32 @@ def oracle_test_grammar(
     return _run_test(gram_oracle, lang_oracle, ir, max_words, max_length, "G")
 
 
+def normalize_agent_pda(pda: dict, acceptance_mode: str | None = None) -> dict:
+    """Convert a PDA in the pda_builder prompt contract to simulator format.
+
+    The prompt (cfl_pda_builder.md) follows textbook notation:
+      - `push` lists symbols topmost-first (["A", "Z"] leaves A on top);
+      - the acceptance mode is `acceptance_mode`, a sibling of `pda` in the
+        agent's evidence.
+    pda_simulator treats the LAST pushed symbol as the new top and requires
+    `accept_mode` inside the PDA. Returns a new dict; the input is untouched.
+    """
+    out = dict(pda)
+    mode = (
+        pda.get("accept_mode")
+        or pda.get("acceptance_mode")
+        or acceptance_mode
+        or ("final_state" if pda.get("accept_states") else "empty_stack")
+    )
+    out["accept_mode"] = mode
+    out.pop("acceptance_mode", None)
+    out["transitions"] = [
+        {**t, "push": list(reversed(t.get("push") or []))}
+        for t in pda.get("transitions", [])
+    ]
+    return out
+
+
 def oracle_test_pda(
     pda: dict,
     ir: dict,
@@ -337,22 +363,21 @@ def oracle_test(
     merged["counterexamples"] = all_counterexamples
 
     # Status resolution (priority order):
-    #   1. error → error
-    #   2. any counterexamples → grammar_incorrect
-    #   3. both not_applicable → not_applicable
-    #   4. at least one pass, none failed → pass
+    #   1. any counterexamples → grammar_incorrect (a broken PDA must never
+    #      hide real counterexamples of the grammar, or vice versa)
+    #   2. at least one real test passed → pass (the other artifact may be
+    #      not_applicable or broken; its details are kept below)
+    #   3. an artifact errored and nothing produced a result → error
+    #   4. otherwise → not_applicable
     g_status = g_result["status"]
     p_status = p_result["status"]
 
-    if g_status == "error" or p_status == "error":
-        merged["status"] = "error"
-    elif all_counterexamples:
+    if all_counterexamples:
         merged["status"] = "grammar_incorrect"
-    elif g_status == "not_applicable" and p_status == "not_applicable":
-        merged["status"] = "not_applicable"
     elif "pass" in (g_status, p_status):
-        # At least one real test ran and passed; the other may be not_applicable.
         merged["status"] = "pass"
+    elif "error" in (g_status, p_status):
+        merged["status"] = "error"
     else:
         merged["status"] = "not_applicable"
 

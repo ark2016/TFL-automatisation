@@ -33,7 +33,7 @@ from cfl_system.lib.cfl_ir_schema import validate_cfl_ir
 from cfl_system.lib.cfl_hypothesis import analyze_cfl_hypothesis
 from cfl_system.lib.language_preprocess import preprocess_language
 from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
-from cfl_system.lib.cfl_oracle_test import oracle_test
+from cfl_system.lib.cfl_oracle_test import normalize_agent_pda, oracle_test
 from cfl_system.lib.claim_verifier import verify_agent_claims
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,9 @@ CFL_SPECIALIST_NAMES = (
     "pumping_cfl", "ogden", "closure_reduction", "interchange", "morphism",
 )
 
-_CONSTRUCTIVE_AGENTS = {"cfg_builder", "pda_builder"}
+# Tuple, not set: iteration order decides which artifact wins, so keep it
+# deterministic (independent of PYTHONHASHSEED).
+_CONSTRUCTIVE_AGENTS = ("cfg_builder", "pda_builder")
 
 
 # ---------------------------------------------------------------------------
@@ -1030,12 +1032,20 @@ def oracle_test_node(state: PipelineState) -> dict:
         output = state.get("agent_results", {}).get(name)
         if output is None:
             continue
+        ev = output.get("evidence", {})
         for key in ("grammar", "pda"):
             if key in output:
                 constructive_evidence[key] = output[key]
-            ev = output.get("evidence", {})
             if isinstance(ev, dict) and key in ev:
                 constructive_evidence[key] = ev[key]
+        if name == "pda_builder" and isinstance(constructive_evidence.get("pda"), dict):
+            # Agent PDAs use the prompt's textbook conventions (topmost-first
+            # push, sibling acceptance_mode); convert for the simulator.
+            mode = (ev.get("acceptance_mode") if isinstance(ev, dict) else None) \
+                or output.get("acceptance_mode")
+            constructive_evidence["pda"] = normalize_agent_pda(
+                constructive_evidence["pda"], mode,
+            )
 
     if not constructive_evidence:
         return {"oracle_test_result": {"status": "not_applicable", "details": "no grammar/PDA"}}

@@ -121,10 +121,12 @@ class TestCheckStratification:
         }
 
     def test_anbn_stratified(self, anbn_grammar):
-        """aⁿbⁿ ⊆ a*b* → exponent vectors {(n,n)} are semilinear."""
+        """aⁿbⁿ ⊆ a*b* → exponent vectors {(n,n)} look semilinear — a hint
+        only: semilinearity is necessary, not sufficient (Ginsburg–Spanier)."""
         result = check_stratification(anbn_grammar, ["a", "b"], max_length=10)
-        assert result["is_stratified"] is True
-        assert result["is_cfl"] is True
+        assert result["looks_semilinear"] is True
+        assert result["is_stratified"] is None
+        assert result["is_cfl"] is None
         # Exponent vectors should be (n, n)
         for ev in result["exponent_vectors"]:
             assert ev[0] == ev[1]
@@ -142,8 +144,8 @@ class TestCheckStratification:
             ],
         }
         result = check_stratification(grammar, ["a"], max_length=10)
-        assert result["is_stratified"] is True
-        assert result["is_cfl"] is True
+        assert result["looks_semilinear"] is True
+        assert result["is_cfl"] is None
 
     def test_empty_grammar(self):
         """Empty grammar → trivially CFL."""
