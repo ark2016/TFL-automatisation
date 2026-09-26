@@ -44,15 +44,16 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "skip_agents": ["cfg_builder", "pda_builder", "decomposition", "parikh", "ogden", "interchange", "morphism"],
   "hints": {
     "pumping_cfl": {
-      "strategy": "try_different_word",
-      "hint": "Your previous word a^p b^p was insufficient. The decomposition where vwx spans the a-b boundary allows pumping within L. Try z = a^p b^p a^p b^p to exploit the repeated structure, or use closure_reduction first to simplify.",
-      "avoid": ["a^p b^p"],
-      "suggested_word": "a^p b a^p c"
+      "strategy": "use_closure_first",
+      "hint": "Your previous word a^p b a^p c cannot be pumped reliably: the split v=a (last symbol of the first a-block), w=b, x=a (first symbol of the second a-block) gives a^{p-1+i} b a^{p-1+i} c in L for EVERY i, so no i ever disqualifies this split (the pumping lemma needs every split to have some disqualifying i). Additionally, w3 in {a,c}+ absorbs extra a's on an upward pump of other splits. Use closure_reduction's R = a+b+aca+b+ac first, then pump L ∩ R DOWN (i=0) on z = a^p b^p ac a^p b^p ac.",
+      "avoid": ["a^p b a^p c", "a+b+a+c+"],
+      "suggested_word": "a^p b^p ac a^p b^p ac"
     },
     "closure_reduction": {
       "strategy": "try_different_regular_language",
-      "hint": "Previous R = a*b* yielded an intersection that is CFL. Try R = a+b+a+c+ to separate the two copies of w1.",
-      "suggested_regex": "a+b+a+c+"
+      "hint": "Previous R = a+b+a+c+ does not force the two w1 copies equal — extra a's leak into w3 in {a,c}+, so L ∩ a+b+a+c+ = {a^n b^m a^j c^k | j >= n} is CFL. Pin down w1's last symbol against an explicit marker: try R = a+b+aca+b+ac.",
+      "avoid": ["a^p b a^p c", "a+b+a+c+"],
+      "suggested_regex": "a+b+aca+b+ac"
     }
   },
   "max_retries_remaining": 1,

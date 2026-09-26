@@ -80,7 +80,8 @@ Key facts for reasoning:
 - Every regular language is LL(1).
 - Every LL(k) language is DCFL.
 - LL(1) ⊊ LL(2) ⊊ ... ⊊ LL(k) — the hierarchy is strict.
-- Not every DCFL is LL(k): e.g., {aⁿbⁿcⁿ}^complement is DCFL but not known to be LL.
+- Not every DCFL is LL(k): e.g., {aⁿbⁿ} ∪ {aⁿcⁿ} is DCFL (LR(1)) but not LL(k) for any k
+  (THEORY.md §3.3 (C), branch-point argument).
 - LL grammars are always unambiguous.
 - Essentially ambiguous CFL → NOT LL.
 
@@ -134,14 +135,16 @@ Key facts for reasoning:
       "proof_sketch": {
         "method": "substitution",
         "for_all_k": true,
-        "witness": {
-          "k": "k (arbitrary)",
-          "n": "k+1",
-          "w1": "a^1",
-          "lookahead_v": "a^k",
-          "suffix_1": "b^n",
-          "suffix_2": "c^n"
-        }
+        "branch_words": {
+          "common_prefix": "a^j, где n-k < j <= n (общий префикс обеих производных)",
+          "word_1": "a^n b^n",
+          "word_2": "a^n c^n",
+          "lookahead_equal_because": "Для j' <= n-k первые k символов после a^{j'} лежат внутри блока a^n для обоих слов, поэтому FIRST_k совпадает и равен a^k."
+        },
+        "common_form_argument": "Оба левых вывода совпадают, пока терминальный префикс имеет длину <= n-k; общая сентенциальная форма a^j * X1...Xm.",
+        "deciding_nonterminal_argument": "Единственный индекс t*, при котором X_{t*} порождает всю различающую часть (b^n / c^n), остальные Xi совпадают.",
+        "pigeonhole_argument": "Конечное число пар (X_{t*}, s), s <= k-1; бесконечно много n ⇒ найдутся n != n' с одинаковой парой.",
+        "proof_explanation": "Полное доказательство методом подстановки (THEORY.md §3.3 (C)) — см. proof_sketch агента substitution_agent."
       }
     },
     "ambiguity_detector": {
@@ -152,12 +155,14 @@ Key facts for reasoning:
     },
     "prefix_classes_agent": {
       "agent_name": "prefix_classes_agent",
-      "verdict": "not_ll",
-      "confidence": 0.85,
+      "verdict": "uncertain",
+      "confidence": 0.2,
       "proof_sketch": {
         "method": "prefix_classes",
-        "for_all_k": true
-      }
+        "for_all_k": false,
+        "dead_class_finite": false
+      },
+      "errors": ["Мёртвый класс D бесконечен — теорема 4.7.4 неприменима (not_applicable), см. THEORY.md §1.2"]
     }
   },
   "first_follow_result": {
@@ -171,10 +176,6 @@ Key facts for reasoning:
   },
   "claim_verification": {
     "substitution_agent": {
-      "status": "verified",
-      "issues": []
-    },
-    "prefix_classes_agent": {
       "status": "verified",
       "issues": []
     }
@@ -240,11 +241,11 @@ Return **only** valid JSON. No markdown fences, no extra text.
 ```json
 {
   "agents_to_retry": ["substitution_agent"],
-  "reason": "Previous substitution witness used wrong lookahead. The argument needs a common a^k prefix, not b^k.",
+  "reason": "Previous attempt did not pin down a unique deciding nonterminal X_{t*}.",
   "hints": {
     "substitution_agent": {
-      "strategy": "fix_witness",
-      "hint": "Use w1 = a^{n-k}, lookahead = a^k to ensure the same lookahead for both words."
+      "strategy": "locate_deciding_nonterminal",
+      "hint": "Use branch_words.common_prefix = a^j (n-k < j <= n) so lookahead is guaranteed equal up to n-k, then apply the mixed-derivation argument in both directions to force a unique X_{t*}."
     }
   },
   "max_retries_remaining": 1
@@ -264,9 +265,9 @@ Return **only** valid JSON. No markdown fences, no extra text.
 - grammar_transformer: not applicable (Format 1)
 - substitution_agent: not_ll (0.95, for_all_k=true, verified)
 - ambiguity_detector: uncertain (language is NOT essentially ambiguous)
-- prefix_classes_agent: not_ll (0.85, for_all_k=true, verified)
+- prefix_classes_agent: uncertain (0.2, dead_class_finite=false — теорема 4.7.4 неприменима)
 - first_follow_result: not run (no grammar)
-- claim_verification: substitution verified, prefix_classes verified
+- claim_verification: substitution verified
 
 **Output:**
 ```json
@@ -274,19 +275,19 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "verdict": "not_ll",
   "k": null,
   "confidence": 0.95,
-  "summary": "Язык L = {aⁿbⁿ | n ≥ 1} ∪ {aⁿcⁿ | n ≥ 1} не является LL(k) ни для какого k. Основное доказательство — метод подстановки: для любого k выбираем n = k+1 и показываем, что два слова a^n b^n и a^n c^n имеют одинаковый lookahead a^k после прочтения одного символа 'a', но требуют несовместимых решений парсера. Дополнительное подтверждение: метод префиксных классов показывает бесконечное число k-различимых префиксов для любого k. Конструктивные агенты не смогли построить LL-грамматику — косвенное подтверждение не-LL статуса.",
-  "justification": "Теорема: L = {aⁿbⁿ | n ≥ 1} ∪ {aⁿcⁿ | n ≥ 1} не является LL(k) ни для какого k ≥ 1.\n\nДоказательство (метод подстановки). Зафиксируем произвольное k ≥ 1 и положим n = k+1.\n\nРассмотрим разбиение двух слов из L:\n  a^n b^n = a^{n-k} · a^k · b^n  (w₁ · v · s₁),\n  a^n c^n = a^{n-k} · a^k · c^n  (w₁ · v · s₂),\nгде w₁ = a^{n-k} = a¹, v = a^k (lookahead одинаковый), s₁ = b^n, s₂ = c^n.\n\nЛюбой LL(k)-парсер после прочтения w₁ = a и просмотра lookahead v = a^k находится в одном состоянии стека. Из этого состояния при данном lookahead он принимает одно решение. Но продолжения s₁ = b^n и s₂ = c^n требуют разных ветвей (b-ветвь и c-ветвь), что невозможно для одного детерминированного действия. Противоречие.\n\nПоскольку k выбиралось произвольно, L не является LL(k) ни для какого k ≥ 1. ∎",
+  "summary": "Язык L = {aⁿbⁿ | n ≥ 1} ∪ {aⁿcⁿ | n ≥ 1} не является LL(k) ни для какого k. Основное доказательство — метод подстановки (аргумент «развилки», THEORY.md §3.3 (C)): для любого k берём n > k, слова a^n b^n и a^n c^n имеют общую сентенциальную форму a^j · X1...Xm (n-k < j <= n) в гипотетической LL(k)-грамматике, и подстановка производной единственного «решающего» нетерминала X_{t*} из вывода для n' в вывод для n != n' даёт слово a^n b^{n'}, не лежащее в L — противоречие. Метод префиксных классов (теорема 4.7.4) здесь неприменим: множество «мёртвых» продолжений языка бесконечно, агент вернул uncertain и доказательной силы не даёт. Конструктивные агенты не смогли построить LL-грамматику — косвенное подтверждение не-LL статуса.",
+  "justification": "Теорема: L = {aⁿbⁿ | n ≥ 1} ∪ {aⁿcⁿ | n ≥ 1} не является LL(k) ни для какого k ≥ 1.\n\nДоказательство (аргумент «развилки», THEORY.md §3.3 (C)). Пусть G — гипотетическая LL(k)-грамматика для L; зафиксируем произвольное k и возьмём n > k.\n\nСлова a^n b^n и a^n c^n имеют общий префикс a^n; для любого j' <= n-k первые k символов после a^{j'} лежат внутри блока a^n для обоих слов, поэтому лишь lookahead после a^{n-k} может различаться. Значит есть общая сентенциальная форма a^j · delta, n-k < j <= n, с delta ⇒* a^{n-j}b^n в выводе первого слова и delta ⇒* a^{n-j}c^n в выводе второго.\n\nПусть delta = X1...Xm. Смесь производных из независимых поддеревьев не может содержать одновременно b и c, что выделяет единственный индекс t*, в котором X_{t*} ⇒* a^s b^n в одном выводе и X_{t*} ⇒* a^{s'} c^n в другом (s, s' <= k-1), а остальные Xi производят одну и ту же строку из a* в обоих выводах.\n\nНетерминалов конечное число и 0 <= s <= k-1, поэтому по принципу Дирихле среди бесконечно многих n > k найдутся n != n' с одинаковой парой (X_{t*}, s). Подставив в вывод слова a^n b^n производную X_{t*} ⇒* a^s b^{n'} из вывода для n', получаем корректный вывод G для a^n b^{n'} ∈ L(G) = L. Но n != n', так что a^n b^{n'} не принадлежит ни {aⁿbⁿ}, ни {aⁿcⁿ} — противоречие.\n\nПоскольку k выбиралось произвольно, L не является LL(k) ни для какого k ≥ 1. ∎",
   "primary_method": "substitution",
   "primary_agent": "substitution_agent",
-  "supporting_agents": ["prefix_classes_agent"],
+  "supporting_agents": [],
   "contradictions": [],
   "action": "done",
   "retry_plan": null,
   "hints_for_human": [
-    "Установлено: L не LL(k) для любого k — метод подстановки доказал это для всех k одновременно",
+    "Установлено: L не LL(k) для любого k — метод подстановки доказал это для всех k одновременно (аргумент «развилки», THEORY.md §3.3 (C))",
     "Язык имеет однозначную грамматику (S → A | B, A → aAb | ab, B → aBc | ac), но она не LL(1): FIRST(A) = FIRST(B) = {a}",
     "Метод существенной неоднозначности не применим: язык имеет однозначную грамматику",
-    "Метод префиксных классов также подтверждает результат: для каждого k бесконечное семейство k-различимых префиксов a^{n+k}",
+    "Метод префиксных классов (теорема 4.7.4) здесь неприменим: «мёртвый» класс D бесконечен, поэтому агент вернул uncertain, а не доказательство",
     "Для экзамена: используйте метод подстановки как основное доказательство"
   ],
   "errors": []

@@ -286,6 +286,38 @@ def _verify_dcfl_pumping(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         checks_run, passed, issues,
     )
 
+    # condition1_argument / condition2_argument — the current contract (THEORY.md §1.1):
+    # condition (1) is a PAIR (x2, x4) anywhere in x, condition (2) is a suffix window x2.
+    # The obsolete single-factor contract used "no_pumping_argument" instead — flag it
+    # explicitly so agents/prompts still emitting it get a clear, actionable issue.
+    condition1_argument = proof_sketch.get("condition1_argument")
+    condition2_argument = proof_sketch.get("condition2_argument")
+    if condition1_argument is None and condition2_argument is None and "no_pumping_argument" in proof_sketch:
+        _check(
+            "condition1_condition2_arguments_present",
+            False,
+            "obsolete field 'no_pumping_argument' found — the contract now requires separate "
+            "'condition1_argument' (пара (x2, x4) в любом месте x, |x2x3x4| <= p) и "
+            "'condition2_argument' (x2 в последних p символах x, синхронно с y2/z2); "
+            "см. THEORY.md §1.1 и dcfl_pumping.md",
+            checks_run, passed, issues,
+        )
+    else:
+        _check(
+            "condition1_argument_non_empty",
+            isinstance(condition1_argument, str) and len(condition1_argument) > 0,
+            "condition1_argument must be a non-empty string: почему никакая пара (x2, x4) в "
+            "любом месте x с |x2x3x4| <= p не накачивается синхронно для обоих слов xy и xz",
+            checks_run, passed, issues,
+        )
+        _check(
+            "condition2_argument_non_empty",
+            isinstance(condition2_argument, str) and len(condition2_argument) > 0,
+            "condition2_argument must be a non-empty string: почему никакое x2 (|x2|>=1) в "
+            "последних p символах x не сохраняет оба слова в L при синхронной накачке",
+            checks_run, passed, issues,
+        )
+
     # Concrete word membership check via check_constraints (set_builder only)
     input_format = task_ir.get("input_format", "")
     if input_format == "set_builder":
@@ -327,58 +359,66 @@ def _verify_shallit(proof_sketch: dict, _task_ir: dict) -> dict[str, Any]:
     passed: list[bool] = []
     issues: list[str] = []
 
-    # infinite_set_description
-    isd = proof_sketch.get("infinite_set_description", "")
+    # Obsolete "homogeneous subsets" contract (pre-revision shallit.md): flag it explicitly
+    # instead of silently accepting fields the current theory no longer supports.
+    obsolete_fields = {"infinite_set_description", "separating_context", "two_elements"}
+    present_obsolete = obsolete_fields & set(proof_sketch.keys())
+    if present_obsolete:
+        _check(
+            "no_obsolete_homogeneous_subsets_fields",
+            False,
+            "obsolete Shallit formulation (homogeneous subsets) — "
+            f"found obsolete field(s) {sorted(present_obsolete)}; the contract now requires "
+            "'technique' ('nerode_classes' | 'prefix_continuation') with the fields specific to "
+            "that technique, see THEORY.md §1.2–1.3 и shallit.md",
+            checks_run, passed, issues,
+        )
+        n_passed = sum(1 for p in passed if p)
+        status = "verified" if n_passed == len(checks_run) else "issues_found"
+        return _make_result(status, checks_run, n_passed, issues if issues else None)
+
+    technique = proof_sketch.get("technique")
     _check(
-        "infinite_set_description_non_empty",
-        isinstance(isd, str) and len(isd) > 0,
-        "infinite_set_description must be a non-empty string",
+        "technique_valid",
+        technique in ("nerode_classes", "prefix_continuation"),
+        "technique must be one of 'nerode_classes', 'prefix_continuation'",
         checks_run, passed, issues,
     )
 
-    # separating_context
-    sc = proof_sketch.get("separating_context", "")
-    _check(
-        "separating_context_non_empty",
-        isinstance(sc, str) and len(sc) > 0,
-        "separating_context must be a non-empty string",
-        checks_run, passed, issues,
-    )
+    def _non_empty_str(value: Any) -> bool:
+        return isinstance(value, str) and len(value) > 0
 
-    # two_elements — must describe u, v with uw in L, vw not in L
-    te = proof_sketch.get("two_elements")
-    if isinstance(te, dict):
-        _check(
-            "two_elements_u_present",
-            "u" in te and te["u"],
-            "two_elements must describe element u",
-            checks_run, passed, issues,
-        )
-        _check(
-            "two_elements_v_present",
-            "v" in te and te["v"],
-            "two_elements must describe element v",
-            checks_run, passed, issues,
-        )
-        reasoning = te.get("reasoning", te.get("explanation", ""))
-        _check(
-            "two_elements_reasoning",
-            isinstance(reasoning, str) and len(reasoning) > 0,
-            "two_elements must explain that uw in L and vw not in L",
-            checks_run, passed, issues,
-        )
-    elif isinstance(te, str):
-        _check(
-            "two_elements_non_empty",
-            len(te) > 0,
-            "two_elements description must be non-empty",
-            checks_run, passed, issues,
-        )
+    if technique == "nerode_classes":
+        for field, ru_hint in (
+            ("dead_class_finite", "почему мёртвый класс D конечен/пуст"),
+            ("distinguishing_suffix", "разделяющий суффикс w(u, v) для произвольных u != v"),
+            ("separation_argument", "почему uw ∈ L, vw ∉ L (или наоборот)"),
+            ("argument", "полное рассуждение"),
+        ):
+            _check(
+                f"{field}_non_empty",
+                _non_empty_str(proof_sketch.get(field)),
+                f"{field} must be a non-empty string ({ru_hint})",
+                checks_run, passed, issues,
+            )
+    elif technique == "prefix_continuation":
+        for field, ru_hint in (
+            ("derived_language", "L_$ ∩ R или haspref(L) ∩ R"),
+            ("regular_filter", "регулярный язык R"),
+            ("non_cfl_argument", "доказательство, что производный язык не КС"),
+            ("argument", "полное рассуждение"),
+        ):
+            _check(
+                f"{field}_non_empty",
+                _non_empty_str(proof_sketch.get(field)),
+                f"{field} must be a non-empty string ({ru_hint})",
+                checks_run, passed, issues,
+            )
     else:
         _check(
-            "two_elements_present",
-            te is not None,
-            "two_elements must be provided (describes u, v with uw in L, vw not in L)",
+            "argument_non_empty",
+            _non_empty_str(proof_sketch.get("argument")),
+            "argument must be a non-empty string",
             checks_run, passed, issues,
         )
 

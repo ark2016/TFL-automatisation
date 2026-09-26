@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
 
+# Wall-clock budget for the full LL(k) test (check_ll_k / find_min_ll_k) —
+# the strong-LL(k) director-set test is cheap and always runs to completion;
+# this only bounds the (potentially exponential) local-follow-set test that
+# runs when the strong test fails. See docs/THEORY.md §3.1.
+_ORACLE_TIME_BUDGET_S = 5.0
+
 LL_SPECIALIST_NAMES = (
     "ll_grammar_builder",
     "marker_analyzer",
@@ -707,17 +713,30 @@ def first_follow_oracle_node(state: PipelineState) -> dict:
     try:
         if requested_k is not None and isinstance(requested_k, int) and requested_k >= 1:
             # User asked: "is this grammar LL(requested_k)?"
-            ck_result = check_ll_k(grammar, requested_k)
-            is_ll = bool(ck_result.get("is_ll_k"))
+            # NOTE: ck_result["is_ll_k"] can be None (budget exhausted, no
+            # conflict found yet — docs/THEORY.md §3.1: "лимит ⇒ unknown").
+            # Do NOT coerce that to bool(None) == False: that would silently
+            # turn "we don't know" into a confident "not LL(k)". "found" only
+            # ever means "conclusively LL(k)".
+            ck_result = check_ll_k(grammar, requested_k, time_budget_s=_ORACLE_TIME_BUDGET_S)
             ff_result = dict(ck_result)
-            ff_result["found"] = is_ll
-            ff_result["min_k"] = requested_k if is_ll else None
+            ff_result["found"] = ck_result.get("is_ll_k") is True
+            ff_result["min_k"] = requested_k if ff_result["found"] else None
             ff_result["checked_k"] = requested_k
         else:
-            result = find_min_ll_k(grammar, max_k=10)
+            result = find_min_ll_k(grammar, max_k=10, time_budget_s=_ORACLE_TIME_BUDGET_S)
             ff_result = dict(result.get("result_for_k") or {})
             ff_result["found"] = result.get("found", False)
             ff_result["min_k"] = result.get("k")
+            # find_min_ll_k-only diagnostics (docs/THEORY.md §3.1): needed by
+            # assemble_result_node to tell a certified "not LL(k) for any k"
+            # apart from "not LL(k) for k <= max_k_checked" (inconclusive above it)
+            # apart from a budget-limited "undetermined" (also inconclusive).
+            ff_result["strong_k"] = result.get("strong_k")
+            ff_result["max_k_checked"] = result.get("max_k_checked")
+            ff_result["max_k_decided"] = result.get("max_k_decided")
+            ff_result["undetermined"] = result.get("undetermined")
+            ff_result["certificate"] = result.get("certificate")
         log_msg(
             state,
             f"  oracle: found={ff_result.get('found')} k={ff_result.get('min_k')}",
@@ -1152,16 +1171,43 @@ def assemble_result_node(state: PipelineState) -> dict:
     # derive verdict directly from first_follow_result.
     if state.get("input_format") == 3 and not reasoning.get("verdict"):
         ff = ff_result or {}
-        is_ll = ff.get("is_ll_k") or ff.get("found", False)
-        is_ll_explicit = ff.get("is_ll_k") if ff.get("is_ll_k") is not None else ff.get("found")
-        if is_ll_explicit is True:
+        is_ll_k = ff.get("is_ll_k")
+        found = ff.get("found")
+        certificate = ff.get("certificate")
+        # True when the budget ran out somewhere before a witness was found —
+        # either this k's own test was cut short (is_ll_k is None), or (on
+        # the find_min_ll_k path) some smaller k's test was (undetermined).
+        # In either case "not found" does NOT mean "conclusively not LL(k)"
+        # (docs/THEORY.md §3.1: "лимит ⇒ unknown") — never conflate the two.
+        budget_limited = is_ll_k is None or bool(ff.get("undetermined"))
+
+        if is_ll_k is True or found is True:
             verdict = "ll"
             k = ff.get("k") or ff.get("min_k")
             confidence = 1.0
-        elif is_ll_explicit is False:
+        elif certificate is not None:
+            # e.g. left recursion (after removing useless symbols) — conclusive
+            # for every k (docs/THEORY.md §3.1).
             verdict = "not_ll"
             k = None
             confidence = 1.0
+        elif ff.get("checked_k") is not None and is_ll_k is False:
+            # A single explicit k was fully (conclusively) tested and failed.
+            verdict = "not_ll"
+            k = None
+            confidence = 1.0
+        elif budget_limited:
+            verdict = "uncertain"
+            k = None
+            confidence = 0.0
+        elif found is False:
+            # find_min_ll_k exhausted k <= max_k_checked: every checked k was
+            # conclusively decided (not budget-limited) and none was LL(k),
+            # but larger k was never tried and there is no certificate —
+            # inconclusive beyond max_k_checked, not a claim about every k.
+            verdict = "not_ll"
+            k = None
+            confidence = 0.9
         else:
             verdict = "uncertain"
             k = None
@@ -1169,7 +1215,7 @@ def assemble_result_node(state: PipelineState) -> dict:
 
         proof = (
             {"method": "first_follow_oracle", "details": ff}
-            if is_ll_explicit is not None
+            if (is_ll_k is not None or found is not None or certificate is not None)
             else None
         )
         grammar = ir.get("grammar")
@@ -1358,15 +1404,60 @@ def assemble_early_failure(state: PipelineState) -> dict:
 
 
 def _format3_summary(ff: dict, verdict: str, k: int | None) -> str:
-    """Build a human-readable summary for Format 3 oracle result."""
+    """Build a human-readable summary for Format 3 oracle result.
+
+    Distinguishes strong LL(k) from (full) LL(k), and a certified
+    "not LL(k) for any k" from an inconclusive "not LL(k) for k <= max_k_checked"
+    (docs/THEORY.md §3.1).
+    """
     if verdict == "ll" and k is not None:
-        return f"Грамматика является LL({k}) (первое/следующее множество без конфликтов)."
+        if ff.get("is_strong_ll_k"):
+            return f"Грамматика является LL({k}); таблица разбора построена для strong LL({k})."
+        return (
+            f"Грамматика является LL({k}), но не strong LL({k}) "
+            "(полный тест Ахо–Ульмана по локальным follow-множествам)."
+        )
+
     if verdict == "not_ll":
+        certificate = ff.get("certificate")
+        if certificate and certificate.get("type") == "left_recursion":
+            return (
+                "Данная грамматика (после удаления бесполезных символов) не является LL(k) "
+                "ни при каком k: обнаружена левая рекурсия. Это утверждение о ГРАММАТИКЕ, "
+                "не о языке — язык может иметь другую, не леворекурсивную LL(k)-грамматику."
+            )
+
+        checked_k = ff.get("checked_k")
+        if checked_k is not None:
+            conflicts = ff.get("ll_conflicts") or ff.get("conflicts") or []
+            n = len(conflicts)
+            suffix = f": обнаружено {n} конфликт(ов)" if n else ""
+            return f"Грамматика не является LL({checked_k}){suffix}."
+
+        max_k_checked = ff.get("max_k_checked")
+        if max_k_checked:
+            conflicts = ff.get("ll_conflicts") or ff.get("conflicts") or []
+            n = len(conflicts)
+            suffix = f": обнаружено {n} конфликт(ов)" if n else ""
+            return (
+                f"Грамматика не является LL(k) при k ≤ {max_k_checked}{suffix} "
+                "(без сертификата — для k больше не проверялось)."
+            )
+
         conflicts = ff.get("conflicts") or []
         if conflicts:
             n = len(conflicts)
             return f"Грамматика не является LL(k): обнаружено {n} конфликт(ов) в таблице разбора."
         return "Грамматика не является LL(k) ни для какого k ≤ 10."
+
+    if verdict == "uncertain" and (ff.get("is_ll_k") is None or ff.get("undetermined")):
+        return (
+            "Бюджет полного LL(k)-теста (время/число таблиц) исчерпан прежде, чем удалось "
+            "получить окончательный ответ; конфликт пока не найден, но не проверенные части "
+            "поиска могут его содержать (docs/THEORY.md §3.1: «лимит ⇒ unknown») — результат "
+            "не является ни подтверждением LL(k), ни опровержением."
+        )
+
     return "Не удалось определить LL-свойство грамматики."
 
 

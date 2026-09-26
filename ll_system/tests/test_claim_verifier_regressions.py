@@ -24,10 +24,25 @@ IR_SIMPLE = {
     },
 }
 
-BASE_WITNESS = {
-    "k": "arbitrary", "w1": "a^n",
-    "lookahead": "a^k", "suffix_1": "b^n", "suffix_2": "c^n",
-    "why_not_in_L": "incompatible continuations",
+BASE_BRANCH_WORDS = {
+    "common_prefix": "a^j", "word_1": "a^n b^n", "word_2": "a^n c^n",
+    "lookahead_equal_because": "both still inside the a-block for n > k",
+}
+BASE_SUBSTITUTION_PS = {
+    "method": "substitution",
+    "branch_words": BASE_BRANCH_WORDS,
+    "common_form_argument": "both derivations pass through a common sentential form a^j · delta",
+    "deciding_nonterminal_argument": "a unique X_t* produces b^n in one run and c^n in the other",
+    "pigeonhole_argument": "finitely many pairs (X_t*, s), infinitely many n -> two share a pair",
+}
+
+BASE_PREFIX_CLASSES_PS = {
+    "method": "prefix_classes",
+    "theorem": "Shallit 4.7.4 -> not DCFL -> not LL",
+    "dead_class_finite": "D = empty: every prefix extends into a palindrome",
+    "distinguishing_suffix": "w = b a^N b u^R, N = 2|uv|",
+    "separation_argument": "exactly one of uw, vw is a palindrome for u != v",
+    "conclusion": "all Nerode classes are singletons -> not DCFL -> not LL for any k",
 }
 
 
@@ -35,19 +50,13 @@ class TestForAllKMustBeTrue:
     """Regression Finding 2: verifiers accepted for_all_k: false as a valid proof."""
 
     def test_substitution_for_all_k_true_verified(self):
-        ps = {
-            "method": "substitution", "for_all_k": True,
-            "witness": BASE_WITNESS,
-        }
+        ps = {**BASE_SUBSTITUTION_PS, "for_all_k": True, "proof_explanation": "full proof"}
         result = verify_substitution_claim(ps, IR_SIMPLE)
-        assert result["verification_status"] == "verified"
+        assert result["verification_status"] == "verified", result["issues"]
 
     def test_substitution_for_all_k_false_not_verified(self):
         """Regression: for_all_k: False was previously accepted as verified."""
-        ps = {
-            "method": "substitution", "for_all_k": False,
-            "witness": BASE_WITNESS,
-        }
+        ps = {**BASE_SUBSTITUTION_PS, "for_all_k": False, "proof_explanation": "full proof"}
         result = verify_substitution_claim(ps, IR_SIMPLE)
         assert result["verification_status"] != "verified", (
             "A proof valid only for a fixed k must not be verified"
@@ -56,34 +65,24 @@ class TestForAllKMustBeTrue:
 
     def test_substitution_for_all_k_missing_not_verified(self):
         """Missing for_all_k field must also fail."""
-        ps = {"method": "substitution", "witness": BASE_WITNESS}
+        ps = {**BASE_SUBSTITUTION_PS, "proof_explanation": "full proof"}
         result = verify_substitution_claim(ps, IR_SIMPLE)
         assert result["verification_status"] != "verified"
         assert any("for_all_k" in i for i in result["issues"])
 
     def test_substitution_for_all_k_none_not_verified(self):
-        ps = {"method": "substitution", "for_all_k": None, "witness": BASE_WITNESS}
+        ps = {**BASE_SUBSTITUTION_PS, "for_all_k": None, "proof_explanation": "full proof"}
         result = verify_substitution_claim(ps, IR_SIMPLE)
         assert result["verification_status"] != "verified"
 
     def test_prefix_classes_for_all_k_true_verified(self):
-        ps = {
-            "method": "prefix_classes",
-            "for_all_k": True,
-            "prefix_family": {"description": "u_n = a^n", "parametrization": "a^n"},
-            "distinguishability_argument": {"why_distinguishable": "different completions"},
-        }
+        ps = {**BASE_PREFIX_CLASSES_PS, "for_all_k": True, "proof_explanation": "full proof"}
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
-        assert result["verification_status"] == "verified"
+        assert result["verification_status"] == "verified", result["issues"]
 
     def test_prefix_classes_for_all_k_false_not_verified(self):
         """Regression: prefix_classes with for_all_k: False was accepted as verified."""
-        ps = {
-            "method": "prefix_classes",
-            "for_all_k": False,
-            "prefix_family": {"description": "u_n = a^n", "parametrization": "a^n"},
-            "distinguishability_argument": {"why_distinguishable": "different completions"},
-        }
+        ps = {**BASE_PREFIX_CLASSES_PS, "for_all_k": False, "proof_explanation": "full proof"}
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
         assert result["verification_status"] != "verified", (
             "prefix_classes proof with for_all_k: False must not be verified"
@@ -91,11 +90,7 @@ class TestForAllKMustBeTrue:
         assert any("for_all_k" in i for i in result["issues"])
 
     def test_prefix_classes_for_all_k_missing_not_verified(self):
-        ps = {
-            "method": "prefix_classes",
-            "prefix_family": {"description": "u_n = a^n", "parametrization": "a^n"},
-            "distinguishability_argument": {"why_distinguishable": "different completions"},
-        }
+        ps = {**BASE_PREFIX_CLASSES_PS, "proof_explanation": "full proof"}
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
         assert result["verification_status"] != "verified"
         assert any("for_all_k" in i for i in result["issues"])

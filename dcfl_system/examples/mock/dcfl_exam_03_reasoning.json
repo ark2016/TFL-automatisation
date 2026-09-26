@@ -1,19 +1,14 @@
 {
-  "agent_name": "reasoning",
-  "status": "success",
+  "action": "done",
   "verdict": "non_dcfl",
-  "proof_sketch": {
-    "action": "done",
-    "primary_evidence": "inh_ambiguity",
-    "supporting_agents": ["inh_ambiguity", "dcfl_pumping"],
-    "conflicting_agents": []
-  },
-  "evidence": [
-    "inh_ambiguity agent returned verdict=non_dcfl with confidence=0.90",
-    "dcfl_pumping agent returned verdict=non_dcfl with confidence=0.50 (supporting)",
-    "stack_strategy agent failed to construct DPDA (consistent with non_dcfl)",
-    "Final verdict: non_dcfl (action=done)"
+  "confidence": 0.5,
+  "primary_evidence": "dcfl_pumping",
+  "summary": "inh_ambiguity agent's essential-ambiguity argument was retracted: the two candidate branches L1={aⁿb^m cⁿ a c*} and L2={aⁿb^j a c* | j>=n} do not overlap and are each individually unambiguous (docs/THEORY.md §1.5, §2), so it does not certify non-DCFL. shallit and closure_reduction both return not_applicable (dead class D infinite / no suitable regular filter found). The only remaining directional evidence is dcfl_pumping, which itself reports an incomplete pumping argument at confidence 0.5 — not a rigorous proof. Reporting non_dcfl with low confidence (0.5) as a best-guess pending a full Yu pumping lemma or L_$ ∩ R argument (docs/THEORY.md §1.1, §1.3).",
+  "retry_plan": null,
+  "hints_for_human": [
+    "Существенная неоднозначность (inh_ambiguity) для этого языка не установлена — ветви не пересекаются и каждая однозначна",
+    "Нужна полная лемма Ю (THEORY.md §1.1) или конструкция L_$ ∩ R (§1.3) для строгого доказательства non_dcfl",
+    "Текущий вердикт основан только на неполном (confidence 0.5) аргументе dcfl_pumping"
   ],
-  "confidence": 0.9,
   "errors": []
 }

@@ -459,9 +459,10 @@ class TestFindMinLLK:
 
     def test_not_found_returns_found_false(self):
         # Left-recursive grammar: S → S + S | a
-        # Left recursion makes a grammar non-LL(k) for any finite k because
-        # the parser would loop forever trying to expand S.
-        # With max_k=4 none of the k values should be conflict-free.
+        # Left recursion makes a grammar non-LL(k) for any finite k (docs/THEORY.md
+        # §3.1: A =>+ A alpha precludes any LL(k) grammar for this derivation).
+        # find_min_ll_k detects this up front and short-circuits the k-loop with
+        # a "left_recursion" certificate — no k value is actually checked.
         grammar_lr = {
             "nonterminals": ["S"],
             "terminals": ["a", "+"],
@@ -474,7 +475,10 @@ class TestFindMinLLK:
         result = find_min_ll_k(grammar_lr, max_k=4)
         assert result["found"] is False
         assert result["k"] is None
-        assert result["max_k_checked"] == 4
+        assert result["max_k_checked"] == 0
+        assert result["not_ll_any_k"] is True
+        assert result["certificate"] is not None
+        assert result["certificate"]["type"] == "left_recursion"
 
 
 # ===========================================================================

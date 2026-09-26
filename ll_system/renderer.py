@@ -482,7 +482,11 @@ def render_markdown(result: dict) -> str:
             details = proof.get("details") or {}
             if isinstance(details, dict) and details:
                 # Render known detail fields
-                summary = details.get("summary") or details.get("argument", "")
+                summary = (
+                    details.get("proof_explanation")
+                    or details.get("summary")
+                    or details.get("argument", "")
+                )
                 if summary:
                     sections.append(f"{summary}\n")
                 steps = details.get("steps") or []
@@ -499,13 +503,31 @@ def render_markdown(result: dict) -> str:
                         if content:
                             sections.append(f"{content}")
                     sections.append("")
-                # Evidence / witness for not_ll proofs
+                # branch_words (substitution_agent) — common prefix / two branch words
+                branch_words = details.get("branch_words")
+                if isinstance(branch_words, dict):
+                    for wk, wv in list(branch_words.items())[:4]:
+                        sections.append(f"> **{wk}:** {wv}")
+                    sections.append("")
+                # Evidence / witness for not_ll proofs (legacy contract)
                 witness = details.get("witness") or details.get("word_chosen")
                 if witness:
                     sections.append(f"> **Свидетель:** `{witness}`\n")
                 evidence = details.get("evidence") or details.get("counterexample")
                 if evidence and isinstance(evidence, str):
                     sections.append(f"> **Обоснование:** {evidence}\n")
+                # Substitution / prefix_classes contract-specific arguments
+                for key, label in (
+                    ("common_form_argument", "Общая сентенциальная форма"),
+                    ("deciding_nonterminal_argument", "Решающий нетерминал"),
+                    ("pigeonhole_argument", "Принцип Дирихле"),
+                    ("dead_class_finite", "Мёртвый класс конечен"),
+                    ("distinguishing_suffix", "Разделяющий суффикс"),
+                    ("separation_argument", "Аргумент разделения"),
+                ):
+                    val = details.get(key)
+                    if val:
+                        sections.append(f"**{label}:** {val}\n")
                 conclusion = details.get("conclusion")
                 if conclusion:
                     sections.append(f"**Заключение:** {conclusion}\n")
@@ -615,15 +637,35 @@ def render_markdown(result: dict) -> str:
                 method = ps.get("method")
                 if method:
                     sections.append(f"  - Метод: `{method}`")
-                desc = ps.get("description") or ps.get("argument")
+                desc = (
+                    ps.get("proof_explanation")
+                    or ps.get("description")
+                    or ps.get("argument")
+                    or ps.get("conclusion")
+                )
                 if desc:
                     sections.append(f"  - {desc}")
+                branch_words = ps.get("branch_words")
+                if isinstance(branch_words, dict):
+                    for wk, wv in list(branch_words.items())[:4]:
+                        sections.append(f"  - {wk}: {wv}")
                 witness = ps.get("witness")
                 if isinstance(witness, dict):
                     for wk, wv in list(witness.items())[:4]:
                         sections.append(f"  - {wk}: {wv}")
                 elif witness:
                     sections.append(f"  - Свидетель: {witness}")
+                for key, label in (
+                    ("common_form_argument", "Общая форма"),
+                    ("deciding_nonterminal_argument", "Решающий нетерминал"),
+                    ("pigeonhole_argument", "Принцип Дирихле"),
+                    ("dead_class_finite", "Мёртвый класс конечен"),
+                    ("distinguishing_suffix", "Разделяющий суффикс"),
+                    ("separation_argument", "Аргумент разделения"),
+                ):
+                    val = ps.get(key)
+                    if val:
+                        sections.append(f"  - {label}: {val}")
         sections.append("")
 
     # Failed agents
@@ -907,9 +949,13 @@ def render_html(result: dict) -> str:
                 proof_parts.append(f'<div class="ll-p"><strong>Метод:</strong> <span class="ll-mono">{_esc(method)}</span></div>')
             details = proof.get("details") or {}
             if isinstance(details, dict):
-                summary = details.get("summary") or details.get("argument", "")
+                summary = (
+                    details.get("proof_explanation")
+                    or details.get("summary")
+                    or details.get("argument", "")
+                )
                 if summary:
-                    proof_parts.append(f'<div class="ll-box">{_esc(summary)}</div>')
+                    proof_parts.append(f'<div class="ll-box">{_render_prose_block(str(summary))}</div>')
                 steps = details.get("steps") or []
                 if steps:
                     for i, step in enumerate(steps, 1):
@@ -928,12 +974,28 @@ def render_html(result: dict) -> str:
                             + (f'<br><em style="color:#7f8c8d">{just}</em>' if just else "")
                             + '</div></div>'
                         )
+                branch_words = details.get("branch_words")
+                if isinstance(branch_words, dict):
+                    bw_lines = [f'<li><em>{_esc(str(wk))}</em>: {_esc(str(wv))}</li>' for wk, wv in list(branch_words.items())[:4]]
+                    if bw_lines:
+                        proof_parts.append(f'<div class="ll-box"><strong>Branch words:</strong><ul>{"".join(bw_lines)}</ul></div>')
                 witness = details.get("witness") or details.get("word_chosen")
                 if witness:
                     proof_parts.append(f'<div class="ll-box"><strong>Свидетель:</strong> <span class="ll-mono">{_esc(str(witness))}</span></div>')
                 evidence = details.get("evidence") or details.get("counterexample")
                 if evidence and isinstance(evidence, str):
                     proof_parts.append(f'<div class="ll-p"><strong>Обоснование:</strong> {_esc(evidence)}</div>')
+                for key, label in (
+                    ("common_form_argument", "Общая сентенциальная форма"),
+                    ("deciding_nonterminal_argument", "Решающий нетерминал"),
+                    ("pigeonhole_argument", "Принцип Дирихле"),
+                    ("dead_class_finite", "Мёртвый класс конечен"),
+                    ("distinguishing_suffix", "Разделяющий суффикс"),
+                    ("separation_argument", "Аргумент разделения"),
+                ):
+                    val = details.get(key)
+                    if val:
+                        proof_parts.append(f'<div class="ll-p"><strong>{label}:</strong> {_render_prose_block(str(val))}</div>')
                 conclusion = details.get("conclusion")
                 if conclusion:
                     proof_parts.append(f'<div class="ll-box" style="border-left:4px solid {badge_bg}"><strong>Заключение.</strong> {_esc(conclusion)}</div>')
@@ -1028,9 +1090,19 @@ def render_html(result: dict) -> str:
                 method = ps.get("method")
                 if method:
                     ps_items.append(f'<strong>Метод:</strong> <code>{_esc(str(method))}</code>')
-                desc = ps.get("description") or ps.get("argument")
+                desc = (
+                    ps.get("proof_explanation")
+                    or ps.get("description")
+                    or ps.get("argument")
+                    or ps.get("conclusion")
+                )
                 if desc:
                     ps_items.append(_render_prose_block(str(desc)))
+                branch_words = ps.get("branch_words")
+                if isinstance(branch_words, dict):
+                    bw_lines = [f'<li><em>{_esc(str(wk))}</em>: {_esc(str(wv))}</li>' for wk, wv in list(branch_words.items())[:4]]
+                    if bw_lines:
+                        ps_items.append(f'<strong>Branch words:</strong><ul>{"".join(bw_lines)}</ul>')
                 witness = ps.get("witness")
                 if isinstance(witness, dict):
                     w_lines = []
@@ -1040,6 +1112,17 @@ def render_html(result: dict) -> str:
                         ps_items.append(f'<strong>Свидетель:</strong><ul>{"".join(w_lines)}</ul>')
                 elif witness:
                     ps_items.append(f'<strong>Свидетель:</strong> <span class="ll-mono">{_esc(str(witness))}</span>')
+                for key, label in (
+                    ("common_form_argument", "Общая форма"),
+                    ("deciding_nonterminal_argument", "Решающий нетерминал"),
+                    ("pigeonhole_argument", "Принцип Дирихле"),
+                    ("dead_class_finite", "Мёртвый класс конечен"),
+                    ("distinguishing_suffix", "Разделяющий суффикс"),
+                    ("separation_argument", "Аргумент разделения"),
+                ):
+                    val = ps.get(key)
+                    if val:
+                        ps_items.append(f'<strong>{label}:</strong> {_render_prose_block(str(val))}')
                 if ps_items:
                     details_parts.append(f'<div class="ll-box" style="margin-top:4px">{"".join(ps_items)}</div>')
 

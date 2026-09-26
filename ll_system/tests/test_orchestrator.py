@@ -748,3 +748,116 @@ class TestProofWasVerifiedScope:
         reasoning = {"primary_agent": "unknown_agent", "verdict": "not_ll"}
         # unknown_agent not in claim_ver -> primary_ver = {} -> status != "verified"
         assert self._compute(reasoning, claim_ver) is False
+
+
+# ---------------------------------------------------------------------------
+# Regression: budget exhaustion must yield "uncertain", not a confident
+# "not_ll" (docs/THEORY.md §3.1: "лимит ⇒ unknown")
+# ---------------------------------------------------------------------------
+
+
+def _format3_state(first_follow_result: dict) -> dict:
+    return {
+        "ir": {
+            "task_type": "ll_check_grammar",
+            "source_text": "test",
+            "grammar": GRAMMAR_LL1_SIMPLE,
+        },
+        "input_format": 3,
+        "agent_results": {},
+        "reasoning_output": {},
+        "first_follow_result": first_follow_result,
+        "claim_verification": {},
+        "preprocess_hints": {},
+        "classifier_output": {},
+        "errors": [],
+        "log": [],
+        "retry_round": 0,
+    }
+
+
+class TestBudgetExhaustionIsUncertainNotNotLL:
+    """Regression: check_ll_k's is_ll_k=None (budget exhausted, no conflict yet
+    found) must not be coerced into found=False and then into a confident
+    not_ll verdict."""
+
+    def test_explicit_k_budget_exhausted_is_uncertain(self):
+        # Mirrors first_follow_oracle_node's explicit-k path when
+        # check_ll_k(...)["is_ll_k"] is None (budget exhausted).
+        ff = {
+            "is_ll_k": None,
+            "is_strong_ll_k": False,
+            "test_complete": False,
+            "checked_k": 2,
+            "found": False,
+            "min_k": None,
+            "ll_conflicts": [],
+            "conflicts": [],
+        }
+        out = assemble_result_node(_format3_state(ff))
+        result = out["result"]
+        assert result["verdict"] == "uncertain"
+        assert result["confidence"] == 0.0
+
+    def test_find_min_ll_k_undetermined_is_uncertain(self):
+        # Mirrors the find_min_ll_k path when some checked k was itself
+        # budget-limited (undetermined=True) and no LL(k) witness was found.
+        ff = {
+            "is_ll_k": False,
+            "is_strong_ll_k": False,
+            "test_complete": True,
+            "found": False,
+            "min_k": None,
+            "strong_k": None,
+            "max_k_checked": 3,
+            "max_k_decided": 2,
+            "undetermined": True,
+            "certificate": None,
+            "ll_conflicts": [],
+            "conflicts": [],
+        }
+        out = assemble_result_node(_format3_state(ff))
+        result = out["result"]
+        assert result["verdict"] == "uncertain"
+        assert result["confidence"] == 0.0
+
+    def test_find_min_ll_k_exhausted_without_undetermined_is_not_ll_09(self):
+        # Every checked k was conclusively decided (no budget cut anywhere) —
+        # the pre-existing "not LL(k) for k <= max_k_checked" behaviour
+        # (confidence 0.9, not a universal claim) must still hold.
+        ff = {
+            "is_ll_k": False,
+            "is_strong_ll_k": False,
+            "test_complete": True,
+            "found": False,
+            "min_k": None,
+            "strong_k": None,
+            "max_k_checked": 5,
+            "max_k_decided": 5,
+            "undetermined": False,
+            "certificate": None,
+            "ll_conflicts": [],
+            "conflicts": [],
+        }
+        out = assemble_result_node(_format3_state(ff))
+        result = out["result"]
+        assert result["verdict"] == "not_ll"
+        assert result["confidence"] == 0.9
+
+    def test_left_recursion_certificate_is_conclusive_not_ll(self):
+        ff = {
+            "is_ll_k": None,
+            "found": False,
+            "min_k": None,
+            "strong_k": None,
+            "max_k_checked": 0,
+            "max_k_decided": 0,
+            "undetermined": False,
+            "certificate": {"type": "left_recursion", "detail": "..."},
+            "ll_conflicts": [],
+            "conflicts": [],
+        }
+        out = assemble_result_node(_format3_state(ff))
+        result = out["result"]
+        assert result["verdict"] == "not_ll"
+        assert result["confidence"] == 1.0

@@ -36,13 +36,23 @@ Full spec: dcfl_system/tz_dcfl_agent_system.md
 - LangGraph for orchestrator
 
 ## DCFL theory reminders
+Single source of truth for formulations: `docs/THEORY.md` §1. One-line summaries below; read the
+file itself before touching any prompt, dataclass or oracle check that depends on them.
+
 - LR(k) grammars generate exactly DCFL
 - For every DCFL there exists an SLR(1) grammar
-- DCFL closed under: complement (~), inverse homomorphism (h⁻¹), ∩ REG (via DPDA × DFA, not Table 1)
+- DCFL closed under: complement (~), inverse homomorphism (h⁻¹), ∩ REG (via DPDA × DFA, not Table 1),
+  right quotient with regular (L/R), MIN(L), MAX(L), haspref(L), L_$ ([GG]; THEORY.md §1.3–1.4)
 - DCFL NOT closed under: union, intersection (DCFL∩DCFL), concatenation, Kleene star, reversal, homomorphism
-- DCFL pumping lemma ≠ CFL pumping lemma (two words, two conditions: prefix-only + synchronized suffix)
-- Shallit's lemma: ⚠ the formulation in `prompts/shallit.md` (∀ infinite M ∃ infinite homogeneous M' ⊆ M)
-  is under review — taken literally it also rejects {aⁿbⁿ}, which is DCFL (see root `TODO.md`)
+- **§1.1 — двухсловная лемма о накачке (лемма Ю, [Yu]).** Два слова xy, xz ∈ L с общим
+  префиксом |x| > p и ⁽¹⁾y = ⁽¹⁾z; условие (1) — пара (x₂, x₄) в любом месте x, |x₂x₃x₄| ≤ p;
+  условие (2) — x₂ в последних p символах x, синхронно с y₂/z₂. Одиночная формулировка условия (1)
+  ложна (отвергает DCFL {aⁿbⁿcᵐ}).
+- **§1.2 — теорема 4.7.4 [Sh].** DCFL ⇒ хотя бы один класс Нероуда бесконечен; контрапозиция:
+  все классы конечны ⇒ не DCFL. Ограничение: мёртвый класс D должен быть конечен, иначе
+  `not_applicable`.
+- **§1.3 — лемма о продолжении.** L — DCFL ⇒ haspref(L), L_$ = {x$y | x∈L, xy∈L} — DCFL;
+  L_$ ∩ R ∉ CFL для регулярного R ⇒ L ∉ DCFL.
 - Inherently ambiguous → not UnambCF → not DCFL
 - Format 2: analyze the LANGUAGE, not the grammar (ambiguous grammar ≠ non-DCFL language)
 

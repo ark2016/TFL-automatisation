@@ -22,6 +22,7 @@ from ll_system.lib.grammar_transforms import (
     is_grammar_equivalent_sample,
     is_left_recursive,
     left_factor,
+    remove_useless_symbols,
     to_ll_normal_form,
     _generate_words,
     _compute_nullable,
@@ -647,3 +648,68 @@ class TestEdgeCases:
             GRAMMAR_WITH_EPSILON, result, max_len=4
         )
         assert ok, f"Language differs: {mismatches}"
+
+
+# ---------------------------------------------------------------------------
+# remove_useless_symbols
+# ---------------------------------------------------------------------------
+
+class TestRemoveUselessSymbols:
+    def test_removes_unreachable_nonterminal(self):
+        grammar = {
+            "nonterminals": ["S", "B"],
+            "terminals": ["a", "b"],
+            "start": "S",
+            "rules": [
+                {"lhs": "S", "rhs": ["a"]},
+                {"lhs": "B", "rhs": ["B", "a"]},
+                {"lhs": "B", "rhs": ["b"]},
+            ],
+        }
+        result = remove_useless_symbols(grammar)
+        assert result["nonterminals"] == ["S"]
+        assert all(r["lhs"] == "S" for r in result["rules"])
+        assert _generates_word(result, "a")
+
+    def test_removes_non_productive_nonterminal(self):
+        # B -> Bc | Bd never bottoms out in terminals -- non-productive.
+        grammar = {
+            "nonterminals": ["S", "B"],
+            "terminals": ["a", "c", "d"],
+            "start": "S",
+            "rules": [
+                {"lhs": "S", "rhs": ["a"]},
+                {"lhs": "S", "rhs": ["B"]},
+                {"lhs": "B", "rhs": ["B", "c"]},
+                {"lhs": "B", "rhs": ["B", "d"]},
+            ],
+        }
+        result = remove_useless_symbols(grammar)
+        assert result["nonterminals"] == ["S"]
+        assert result["rules"] == [{"lhs": "S", "rhs": ["a"]}]
+
+    def test_keeps_grammar_with_no_useless_symbols_unchanged_in_language(self):
+        grammar = {
+            "nonterminals": ["S", "A"],
+            "terminals": ["a", "b"],
+            "start": "S",
+            "rules": [
+                {"lhs": "S", "rhs": ["a", "A"]},
+                {"lhs": "A", "rhs": ["b"]},
+                {"lhs": "A", "rhs": []},
+            ],
+        }
+        result = remove_useless_symbols(grammar)
+        assert set(result["nonterminals"]) == {"S", "A"}
+        ok, mismatches = is_grammar_equivalent_sample(grammar, result, max_len=4)
+        assert ok, f"Language differs: {mismatches}"
+
+    def test_empty_language_when_start_is_non_productive(self):
+        grammar = {
+            "nonterminals": ["S"],
+            "terminals": ["a"],
+            "start": "S",
+            "rules": [{"lhs": "S", "rhs": ["S", "a"]}],
+        }
+        result = remove_useless_symbols(grammar)
+        assert result["rules"] == []

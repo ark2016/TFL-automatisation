@@ -188,76 +188,52 @@ Return **only** valid JSON. No markdown fences, no extra text.
 }
 ```
 
-### Example 2: {w1w2w1w3} — Repeated subword via intersection reduction
+### Example 2: {w1w2w1w3} — direct pumping is unreliable, recommend closure_reduction
 
 **Task:** L = {w1w2w1w3 | w2 in {b,c}*, w1 in {a,b}*, w3 in {a,c}*, |wi| > 0}
 
 **Reasoning (Chain-of-Thought):**
-1. Direct pumping on this language is complex because the word structure is w1w2w1w3.
-2. Consider intersecting with R = a+ b+ a+ c+ (regular). Then L ∩ R = {a^n b^m a^n c^k | n >= 1, m >= 1, k >= 1}.
-3. Wait — that's the closure_reduction agent's job, not mine. Let me try direct pumping.
-4. Choose z where w1 = a^p: z = a^p · b · a^p · c (w1=a^p, w2=b, w3=c).
-5. z in L: w1=a^p in {a,b}+, w2=b in {b,c}+, w3=c in {a,c}+. Check.
-6. |z| = 2p+2 >= p. Check.
-7. Since |vwx| <= p, the substring vwx of length <= p cannot span both copies of a^p (they are separated by 'b' and more a's, total distance p+1).
-8. Cases based on where vwx falls in z = a^p | b | a^p | c:
-   - Case 1: vwx in first a^p. Pumping changes length of first a-block but not second. i=2 gives a^{p+|vx|} b a^p c, which requires w1 length to match: first block has p+|vx| a's but second still has p. Not in L.
-   - Case 2: vwx spans first a^p and b. Then v and/or x contain some a's from first block and possibly b. Pumping distorts the structure.
-   - Continue for all positions...
+1. A tempting witness is z = a^p · b · a^p · c (w1=a^p, w2=b, w3=c), p >= 3. But this word is NOT a
+   valid pumping witness for this L: take v = a (the LAST symbol of the first a-block), w = b,
+   x = a (the FIRST symbol of the second a-block) — a legal split (|vwx| = 3 <= p, |vx| = 2 >= 1).
+   Pumping this split gives u v^i w x^i y = a^{p-1+i} b a^{p-1+i} c for EVERY i >= 0, which stays in
+   L for every i (w1 = a^{p-1+i}, w2 = b, w3 = c). So no i disqualifies this particular
+   decomposition — the pumping lemma needs EVERY valid vwx-split to have SOME disqualifying i, and
+   this split has none. That alone rules z out as a witness, independent of anything else.
+2. As an additional reason for caution (not the primary one): z also misbehaves on a different
+   split. Since w3 in {a,c}+ can absorb extra a's, pumping the SECOND a-block UP can re-decompose
+   the word and it stays in L too — z pumped to a^p b a^{p+1} c is still in L via w1=a^p, w2=b,
+   w3=a·c (the extra a moved into w3). This reinforces (but does not by itself establish) that z is
+   unreliable.
+3. Conclusion: direct application of the Bar-Hillel pumping lemma to L (without first restricting it
+   to a regular language) is unreliable for this task. It cannot certify non_cfl here.
+4. Recommendation: intersect L with R = a+ · b+ · ac · a+ · b+ · ac (regex a+b+aca+b+ac) via the
+   closure_reduction agent. Fixing w1's LAST symbol against an explicit "ac" marker removes the
+   re-decomposition freedom (see closure_reduction's worked example), giving
+   L ∩ R = {a^n b^m ac · a^n b^m ac | n,m >= 1}, which pumps cleanly DOWN (i=0) on
+   z = a^p b^p ac · a^p b^p ac.
+5. Report status=inconclusive, verdict=null, with the recommendation surfaced in `errors` (this
+   agent's contract has no dedicated recommendation field).
 
 **Output:**
 ```json
 {
   "agent": "pumping_cfl",
-  "status": "success",
-  "verdict": "non_cfl",
+  "status": "inconclusive",
+  "verdict": null,
   "evidence": {
     "word_chosen": "a^p b a^p c",
     "word_parametric": "a^{p} \\cdot b \\cdot a^{p} \\cdot c",
     "membership_argument": "Слово z = aᵖbaᵖc принадлежит L: w₁ = aᵖ ∈ {a,b}⁺, w₂ = b ∈ {b,c}⁺, w₃ = c ∈ {a,c}⁺, |wᵢ| > 0 для всех i.",
     "length_argument": "|z| = 2p + 2 >= p при p >= 1",
-    "cases": [
-      {
-        "case": "vwx целиком в первом блоке aᵖ",
-        "vwx_region": "positions 1..p (first a-block)",
-        "pump_value": 0,
-        "pumped_word": "a^{p-|vx|} b a^p c",
-        "why_not_in_L": "Для принадлежности L нужно w₁w₂w₁w₃, где оба вхождения w₁ одинаковы. Первый a-блок теперь имеет длину p-|vx|, второй — p. Разные длины означают, что никакое разбиение не может дать два одинаковых w₁."
-      },
-      {
-        "case": "vwx на границе первого aᵖ и символа b",
-        "vwx_region": "end of first a-block and b",
-        "pump_value": 0,
-        "pumped_word": "Слово теряет часть a из первого блока и/или символ b",
-        "why_not_in_L": "При i=0 удаляется часть первого блока a и/или разделитель b. Если b удалён, слово не содержит символа из {b,c} между блоками a. Если b сохранён но a удалены, первый блок короче второго — невозможно разбить на w₁w₂w₁w₃."
-      },
-      {
-        "case": "vwx содержит b и часть второго aᵖ",
-        "vwx_region": "b and start of second a-block",
-        "pump_value": 2,
-        "pumped_word": "a^p b^{1+j} a^{k} a^{p-m} c, где часть структуры нарушена",
-        "why_not_in_L": "Накачка добавляет лишние символы между блоками. Два вхождения w₁ = aᵖ больше не могут быть выделены: промежуточные символы нарушают шаблон w₁w₂w₁w₃."
-      },
-      {
-        "case": "vwx целиком во втором блоке aᵖ",
-        "vwx_region": "positions p+2..2p+1 (second a-block)",
-        "pump_value": 0,
-        "pumped_word": "a^p b a^{p-|vx|} c",
-        "why_not_in_L": "Второй a-блок стал короче первого. При любом разбиении на w₁w₂w₁w₃: если w₁ = aⁿ, то нужно aⁿ в обеих позициях, но первый блок = aᵖ, второй = a^{p-|vx|}, p ≠ p-|vx|."
-      },
-      {
-        "case": "vwx на границе второго aᵖ и символа c",
-        "vwx_region": "end of second a-block and c",
-        "pump_value": 0,
-        "pumped_word": "a^p b a^{p-j} (c или пусто)",
-        "why_not_in_L": "Если c удалён при i=0, слово не имеет суффикса из {a,c}⁺. Если часть второго a-блока удалена, блоки разной длины — невозможно выделить два одинаковых w₁."
-      }
-    ],
-    "all_cases_covered": true,
-    "conclusion": "Для любого p ≥ 1, слово z = aᵖbaᵖc ∈ L не может быть накачано. При любом разбиении z = uvwxy с |vwx| ≤ p и |vx| ≥ 1, существует i (0 или 2) такое, что uvⁱwxⁱy ∉ L, поскольку накачка нарушает равенство длин двух копий w₁. По лемме Бар-Хиллеля о накачке для КС-языков, L не является контекстно-свободным."
+    "cases": [],
+    "all_cases_covered": false,
+    "conclusion": "Слово z = aᵖbaᵖc (p >= 3) не годится как свидетель накачки: разбиение v = a (последний символ первого a-блока), w = b, x = a (первый символ второго a-блока) даёт a^{p-1+i}ba^{p-1+i}c ∈ L при ВСЕХ i >= 0 (w₁ = a^{p-1+i}, w₂ = b, w₃ = c) — ни одно i не выводит это конкретное разбиение из L, а по лемме о накачке нужно, чтобы КАЖДОЕ разбиение вывела наружу какая-то степень i. Дополнительно: язык допускает w₃ ∈ {a,c}⁺, поэтому накачка ВВЕРХ второго блока a тоже может переразложить слово — aᵖba^{p+1}c снова лежит в L (w₁=aᵖ, w₂=b, w₃=ac). Вывод: uncertain, требуется предварительное сужение через closure_reduction."
   },
-  "confidence": 0.90,
-  "errors": []
+  "confidence": 0.0,
+  "errors": [
+    "Прямая накачка ненадёжна для этой задачи: разбиение v=a|w=b|x=a (границы a-блоков) никогда не выводит слово из L ни при каком i. Дополнительно w₃ ∈ {a,c}⁺ поглощает лишние 'a' при накачке вверх других разбиений. Рекомендация: применить closure_reduction с R = a⁺b⁺aca⁺b⁺ac (регулярное выражение a+b+aca+b+ac); тогда L ∩ R = {aⁿbᵐac·aⁿbᵐac | n,m ≥ 1} накачивается вниз (i=0) на слове z = aᵖbᵖac·aᵖbᵖac."
+  ]
 }
 ```
 

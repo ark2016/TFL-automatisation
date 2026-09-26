@@ -139,40 +139,86 @@ def verify_ll_grammar_claim(proof_sketch: dict, ir: dict) -> dict:
     )
 
 
+def _try_word_oracle(ir: dict):
+    """Best-effort membership oracle for a set_builder language in `ir`.
+
+    Returns a Callable[[str], bool] or None if no oracle can be built (e.g. the
+    IR is not in the cfl_system.lib.cfl_oracle language_spec shape, or the
+    words involved are parametrized templates rather than concrete strings).
+    This is intentionally best-effort: structural checks below never depend on
+    it succeeding.
+    """
+    try:
+        from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
+    except ImportError:
+        return None
+    try:
+        return cfl_oracle_from_ir(ir)
+    except Exception:
+        return None
+
+
+def _looks_concrete(word: Any) -> bool:
+    """True if `word` is a plain terminal string (no template variables like n, k)."""
+    if not isinstance(word, str) or not word:
+        return False
+    return all(ch.isalpha() for ch in word)
+
+
 def verify_substitution_claim(proof_sketch: dict, ir: dict) -> dict:
-    """Verify a substitution method claim (not-LL proof).
+    """Verify a substitution ("branch-point argument") claim (not-LL proof).
 
-    The substitution method shows language is not LL(k) by finding:
-    - w1·v·w2 ∈ L and w1·v·w3 ∈ L (same prefix w1 and lookahead v)
-    - After substitution: w1·v·w3' ∉ L (or contradiction)
-
-    Checks (structural, not oracle-based in Phase 1):
-    1. method == "substitution"
-    2. k field is present (integer or "arbitrary")
-    3. witness has required fields: k, lookahead (or w1/w2/w3 pattern)
-    4. for_all_k field present
-    5. why_not_in_L explanation present
-
-    proof_sketch fields expected:
+    New contract (docs/THEORY.md §3.3 (C)):
     {
         "method": "substitution",
+        "branch_words": {
+            "common_prefix": str, "word_1": str, "word_2": str,
+            "lookahead_equal_because": str
+        },
+        "common_form_argument": str,
+        "deciding_nonterminal_argument": str,
+        "pigeonhole_argument": str,
         "for_all_k": bool,
-        "witness": {
-            "k": str | int,
-            "w1": str,
-            "lookahead": str,
-            "suffix_1": str,
-            "suffix_2": str,
-            "substitution_result": str,
-            "why_not_in_L": str
-        }
+        "proof_explanation": str
     }
+
+    Checks (structural):
+    1. method == "substitution"
+    2. for_all_k is True
+    3. branch_words is a dict with common_prefix/word_1/word_2/lookahead_equal_because
+       all non-empty
+    4. common_form_argument non-empty
+    5. deciding_nonterminal_argument non-empty
+    6. pigeonhole_argument non-empty
+    7. proof_explanation non-empty
+
+    Fields from the old (pre-revision) contract — "witness", "w1", "lookahead",
+    "suffix_1", "suffix_2", "substitution_result", "why_not_in_L", "why_not_ll" —
+    are recognized and reported as obsolete (they no longer count towards
+    verification either way).
     """
     agent = "substitution_agent"
     checks_passed = 0
     checks_total = 0
     issues: list[str] = []
+    obsolete: list[str] = []
     details: dict = {}
+
+    _OBSOLETE_TOP_LEVEL = ("witness", "k", "substitution_result")
+    for name in _OBSOLETE_TOP_LEVEL:
+        if name in proof_sketch:
+            obsolete.append(
+                f"obsolete field '{name}' from the pre-revision substitution contract; ignored"
+            )
+    old_witness = proof_sketch.get("witness")
+    if isinstance(old_witness, dict):
+        for name in ("w1", "lookahead", "lookahead_v", "suffix_1", "suffix_2",
+                     "why_not_in_L", "why_not_ll"):
+            if name in old_witness:
+                obsolete.append(
+                    f"obsolete field 'witness.{name}' from the pre-revision substitution "
+                    f"contract; ignored"
+                )
 
     # Check 1: method field
     checks_total += 1
@@ -183,15 +229,7 @@ def verify_substitution_claim(proof_sketch: dict, ir: dict) -> dict:
             f"Expected method='substitution', got {proof_sketch.get('method')!r}"
         )
 
-    # Check 2: k field present
-    checks_total += 1
-    k = proof_sketch.get("k") or proof_sketch.get("witness", {}).get("k")
-    if k is not None:
-        checks_passed += 1
-    else:
-        issues.append("No 'k' field in proof_sketch or witness")
-
-    # Check 3: for_all_k must be True (proof must hold for all k, not just fixed k)
+    # Check 2: for_all_k must be True (proof must hold for all k, not just fixed k)
     checks_total += 1
     if proof_sketch.get("for_all_k") is True:
         checks_passed += 1
@@ -201,44 +239,73 @@ def verify_substitution_claim(proof_sketch: dict, ir: dict) -> dict:
             f"got {proof_sketch.get('for_all_k')!r}"
         )
 
-    # Check 4: witness structure
-    witness = proof_sketch.get("witness")
+    # Check 3: branch_words structure
     checks_total += 1
-    if not witness or not isinstance(witness, dict):
-        issues.append("No 'witness' dict in proof_sketch")
-    else:
+    bw = proof_sketch.get("branch_words")
+    required_bw_fields = ("common_prefix", "word_1", "word_2", "lookahead_equal_because")
+    if isinstance(bw, dict) and all(
+        isinstance(bw.get(f), str) and bw.get(f, "").strip() for f in required_bw_fields
+    ):
         checks_passed += 1
-        details["witness"] = witness
+        details["branch_words"] = bw
+    else:
+        missing = [f for f in required_bw_fields if not (isinstance(bw, dict) and bw.get(f))] if isinstance(bw, dict) else list(required_bw_fields)
+        issues.append(f"Missing or empty 'branch_words' fields: {missing}")
 
-        # Check 5: required witness fields
-        # Prompt uses "lookahead_v" and "why_not_ll"; accept both names.
-        def _has_field(w: dict, *names: str) -> bool:
-            return any(n in w for n in names)
+    # Check 4: common_form_argument
+    checks_total += 1
+    cfa = proof_sketch.get("common_form_argument", "")
+    if isinstance(cfa, str) and cfa.strip():
+        checks_passed += 1
+    else:
+        issues.append("Missing or empty 'common_form_argument'")
 
-        required_witness_checks = [
-            ("w1",),
-            ("lookahead", "lookahead_v"),
-            ("suffix_1",),
-            ("suffix_2",),
-            ("why_not_in_L", "why_not_ll"),
-        ]
-        missing = [
-            names[0] for names in required_witness_checks
-            if not _has_field(witness, *names)
-        ]
-        checks_total += 1
-        if missing:
-            issues.append(f"Witness is missing fields: {missing}")
-        else:
-            checks_passed += 1
+    # Check 5: deciding_nonterminal_argument
+    checks_total += 1
+    dna = proof_sketch.get("deciding_nonterminal_argument", "")
+    if isinstance(dna, str) and dna.strip():
+        checks_passed += 1
+    else:
+        issues.append("Missing or empty 'deciding_nonterminal_argument'")
 
-        # Check 6: why_not_in_L (or why_not_ll) explanation non-empty
-        checks_total += 1
-        why = witness.get("why_not_in_L") or witness.get("why_not_ll", "")
-        if why and isinstance(why, str) and len(why.strip()) > 0:
-            checks_passed += 1
-        else:
-            issues.append("'why_not_in_L' / 'why_not_ll' explanation is missing or empty")
+    # Check 6: pigeonhole_argument
+    checks_total += 1
+    pha = proof_sketch.get("pigeonhole_argument", "")
+    if isinstance(pha, str) and pha.strip():
+        checks_passed += 1
+    else:
+        issues.append("Missing or empty 'pigeonhole_argument'")
+
+    # Check 7: proof_explanation
+    checks_total += 1
+    pe = proof_sketch.get("proof_explanation", "")
+    if isinstance(pe, str) and pe.strip():
+        checks_passed += 1
+    else:
+        issues.append("Missing or empty 'proof_explanation'")
+
+    # Optional check 8: if a word-oracle for the IR's set_builder language is
+    # available and word_1/word_2 are concrete (non-templated) strings, verify
+    # they actually belong to L. Best-effort — never blocks verification when
+    # unavailable.
+    if isinstance(bw, dict):
+        w1, w2 = bw.get("word_1"), bw.get("word_2")
+        if _looks_concrete(w1) or _looks_concrete(w2):
+            oracle = _try_word_oracle(ir)
+            if oracle is not None:
+                checks_total += 1
+                oracle_ok = True
+                for w in (w1, w2):
+                    if _looks_concrete(w):
+                        try:
+                            if not oracle(w):
+                                oracle_ok = False
+                                issues.append(f"word-oracle: {w!r} is claimed in L but oracle rejects it")
+                        except Exception as exc:
+                            issues.append(f"word-oracle raised an error on {w!r}: {exc}")
+                            oracle_ok = False
+                if oracle_ok:
+                    checks_passed += 1
 
     status = "verified" if not issues else "inconclusive"
     return _make_result(
@@ -246,7 +313,7 @@ def verify_substitution_claim(proof_sketch: dict, ir: dict) -> dict:
         status=status,
         checks_passed=checks_passed,
         checks_total=checks_total,
-        issues=issues,
+        issues=issues + obsolete,
         details=details,
     )
 
@@ -453,28 +520,47 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
-    """Verify a prefix_classes method claim (not-LL proof).
+    """Verify a prefix_classes method claim (not-LL proof via Theorem 4.7.4 [Sh]).
+
+    New contract (docs/THEORY.md §1.2, §3.3 (A)):
+    {
+        "method": "prefix_classes",
+        "theorem": "Shallit 4.7.4 → not DCFL → not LL",
+        "dead_class_finite": str,
+        "distinguishing_suffix": str,
+        "separation_argument": str,
+        "for_all_k": bool,
+        "conclusion": str,
+        "proof_explanation": str
+    }
 
     Checks (structural):
     1. method == "prefix_classes"
-    2. for_all_k field present
-    3. prefix_family present with non-empty description/parametrization
-    4. distinguishability_argument present with why_distinguishable
+    2. for_all_k is True
+    3. theorem non-empty
+    4. dead_class_finite non-empty (the mandatory dead-class check)
+    5. distinguishing_suffix non-empty
+    6. separation_argument non-empty
+    7. conclusion non-empty
+    8. proof_explanation non-empty
 
-    proof_sketch fields expected:
-    {
-        "method": "prefix_classes",
-        "for_all_k": bool,
-        "prefix_family": {"parametrization": str, "description": str, ...},
-        "distinguishability_argument": {"why_distinguishable": str, ...},
-        "conclusion": str
-    }
+    Fields from the old (pre-revision, "LL Nerode theorem") contract —
+    "prefix_family", "distinguishability_argument" — are recognized and
+    reported as obsolete (they no longer count towards verification either way).
     """
     agent = "prefix_classes_agent"
     checks_passed = 0
     checks_total = 0
     issues: list[str] = []
+    obsolete: list[str] = []
     details: dict = {}
+
+    for name in ("prefix_family", "distinguishability_argument"):
+        if name in proof_sketch:
+            obsolete.append(
+                f"obsolete field '{name}' from the pre-revision prefix_classes contract "
+                f"(false 'LL Nerode theorem'); ignored"
+            )
 
     # Check 1: method
     checks_total += 1
@@ -483,7 +569,7 @@ def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append(f"Expected method='prefix_classes', got {proof_sketch.get('method')!r}")
 
-    # Check 2: for_all_k must be True (proof must hold for all k, not just fixed k)
+    # Check 2: for_all_k must be True
     checks_total += 1
     if proof_sketch.get("for_all_k") is True:
         checks_passed += 1
@@ -493,26 +579,55 @@ def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
             f"got {proof_sketch.get('for_all_k')!r}"
         )
 
-    # Check 3: prefix_family with description
-    checks_total += 1
-    pf = proof_sketch.get("prefix_family")
-    if isinstance(pf, dict) and (pf.get("description") or pf.get("parametrization")):
-        checks_passed += 1
-        details["prefix_family"] = pf
-    else:
-        issues.append("Missing or empty 'prefix_family' (need 'description' or 'parametrization')")
+    def _nonempty_str(field: str) -> bool:
+        v = proof_sketch.get(field, "")
+        return isinstance(v, str) and bool(v.strip())
 
-    # Check 4: distinguishability_argument with why_distinguishable
+    # Check 3: theorem
     checks_total += 1
-    da = proof_sketch.get("distinguishability_argument")
-    why = (da or {}).get("why_distinguishable", "") if isinstance(da, dict) else ""
-    if isinstance(da, dict) and why and len(why.strip()) > 0:
+    if _nonempty_str("theorem"):
         checks_passed += 1
-        details["distinguishability_argument"] = da
+    else:
+        issues.append("Missing or empty 'theorem'")
+
+    # Check 4: dead_class_finite — the mandatory dead-class argument
+    checks_total += 1
+    if _nonempty_str("dead_class_finite"):
+        checks_passed += 1
+        details["dead_class_finite"] = proof_sketch.get("dead_class_finite")
     else:
         issues.append(
-            "Missing 'distinguishability_argument' or empty 'why_distinguishable'"
+            "Missing or empty 'dead_class_finite' — Theorem 4.7.4 is vacuous if the dead "
+            "class is infinite, so this argument is mandatory"
         )
+
+    # Check 5: distinguishing_suffix
+    checks_total += 1
+    if _nonempty_str("distinguishing_suffix"):
+        checks_passed += 1
+    else:
+        issues.append("Missing or empty 'distinguishing_suffix'")
+
+    # Check 6: separation_argument
+    checks_total += 1
+    if _nonempty_str("separation_argument"):
+        checks_passed += 1
+    else:
+        issues.append("Missing or empty 'separation_argument'")
+
+    # Check 7: conclusion
+    checks_total += 1
+    if _nonempty_str("conclusion"):
+        checks_passed += 1
+    else:
+        issues.append("Missing or empty 'conclusion'")
+
+    # Check 8: proof_explanation
+    checks_total += 1
+    if _nonempty_str("proof_explanation"):
+        checks_passed += 1
+    else:
+        issues.append("Missing or empty 'proof_explanation'")
 
     status = "verified" if not issues else "inconclusive"
     return _make_result(
@@ -520,7 +635,7 @@ def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
         status=status,
         checks_passed=checks_passed,
         checks_total=checks_total,
-        issues=issues,
+        issues=issues + obsolete,
         details=details,
     )
 

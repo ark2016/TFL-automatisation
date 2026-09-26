@@ -1,6 +1,8 @@
 """FIRST_k, FOLLOW_k, NULLABLE computation for LL(k) grammar analysis."""
 from __future__ import annotations
 
+import time
+
 _MAX_ITER = 1000
 
 
@@ -248,3 +250,91 @@ def compute_all(
     first_k = compute_first_k(grammar, k)
     follow_k = compute_follow_k(grammar, k, first_k, nullable)
     return nullable, first_k, follow_k
+
+
+# ---------------------------------------------------------------------------
+# Local follow sets σ(A) — full Aho–Ullman LL(k) test [AU, §5.1]
+# ---------------------------------------------------------------------------
+
+def compute_local_follow_sets(
+    grammar: dict,
+    k: int,
+    first_k: dict[str, set[str]],
+    nullable: set[str],
+    *,
+    deadline: float | None = None,
+) -> tuple[dict[str, set[frozenset[str]]], bool]:
+    """Compute the local follow sets σ(A) for every nonterminal A.
+
+    Unlike the single *global* FOLLOW_k(A) (``compute_follow_k``), σ(A) tracks
+    every distinct k-length *set* of continuations that can actually follow A
+    in some left-most derivation from the start symbol:
+
+        σ(A) = {FIRST_k(α) | S ⇒*_lm w A α}
+
+    Crucially, σ(A) is a set of **sets** of strings (each element L ∈ σ(A) is
+    a whole FIRST_k(α) for one specific α, kept together as one context), not
+    a flat set of strings — the full LL(k) test (docs/THEORY.md §3.1,
+    [AU, §5.1]) checks ``k_concat(FIRST_k(β), L) ∩ k_concat(FIRST_k(γ), L)``
+    for the *same* L as a whole. Flattening σ(A) into individual strings and
+    testing each singleton context separately is unsound — it can miss a
+    conflict that only shows up when the elements of L are combined (see the
+    regression for ``S → AB, A → ε|b, B → aa|ba`` in ``test_ll_k_full.py``:
+    not LL(2) only when {aa, ba} is tested together as one context).
+
+    The strong-LL(k) director-set test uses a single global FOLLOW_k(A)
+    instead and is strictly weaker for k ≥ 2.
+
+    Fixed-point construction:
+        σ(S) ∋ {frozenset({""})}  (start symbol followed by end-of-input only)
+        for each rule A → X1 … Xn, each L ∈ σ(A), each nonterminal Xi:
+            σ(Xi) ⊇ {frozenset(k_concat(FIRST_k(X_{i+1}…Xn), L, k))}
+    iterated to a fixed point. Each individual σ(A) is finite (⊆ 2^(Σ^{≤k})),
+    so this always terminates in the absence of a *deadline*, though the
+    number of distinct contexts can be exponential in the worst case — hence
+    the *deadline* budget (docs/THEORY.md §3.1: "число таблиц в худшем случае
+    экспоненциально — нужен бюджет").
+
+    Returns ``(sigma, complete)``. *complete* is False when *deadline* (a
+    ``time.monotonic()`` timestamp) is reached, or the iteration cap is hit,
+    before the fixed point is reached; in that case *sigma* is a sound but
+    possibly incomplete (under-approximated) set of local follow contexts —
+    safe to use for reporting conflicts actually found, but not to certify
+    the absence of conflicts.
+    """
+    nonterminals: set[str] = set(grammar["nonterminals"])
+    start: str = grammar["start"]
+
+    sigma: dict[str, set[frozenset[str]]] = {nt: set() for nt in nonterminals}
+    if start in sigma:
+        sigma[start].add(frozenset({""}))
+
+    rules: list[tuple[str, list[str]]] = [
+        (r["lhs"], [] if _is_epsilon_rhs(r["rhs"]) else list(r["rhs"]))
+        for r in grammar["rules"]
+    ]
+
+    for _ in range(_MAX_ITER):
+        changed = False
+        for lhs, rhs in rules:
+            if lhs not in sigma:
+                continue
+            local_contexts = list(sigma[lhs])
+            if not local_contexts:
+                continue
+            for i, sym in enumerate(rhs):
+                if sym == "ε" or sym not in nonterminals:
+                    continue
+                tail = rhs[i + 1:]
+                first_tail = compute_first_k_seq(tail, grammar, k, first_k, nullable)
+                for local_follow in local_contexts:
+                    new_context = frozenset(k_concat(first_tail, set(local_follow), k))
+                    if new_context not in sigma[sym]:
+                        sigma[sym].add(new_context)
+                        changed = True
+            if deadline is not None and time.monotonic() > deadline:
+                return sigma, False
+        if not changed:
+            return sigma, True
+
+    return sigma, False

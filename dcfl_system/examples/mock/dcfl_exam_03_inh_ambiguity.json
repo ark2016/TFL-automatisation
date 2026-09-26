@@ -1,20 +1,16 @@
 {
   "agent_name": "inh_ambiguity",
-  "status": "success",
-  "verdict": "non_dcfl",
-  "proof_sketch": {
-    "kind": "inh_ambiguity",
-    "disjunction_identified": "cⁿ|bⁿ при общем n с префиксом aⁿb*",
-    "overlap_words": "Слова вида aⁿbⁿac* (при пустом b* перед bⁿ): совпадают с веткой bⁿ. При bⁿ = bⁿ после b* получаем пересечение.",
-    "ambiguity_argument": "Язык представим как L₁ ∪ L₂, где L₁ = {aⁿb*cⁿac*}, L₂ = {aⁿb*bⁿac*}. Пересечение L₁ ∩ L₂ на словах с b*bⁿ неоднозначно: разбиение b*bⁿ допускает разные интерпретации границы b*/bⁿ. По теореме о существенной неоднозначности объединения...",
-    "dcfl_implication": "Существенно неоднозначный → не UnambCF → не DCFL (т.к. DCFL ⊂ UnambCF)"
-  },
+  "status": "not_applicable",
+  "verdict": null,
+  "proof_sketch": null,
   "evidence": [
-    "Identified disjunction cⁿ|bⁿ as source of inherent ambiguity",
-    "Constructed overlap words demonstrating ambiguous parse",
-    "Applied inherent ambiguity theorem: L₁ ∪ L₂ with non-empty intersection",
-    "Concluded: inherently ambiguous → not UnambCF → not DCFL"
+    "Кандидат: L = L1 ∪ L2, L1 = {aⁿb^m cⁿ a c* | n,m >= 0}, L2 = {aⁿb^j a c* | j >= n}.",
+    "Пересечение L1 ∩ L2 ложно объявлялось неоднозначным. Проверка: L1 состоит из слов с 'c' ПЕРЕД одиночным разделителем 'a', L2 — из слов, где после блока b сразу идёт разделитель 'a' без 'c' перед ним. Эти два множества слов НЕ пересекаются: в L1 разделитель 'a' предваряется символом 'c' (или n=0), в L2 — символом 'b' (или началом слова при n=0), так что ни одно слово не лежит одновременно в обеих ветвях при n,m,j > 0.",
+    "Обе ветви по отдельности однозначны: L1 порождается грамматикой T -> aTc | aBc, B -> bB | ε; L2 порождается грамматикой U -> aUb | aVb, V -> bV | ε (после чего добавляется финальное 'a c*').",
+    "Существенная неоднозначность объединения не установлена: L1 ∩ L2 = ∅, обе ветви однозначны по отдельности, аргумент о неоднозначности пересечения неприменим (docs/THEORY.md §1.5, §2)."
   ],
-  "confidence": 0.9,
-  "errors": []
+  "confidence": 0.0,
+  "errors": [
+    "Не удалось построить свидетельство существенной неоднозначности: ветви L1 и L2 не пересекаются и каждая по отдельности однозначна"
+  ]
 }

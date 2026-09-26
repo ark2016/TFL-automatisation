@@ -647,64 +647,105 @@ class ClosureReductionProof:
 
 **Модель:** Opus
 
-**Цель:** Доказать, что язык НЕ DCFL, используя лемму о накачке для DCFL.
+**Цель:** Доказать, что язык НЕ DCFL, используя двухсловную лемму о накачке для DCFL
+(лемма Ю, [Yu]; см. `docs/THEORY.md` §1.1). В курсе ИУ-9 эту лемму иногда называют леммой
+Шаллита; в этой системе `shallit` — отдельный агент (классы Нероуда / лемма о продолжении,
+§5.5), не путать.
 
-**Формулировка леммы (отрицание):**
+**Формулировка леммы.** Пусть L — DCFL. Существует p такая, что для любых xy ∈ L, xz ∈ L
+с |x| > p и одинаковыми первыми буквами y и z выполнено хотя бы одно из условий:
 
-Для любой длины накачки p найти два слова w = xy, w' = xz, где:
-- |x| > p
-- первые буквы y и z совпадают
-- НЕ существует разбиения x = x₁x₂x₃, y = y₁y₂y₃, z = z₁z₂z₃ с
-  |x₂x₃| ≤ p, |x₂| > 0, такого что
-  ∀i: x₁x₂ⁱx₃y₁y₂ⁱy₃ ∈ L И x₁x₂ⁱx₃z₁z₂ⁱz₃ ∈ L
+- **(1)** x = x₁x₂x₃x₄x₅, |x₂x₄| ≥ 1, |x₂x₃x₄| ≤ p (пара (x₂, x₄) стоит **в любом месте** x,
+  ограничена только длина окна), и ∀i ≥ 0: x₁x₂ⁱx₃x₄ⁱx₅y ∈ L И x₁x₂ⁱx₃x₄ⁱx₅z ∈ L.
+- **(2)** x = x₁x₂x₃, y = y₁y₂y₃, z = z₁z₂z₃, |x₂| ≥ 1, |x₂x₃| ≤ p (x₂ — в последних p
+  символах x), и ∀i ≥ 0: x₁x₂ⁱx₃y₁y₂ⁱy₃ ∈ L И x₁x₂ⁱx₃z₁z₂ⁱz₃ ∈ L.
+
+**Отрицание (доказательство L ∉ DCFL):** для всякого p указать xy, xz ∈ L, |x| > p,
+⁽¹⁾y = ⁽¹⁾z, и показать, что для КАЖДОГО допустимого разбиения по (1) и по (2) существует i,
+при котором хотя бы одно из двух накачанных слов выходит из L.
+
+**Важно:** условие (1) — это пара (x₂, x₄) в произвольном месте x, а не одиночный фактор в
+хвосте x; при ошибочной (одиночной) формулировке лемма ложно отвергает DCFL {aⁿbⁿcᵐ}
+(контрпример-ловушка: x = aⁿbⁿ, y = c, z = cc — пара (a, b) на границе блоков накачивается,
+одиночный фактор — нет). Агент обязан проверять условие (1) именно как пару.
 
 **Формат proof_sketch:**
 ```python
 @dataclass
 class DCFLPumpingProof:
     kind: Literal["dcfl_pumping"]
-    pumping_length: str         # "p" (символическое)
-    word_w: str                 # Первое слово w = xy
-    word_w_prime: str           # Второе слово w' = xz
-    common_prefix_x: str        # Общий префикс x, |x| > p
-    suffix_y: str               # y (суффикс w)
-    suffix_z: str               # z (суффикс w')
-    first_letters_match: str    # Почему первые буквы y и z совпадают
-    no_pumping_argument: str    # Почему синхронная накачка невозможна
+    pumping_length: str          # "p" (символическое)
+    word_w: str                  # Первое слово w = xy
+    word_w_prime: str            # Второе слово w' = xz
+    common_prefix_x: str         # Общий префикс x, |x| > p
+    suffix_y: str                # y (суффикс w)
+    suffix_z: str                # z (суффикс w')
+    first_letters_match: str     # Почему первые буквы y и z совпадают
+    condition1_argument: str     # Почему никакая пара (x2, x4) в любом окне x с |x2x3x4|<=p не накачивается для обоих слов
+    condition2_argument: str     # Почему никакое x2 в последних p символах x с синхронной накачкой y2/z2 не проходит
 ```
 
 ### 5.5. shallit (деструктивный)
 
 **Модель:** Opus
 
-**Цель:** Доказать, что язык НЕ DCFL, используя лемму Шаллита.
+**Цель:** Доказать, что язык НЕ DCFL одной из двух техник [Sh, §4.7] (`docs/THEORY.md` §1.2–1.3):
+теоремой 4.7.4 о классах Нероуда или леммой о продолжении.
 
-**Формулировка:**
-Для DCFL L существует бесконечное множество M ⊆ Σ*, такое что для всякого w:
-либо Mw ⊆ L, либо Mw ∩ L = ∅.
+**Техника 1 — nerode_classes (теорема 4.7.4 [Sh]).** Если L — DCFL, хотя бы один класс
+эквивалентности Майхилла–Нероуда языка L бесконечен. Контрапозиция: если все классы конечны, то
+L ∉ DCFL — обычно доказывается предъявлением разделяющего суффикса w(u,v) для любых u ≠ v.
+Ограничение: «мёртвый» класс D = {x | ∄z: xz ∈ L} — тоже класс Нероуда; если D бесконечен
+(например L ⊆ a*b*c*), теорема ничего не даёт — агент обязан явно обосновать конечность D
+(поле `dead_class_finite`), иначе возвращает `not_applicable`.
 
-**Отрицание:** Для каждого бесконечного M найдётся w, разделяющее M
-(т.е. существуют u, v ∈ M: uw ∈ L, но vw ∉ L).
+**Техника 2 — prefix_continuation (лемма о продолжении).** Пусть L — DCFL, $ ∉ Σ. Тогда
+haspref(L) = {xy | x ∈ L, xy ∈ L, y ≠ ε} и L_$ = {x$y | x ∈ L, xy ∈ L} — DCFL. Если для
+некоторого регулярного R язык L_$ ∩ R (или haspref(L) ∩ R) не является КС, то по контрапозиции
+(DCFL замкнуты относительно ∩ REG и DCFL ⊆ CFL) L ∉ DCFL.
 
 **Формат proof_sketch:**
 ```python
 @dataclass
 class ShallitProof:
     kind: Literal["shallit"]
-    infinite_set_description: str   # "Для любого бесконечного M..."
-    separating_context: str         # Как для каждого M найти w
-    two_elements: str               # u, v ∈ M: uw ∈ L, vw ∉ L
-    argument: str                   # Полное рассуждение
+    technique: Literal["nerode_classes", "prefix_continuation"]
+    dead_class_finite: str | None       # nerode_classes: почему мёртвый класс D конечен/пуст (обязательно для этой техники)
+    distinguishing_suffix: str | None   # nerode_classes: w(u,v) для произвольных u != v
+    separation_argument: str | None     # nerode_classes: почему uw in L, vw not in L
+    derived_language: str | None        # prefix_continuation: L_$ ∩ R или haspref(L) ∩ R = {...}
+    regular_filter: str | None          # prefix_continuation: R
+    non_cfl_argument: str | None        # prefix_continuation: доказательство не-КС производного языка
+    argument: str                       # полное рассуждение на русском
 ```
 
-**Пример для палиндромов {ww^R | w ∈ {a,b}*}:**
+**Пример nerode_classes для {ww^R | w ∈ {a,b}*}:**
 ```json
 {
   "kind": "shallit",
-  "infinite_set_description": "Возьмём любое бесконечное M ⊆ {a,b}*",
-  "separating_context": "Для любых u ≠ v ∈ M, возьмём w = ba^{|uv|}bu^R",
-  "two_elements": "u·w = u·ba^{|uv|}bu^R — палиндром (∈ L), v·w = v·ba^{|uv|}bu^R — не палиндром (∉ L)",
-  "argument": "Никакие два различных слова не попадают в один класс эквивалентности → бесконечно много классов → не DCFL"
+  "technique": "nerode_classes",
+  "dead_class_finite": "Любое x продолжается до x·x^R ∈ L, значит D = ∅",
+  "distinguishing_suffix": "Для u != v: N = 2|uv|, w = b a^N b u^R",
+  "separation_argument": "u·w — палиндром (∈ L); v·w — не палиндром при v != u (∉ L)",
+  "derived_language": null,
+  "regular_filter": null,
+  "non_cfl_argument": null,
+  "argument": "Все пары u != v различимы ⇒ все классы Нероуда одноэлементны ⇒ конечны; мёртвый класс пуст ⇒ по контрапозиции 4.7.4 L не DCFL"
+}
+```
+
+**Пример prefix_continuation для {aⁿbⁿ} ∪ {aⁿb²ⁿ}:**
+```json
+{
+  "kind": "shallit",
+  "technique": "prefix_continuation",
+  "dead_class_finite": null,
+  "distinguishing_suffix": null,
+  "separation_argument": null,
+  "derived_language": "L_$ ∩ a*b*$b⁺ = {aⁿbⁿ$bⁿ | n >= 1}",
+  "regular_filter": "R = a*b*$b⁺",
+  "non_cfl_argument": "{aⁿbⁿ$bⁿ} не КС по лемме о накачке для КС (три равных счётчика)",
+  "argument": "L_$ была бы DCFL (лемма о продолжении), тогда L_$ ∩ R была бы DCFL ⊆ CFL — противоречие с не-КС {aⁿbⁿ$bⁿ}, значит L не DCFL"
 }
 ```
 
@@ -772,12 +813,24 @@ class InherentAmbiguityProof:
 - Если пересечение с регулярным → проверить, что sample_words ∈ L ∩ R.
 
 **6.1.3. Проверка dcfl_pumping:**
+- Проверить наличие полей контракта DCFLPumpingProof, в частности `condition1_argument` и
+  `condition2_argument` (замена устаревшего единого `no_pumping_argument`).
 - Подставить конкретные значения p = 1, 2, ..., 10.
 - Для каждого p проверить, что указанные слова w, w' действительно принадлежат L.
-- Для каждого допустимого разбиения проверить, что накачка ломает принадлежность.
+- Для каждого допустимого разбиения (по условию (1) — пара (x₂,x₄) в любом окне ≤ p; по
+  условию (2) — x₂ в последних p символах x) проверить, что накачка ломает принадлежность хотя бы
+  одного из двух слов.
 
 **6.1.4. Проверка shallit:**
-- Для конкретных u, v ∈ M и w проверить uw ∈ L и vw ∉ L (через CYK или подстановку).
+- Проверить наличие полей по указанной `technique`: для `nerode_classes` обязательны
+  `dead_class_finite`, `distinguishing_suffix`, `separation_argument` (в частности,
+  `dead_class_finite` не может быть пустым — без него доказательство неполно); для
+  `prefix_continuation` обязательны `derived_language`, `regular_filter`, `non_cfl_argument`.
+- Для `nerode_classes`: для конкретных u, v и w = w(u,v) проверить uw ∈ L и vw ∉ L (через CYK
+  или подстановку).
+- Для `prefix_continuation`: проверить, что производный язык (L_$ ∩ R или haspref(L) ∩ R)
+  вычислен согласно указанному R на sample_words, и что заявленный не-КС аргумент не содержит
+  явных противоречий (полная проверка не-КС неразрешима — проверяем необходимые условия).
 
 **6.1.5. Проверка inh_ambiguity:**
 - Проверить, что указанные overlap_words действительно принадлежат L.

@@ -24,7 +24,12 @@ MOCK_DIR = EXAMPLES_DIR / "mock"
 TASKS = [
     ("task_wvaavRwR", "dcfl", 0.92),
     ("task_u1au2_u3au4", "dcfl", 0.88),
-    ("task_anb_cnbn", "non_dcfl", 0.90),
+    # dcfl_exam_03_inh_ambiguity mock was corrected (its essential-ambiguity
+    # argument was invalid: the two branches don't overlap and are each
+    # individually unambiguous — docs/THEORY.md §1.5/§2), so the only
+    # remaining directional evidence is dcfl_pumping's own incomplete,
+    # low-confidence attempt (0.5) — the fallback reasoner picks that up.
+    ("task_anb_cnbn", "non_dcfl", 0.5),
     ("task_grammar_aSSb", "dcfl", 0.55),
 ]
 

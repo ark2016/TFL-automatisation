@@ -53,7 +53,7 @@ AGENT_LL_CLAIM = {
     "artifacts": {},
 }
 
-# Valid substitution claim (not_ll)
+# Valid substitution claim (not_ll) — new contract (docs/THEORY.md §3.3 (C))
 AGENT_NOT_LL_CLAIM = {
     "agent_name": "substitution_agent",
     "verdict": "not_ll",
@@ -61,18 +61,18 @@ AGENT_NOT_LL_CLAIM = {
     "proof_sketch": {
         "method": "substitution",
         "for_all_k": True,
-        "k": "k (arbitrary)",
-        "witness": {
-            "k": "k (arbitrary)",
-            "w1": "a^{n+k}",
-            "lookahead": "b^k",
-            "suffix_1": "b^{n}",
-            "suffix_2": "c^{n}",
-            "substitution_result": "a^{n+k} b^{k} c^{n}",
-            "why_not_in_L": "not in {aⁿbⁿ} ∪ {aⁿcⁿ}",
+        "branch_words": {
+            "common_prefix": "a^j, n-k < j <= n",
+            "word_1": "a^n b^n",
+            "word_2": "a^n c^n",
+            "lookahead_equal_because": "both words are still inside the a-block for n > k",
         },
+        "common_form_argument": "both derivations pass through a common sentential form a^j · delta",
+        "deciding_nonterminal_argument": "a unique X_t* produces b^n in one run and c^n in the other",
+        "pigeonhole_argument": "finitely many pairs (X_t*, s), infinitely many n -> two share a pair",
+        "proof_explanation": "substituting X_t*'s subderivation for n' into the n-run gives a^n b^n' not in L — contradiction",
     },
-    "artifacts": {"counterexample_words": ["a^{n+k} b^{k} c^{n}"]},
+    "artifacts": {"counterexample_words": ["a^{k+1} b^{k+1}", "a^{k+1} c^{k+1}"]},
 }
 
 # Uncertain claim
@@ -308,50 +308,44 @@ class TestVerifySubstitutionClaim:
         result = verify_substitution_claim(proof, IR_SIMPLE)
         assert result["checks_passed"] > 0
 
+    def test_complete_witness_verified(self):
+        proof = AGENT_NOT_LL_CLAIM["proof_sketch"]
+        result = verify_substitution_claim(proof, IR_SIMPLE)
+        assert result["verification_status"] == "verified", result["issues"]
+
     def test_complete_witness_result_shape(self):
         proof = AGENT_NOT_LL_CLAIM["proof_sketch"]
         result = verify_substitution_claim(proof, IR_SIMPLE)
         _assert_result_shape(result)
 
-    def test_missing_witness_raises_issue(self):
+    def test_missing_branch_words_raises_issue(self):
         proof = {
             "method": "substitution",
             "for_all_k": True,
-            "k": "k",
         }
         result = verify_substitution_claim(proof, IR_SIMPLE)
-        assert len(result["issues"]) > 0
+        assert any("branch_words" in i for i in result["issues"])
 
-    def test_missing_why_not_in_L_raises_issue(self):
+    def test_missing_proof_explanation_raises_issue(self):
         proof = {
-            "method": "substitution",
-            "for_all_k": True,
-            "k": "k",
-            "witness": {
-                "k": "k",
-                "w1": "a^n",
-                "lookahead": "b^k",
-                "suffix_1": "b^n",
-                "suffix_2": "c^n",
-                # missing why_not_in_L
-            },
+            k: v for k, v in AGENT_NOT_LL_CLAIM["proof_sketch"].items()
+            if k != "proof_explanation"
         }
         result = verify_substitution_claim(proof, IR_SIMPLE)
-        assert any("why_not_in_L" in i for i in result["issues"])
+        assert any("proof_explanation" in i for i in result["issues"])
+
+    def test_missing_pigeonhole_argument_raises_issue(self):
+        proof = {
+            k: v for k, v in AGENT_NOT_LL_CLAIM["proof_sketch"].items()
+            if k != "pigeonhole_argument"
+        }
+        result = verify_substitution_claim(proof, IR_SIMPLE)
+        assert any("pigeonhole_argument" in i for i in result["issues"])
 
     def test_missing_for_all_k_raises_issue(self):
         proof = {
-            "method": "substitution",
-            "k": "k",
-            "witness": {
-                "k": "k",
-                "w1": "a^n",
-                "lookahead": "b^k",
-                "suffix_1": "b^n",
-                "suffix_2": "c^n",
-                "why_not_in_L": "contradiction",
-            },
-            # missing for_all_k
+            k: v for k, v in AGENT_NOT_LL_CLAIM["proof_sketch"].items()
+            if k != "for_all_k"
         }
         result = verify_substitution_claim(proof, IR_SIMPLE)
         assert any("for_all_k" in i for i in result["issues"])
@@ -361,6 +355,15 @@ class TestVerifySubstitutionClaim:
         proof["method"] = "pumping"
         result = verify_substitution_claim(proof, IR_SIMPLE)
         assert any("substitution" in i.lower() for i in result["issues"])
+
+    def test_old_contract_fields_reported_obsolete(self):
+        """Regression: pre-revision fields (witness/w1/lookahead/...) must be flagged obsolete."""
+        proof = dict(AGENT_NOT_LL_CLAIM["proof_sketch"])
+        proof["witness"] = {"w1": "a^n", "lookahead": "b^k", "why_not_in_L": "old contract"}
+        result = verify_substitution_claim(proof, IR_SIMPLE)
+        assert any("obsolete" in i for i in result["issues"])
+        # Structural checks on the new contract still pass despite the obsolete leftover.
+        assert result["verification_status"] == "verified", result["issues"]
 
     def test_result_has_all_keys(self):
         proof = AGENT_NOT_LL_CLAIM["proof_sketch"]
@@ -558,68 +561,70 @@ class TestGrammarTransformerPromptFieldNames:
 
 
 # ---------------------------------------------------------------------------
-# Regression: Fix 2 — substitution uses 'lookahead_v' and 'why_not_ll'
+# Regression: substitution contract is the "branch-point" argument
+# (docs/THEORY.md §3.3 (C)), not the old lookahead/witness shape.
 # ---------------------------------------------------------------------------
 
 
 class TestSubstitutionPromptFieldNames:
-    """Verify verify_substitution_claim accepts prompt-shaped witness."""
+    """Verify verify_substitution_claim accepts the new branch-point contract
+    and flags the pre-revision ('parser configuration depends only on
+    lookahead') shape as obsolete rather than silently accepting it."""
 
-    BASE_WITNESS_OLD = {
-        "k": "k (arbitrary)",
-        "w1": "a^n",
-        "lookahead": "a^k",
-        "suffix_1": "b^n",
-        "suffix_2": "c^n",
-        "why_not_in_L": "incompatible continuations",
-    }
+    def _make_proof(self, **overrides) -> dict:
+        proof = {
+            "method": "substitution",
+            "for_all_k": True,
+            "branch_words": {
+                "common_prefix": "a^j",
+                "word_1": "a^n b^n",
+                "word_2": "a^n c^n",
+                "lookahead_equal_because": "both inside the a-block for n > k",
+            },
+            "common_form_argument": "common sentential form a^j · delta",
+            "deciding_nonterminal_argument": "unique X_t* branches into b^n vs c^n",
+            "pigeonhole_argument": "finitely many (X_t*, s) pairs, infinitely many n",
+            "proof_explanation": "substitution yields a^n b^n' not in L — contradiction",
+        }
+        proof.update(overrides)
+        return proof
 
-    BASE_WITNESS_NEW = {
-        "k": "k (arbitrary)",
-        "w1": "a^n",
-        "lookahead_v": "a^k",
-        "suffix_1": "b^n",
-        "suffix_2": "c^n",
-        "why_not_ll": "incompatible continuations",
-    }
-
-    def _make_proof(self, witness: dict) -> dict:
-        return {"method": "substitution", "for_all_k": True, "witness": witness}
-
-    def test_old_field_names_still_work(self):
-        result = verify_substitution_claim(self._make_proof(self.BASE_WITNESS_OLD), IR_SIMPLE)
-        assert result["verification_status"] == "verified"
-
-    def test_lookahead_v_accepted(self):
-        """Regression: prompt writes 'lookahead_v', verifier required 'lookahead'."""
-        result = verify_substitution_claim(self._make_proof(self.BASE_WITNESS_NEW), IR_SIMPLE)
+    def test_new_contract_fully_verified(self):
+        result = verify_substitution_claim(self._make_proof(), IR_SIMPLE)
         assert result["verification_status"] == "verified", result["issues"]
 
-    def test_why_not_ll_accepted(self):
-        """Regression: prompt writes 'why_not_ll', verifier required 'why_not_in_L'."""
-        result = verify_substitution_claim(self._make_proof(self.BASE_WITNESS_NEW), IR_SIMPLE)
-        assert not any("why_not_in_L" in i for i in result["issues"])
-
-    def test_prompt_shaped_payload_fully_verified(self):
-        """End-to-end: a payload shaped exactly like the prompt output must be verified."""
-        prompt_payload = {
+    def test_old_witness_shape_alone_is_not_verified(self):
+        """Regression: the pre-revision witness/lookahead/why_not_ll shape must
+        NOT be silently accepted as a valid proof — it lacks the new contract's
+        branch_words/common_form/deciding_nonterminal/pigeonhole fields."""
+        old_shaped_proof = {
             "method": "substitution",
             "for_all_k": True,
             "witness": {
                 "k": "k (arbitrary)",
-                "n": "k + 1",
                 "w1": "a^{n-k}",
                 "lookahead_v": "a^k",
                 "suffix_1": "b^n",
                 "suffix_2": "c^n",
+                "why_not_ll": "parser configuration depends only on lookahead",
+            },
+        }
+        result = verify_substitution_claim(old_shaped_proof, IR_SIMPLE)
+        assert result["verification_status"] != "verified"
+        assert any("obsolete" in i for i in result["issues"])
+        assert any("branch_words" in i for i in result["issues"])
+
+    def test_prompt_shaped_payload_fully_verified(self):
+        """End-to-end: a payload shaped exactly like the new prompt output must be verified."""
+        prompt_payload = self._make_proof(
+            branch_words={
+                "common_prefix": "a^j, n-k < j <= n",
                 "word_1": "a^n b^n",
                 "word_2": "a^n c^n",
-                "word_1_in_L": True,
-                "word_2_in_L": True,
-                "why_not_ll": "После прочтения w₁ парсер в одном состоянии стека для обоих слов.",
+                "lookahead_equal_because": "n > k keeps both lookaheads inside the a-block: a^k",
             },
-            "proof_explanation": "full formal proof",
-        }
+            proof_explanation="Полное доказательство на русском.",
+        )
         result = verify_substitution_claim(prompt_payload, IR_SIMPLE)
         assert result["verification_status"] == "verified", result["issues"]
 
@@ -710,31 +715,31 @@ class TestMarkerPromptFieldNames:
 
 
 class TestVerifyPrefixClassesClaim:
-    """Regression: prefix_classes_agent was falling through to 'No verifier' inconclusive."""
+    """Regression: prefix_classes_agent was falling through to 'No verifier' inconclusive.
+
+    Contract is Theorem 4.7.4 [Sh] (docs/THEORY.md §1.2, §3.3 (A)): all Myhill–Nerode
+    classes finite ⇒ not DCFL ⇒ not LL. The old "LL Nerode theorem" (finitely many
+    k-equivalence classes of prefixes) is false and must not be accepted.
+    """
 
     VALID_PS = {
         "method": "prefix_classes",
+        "theorem": "Shallit 4.7.4 → not DCFL → not LL",
         "for_all_k": True,
-        "prefix_family": {
-            "parametrization": "u_n = a^{n+k}",
-            "parameter_range": "n >= 1",
-            "description": "Family of prefixes u_n = a^{n+k}",
-        },
-        "distinguishability_argument": {
-            "fixed_k": "arbitrary k >= 1",
-            "lookahead_v": "a^k",
-            "why_distinguishable": "u_n and u_m require different completions for n != m",
-        },
-        "conclusion": "Infinitely many prefix classes for each k — not LL(k)",
+        "dead_class_finite": "D = ∅: every prefix extends into a palindrome ww^R ∈ L",
+        "distinguishing_suffix": "w = b · a^N · b · u^R, N = 2|uv|",
+        "separation_argument": "exactly one of uw, vw is a palindrome for u != v",
+        "conclusion": "All Nerode classes are singletons (finite) ⇒ not DCFL ⇒ not LL(k) for any k",
+        "proof_explanation": "Full formal proof.",
     }
 
     def test_valid_claim_verified(self):
         result = verify_prefix_classes_claim(self.VALID_PS, IR_SIMPLE)
         assert result["verification_status"] == "verified", result["issues"]
 
-    def test_checks_passed_all_four(self):
+    def test_checks_passed_all_eight(self):
         result = verify_prefix_classes_claim(self.VALID_PS, IR_SIMPLE)
-        assert result["checks_passed"] == 4
+        assert result["checks_passed"] == 8
 
     def test_missing_for_all_k(self):
         ps = {**self.VALID_PS}
@@ -742,16 +747,23 @@ class TestVerifyPrefixClassesClaim:
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
         assert any("for_all_k" in i for i in result["issues"])
 
-    def test_missing_prefix_family(self):
+    def test_missing_dead_class_finite(self):
+        """dead_class_finite is mandatory — Theorem 4.7.4 is vacuous without it."""
         ps = {**self.VALID_PS}
-        del ps["prefix_family"]
+        del ps["dead_class_finite"]
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
-        assert any("prefix_family" in i for i in result["issues"])
+        assert any("dead_class_finite" in i for i in result["issues"])
 
-    def test_empty_why_distinguishable(self):
-        ps = {**self.VALID_PS, "distinguishability_argument": {"why_distinguishable": ""}}
+    def test_missing_distinguishing_suffix(self):
+        ps = {**self.VALID_PS}
+        del ps["distinguishing_suffix"]
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
-        assert any("why_distinguishable" in i for i in result["issues"])
+        assert any("distinguishing_suffix" in i for i in result["issues"])
+
+    def test_empty_separation_argument(self):
+        ps = {**self.VALID_PS, "separation_argument": ""}
+        result = verify_prefix_classes_claim(ps, IR_SIMPLE)
+        assert any("separation_argument" in i for i in result["issues"])
 
     def test_dispatched_via_verify_ll_claim(self):
         """Regression: verify_ll_claim was returning 'No verifier for method prefix_classes'."""
@@ -766,29 +778,35 @@ class TestVerifyPrefixClassesClaim:
         assert "No verifier" not in " ".join(result.get("issues", []))
         assert result["verification_status"] == "verified"
 
+    def test_old_ll_nerode_theorem_shape_not_verified(self):
+        """Regression: the false 'LL Nerode theorem' (k-distinguishable prefixes) shape
+        must not be silently accepted; old fields are reported obsolete."""
+        old_shaped_ps = {
+            "method": "prefix_classes",
+            "for_all_k": True,
+            "prefix_family": {
+                "parametrization": "u_n = a^{n+k}",
+                "description": "Family of prefixes u_n = a^{n+k}",
+            },
+            "distinguishability_argument": {
+                "why_distinguishable": "u_n and u_m require different completions for n != m",
+            },
+        }
+        result = verify_prefix_classes_claim(old_shaped_ps, IR_SIMPLE)
+        assert result["verification_status"] != "verified"
+        assert any("obsolete" in i for i in result["issues"])
+        assert any("dead_class_finite" in i for i in result["issues"])
+
     def test_prompt_shaped_payload(self):
         """End-to-end: payload exactly as prompt outputs must be verified."""
         ps = {
             "method": "prefix_classes",
+            "theorem": "Shallit 4.7.4 → not DCFL → not LL",
+            "dead_class_finite": "D = ∅: любой префикс x ∈ {a,b}* продолжается до палиндрома x·xᴿ ∈ L.",
+            "distinguishing_suffix": "Для различных u, v положим N = 2|uv|, w = b·aᴺ·b·uᴿ.",
+            "separation_argument": "u·w — палиндром; v·w — палиндром лишь при u = v, что противоречит u != v.",
             "for_all_k": True,
-            "prefix_family": {
-                "parametrization": "u_n = a^{n+k} для n >= 1 (при фиксированном k)",
-                "parameter_range": "n >= 1, любое n",
-                "description": "Рассматриваем семейство префиксов u_n = a^{n+k}",
-            },
-            "distinguishability_argument": {
-                "fixed_k": "arbitrary k >= 1",
-                "lookahead_v": "a^k",
-                "for_n": "n (arbitrary > 0)",
-                "for_m": "m != n",
-                "completion_for_n": "a^{n+k}",
-                "completion_for_m": "a^{m+k}",
-                "word_un_v_sn": "a^{2(n+k)} in L",
-                "word_um_v_sn": "a^{n+k+m+k} — may differ",
-                "why_distinguishable": "u_n и u_m требуют разных продолжений: "
-                                       "a^{n+k} ∈ L(u_n), но a^{n+k} ∉ L(u_m).",
-            },
-            "conclusion": "Для каждого k классов бесконечно много → L не LL(k).",
+            "conclusion": "Все классы Нероуда одноэлементны ⇒ по т. 4.7.4 L ∉ DCFL ⇒ L не LL(k) ни для какого k.",
             "proof_explanation": "Полное доказательство на русском.",
         }
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)

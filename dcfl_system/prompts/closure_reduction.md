@@ -56,6 +56,11 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
 | Kleene star | L* | NO | Cannot conclude anything about DCFL from Kleene star |
 | Reversal | L^R | NO | Cannot conclude anything about DCFL from reversal |
 | Homomorphism | h(L) | NO | Cannot conclude anything about DCFL from forward homomorphism |
+| **Right quotient with regular** | L/R | **YES** [GG] | If L is DCFL and R is regular, then L/R is DCFL |
+| **MIN** | MIN(L) | **YES** [GG] | MIN(L) = {x ∈ L \| no proper prefix of x is in L} is DCFL if L is DCFL |
+| **MAX** | MAX(L) | **YES** [GG] | MAX(L) = {x ∈ L \| no proper extension of x is in L} is DCFL if L is DCFL |
+| **haspref** | haspref(L) | **YES** [Sh] | haspref(L) = {xy \| x ∈ L, xy ∈ L, y ≠ ε} is DCFL if L is DCFL — used by the `shallit` agent (prefix_continuation technique) |
+| **Marked continuation** | L_$ | **YES** [Sh] | L_$ = {x$y \| x ∈ L, xy ∈ L} is DCFL if L is DCFL — used by the `shallit` agent (prefix_continuation technique) |
 
 *∩ REG — this is NOT from Table 1 (where ∩ means DCFL ∩ DCFL, which is NOT closed). Closure under ∩ REG follows from the product construction DPDA × DFA, which preserves determinism.
 

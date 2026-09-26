@@ -5,6 +5,8 @@ Agentic system for analyzing context-free language properties (КС-свойст
 Extension of the existing REG agent system in `agent_system/`.
 Full spec: `cfl_system/tz_cfl_agent_system.md`
 
+Theory (lemma formulations, worked examples): `docs/THEORY.md` §2 is the single source of truth for CFL closure/pumping examples used in the prompts below.
+
 ## Architecture rules
 - Pure functions in `lib/` — no LLM calls, fully testable
 - Prompts in `prompts/` — externalized, not hardcoded

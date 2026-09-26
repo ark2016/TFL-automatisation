@@ -553,18 +553,25 @@ LLM анализирует коммутативный образ.
 2. Показать, что L ∩ R не КС (через pumping)
 3. Поскольку CFL ∩ REG = CFL, если L ∩ R не КС → L не КС
 
-**Пример:** L = {w₁w₂w₁w₃ | ...}, R = a* · {b,c}* · a* · {a,c}*
-Тогда L ∩ R = {aⁿ · w₂ · aⁿ · w₃} — содержит aⁿ(b|c)ᵐaⁿ, далее pumping.
+**Пример:** L = {w₁w₂w₁w₃ | w₂ ∈ {b,c}⁺, w₁ ∈ {a,b}⁺, w₃ ∈ {a,c}⁺}, R = a⁺b⁺ac·a⁺b⁺ac
+(regex `a+b+aca+b+ac`). Наивный R = a*(b|c)*a*(a|c)* (или a⁺b⁺a⁺c⁺) **не годится**: лишние a
+из второго вхождения w₁ уходят в w₃ ∈ {a,c}⁺, поэтому L ∩ a⁺b⁺a⁺c⁺ = {aⁿbᵐaʲcᵏ | j ≥ n} —
+это КС-язык, и он ничего не доказывает. Фиксация w₁ вплоть до последнего символа перед
+явным маркером «ac» устраняет эту свободу: L ∩ R = {aⁿbᵐac·aⁿbᵐac | n,m ≥ 1} (единственное
+разложение w₁w₂w₁w₃, совместимое с R, — это w₁ = aⁿbᵐa, w₂ = c, второй w₁ = aⁿbᵐa, w₃ = c;
+см. полный разбор вариантов в `prompts/cfl_closure_reduction.md`). Для z = aᵖbᵖac·aᵖbᵖac
+накачка вниз (i = 0) для любого разбиения либо ломает один из двух маркеров «ac», либо
+нарушает n₁ = n₂ или m₁ = m₂ — далее pumping.
 
 **Выход (evidence):**
 ```json
 {
-  "regular_language": "a*(b|c)*a*(a|c)*",
-  "regular_language_regex": "a*(b|c)*a*(a|c)*",
-  "intersection_description": "{a^n w₂ a^n w₃ | w₂ ∈ {b,c}+, w₃ ∈ {a,c}+}",
+  "regular_language": "a+b+ac·a+b+ac",
+  "regular_language_regex": "a+b+aca+b+ac",
+  "intersection_description": "{a^n b^m ac a^n b^m ac | n ≥ 1, m ≥ 1}",
   "intersection_not_cfl_proof": {
     "method": "pumping",
-    "word_chosen": "a^p b a^p c",
+    "word_chosen": "a^p b^p ac a^p b^p ac",
     "cases": [ ... ]
   },
   "conclusion": "L ∩ R is not CFL, R is regular, therefore L is not CFL"
@@ -773,7 +780,7 @@ n слов, для которых interchange (обмен подсловами) 
   "confidence": 0.95,
   "proof": {
     "method": "closure_reduction + pumping",
-    "summary": "Intersected L with R = a*(b|c)*a*(a|c)* (regular). Showed L ∩ R contains {a^n b a^n c | n ≥ 1} which is not CFL by Bar-Hillel pumping.",
+    "summary": "Intersected L with R = a+b+ac·a+b+ac (regular). Showed L ∩ R = {a^n b^m ac · a^n b^m ac | n,m ≥ 1}, not CFL: pumping z = a^p b^p ac·a^p b^p ac down (i = 0) breaks one of the two matched counters for every decomposition (docs/THEORY.md §2).",
     "details": { ... }
   },
   "grammar": null,
