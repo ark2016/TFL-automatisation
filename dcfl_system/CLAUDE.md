@@ -24,14 +24,14 @@ Full spec: dcfl_system/tz_dcfl_agent_system.md
 - May import from `agent_system.lib.ir_schema` (base IR schema)
 - May import from `agent_system.lib.oracle` (base oracle framework)
 - May import from `agent_system.lib.word_generator` (base word generator)
-- May import from `cfl_system.lib.cyk_oracle` (CYK membership oracle)
+- May import from `cfl_system.lib.cyk` (CYK membership)
 - Do NOT modify any files in `agent_system/` or `cfl_system/`
 
 ## Code style
-- Python 3.11+, type hints everywhere
+- Python 3.12+, type hints everywhere
 - Dataclasses or Pydantic for structured data
 - Every pure function must have unit tests in `tests/`
-- No dependencies beyond stdlib + jsonschema for Phase 1
+- `lib/` stays stdlib-only; runtime deps are declared in the root `pyproject.toml`
 - Guard `if proof_sketch is None` before accessing proof fields in renderer
 - LangGraph for orchestrator
 
@@ -41,13 +41,15 @@ Full spec: dcfl_system/tz_dcfl_agent_system.md
 - DCFL closed under: complement (~), inverse homomorphism (h⁻¹), ∩ REG (via DPDA × DFA, not Table 1)
 - DCFL NOT closed under: union, intersection (DCFL∩DCFL), concatenation, Kleene star, reversal, homomorphism
 - DCFL pumping lemma ≠ CFL pumping lemma (two words, two conditions: prefix-only + synchronized suffix)
-- Shallit's lemma: ∀ infinite M ∃ infinite homogeneous M' ⊆ M (negation: ∃ M with no homogeneous subset)
+- Shallit's lemma: ⚠ the formulation in `prompts/shallit.md` (∀ infinite M ∃ infinite homogeneous M' ⊆ M)
+  is under review — taken literally it also rejects {aⁿbⁿ}, which is DCFL (see root `TODO.md`)
 - Inherently ambiguous → not UnambCF → not DCFL
 - Format 2: analyze the LANGUAGE, not the grammar (ambiguous grammar ≠ non-DCFL language)
 
-## Current phase
-Phase 1: Core Infrastructure (pure fn, no LLM)
-See §10 Phase 1 in the spec for the full list.
+## Current status
+All phases through live LLM integration are implemented (models: see `config.py`).
+Open work is tracked in the root `TODO.md`. Live test runs: Haiku only, via
+`TFL_MODEL_OVERRIDE=claude-haiku-4-5` (see root `CLAUDE.md`).
 
 ## Formal verification
 NOT implemented. No Lean/Coq proof checking — not in scope.
@@ -56,8 +58,9 @@ and LLM-based reasoning.
 
 ## Key commands
 ```bash
-cd dcfl_system/
-python -m pytest tests/ -v
-python -m lib.dcfl_ir_schema examples/task_wvaavRwR.json
-python orchestrator.py examples/task_wvaavRwR.json --mock examples/mock/
+# from the repo root
+.venv/Scripts/python -m pytest dcfl_system/tests -q
+.venv/Scripts/python -m dcfl_system.lib.dcfl_ir_schema dcfl_system/examples/task_wvaavRwR.json
+.venv/Scripts/python -m dcfl_system.orchestrator dcfl_system/examples/task_wvaavRwR.json \
+    --mock dcfl_system/examples/mock/ --save out/
 ```

@@ -26,5 +26,6 @@ This repository distributes code that calls the Anthropic API on behalf of the u
 - **Credential exposure.** `ANTHROPIC_API_KEY` must never be committed; `.env` is git-ignored. If you find a key accidentally committed to history, report privately and rotate the key immediately via the [Anthropic console](https://console.anthropic.com/).
 - **Prompt-injection attacks.** The pipelines accept natural-language problem statements and pass them to an LLM. A crafted `source_text` that manipulates an agent into producing misleading output is a known risk and is in scope.
 - **Arbitrary code execution.** The orchestrators spawn `python -m <project>.orchestrator` subprocesses based on user input in the UI. Command arguments are built from a fixed allow-list of project IDs, not from free-form input. Any path traversal or argument injection in `ui_server/server.py` is in scope.
+- **Local UI exposure.** TFL Lab binds to `127.0.0.1`, answers only loopback `Host` headers and accepts `POST /api/run` only as a same-origin JSON request, so another web page cannot read local files or start paid live runs. Bypasses of these checks are in scope.
 
 Out of scope: general behavior of the underlying LLM, Anthropic API availability, and issues in third-party dependencies (report those upstream).

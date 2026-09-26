@@ -16,9 +16,9 @@
 
 ## Test plan
 
-- [ ] `python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests -q` passes locally
+- [ ] `python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests ui_server/tests -q` passes locally
 - [ ] Manually tested the affected pipeline with `--mock` on a representative IR
-- [ ] (if LLM behavior changed) Ran at least one `--live` task and reviewed the rendered HTML report
+- [ ] (if LLM behavior changed) Ran at least one `--live` task (`TFL_MODEL_OVERRIDE=claude-haiku-4-5` first) and reviewed the rendered HTML report
 - [ ] (if UI changed) Loaded `http://127.0.0.1:8765/`, ran a mock task, all four result tabs render
 
 ## Related issues

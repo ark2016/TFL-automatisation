@@ -18,25 +18,25 @@ Full spec: `ll_system/tz_ll_agent_system.md`
 - Import from `agent_system.lib.ir_schema` (base IR schema)
 - Import from `agent_system.lib.oracle` (base oracle framework)
 - Import from `agent_system.lib.word_generator` (word generation)
-- Import from `cfl_system.lib.cyk_oracle` (CYK membership check)
-- Import from `cfl_system.lib.cfg_utils` (grammar utilities)
+- Import from `cfl_system.lib.cyk` (CYK membership check)
 - Do NOT modify any files in `agent_system/` or `cfl_system/`
 
 ## Code style
-- Python 3.11+, type hints everywhere
+- Python 3.12+, type hints everywhere
 - Dataclasses or Pydantic for structured data
 - Every pure function must have unit tests in `tests/`
-- No dependencies beyond stdlib + jsonschema for Phase 1
+- `lib/` stays stdlib-only; runtime deps are declared in the root `pyproject.toml`
 - Guard `if proof is None` before accessing proof fields in renderer
 - BFS word generation with length limits (not recursive DFS)
 
 ## Key commands
 ```bash
-cd ll_system/
-python -m pytest tests/ -v
-python -m pytest tests/test_first_follow.py -v
-python -m lib.ll_ir_schema examples/format3_simple_ll1.json
-python orchestrator.py examples/format1_anbn_union_ancn.json --mock examples/mock/
+# from the repo root
+.venv/Scripts/python -m pytest ll_system/tests -q
+.venv/Scripts/python -m pytest ll_system/tests/test_first_follow.py -v
+.venv/Scripts/python -m ll_system.lib.ll_ir_schema ll_system/examples/format3_simple_ll1.json
+.venv/Scripts/python -m ll_system.orchestrator ll_system/examples/format1_anbn_union_ancn.json \
+    --mock ll_system/examples/mock/ --save out/
 ```
 
 ## Allowed actions
@@ -50,11 +50,14 @@ python orchestrator.py examples/format1_anbn_union_ancn.json --mock examples/moc
 - Language vs grammar: left recursion ≠ not LL (language may still be LL)
 - LL(k) ⊂ LL(k+1) strictly; minimum k is part of the answer
 - FIRST/FOLLOW fixed-point computation must converge (max iterations guard)
+- The table check uses global FOLLOW_k → it decides STRONG LL(k); for k ≥ 2, LL(k) ≠ strong LL(k)
+  (open item in root `TODO.md`)
 - k-prefix concatenation: X ⊕_k Y = {(xy)[:k] | x ∈ X, y ∈ Y}
 - LL closure: LL ∩ REG = LL; LL ∪ LL ≠ necessarily LL
 - Hierarchy: REG ⊂ LL(1) ⊂ LL(k) ⊂ LR(k) = DCFL ⊂ CFL
 - LaTeX: use `b·a^i` not `ba^i`, no `\,`
 
-## Current phase
-Phase 1: Core Infrastructure (pure fn, no LLM)
-See §9 Phase 1 in the spec for the full list.
+## Current status
+All phases through live LLM integration are implemented (models: see `config.py`).
+Open work is tracked in the root `TODO.md`. Live test runs: Haiku only, via
+`TFL_MODEL_OVERRIDE=claude-haiku-4-5` (see root `CLAUDE.md`).

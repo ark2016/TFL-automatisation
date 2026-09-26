@@ -7,7 +7,10 @@
 - миграция на Opus 5.5 / Sonnet 5: effort, refusal, streaming, чтение блоков по типу;
 - TFL Lab: path traversal, CSRF/Host, запуск всех 4 пайплайнов (`--save`);
 - CFL: формат PDA, маскировка контрпримеров, `quick_verdict` при нерегулярном фильтре, «semilinear ⇒ CFL»;
-- `_CONSTRUCTIVE_AGENTS` → tuple; `ui_server/tests` в CI; `anthropic>=0.77.0`.
+- `_CONSTRUCTIVE_AGENTS` → tuple; `ui_server/tests` в CI; `anthropic>=0.77.0`;
+- CodeQL: раздача файлов через индекс, `permissions: contents: read` в CI;
+- документация: README (CLI, различия пайплайнов, теория DCFL/LL, тесты), корневой и подсистемные `CLAUDE.md`,
+  `CONTRIBUTING.md`, шаблоны issue/PR, `SECURITY.md`.
 
 Легенда: 🔴 high · 🟠 medium · ⚪ low; объём: S ≤ 30 мин · M ≤ день · L > дня.
 
@@ -49,6 +52,11 @@
     (эталон `cfl`, см. `tests/test_e2e.py:62`). Грамматика и PDA от агентов неверны (43 настоящих контрпримера), retry → invert →
     `done non_cfl` с confidence **0.92**. «Не удалось построить верный артефакт» ≠ «язык не КС»: после inversion нужен
     проверенный деструктивный аргумент, иначе `inconclusive` / низкий confidence.
+- [ ] 🔴 **S–M** **Формулировка леммы Шаллита в `dcfl_system/prompts/shallit.md:46-70` ошибочна.**
+  «∀ бесконечного M ∃ бесконечное однородное M′ ⊆ M» при M = {aⁿ}: любое бесконечное M′ разделяется суффиксом bᵏ
+  (k ∈ M′), т.е. по промпту {aⁿbⁿ} — не DCFL, хотя это DCFL. Раздел «Practical approach» (попарно различимые
+  префиксы) доказывает только нерегулярность. → сверить с первоисточником (Shallit, «A Second Course in Formal
+  Languages and Automata Theory») и переписать формулировку, пример и `dcfl_system/CLAUDE.md`; добавить тест-ловушку {aⁿbⁿ}.
 - [ ] 🔴 **M** **Ложное эталонное доказательство в CFL-промптах.**
   `cfl_system/prompts/cfl_closure_reduction.md:107-113`: L ∩ a⁺b⁺a⁺c⁺ на деле {aⁿbᵐaʲcᵏ | 1≤n≤j} (это CFL), накачка неверна.
   Копии: `cfl_pumping.md:197-235`, `cfl_reasoning.md:184,187`, `cfl_retry_planner.md:54-55`, `tz_cfl_agent_system.md:555-567`.
@@ -139,19 +147,12 @@
 - [ ] ⚪ **S** `pyproject.toml`: `prompts/*.md`, `examples`, `static`, шаблоны Lean не попадают в wheel, а `*/tests` попадают;
   сломан скрипт `inverse-homomorphism`; extra `ui=streamlit` вводит в заблуждение, extra `langgraph` дублирует основные зависимости;
   нет entry points для четырёх систем; описание устарело.
-- [ ] ⚪ **S** `.github/workflows/tests.yml`: добавить `permissions: contents: read`, `timeout-minutes`, `concurrency`;
+- [ ] ⚪ **S** `.github/workflows/tests.yml`: добавить `timeout-minutes`, `concurrency`;
   lint (`ruff`), coverage с порогом, сборку wheel со smoke-установкой; неблокирующую Lean-задачу; тесты `pumping_len.py`.
 - [ ] ⚪ **S** `agent_system/tests/test_phase3.py:49`: шаблоны Lean никогда не компилируются в CI.
 
 ## 6. Документация и промпты
 
-- [ ] 🟠 **S** `CLAUDE.md` (корень) всё ещё «только `agent_system/`, Phase 1». `dcfl_system/CLAUDE_dcfl.md` и `ll_system/CLAUDE_ll.md`
-  не загружаются из-за имени → переименовать в `CLAUDE.md`; в `cfl_system/CLAUDE.md:44-45` устарели «Python 3.11+», «jsonschema», фазы.
-- [ ] 🟠 **S** `README.md:23, 68, 116`: заявлены «одинаковая топология» и «единый LiveRunner», но в dcfl нет proof_checker/formalizer/invert,
-  в ll — proof_checker/oracle_test/retry_planner; `:33` ссылается на несуществующий `requirements.txt`, `:283` — на `pumping_regular/`;
-  CLI-флаги (в т.ч. общий `--save`) не описаны.
-- [ ] 🟠 **S** `README.md:202-204`: теория DCFL неверна (неоднозначность одной грамматики ≠ не-DCFL; лемма DCFL-накачки и Shallit
-  описаны неправильно) → переписать по формулировкам из промптов dcfl.
 - [ ] 🟠 **S** `cfl_system/prompts/cfl_formalizer.md:40, 194`: доказательство генерируется дважды, поле `markdown` почти не используется
   (`orchestrator.py:1514, 1563-1566`) → убрать из контракта (лишние Opus-токены).
 - [ ] ⚪ **S** 14 промптов: блоки «Reasoning (Chain-of-Thought)» перед JSON и черновые реплики «Wait — ...»
@@ -167,6 +168,8 @@
   (шаг parse из спецификации отсутствует) → реализовать `--text` или пометить как deferred.
 - [ ] ⚪ **S** `agent_system/lib/claim_verifier.py:129,157`: алфавит `[ab]` захардкожен, нет левой границы слова, `in\s+L` матчит «in length».
 - [ ] ⚪ **S** `ll_system/lib/ll_ir_schema.py:88`: `$`/`ε` не зарезервированы и конфликтуют с маркером конца ввода.
+- [ ] ⚪ **S** `ll_system/CLAUDE.md` («LL closure: LL ∩ REG = LL») — проверить по литературе замкнутость LL(k)-языков
+  относительно пересечения с регулярными; если утверждение неверно, оно попадает и в рассуждения агентов.
 
 ## 7. Стратегия
 

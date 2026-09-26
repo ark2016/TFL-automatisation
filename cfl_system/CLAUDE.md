@@ -31,25 +31,25 @@ Full spec: `cfl_system/tz_cfl_agent_system.md`
   - Verify: `dot -V` should print the version.
 
 ## Code style
-- Python 3.11+, type hints everywhere
+- Python 3.12+, type hints everywhere
 - Dataclasses or Pydantic for structured data
 - Every pure function must have unit tests in `tests/`
-- No dependencies beyond stdlib + jsonschema for Phase 1
+- `lib/` stays stdlib-only; runtime deps are declared in the root `pyproject.toml`
 - Guard `if proof is None` before accessing proof fields in renderer (recurring bug)
 
-## Current phase
-Phase 2: Agents + Orchestrator (complete)
-- Phase 1: 15 pure-fn modules in lib/, 275+ tests
-- Phase 2: 15 prompts, orchestrator with MockRunner, mock outputs for 4 tasks, E2E tests
-- Phase 3 next: Lean 4 formalization
-- Phase 4 next: Live LLM integration
+## Current status
+All phases through live LLM integration are implemented (models: see `config.py`).
+Open work is tracked in the root `TODO.md`. Live test runs: Haiku only, via
+`TFL_MODEL_OVERRIDE=claude-haiku-4-5` (see root `CLAUDE.md`).
 
 ## Key commands
 ```bash
-cd cfl_system/
-python -m pytest tests/ -v
-python -m lib.cfl_ir_schema examples/task_w1w2w1w3.json
-python orchestrator.py examples/task_w1w2w1w3.json --mock examples/mock/
+# from the repo root
+.venv/Scripts/python -m pytest cfl_system/tests -q
+.venv/Scripts/python -m cfl_system.orchestrator cfl_system/examples/task_w1w2w1w3.json \
+    --mock cfl_system/examples/mock/ --save out/
+TFL_MODEL_OVERRIDE=claude-haiku-4-5 .venv/Scripts/python -m cfl_system.orchestrator \
+    cfl_system/examples/task_w1w2w1w3.json --live --verbose --save out/
 ```
 
 ## Allowed actions
@@ -61,7 +61,10 @@ python orchestrator.py examples/task_w1w2w1w3.json --mock examples/mock/
 ## Critical reminders
 - CYK timeout: 10s for words > 100 chars
 - PDA sim: max_stack_depth=1000, max_steps=10000
-- Parikh: semilinearity is NECESSARY but NOT SUFFICIENT for CFL
+- Parikh: semilinearity is NECESSARY but NOT SUFFICIENT for CFL (also for bounded languages:
+  Ginsburg–Spanier needs *stratified* semilinear sets — `check_stratification` only gives hints)
+- PDA contract: prompts use topmost-first `push` + sibling `acceptance_mode`; the simulator wants
+  last-pushed-on-top + `accept_mode` — convert agent PDAs with `normalize_agent_pda()`
 - {ww} is NOT CFL — verify decomposition claims
 - LaTeX: use `b·a^i` not `ba^i`, no `\,`
 
