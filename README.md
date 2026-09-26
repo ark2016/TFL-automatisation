@@ -3,7 +3,7 @@
 [![tests](https://github.com/Ark2016/TFL-automatisation/actions/workflows/tests.yml/badge.svg)](https://github.com/Ark2016/TFL-automatisation/actions/workflows/tests.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
-[![Powered by Claude](https://img.shields.io/badge/powered%20by-Claude%204.7-7a5af8.svg)](https://www.anthropic.com/claude)
+[![Powered by Claude](https://img.shields.io/badge/powered%20by-Claude%20Opus%205.5-7a5af8.svg)](https://www.anthropic.com/claude)
 
 Multi-agent pipelines for **Theory of Formal Languages** problems — classify a language and produce an exam-ready proof that it belongs (or does not belong) to a given complexity class. Four independent pipelines, one shared orchestration pattern, one local web UI.
 
@@ -20,7 +20,7 @@ Multi-agent pipelines for **Theory of Formal Languages** problems — classify a
 | **DCFL** — `dcfl_system/` | Deterministic CFL | 8 | DCFL pumping, Shallit's lemma, inherent ambiguity |
 | **LL** — `ll_system/` | LL(k) grammars | 10 | FIRST / FOLLOW, LL(k) conflict detection, left-recursion and factoring transforms |
 
-Each pipeline runs **in parallel** over its specialist agents, fuses their results through a reasoning agent, audits the selected proof with an independent proof-checker, and formalizes the verdict via a structured Markdown document. See [Architecture](#architecture) below.
+Each pipeline runs its specialist agents **in parallel**, checks their artifacts against deterministic oracles, and fuses the evidence through a reasoning agent into a verdict and a structured report. REG and CFL additionally audit the chosen proof with an independent proof-checker agent. See [Architecture](#architecture) below.
 
 ---
 
@@ -30,7 +30,8 @@ Each pipeline runs **in parallel** over its specialist agents, fuses their resul
 # One-time setup
 python -m venv .venv
 .venv/Scripts/activate        # or source .venv/bin/activate on *nix
-pip install -r requirements.txt   # anthropic, langgraph, python-dotenv, ...
+pip install -e .                  # anthropic, langgraph, python-dotenv, ...
+pip install pytest                # for the test suite
 echo "ANTHROPIC_API_KEY=sk-..." > .env
 
 # Install Graphviz (for PDA state diagrams in HTML reports)
@@ -44,28 +45,34 @@ dot -V                        # sanity check
 # → open http://127.0.0.1:8765/
 ```
 
-Or run a pipeline directly from the command line:
+Or run a pipeline directly from the command line. All four orchestrators share one CLI contract — `<ir.json> --save DIR [--live] [--verbose]` — which is also what TFL Lab uses:
 
 ```bash
-# Mock (no LLM, fast, free) — exercises validation + fallback reasoning
+# Offline (no LLM, free) — exercises validation, oracles and fallback reasoning
 .venv/Scripts/python -m cfl_system.orchestrator \
     cfl_system/examples/task11_ai_bj_between.json \
     --save cfl_system/examples/live_outputs/
 
-# Live (Anthropic API, real money)
+# Live, cheap: every agent on Haiku (use this for testing)
+TFL_MODEL_OVERRIDE=claude-haiku-4-5 .venv/Scripts/python -m cfl_system.orchestrator \
+    cfl_system/examples/task11_ai_bj_between.json \
+    --live --verbose --save cfl_system/examples/live_outputs/
+
+# Live with the production models (Opus 5.5 / Sonnet 5 — real money)
 .venv/Scripts/python -m cfl_system.orchestrator \
     cfl_system/examples/task11_ai_bj_between.json \
-    --live --verbose \
-    --save cfl_system/examples/live_outputs/
+    --live --verbose --save cfl_system/examples/live_outputs/
 ```
 
-Artifacts land as `{task}_result.{json,md,html}` beside the IR.
+Module per pipeline: `agent_system` (REG, run as `python -m agent_system`), `cfl_system.orchestrator`, `dcfl_system.orchestrator`, `ll_system.orchestrator`. `--mock DIR` replays recorded agent outputs instead of calling the API.
+
+Artifacts land as `{ir_stem}_result.{json,md,html}` in the `--save` directory; the JSON has a top-level `verdict`. Exit code (cfl / dcfl / ll): `0` decided, `2` inconclusive, `1` failure; REG: `0` unless the pipeline failed.
 
 ---
 
 ## Architecture
 
-Every pipeline is a **LangGraph `StateGraph`**, wired with the same topology. Specialists run concurrently via `Send()` fan-out; the reasoning agent consolidates their evidence; disagreements trigger a selective retry or a hypothesis inversion.
+Every pipeline is a **LangGraph `StateGraph`** built on the same pattern: specialists run concurrently via `Send()` fan-out, deterministic oracles check their artifacts, and a reasoning agent consolidates the evidence; disagreements trigger a selective retry. The diagram shows the full topology of **REG and CFL**; DCFL and LL use a subset (see [Pipeline differences](#pipeline-differences)).
 
 ```mermaid
 flowchart TD
@@ -109,11 +116,24 @@ flowchart TD
 - **Fan-out parallelism.** All specialists are dispatched in one `Send()` burst and run concurrently in LangGraph's Pregel thread pool. End-to-end wall time ≈ max(specialist time), not sum.
 - **Selective retry.** `retry_planner` can re-dispatch a subset of agents with specific hints (e.g. "try pumping word $a^p b^p c^p$ instead of $a^{2p}$") without re-running the whole pipeline.
 - **Hypothesis inversion.** If every specialist under the current guess (`cfl` / `non_cfl`) fails, `invert_hypothesis` flips the hypothesis and restarts the dispatch. Bounded by `MAX_INVERSIONS`.
-- **Honest verification.** `proof_verified: true` is set **only** if `proof_checker` actually ran and returned `status = verified`. Agent errors, API failures, and JSON-parse problems are tracked in `state["errors"]` and surfaced in the final result — no silent success.
+- **Error tracking.** `proof_verified: true` is set only if `proof_checker` actually ran and returned `status = verified` (REG / CFL). Agent errors, API failures, and JSON-parse problems are tracked in `state["errors"]` and surfaced in the final result.
+- **Known limitations.** Several claim verifiers still mark an agent claim `verified` when it is merely well-formed, and the final verdict is not yet cross-checked against the oracle — a run can end with a confident verdict the oracle does not support. Treat verdicts as strong hints, not proofs; see [`TODO.md`](TODO.md) §1.
+
+### Pipeline differences
+
+| Stage | REG | CFL | DCFL | LL |
+|---|:-:|:-:|:-:|:-:|
+| Classifier (advisory) | ✓ | ✓ | ✓ | ✓ |
+| Deterministic oracle | DFA / regex | CYK + PDA simulation | word sampler + verifier | FIRST_k / FOLLOW_k table |
+| Claim verification | ✓ | ✓ | ✓ | ✓ |
+| `proof_checker` agent | ✓ | ✓ | — | — |
+| Retry | LLM planner | LLM planner | rule-based | reasoning-driven |
+| Hypothesis inversion | ✓ | ✓ | — | — |
+| Formalizer | Markdown (+ Lean stubs) | Markdown | renderer only | Markdown |
 
 ### Live-runner reliability layer
 
-The [`LiveRunner`](cfl_system/orchestrator.py) (same pattern across all four pipelines) handles the messy reality of calling a frontier LLM in production:
+The [`LiveRunner`](cfl_system/orchestrator.py) (same pattern in cfl / dcfl / ll; REG uses [`LLMRunner`](agent_system/lib/llm_client.py)) handles the messy reality of calling a frontier LLM:
 
 ```
 Opus response → _extract_json (3 strategies: whole / fenced / braces)
@@ -127,7 +147,7 @@ Opus response → _extract_json (3 strategies: whole / fenced / braces)
                                          with errors recorded in state
 ```
 
-- **Streaming API** is mandatory — non-streaming requests are rejected by the Anthropic SDK when `max_tokens × projected latency > 10 min`, which the older 4096-token runs silently hit on formalizer / proof_checker.
+- **Streaming API** everywhere — non-streaming requests are rejected by the Anthropic SDK when `max_tokens × projected latency > 10 min`, and with adaptive thinking `max_tokens` has to cover reasoning + answer (64K).
 - **Request parameters per model.** Opus 5.5 / Sonnet 5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; only legacy models (Haiku 4.5) get `temperature`. See `LiveRunner._build_request_kwargs()`.
 - **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-4-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
 - **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`).
@@ -200,9 +220,9 @@ flowchart LR
 
 **Theorems / methods:**
 
-- **DCFL pumping lemma.** Unlike CFL pumping, bounds `|uv|` instead of just `|vwx|` — tighter, catches DCFL-but-not-REG distinctions.
-- **Shallit's lemma.** Counting-based tool: if specific ratios of letter frequencies force an unbounded stack state, the language cannot be DCFL.
-- **Inherent ambiguity arguments.** A DCFL is unambiguous; demonstrate two distinct parse trees for the same word to rule DCFL out.
+- **DCFL pumping lemma (Yu).** Works with *two* words `xy`, `xz ∈ L` sharing a long prefix `x` (|x| > p, first(y) = first(z)); pumping inside the prefix, alone or synchronised with the suffixes, must keep both words in `L`. Refuting this for every decomposition shows `L` is not DCFL.
+- **Shallit's lemma.** Prefix-homogeneity argument: find an infinite set of prefixes that no infinite subset of which behaves uniformly under all suffixes. ⚠ The formulation currently in `prompts/shallit.md` is under review (as written it would also reject {aⁿbⁿ}, which is DCFL) — see [`TODO.md`](TODO.md).
+- **Inherent ambiguity.** Every DCFL has an unambiguous grammar, so an *inherently* ambiguous language (every CFG for it is ambiguous) is not DCFL. One ambiguous grammar proves nothing.
 - **Closure under complement (DCFL-specific).** DCFLs are closed under complement but CFLs are not — useful discriminator.
 
 ### LL — `ll_system/`
@@ -224,7 +244,7 @@ flowchart LR
 - **FIRST / FOLLOW sets.** Computed per-nonterminal; the LL(1) test is $\text{FIRST}(\alpha_i) \cap \text{FIRST}(\alpha_j) = \emptyset$ for every pair of productions of the same nonterminal, plus a FOLLOW-disjointness condition when $\varepsilon$ is derivable.
 - **LL(k) generalization.** For $k > 1$, prefix classes of length $k$ must be pairwise disjoint.
 - **Grammar transformations.** Left-recursion elimination, left-factoring — makes a non-LL(1) grammar potentially LL(1), detected by `ll_grammar_transformer`.
-- **First/Follow oracle.** Pure-function computation used both for verification and as an independent source of truth against the LLM-proposed sets.
+- **First/Follow oracle.** Pure-function FIRST_k / FOLLOW_k computation used both for verification and as an independent source of truth against the LLM-proposed sets. Note: the table check uses global FOLLOW_k, i.e. it decides **strong** LL(k); for k ≥ 2 a grammar can be LL(k) without being strong LL(k) (see [`TODO.md`](TODO.md)).
 
 ---
 
@@ -238,7 +258,7 @@ All four pipelines use the same three-tier model stack:
 | Fast structured | `claude-sonnet-5` (effort `medium`) | $2 / $10 per MTok | `classifier`, `retry_planner`, `input_parser` |
 | JSON repair | `claude-haiku-4-5` | $1 / $5 per MTok | `_repair_json_with_haiku` hook in `LiveRunner` |
 
-**Actual run cost** of the CFL pipeline on a medium problem (`task_w1bw2w3_ticket50.json`, closure_reduction + pumping, proof_checker verified) was **≈ $2–3** on Opus 4.7 (without thinking); simple problems (single-path, short proof) came in at **≈ $1**. Opus 5.5 is cheaper per token but always thinks, so re-measure after the migration and tune `EFFORT` per agent.
+**Run cost.** On the previous stack (Opus 4.7 without thinking) a medium CFL problem (`task_w1bw2w3_ticket50.json`) cost **≈ $2–3**, a simple one **≈ $1**. Opus 5.5 is cheaper per token but thinks on every call, so these numbers need re-measuring; tune `EFFORT` per agent in each `config.py`. For development, `TFL_MODEL_OVERRIDE=claude-haiku-4-5` runs a full CFL pipeline (≈20 calls incl. a retry round) for well under $1.
 
 > Opus 5.5 **always** uses adaptive thinking (it can't be disabled) and defaults to effort `medium` when none is sent, so every agent has an explicit level in `EFFORT`. Thinking tokens count toward `max_tokens`, hence `MAX_TOKENS = 64000` with streaming. Sampling parameters (`temperature`) are rejected with a 400 and are only sent to legacy models.
 
@@ -250,10 +270,12 @@ All four pipelines use the same three-tier model stack:
 
 - **Sidebar:** project switcher (REG / CFL / DCFL / LL) + `examples/*.json` file list
 - **Editor:** monospace IR editor with live JSON validator and line gutter
-- **Run bar:** `Mock Run` (free, no LLM) and `Live Run` (gated by an explicit "I confirm API spend" checkbox with red border)
+- **Run bar:** `Mock Run` (free, no LLM) and `Live Run` (gated by an explicit "I confirm API spend" checkbox with red border). Start the server with `TFL_MODEL_OVERRIDE=claude-haiku-4-5` to make live runs cheap.
 - **Result pane:** four tabs — HTML (iframe of the rendered report with KaTeX + inline Graphviz SVG), JSON (formatted), Markdown (Preview ↔ Raw GitHub-style toggle), Log (streamed stderr, color-coded)
 
 Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/). No framework, no build step.
+
+Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a loopback `Host` header (DNS-rebinding guard), `POST /api/run` requires a same-origin `application/json` request (no cross-site "no-cors" posts starting paid runs), and files are served only by lookup in an index of the served directory.
 
 ```bash
 .venv/Scripts/python -m ui_server.server --port 8765
@@ -267,51 +289,55 @@ Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vani
 ```
 .
 ├── agent_system/           # REG pipeline
-│   ├── orchestrator.py     # LangGraph StateGraph + LiveRunner
-│   ├── config.py           # models + max_tokens per agent
+│   ├── graph.py            # LangGraph StateGraph
+│   ├── orchestrator.py     # Pipeline API + CLI (run as `python -m agent_system`)
+│   ├── config.py           # models, effort, max_tokens per agent
 │   ├── prompts/            # system prompts (one per agent)
-│   ├── lib/                # oracle, IR schema, renderer, word generator
+│   ├── lib/                # LLM client, oracle, IR schema, renderer, word generator
 │   ├── examples/           # task IRs
 │   ├── templates/          # Lean 4 proof templates
 │   └── tests/              # pytest suite
-├── cfl_system/             # CFL pipeline (same layout)
-├── dcfl_system/            # DCFL pipeline (same layout)
-├── ll_system/              # LL pipeline (same layout)
+├── cfl_system/             # CFL pipeline (orchestrator.py = graph + LiveRunner + CLI)
+├── dcfl_system/            # DCFL pipeline (same idea)
+├── ll_system/              # LL pipeline (same idea)
 ├── ui_server/              # TFL Lab web UI
 │   ├── server.py           # stdlib http.server
 │   ├── static/index.html   # single-page frontend
-│   └── __init__.py
-├── pumping_regular/        # Legacy standalone pumping tool (reference)
+│   └── tests/              # guards, path confinement, CLI contract
+├── pumping_lemma/          # Legacy pumping-lemma checker (reference, not maintained)
 ├── reverse_morfism/        # Legacy inverse-homomorphism solver
-├── pumping_len.py          # Standalone min pumping-length finder for regex
+├── pumping_len.py          # Min pumping-length finder for regex (experimental, see TODO.md)
+├── TODO.md                 # backlog: open audit findings
 ├── .env                    # ANTHROPIC_API_KEY (git-ignored)
 └── README.md               # you are here
 ```
 
-Each pipeline follows the same module contract — if you can read one, you can read all four.
+Each pipeline follows the same module split — `config.py` (models, effort), `prompts/`, `lib/` (pure functions, no LLM), orchestrator — so reading one makes the others easy to follow.
 
 ---
 
 ## Tests
 
-Pure-function modules have full pytest coverage; LLM-driven layers are covered by mock-mode integration tests.
+Pure-function modules have pytest coverage; LLM-driven layers are covered by mock-mode integration tests and by request-building tests against a mocked Anthropic client. No test calls the API.
 
 ```bash
 .venv/Scripts/python -m pytest agent_system/tests cfl_system/tests \
-                               dcfl_system/tests ll_system/tests -q
-# → 1294 passed, 3 skipped (as of current HEAD)
+                               dcfl_system/tests ll_system/tests ui_server/tests -q
+# → 1383 passed, 3 skipped
 ```
 
-The 3 skipped tests exercise MockRunner against `%TEMP%` on Windows and skip in sandboxed CI environments.
+The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-lean4` image.
+
+> Run pytest with these explicit paths. A bare `pytest` from the repo root also collects the legacy `pumping_lemma/tests`, which **call the real API** with the key from `.env`.
 
 ---
 
 ## External dependencies
 
-- **Python 3.12+** — `anthropic`, `langgraph`, `python-dotenv`, `pytest`
+- **Python 3.12+** — `anthropic>=0.77`, `langgraph`, `python-dotenv` (declared in `pyproject.toml`), `pytest` for tests
 - **Graphviz `dot` binary** — rendering PDA state diagrams as inline SVG in HTML reports. Falls back to [Mermaid](https://mermaid.js.org/) via CDN if `dot` is absent. See [`cfl_system/CLAUDE.md`](cfl_system/CLAUDE.md) for install notes.
 - **Lean 4** (optional) — REG pipeline can emit Lean stubs via `agent_system/templates/*.lean`.
-- **Anthropic API key** in `.env` for `--live` runs. Mock mode works offline.
+- **Anthropic API key** in `.env` for `--live` runs. Offline / mock mode needs no key.
 
 ---
 

@@ -17,10 +17,12 @@ echo "ANTHROPIC_API_KEY=sk-ant-..." > .env   # only needed for --live runs
 Run the full test suite before pushing:
 
 ```bash
-python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests -q
+python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests ui_server/tests -q
 ```
 
-All four suites must stay green (currently: **1294 passed, 3 skipped**).
+All suites must stay green (currently: **1383 passed, 3 skipped** — the skips need Docker with the Lean 4 image). Always pass these paths explicitly: a bare `pytest` also collects the legacy `pumping_lemma/tests`, which call the real Anthropic API.
+
+Open work and known issues are listed in [`TODO.md`](TODO.md) — a good place to pick a first PR.
 
 ## Scope of a good PR
 
@@ -35,7 +37,7 @@ All four suites must stay green (currently: **1294 passed, 3 skipped**).
 
 - Don't add hard dependencies that aren't already in `pyproject.toml` unless necessary. Streamlit/React/etc. are out of scope — the UI is intentionally vanilla JS + stdlib Python.
 - Don't commit live run artifacts. `examples/live_outputs/` and `examples/output/` are git-ignored; if you need to share a specific run, attach the JSON in the PR description instead.
-- Don't bump LLM model IDs without updating every project together. All four pipelines use the same three-tier model stack (Opus / Sonnet / Haiku) and are pinned in each project's `config.py`.
+- Don't bump LLM model IDs without updating every project together. All four pipelines use the same three-tier model stack — Opus 5.5 (reasoning), Sonnet 5 (parsing / classification), Haiku 4.5 (JSON repair) — pinned in each project's `config.py` together with the per-agent `EFFORT` levels. Don't reintroduce `temperature` for thinking models (400 on Opus 4.7+ / Sonnet 5).
 - Don't include a real `ANTHROPIC_API_KEY` anywhere — `.env` is git-ignored, `.env.example` uses a placeholder.
 
 ## Code style
@@ -46,17 +48,24 @@ All four suites must stay green (currently: **1294 passed, 3 skipped**).
 
 ## Testing an LLM change
 
-Before running a `--live` test with real API credits, exercise the logic with `--mock`:
+Work up from free to paid:
 
 ```bash
-python -m cfl_system.orchestrator cfl_system/examples/task11_ai_bj_between.json --verbose
+# 1. Offline: no runner, fallback reasoning — exercises orchestrator / oracles / renderer
+python -m cfl_system.orchestrator cfl_system/examples/task11_ai_bj_between.json --verbose --save out/
+
+# 2. Replay recorded agent outputs
+python -m cfl_system.orchestrator cfl_system/examples/task_w1w2w1w3.json --mock cfl_system/examples/mock/ --save out/
+
+# 3. Live but cheap: every agent on Haiku (a full CFL run is well under $1)
+TFL_MODEL_OVERRIDE=claude-haiku-4-5 python -m cfl_system.orchestrator     cfl_system/examples/task11_ai_bj_between.json --live --verbose --save out/
 ```
 
-Mock mode uses the fallback-reasoning path and exercises the orchestrator / verifier / renderer without touching the network. If a regression is isolable to a pure-function module (`lib/`), add a unit test and keep the LLM out of the critical path.
+Only run the production models (Opus 5.5 / Sonnet 5) when you need to judge answer quality. If a regression is isolable to a pure-function module (`lib/`), add a unit test and keep the LLM out of the critical path.
 
 ## Opening an issue
 
-Use the bug report template at `.github/ISSUE_TEMPLATE/bug_report.md`. Attach the task IR JSON, the full stderr log, and the `_result.json` if one was produced. Live-run issues should specify which model version (Opus / Sonnet / Haiku, date if known) you were on.
+Use the bug report template at `.github/ISSUE_TEMPLATE/bug_report.md`. Attach the task IR JSON, the full stderr log, and the `_result.json` if one was produced. Live-run issues should say which models were used (default stack or `TFL_MODEL_OVERRIDE`) and the `effort` levels if you changed them.
 
 ## License
 

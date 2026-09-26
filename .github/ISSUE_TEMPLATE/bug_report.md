@@ -20,7 +20,7 @@ assignees: ''
 
 - [ ] Mock (no LLM)
 - [ ] Live (Anthropic API)
-  - Model: <!-- Opus 5.5 / Sonnet 5 / Haiku 4.5 -->
+  - Models: <!-- default stack (Opus 5.5 / Sonnet 5 / Haiku 4.5) or TFL_MODEL_OVERRIDE=... ; changed EFFORT levels, if any -->
 
 ## What happened
 
