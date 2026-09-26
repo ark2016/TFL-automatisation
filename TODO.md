@@ -45,6 +45,10 @@
   - `dcfl_system/orchestrator.py:669-688`: fallback реагирует только на `refuted`, которого верификатор не выдаёт;
     `retry_logic.py:19-84` не читает `oracle_verification`.
   → главным считать вердикт reasoning, оракул — свидетельством; противоречие → retry или снижение confidence с пометкой `contradiction`.
+  - **Воспроизведено вживую (2026-09-26, Haiku через `TFL_MODEL_OVERRIDE`):** `cfl_system/examples/task_grammar_filter_49.json`
+    (эталон `cfl`, см. `tests/test_e2e.py:62`). Грамматика и PDA от агентов неверны (43 настоящих контрпримера), retry → invert →
+    `done non_cfl` с confidence **0.92**. «Не удалось построить верный артефакт» ≠ «язык не КС»: после inversion нужен
+    проверенный деструктивный аргумент, иначе `inconclusive` / низкий confidence.
 - [ ] 🔴 **M** **Ложное эталонное доказательство в CFL-промптах.**
   `cfl_system/prompts/cfl_closure_reduction.md:107-113`: L ∩ a⁺b⁺a⁺c⁺ на деле {aⁿbᵐaʲcᵏ | 1≤n≤j} (это CFL), накачка неверна.
   Копии: `cfl_pumping.md:197-235`, `cfl_reasoning.md:184,187`, `cfl_retry_planner.md:54-55`, `tz_cfl_agent_system.md:555-567`.
