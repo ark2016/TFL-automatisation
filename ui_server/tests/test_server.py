@@ -60,6 +60,37 @@ def test_runs_path_validated(port, path):
     assert request(port, "GET", path)[0] in (400, 404)
 
 
+@pytest.mark.parametrize("path", [
+    "/api/example/cfl_system/..%2f..%2fpyproject.toml",
+    "/api/example/cfl_system/../../pyproject.toml",
+    "/api/example/cfl_system/C:/Windows/win.ini",
+    "/api/example/..%2fcfl_system/task11_ai_bj_between.json",
+])
+def test_example_path_traversal_blocked(port, path):
+    status, body = request(port, "GET", path)
+    assert status in (400, 404)
+    assert b"[project]" not in body
+
+
+def test_example_and_listing_served(port):
+    status, body = request(port, "GET", "/api/examples/cfl_system")
+    assert status == 200 and "task11_ai_bj_between.json" in json.loads(body)["examples"]
+    status, body = request(port, "GET", "/api/example/cfl_system/task11_ai_bj_between.json")
+    assert status == 200 and "ir" in json.loads(body)
+
+
+def test_run_artifact_served(port):
+    run_dir = srv.RUNS_DIR / "0123456789ab"
+    run_dir.mkdir(exist_ok=True)
+    (run_dir / "input_result.json").write_text('{"verdict": "cfl"}', encoding="utf-8")
+    try:
+        status, body = request(port, "GET", "/runs/0123456789ab/input_result.json")
+        assert status == 200 and json.loads(body)["verdict"] == "cfl"
+        assert request(port, "GET", "/runs/0123456789ab/missing.json")[0] == 404
+    finally:
+        shutil.rmtree(run_dir)
+
+
 def test_foreign_host_rejected(port):
     status, _ = request(port, "GET", "/api/projects", headers={"Host": "evil.example:80"})
     assert status == 403

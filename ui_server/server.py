@@ -58,17 +58,34 @@ PROJECTS: list[dict] = [
     {"id": "ll_system",    "label": "LL",   "module": "ll_system.orchestrator"},
 ]
 PROJECT_IDS = {p["id"] for p in PROJECTS}
+# Examples directory per project, built from the registry — request data is
+# only ever used as a lookup key, never joined into a filesystem path.
+EXAMPLE_DIRS: dict[str, Path] = {p["id"]: ROOT / p["id"] / "examples" for p in PROJECTS}
 
 RUN_ID_RE = re.compile(r"[0-9a-f]{12}")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 MAX_BODY_BYTES = 1_000_000
 
 
-def _safe_child(base: Path, rel: str) -> Path | None:
-    """`base / rel` if it stays inside `base` (no `..`, no absolute paths)."""
-    base = base.resolve()
-    candidate = (base / rel).resolve()
-    return candidate if candidate.is_relative_to(base) else None
+def _files_in(directory: Path, pattern: str = "*", recursive: bool = False) -> dict[str, Path]:
+    """Index of the regular files under `directory`, keyed by their POSIX path
+    relative to it. File routes look the requested name up in this index, so
+    a request can only ever reach a file that actually lives in `directory`
+    (no `..`, no absolute paths, no symlinks leading outside)."""
+    if not directory.is_dir():
+        return {}
+    base = directory.resolve()
+    walk = directory.rglob(pattern) if recursive else directory.glob(pattern)
+    index: dict[str, Path] = {}
+    for f in walk:
+        if f.is_file() and f.resolve().is_relative_to(base):
+            index[f.relative_to(directory).as_posix()] = f
+    return index
+
+
+def _run_dirs() -> dict[str, Path]:
+    """Existing run directories (named by 12-hex run ids), keyed by run id."""
+    return {d.name: d for d in RUNS_DIR.iterdir() if d.is_dir() and RUN_ID_RE.fullmatch(d.name)}
 
 # In-memory run registry. Threading lock protects concurrent access.
 # {run_id: {"status", "lines" (list[str]), "started", "elapsed",
@@ -87,28 +104,21 @@ def api_projects() -> dict:
 
 
 def api_examples(project: str) -> dict:
-    if project not in PROJECT_IDS:
+    examples_dir = EXAMPLE_DIRS.get(project)
+    if examples_dir is None:
         raise ValueError(f"unknown project: {project}")
-    examples_dir = ROOT / project / "examples"
-    if not examples_dir.is_dir():
-        return {"examples": []}
-    files = sorted(
-        p.name for p in examples_dir.iterdir()
-        if p.is_file() and p.suffix == ".json"
-    )
-    return {"examples": files}
+    return {"examples": sorted(_files_in(examples_dir, "*.json"))}
 
 
 def api_example(project: str, fname: str) -> dict:
-    if project not in PROJECT_IDS:
+    examples_dir = EXAMPLE_DIRS.get(project)
+    if examples_dir is None:
         raise ValueError(f"unknown project: {project}")
-    # Prevent path traversal
-    safe = Path(fname).name
-    path = ROOT / project / "examples" / safe
-    if not path.is_file():
-        raise FileNotFoundError(f"example not found: {safe}")
+    path = _files_in(examples_dir, "*.json").get(fname)
+    if path is None:
+        raise FileNotFoundError("example not found")
     data = json.loads(path.read_text(encoding="utf-8"))
-    return {"ir": data, "name": safe}
+    return {"ir": data, "name": path.name}
 
 
 def api_log(run_id: str) -> dict:
@@ -378,7 +388,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path.startswith("/static/"):
-                fpath = _safe_child(STATIC_DIR, path[len("/static/"):])
+                fpath = _files_in(STATIC_DIR, recursive=True).get(path[len("/static/"):])
                 if fpath is None:
                     self._send_error_json(404, "not found")
                     return
@@ -415,8 +425,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_error_json(400, "bad run path")
                     return
                 run_id, fname = parts
-                fpath = _safe_child(RUNS_DIR / run_id, Path(fname).name)
-                if not RUN_ID_RE.fullmatch(run_id) or fpath is None:
+                run_dir = _run_dirs().get(run_id)
+                fpath = _files_in(run_dir).get(fname) if run_dir else None
+                if fpath is None:
                     self._send_error_json(404, "not found")
                     return
                 self._send_file(fpath)
