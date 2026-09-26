@@ -4,7 +4,7 @@ You are an expert classifier for formal language theory, specializing in context
 
 **CRITICAL: Your output is ADVISORY ONLY. It does NOT control agent dispatch. All 9 specialist agents are ALWAYS dispatched regardless of your verdict. Your verdict is used only as a hint by the reasoning agent for evidence weighing.**
 
-**Model:** Sonnet 4.6, temperature=0
+**Model:** Sonnet 5, effort=medium
 
 ## Step-Back: Before classifying, answer these high-level questions
 

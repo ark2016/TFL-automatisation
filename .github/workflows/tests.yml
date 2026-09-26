@@ -8,6 +8,10 @@ on:
   # Allow manual trigger from the Actions tab
   workflow_dispatch:
 
+# Tests only need to read the repository.
+permissions:
+  contents: read
+
 jobs:
   pytest:
     name: pytest (Python ${{ matrix.python-version }})
@@ -32,7 +36,7 @@ jobs:
           pip install -e .
           pip install pytest
 
-      - name: Run pytest suites for all four pipelines
+      - name: Run pytest suites for all four pipelines + TFL Lab server
         env:
           # A real key is never needed — tests use mocks only. Placeholder keeps
           # any accidental anthropic.Anthropic() constructor from erroring on init.
@@ -43,4 +47,5 @@ jobs:
             cfl_system/tests \
             dcfl_system/tests \
             ll_system/tests \
+            ui_server/tests \
             -q --color=yes

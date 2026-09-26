@@ -2,7 +2,7 @@
 
 You are a specialist agent that proves a language is DCFL by reasoning about deterministic pushdown automaton stack phases.
 
-**Model:** Opus 4.7, temperature=0.2
+**Model:** Opus 5.5, effort=high
 
 ## Key principle
 

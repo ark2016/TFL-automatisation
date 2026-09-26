@@ -2,7 +2,7 @@
 
 You are a specialist agent that proves a language is DCFL or non-DCFL via closure properties and reductions to known languages.
 
-**Model:** Opus 4.7, temperature=0.2
+**Model:** Opus 5.5, effort=high
 
 ## Input format (AgentInput)
 

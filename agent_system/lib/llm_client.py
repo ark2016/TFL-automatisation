@@ -17,11 +17,42 @@ from typing import Any
 
 # Import config (with fallback defaults if missing)
 try:
-    from agent_system.config import MODELS as _CFG_MODELS, MAX_TOKENS as _CFG_MAX_TOKENS, TEMPERATURE as _CFG_TEMP
+    from agent_system.config import (
+        MODELS as _CFG_MODELS, MAX_TOKENS as _CFG_MAX_TOKENS, TEMPERATURE as _CFG_TEMP,
+        EFFORT as _CFG_EFFORT, DEFAULT_EFFORT as _CFG_DEFAULT_EFFORT,
+        REFUSAL_FALLBACK as _CFG_REFUSAL_FALLBACK,
+    )
 except ImportError:
     _CFG_MODELS = {}
-    _CFG_MAX_TOKENS = 4096
+    _CFG_MAX_TOKENS = 64000
     _CFG_TEMP = 0.0
+    _CFG_EFFORT = {}
+    _CFG_DEFAULT_EFFORT = "high"
+    _CFG_REFUSAL_FALLBACK = True
+
+# Legacy models — Haiku 4.5 and anything before the 4.6 family — take
+# sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
+# 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
+# Opus 4.7+, Sonnet 5 and Opus 5.x reject `temperature` with a 400.
+_LEGACY_MODEL_RE = re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
+# Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
+_FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
+
+
+def _is_adaptive_model(model: str) -> bool:
+    """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
+    return bool(model) and not _LEGACY_MODEL_RE.search(model)
+
+
+def _response_text(message: Any) -> str:
+    """Concatenate the text blocks of a response.
+
+    With adaptive thinking the response may start with `thinking` blocks, so
+    content[0] is not necessarily the answer — read blocks by type.
+    """
+    return "".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    )
 
 # Prompt file name → agent name (some have _agent suffix in file)
 _PROMPT_ALIASES: dict[str, str] = {
@@ -108,6 +139,7 @@ class LLMRunner:
         api_key: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        effort_map: dict[str, str] | None = None,
     ) -> None:
         _load_env()
 
@@ -118,6 +150,9 @@ class LLMRunner:
         self.model_map = model_map or dict(_CFG_MODELS)
         self.max_tokens = max_tokens if max_tokens is not None else _CFG_MAX_TOKENS
         self.temperature = temperature if temperature is not None else _CFG_TEMP
+        self.effort_map = effort_map or dict(_CFG_EFFORT)
+        self.default_effort = _CFG_DEFAULT_EFFORT
+        self.refusal_fallback = _CFG_REFUSAL_FALLBACK
 
         resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not resolved_key:
@@ -152,7 +187,15 @@ class LLMRunner:
         return path.read_text(encoding="utf-8")
 
     def _get_model(self, agent_name: str) -> str:
-        """Get model ID for an agent. Checks: env override → model_map → default."""
+        """Get model ID for an agent. Checks: env override → model_map → default.
+
+        TFL_MODEL_OVERRIDE forces every agent onto one model (cheap live test
+        runs, e.g. claude-haiku-4-5); TFL_MODEL_FAST / TFL_MODEL_DEEP override
+        the fast / deep tier only.
+        """
+        override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
+        if override:
+            return override
         prompt_name = self._resolve_prompt_name(agent_name)
         # Env overrides (TFL_MODEL_DEEP, TFL_MODEL_FAST)
         if prompt_name in ("input_parser", "classifier"):
@@ -164,8 +207,62 @@ class LLMRunner:
             if env:
                 return env
         return self.model_map.get(
-            prompt_name, self.model_map.get(agent_name, "claude-sonnet-4-6")
+            prompt_name, self.model_map.get(agent_name, "claude-sonnet-5")
         )
+
+    def _get_effort(self, agent_name: str) -> str:
+        """Get effort level for an agent: effort_map → DEFAULT_EFFORT."""
+        prompt_name = self._resolve_prompt_name(agent_name)
+        return self.effort_map.get(
+            prompt_name, self.effort_map.get(agent_name, self.default_effort)
+        )
+
+    def _build_request_kwargs(
+        self, model: str, max_tokens: int, system: str, user: str,
+        effort: str | None = None, temperature: float | None = None,
+    ) -> dict[str, Any]:
+        """Build kwargs for messages.stream / messages.create.
+
+        Thinking models get adaptive thinking + an explicit effort (Opus 5.5
+        would silently default to "medium"); legacy models get temperature.
+        """
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if _is_adaptive_model(model):
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": effort or self.default_effort}
+            if self.refusal_fallback and model.startswith(_FALLBACK_MODEL_PREFIXES):
+                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
+                kwargs["extra_body"] = {"fallbacks": "default"}
+        else:
+            kwargs["temperature"] = self.temperature if temperature is None else temperature
+        return kwargs
+
+    def _stream_text(self, model: str, system: str, user: str, effort: str) -> str | None:
+        """Make one streamed API call and return the answer text.
+
+        Streaming keeps a large max_tokens (thinking + answer) clear of the
+        SDK's non-streaming timeout. Returns None on API errors and refusals.
+        """
+        try:
+            kwargs = self._build_request_kwargs(model, self.max_tokens, system, user, effort)
+            with self._client.messages.stream(**kwargs) as stream:
+                message = stream.get_final_message()
+        except Exception as exc:
+            print(f"[LLM] API error: {exc}", file=sys.stderr)
+            return None
+        if message.stop_reason == "refusal":
+            details = getattr(message, "stop_details", None)
+            category = getattr(details, "category", None) if details else None
+            print(f"[LLM] {model} refused the request (category={category})", file=sys.stderr)
+            return None
+        if message.stop_reason == "max_tokens":
+            print(f"[LLM] {model} hit max_tokens={self.max_tokens}; output truncated", file=sys.stderr)
+        return _response_text(message)
 
     # ---- main API ---------------------------------------------------------
 
@@ -180,6 +277,7 @@ class LLMRunner:
         """
         system_prompt = self._load_prompt(agent_name)
         model = self._get_model(agent_name)
+        effort = self._get_effort(agent_name)
 
         if isinstance(input_data, (dict, list)):
             user_msg = json.dumps(input_data, indent=2, ensure_ascii=False)
@@ -203,7 +301,7 @@ class LLMRunner:
 
         # Formalizer: return raw text, not JSON
         if agent_name in self._RAW_TEXT_AGENTS:
-            raw = self._call_raw(system_prompt, user_msg, model)
+            raw = self._call_raw(system_prompt, user_msg, model, effort)
             if raw is not None:
                 # Strip markdown fences if present
                 code = raw.strip()
@@ -223,7 +321,7 @@ class LLMRunner:
             return None
 
         # Standard JSON agents
-        parsed = self._call_and_parse(system_prompt, user_msg, model)
+        parsed = self._call_and_parse(system_prompt, user_msg, model, effort)
         if parsed is not None:
             return self._wrap_output(agent_name, parsed)
 
@@ -233,46 +331,24 @@ class LLMRunner:
             "IMPORTANT: Your previous response was not valid JSON. "
             "Please respond with ONLY a valid JSON object, no other text."
         )
-        parsed = self._call_and_parse(system_prompt, retry_msg, model)
+        parsed = self._call_and_parse(system_prompt, retry_msg, model, effort)
         if parsed is not None:
             return self._wrap_output(agent_name, parsed)
 
         return None
 
     def _call_raw(
-        self, system: str, user: str, model: str
+        self, system: str, user: str, model: str, effort: str | None = None
     ) -> str | None:
         """Make one API call and return raw response text."""
-        try:
-            response = self._client.messages.create(
-                model=model,
-                max_tokens=8192,  # formalizer needs more tokens
-                temperature=self.temperature,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
-            return response.content[0].text
-        except Exception as exc:
-            print(f"[LLM] API error: {exc}", file=sys.stderr)
-            return None
+        return self._stream_text(model, system, user, effort or self.default_effort)
 
     def _call_and_parse(
-        self, system: str, user: str, model: str
+        self, system: str, user: str, model: str, effort: str | None = None
     ) -> dict | None:
         """Make one API call and try to parse JSON from response."""
-        try:
-            response = self._client.messages.create(
-                model=model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
-            text = response.content[0].text
-            return _extract_json(text)
-        except Exception as exc:
-            print(f"[LLM] API error: {exc}", file=sys.stderr)
-            return None
+        text = self._stream_text(model, system, user, effort or self.default_effort)
+        return _extract_json(text) if text is not None else None
 
     def quick_validate(self, question: str, data: Any) -> str:
         """Fast validation / sanity check via Haiku.
@@ -287,17 +363,15 @@ class LLMRunner:
             data_str = str(data)
 
         try:
-            response = self._client.messages.create(
-                model=model,
+            response = self._client.messages.create(**self._build_request_kwargs(
+                model,
                 max_tokens=256,
-                temperature=0.0,
                 system="You are a formal language theory expert. Answer in 1-2 sentences, in Russian.",
-                messages=[{
-                    "role": "user",
-                    "content": f"{question}\n\nДанные:\n{data_str[:2000]}",
-                }],
-            )
-            return response.content[0].text.strip()
+                user=f"{question}\n\nДанные:\n{data_str[:2000]}",
+                effort="low",
+                temperature=0.0,
+            ))
+            return _response_text(response).strip()
         except Exception as exc:
             return f"(validation error: {exc})"
 

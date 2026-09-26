@@ -248,3 +248,47 @@ class TestParikhPrecheck:
         pp = result["parikh_precheck"]
         assert pp is not None
         assert "is_semilinear" in pp
+
+
+# ---------------------------------------------------------------------------
+# Regression: no quick verdict unless the filter is known to be regular
+# ---------------------------------------------------------------------------
+
+class TestQuickVerdictFilterGuard:
+    """{a^6n b^6n c^6n} given as grammar ∩ non-regular filter used to get
+    quick_verdict=cfl (confidence 0.9) from the grammar-only bounded
+    analysis."""
+
+    BOUNDED_LOOKS_CFL = {
+        "is_bounded": True,
+        "bounding_words": ["a", "b", "c"],
+        "stratification": {"is_stratified": True, "is_cfl": True},
+    }
+
+    @pytest.mark.parametrize("filter_is_regular", [False, None])
+    def test_non_regular_or_unknown_filter_gives_no_verdict(self, filter_is_regular):
+        from cfl_system.lib.language_preprocess import _determine_quick_verdict
+        verdict, _ = _determine_quick_verdict(
+            {"filter_is_regular": filter_is_regular}, self.BOUNDED_LOOKS_CFL, None,
+        )
+        assert verdict is None
+
+    def test_regular_filter_still_gives_cfl(self):
+        from cfl_system.lib.language_preprocess import _determine_quick_verdict
+        verdict, _ = _determine_quick_verdict({"filter_is_regular": True}, None, None)
+        assert verdict == "cfl"
+
+    def test_semilinear_bounded_sample_is_not_a_verdict(self):
+        from cfl_system.lib.language_preprocess import _determine_quick_verdict
+        from cfl_system.lib.stratification import check_stratification
+        # {a^n b^n c^n}-like exponent sets are semilinear but not CFL:
+        # semilinearity alone must not produce is_cfl / quick_verdict.
+        grammar = {
+            "kind": "grammar", "terminals": ["a", "b"], "nonterminals": ["S"],
+            "start": "S",
+            "rules": [{"lhs": "S", "rhs": ["a", "S", "b"]}, {"lhs": "S", "rhs": []}],
+        }
+        strat = check_stratification(grammar, ["a", "b"], max_length=10)
+        assert strat["is_cfl"] is None
+        bounded = {"is_bounded": True, "bounding_words": ["a", "b"], "stratification": strat}
+        assert _determine_quick_verdict(None, bounded, None) == (None, None)

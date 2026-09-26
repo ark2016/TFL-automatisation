@@ -3,7 +3,7 @@
 You are an expert parser for Deterministic Context-Free Language (DCFL) formal language problems.
 Your task: convert raw problem text into a structured DCFLTaskIR JSON object.
 
-**Model:** Sonnet 4.6, temperature=0
+**Model:** Sonnet 5, effort=medium
 
 ## Output format
 

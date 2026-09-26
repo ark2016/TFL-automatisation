@@ -465,7 +465,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
 
 **Вход:** Текст задачи на русском или формальная нотация.
 **Выход:** JSON IR по schema из §3.
-**Модель:** Sonnet 4.6 (temperature=0, structured output=JSON).
+**Модель:** Sonnet 5 (effort=medium, structured output=JSON).
 **Валидация:** Pure fn `validate_ir(json)` — проверка по JSON Schema.
 **Retry:** Если невалидный JSON — повтор с ошибкой валидации в промпте (max 2 retry).
 
@@ -535,7 +535,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
   }
 }
 ```
-**Модель:** Sonnet 4.6 (temperature=0).
+**Модель:** Sonnet 5 (effort=medium).
 
 ### 4.4. RE Builder Agent (LLM)
 
@@ -549,7 +549,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
   "confidence": 0.95
 }
 ```
-**Модель:** Opus 4.7 (temperature=0.1). Требует глубокого рассуждения.
+**Модель:** Opus 5.5 (effort=high). Требует глубокого рассуждения.
 
 ### 4.5. DFA Builder Agent (LLM + pure fn)
 
@@ -602,7 +602,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
   }
 }
 ```
-**Модель:** Opus 4.7 (temperature=0.1).
+**Модель:** Opus 5.5 (effort=high).
 
 ### 4.7. Nerode Agent (LLM + pure fn)
 
@@ -654,7 +654,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
 - Обратный гомоморфизм
 - Дополнение
 
-**Модель:** Opus 4.7.
+**Модель:** Opus 5.5 (effort=high).
 
 ### 4.9. Grammar Analyzer (LLM + pure fn)
 
@@ -768,7 +768,7 @@ def differential_test(dfa1: dict, dfa2: dict, alphabet: list, max_len: int = 10)
 - `invert_hypothesis` — классификатор ошибся, инвертировать REG/non-REG
 - `escalate` — max retries exceeded, передать человеку
 
-**Модель:** Opus 4.7 (temperature=0).
+**Модель:** Opus 5.5 (effort=high).
 **Max retries:** 3 на уровне reasoning → specialist, 2 на уровне reasoning → formalizer.
 
 ### 4.12. Formalizer Agent (LLM — template-based)

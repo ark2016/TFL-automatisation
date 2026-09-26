@@ -33,7 +33,7 @@ from cfl_system.lib.cfl_ir_schema import validate_cfl_ir
 from cfl_system.lib.cfl_hypothesis import analyze_cfl_hypothesis
 from cfl_system.lib.language_preprocess import preprocess_language
 from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
-from cfl_system.lib.cfl_oracle_test import oracle_test
+from cfl_system.lib.cfl_oracle_test import normalize_agent_pda, oracle_test
 from cfl_system.lib.claim_verifier import verify_agent_claims
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,9 @@ CFL_SPECIALIST_NAMES = (
     "pumping_cfl", "ogden", "closure_reduction", "interchange", "morphism",
 )
 
-_CONSTRUCTIVE_AGENTS = {"cfg_builder", "pda_builder"}
+# Tuple, not set: iteration order decides which artifact wins, so keep it
+# deterministic (independent of PYTHONHASHSEED).
+_CONSTRUCTIVE_AGENTS = ("cfg_builder", "pda_builder")
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +131,8 @@ class LiveRunner:
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from cfl_system.config import (
-            MODELS, TEMPERATURES, MAX_TOKENS, MAX_TOKENS_PER_AGENT,
+            MODELS, TEMPERATURES, EFFORT, DEFAULT_EFFORT, REFUSAL_FALLBACK,
+            MAX_TOKENS, MAX_TOKENS_PER_AGENT,
             LLM_JSON_RETRIES, PROMPT_FILES, ANTHROPIC_API_KEY,
         )
         import anthropic
@@ -150,7 +153,13 @@ class LiveRunner:
             )
         self.client = anthropic.Anthropic(api_key=resolved_key)
         self.models = MODELS
+        # TFL_MODEL_OVERRIDE forces every agent onto one model — used for cheap
+        # live test runs (e.g. TFL_MODEL_OVERRIDE=claude-haiku-4-5).
+        self.model_override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
         self.temperatures = TEMPERATURES
+        self.efforts = EFFORT
+        self.default_effort = DEFAULT_EFFORT
+        self.refusal_fallback = REFUSAL_FALLBACK
         self.max_tokens = MAX_TOKENS
         self.max_tokens_per_agent = MAX_TOKENS_PER_AGENT
         self.json_retries = LLM_JSON_RETRIES
@@ -165,35 +174,59 @@ class LiveRunner:
         # Opus retry, and it's faster too (~2s vs ~30s).
         self._json_repair_model = "claude-haiku-4-5"
 
-    @staticmethod
-    def _model_accepts_temperature(model: str) -> bool:
-        """Whether the API accepts the `temperature` parameter for this model.
+    # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
+    # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
+    # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
+    # Opus 4.7+, Sonnet 5 and Opus 5.x reject `temperature` with a 400, so
+    # thinking models never get sampling parameters.
+    _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
+    # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
+    _FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
 
-        Thinking-capable Claude models (Opus 4.7, likely future ones) deprecated
-        the `temperature` field — passing it causes a 400 Bad Request. Sonnet 4.x
-        and Haiku 4.x still accept it. Keep this a small allow-list of known
-        deprecations so we fail closed when new models arrive.
-        """
-        if not model:
-            return True
-        # Known models that REJECT temperature. Extend as Anthropic releases more.
-        rejects = ("claude-opus-4-7",)
-        return not any(model.startswith(p) for p in rejects)
+    @classmethod
+    def _is_adaptive_model(cls, model: str) -> bool:
+        """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
+        return bool(model) and not cls._LEGACY_MODEL_RE.search(model)
 
     def _build_request_kwargs(self, model: str, max_tokens: int,
                               temperature: float, system_prompt: str,
-                              user_msg: str) -> dict:
-        """Build kwargs for messages.stream / messages.create, dropping
-        `temperature` for models that no longer accept it."""
-        kwargs = {
+                              user_msg: str, effort: str | None = None) -> dict:
+        """Build kwargs for messages.stream / messages.create.
+
+        Thinking models get `thinking: adaptive` + an explicit effort level
+        (Opus 5.5 would silently default to "medium"); legacy models get
+        `temperature` instead.
+        """
+        kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_msg}],
         }
-        if self._model_accepts_temperature(model):
+        if self._is_adaptive_model(model):
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": effort or self.default_effort}
+            if self.refusal_fallback and model.startswith(self._FALLBACK_MODEL_PREFIXES):
+                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
+                kwargs["extra_body"] = {"fallbacks": "default"}
+        else:
             kwargs["temperature"] = temperature
         return kwargs
+
+    @staticmethod
+    def _refusal_error(agent_name: str, final_msg: Any) -> dict:
+        """agent_error dict for a safety-classifier decline (stop_reason="refusal")."""
+        details = getattr(final_msg, "stop_details", None)
+        category = getattr(details, "category", None) if details else None
+        explanation = getattr(details, "explanation", None) if details else None
+        msg = f"Model refused (stop_reason=refusal, category={category})"
+        if explanation:
+            msg += f": {explanation}"
+        logger.error("[%s] %s", agent_name, msg)
+        return {
+            "agent": agent_name, "status": "agent_error", "verdict": None,
+            "confidence": 0.0, "evidence": {}, "errors": [msg],
+        }
 
     def _repair_json_with_haiku(self, agent_name: str, raw_text: str, was_truncated: bool) -> dict | None:
         """Ask Haiku to extract/repair valid JSON from a specialist's raw output.
@@ -291,8 +324,9 @@ class LiveRunner:
             logger.warning("Skipping agent '%s': %s", agent_name, exc)
             return None
 
-        model = self.models.get(agent_name, "claude-sonnet-4-6")
+        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5")
         temperature = self.temperatures.get(agent_name, 0.0)
+        effort = self.efforts.get(agent_name, self.default_effort)
         max_tokens = self.max_tokens_per_agent.get(agent_name, self.max_tokens)
         user_content = json.dumps(input_data or {}, ensure_ascii=False, indent=2)
 
@@ -342,12 +376,12 @@ class LiveRunner:
             # Always stream. Non-streaming requests are rejected by the SDK
             # when max_tokens × projected latency exceeds 10 minutes; streaming
             # lifts that cap and handles long proofs / audits reliably.
-            # temperature is dropped automatically for models that don't
-            # accept it (e.g. Opus 4.7 — adaptive thinking, picks its own).
+            # Thinking models get adaptive thinking + this agent's effort;
+            # temperature is only sent to legacy models (Haiku 4.5).
             request_kwargs = self._build_request_kwargs(
                 model=model, max_tokens=max_tokens,
                 temperature=temperature, system_prompt=system_prompt,
-                user_msg=user_msg,
+                user_msg=user_msg, effort=effort,
             )
             try:
                 with self.client.messages.stream(**request_kwargs) as stream:
@@ -378,11 +412,16 @@ class LiveRunner:
             if self.verbose:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
                 print(
-                    f"[{agent_name}] model={model} "
+                    f"[{agent_name}] model={final_msg.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
                     f"time={elapsed:.1f}s max={max_tokens}{extra}",
                     file=sys.stderr, flush=True,
                 )
+
+            # A safety-classifier decline is not a parse problem: retrying or
+            # JSON-repairing the (empty/partial) text cannot help.
+            if stop_reason == "refusal":
+                return self._refusal_error(agent_name, final_msg)
 
             parsed, parse_error = _extract_json_with_error(raw_text)
             if parsed is not None:
@@ -993,12 +1032,20 @@ def oracle_test_node(state: PipelineState) -> dict:
         output = state.get("agent_results", {}).get(name)
         if output is None:
             continue
+        ev = output.get("evidence", {})
         for key in ("grammar", "pda"):
             if key in output:
                 constructive_evidence[key] = output[key]
-            ev = output.get("evidence", {})
             if isinstance(ev, dict) and key in ev:
                 constructive_evidence[key] = ev[key]
+        if name == "pda_builder" and isinstance(constructive_evidence.get("pda"), dict):
+            # Agent PDAs use the prompt's textbook conventions (topmost-first
+            # push, sibling acceptance_mode); convert for the simulator.
+            mode = (ev.get("acceptance_mode") if isinstance(ev, dict) else None) \
+                or output.get("acceptance_mode")
+            constructive_evidence["pda"] = normalize_agent_pda(
+                constructive_evidence["pda"], mode,
+            )
 
     if not constructive_evidence:
         return {"oracle_test_result": {"status": "not_applicable", "details": "no grammar/PDA"}}

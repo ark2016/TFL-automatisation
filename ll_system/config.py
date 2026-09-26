@@ -13,21 +13,23 @@ import os
 
 MODELS: dict[str, str] = {
     # Fast / structured → Sonnet
-    "input_parser":         "claude-sonnet-4-6",
-    "classifier":           "claude-sonnet-4-6",
-    "marker_analyzer":      "claude-sonnet-4-6",
-    "grammar_transformer":  "claude-sonnet-4-6",
-    "formalizer":           "claude-sonnet-4-6",
+    "input_parser":         "claude-sonnet-5",
+    "classifier":           "claude-sonnet-5",
+    "marker_analyzer":      "claude-sonnet-5",
+    "grammar_transformer":  "claude-sonnet-5",
+    "formalizer":           "claude-sonnet-5",
 
     # Deep reasoning → Opus
-    "ll_grammar_builder":   "claude-opus-4-7",
-    "substitution_agent":   "claude-opus-4-7",
-    "ambiguity_detector":   "claude-opus-4-7",
-    "prefix_classes_agent": "claude-opus-4-7",
-    "reasoning_agent":      "claude-opus-4-7",
+    "ll_grammar_builder":   "claude-opus-5-5",
+    "substitution_agent":   "claude-opus-5-5",
+    "ambiguity_detector":   "claude-opus-5-5",
+    "prefix_classes_agent": "claude-opus-5-5",
+    "reasoning_agent":      "claude-opus-5-5",
 }
 
-# Temperature per agent (0.0 = deterministic)
+# Temperature per agent — only sent to legacy models (Haiku 4.5, pre-4.6).
+# Adaptive-thinking models (Opus 4.7+, Sonnet 5, Opus 5.x) reject sampling
+# parameters with a 400, so for them these values are ignored; see EFFORT.
 TEMPERATURES: dict[str, float] = {
     # System / structural agents: fully deterministic
     "input_parser":         0.0,
@@ -46,24 +48,48 @@ TEMPERATURES: dict[str, float] = {
     "prefix_classes_agent": 0.2,
 }
 
+# Reasoning depth per agent (`output_config.effort`). Opus 5.5 always runs
+# adaptive thinking (it can't be switched off) and Sonnet 5 runs it by default;
+# effort is the knob for how much they think (and thus for latency and cost). Opus 5.5 defaults to "medium"
+# when effort is omitted, so every agent gets an explicit value: proof-producing
+# agents run at "high", structured parsing/classification at "medium".
+# Levels: low | medium | high | xhigh | max. Agents not listed use DEFAULT_EFFORT.
+EFFORT: dict[str, str] = {
+    "input_parser":         "medium",
+    "classifier":           "medium",
+    "marker_analyzer":      "medium",
+    "grammar_transformer":  "medium",
+    "formalizer":           "medium",
+    "ll_grammar_builder":   "high",
+    "substitution_agent":   "high",
+    "ambiguity_detector":   "high",
+    "prefix_classes_agent": "high",
+    "reasoning_agent":      "high",
+}
+DEFAULT_EFFORT = "high"
+
+# Server-side refusal fallback (beta server-side-fallback-2026-07-01): if a
+# safety classifier declines an Opus 5.x request (stop_reason="refusal"),
+# the API re-runs it on the model Anthropic recommends for that category.
+REFUSAL_FALLBACK = True
+
 # ---------------------------------------------------------------------------
 # Pipeline settings
 # ---------------------------------------------------------------------------
 
 # Output token budget.
 #
-# The Anthropic API requires max_tokens — it cannot be omitted. So the
-# question is only what value to pass. Key facts:
-#   • Opus 4.7 physical ceiling is 32000 output tokens per request.
+# The Anthropic API requires max_tokens — it cannot be omitted. Key facts:
+#   • Opus 5.5 / Sonnet 5 think adaptively on every call, and thinking tokens
+#     count toward max_tokens even though their text is not returned — so the
+#     limit must cover reasoning + the JSON answer.
+#   • Opus 5.5 output ceiling is 128K per request; 64K is the recommended start
+#     for long reasoning turns.
 #   • You pay for REAL output_tokens, not max_tokens — a high ceiling with
 #     a short reply costs the same as a tight ceiling with the same reply.
-#   • With streaming (which LiveRunner uses), the 10-minute-request guard
-#     no longer refuses large budgets.
-#
-# So the sensible default is: give every agent the full model ceiling.
-# This eliminates truncation-mid-JSON bugs. The only downside is the
-# runaway-loop scenario, which is capped at 32K × $0.015/1K ≈ $0.48.
-MAX_TOKENS = 32000
+#   • LiveRunner always streams, so the SDK's 10-minute non-streaming guard
+#     does not refuse large budgets.
+MAX_TOKENS = 64000
 
 # Kept as an escape hatch for per-agent tuning, but intentionally empty:
 # every agent uses MAX_TOKENS unless a specific reason to lower it emerges.

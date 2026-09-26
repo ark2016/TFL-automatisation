@@ -19,6 +19,7 @@ import json
 import logging
 import operator
 import os
+import re as _re
 import sys
 import time as _time
 from pathlib import Path
@@ -151,7 +152,8 @@ class LiveRunner:
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from dcfl_system.config import (
-            MODELS, TEMPERATURES, MAX_TOKENS, MAX_TOKENS_PER_AGENT,
+            MODELS, TEMPERATURES, EFFORT, DEFAULT_EFFORT, REFUSAL_FALLBACK,
+            MAX_TOKENS, MAX_TOKENS_PER_AGENT,
             LLM_JSON_RETRIES, PROMPT_FILES, ANTHROPIC_API_KEY,
         )
         import anthropic
@@ -171,7 +173,13 @@ class LiveRunner:
 
         self.client = anthropic.Anthropic(api_key=resolved_key)
         self.models = MODELS
+        # TFL_MODEL_OVERRIDE forces every agent onto one model — used for cheap
+        # live test runs (e.g. TFL_MODEL_OVERRIDE=claude-haiku-4-5).
+        self.model_override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
         self.temperatures = TEMPERATURES
+        self.efforts = EFFORT
+        self.default_effort = DEFAULT_EFFORT
+        self.refusal_fallback = REFUSAL_FALLBACK
         self.max_tokens = MAX_TOKENS
         self.max_tokens_per_agent = MAX_TOKENS_PER_AGENT
         self.json_retries = LLM_JSON_RETRIES
@@ -194,6 +202,60 @@ class LiveRunner:
         self._prompt_cache[agent_name] = text
         return text
 
+    # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
+    # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
+    # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
+    # Opus 4.7+, Sonnet 5 and Opus 5.x reject `temperature` with a 400, so
+    # thinking models never get sampling parameters.
+    _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
+    # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
+    _FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
+
+    @classmethod
+    def _is_adaptive_model(cls, model: str) -> bool:
+        """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
+        return bool(model) and not cls._LEGACY_MODEL_RE.search(model)
+
+    def _build_request_kwargs(self, model: str, max_tokens: int,
+                              temperature: float, system_prompt: str,
+                              user_msg: str, effort: str | None = None) -> dict:
+        """Build kwargs for messages.stream / messages.create.
+
+        Thinking models get `thinking: adaptive` + an explicit effort level
+        (Opus 5.5 would silently default to "medium"); legacy models get
+        `temperature` instead.
+        """
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_msg}],
+        }
+        if self._is_adaptive_model(model):
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": effort or self.default_effort}
+            if self.refusal_fallback and model.startswith(self._FALLBACK_MODEL_PREFIXES):
+                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
+                kwargs["extra_body"] = {"fallbacks": "default"}
+        else:
+            kwargs["temperature"] = temperature
+        return kwargs
+
+    @staticmethod
+    def _refusal_error(agent_name: str, final_msg: Any) -> dict:
+        """agent_error dict for a safety-classifier decline (stop_reason="refusal")."""
+        details = getattr(final_msg, "stop_details", None)
+        category = getattr(details, "category", None) if details else None
+        explanation = getattr(details, "explanation", None) if details else None
+        msg = f"Model refused (stop_reason=refusal, category={category})"
+        if explanation:
+            msg += f": {explanation}"
+        logger.error("[%s] %s", agent_name, msg)
+        return {
+            "agent": agent_name, "status": "agent_error", "verdict": None,
+            "confidence": 0.0, "evidence": {}, "errors": [msg],
+        }
+
     def _repair_json_with_haiku(self, agent_name: str, raw_text: str, was_truncated: bool) -> dict | None:
         """Ask Haiku to repair broken JSON from a specialist's output."""
         if not raw_text or not raw_text.strip():
@@ -208,13 +270,11 @@ class LiveRunner:
         )
         user_msg = f"Agent: {agent_name}\nRepair this:{truncation_note}\n```\n{raw_text}\n```"
         try:
-            response = self.client.messages.create(
+            response = self.client.messages.create(**self._build_request_kwargs(
                 model=self._json_repair_model,
                 max_tokens=min(len(raw_text) // 2 + 2000, 8000),
-                temperature=0.0,
-                system=system,
-                messages=[{"role": "user", "content": user_msg}],
-            )
+                temperature=0.0, system_prompt=system, user_msg=user_msg,
+            ))
         except Exception:
             return None
         repaired = "".join(b.text for b in response.content if hasattr(b, "text"))
@@ -227,8 +287,9 @@ class LiveRunner:
             logger.warning("Skipping agent '%s': %s", agent_name, exc)
             return None
 
-        model = self.models.get(agent_name, "claude-sonnet-4-6")
+        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5")
         temperature = self.temperatures.get(agent_name, 0.0)
+        effort = self.efforts.get(agent_name, self.default_effort)
         max_tokens = self.max_tokens_per_agent.get(agent_name, self.max_tokens)
         user_content = json.dumps(input_data or {}, ensure_ascii=False, indent=2)
 
@@ -248,14 +309,15 @@ class LiveRunner:
             t0 = _time.monotonic()
             raw_text = ""
             stop_reason = None
+            # Thinking models get adaptive thinking + this agent's effort;
+            # temperature is only sent to legacy models (Haiku 4.5).
+            request_kwargs = self._build_request_kwargs(
+                model=model, max_tokens=max_tokens,
+                temperature=temperature, system_prompt=system_prompt,
+                user_msg=user_msg, effort=effort,
+            )
             try:
-                with self.client.messages.stream(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_msg}],
-                ) as stream:
+                with self.client.messages.stream(**request_kwargs) as stream:
                     for chunk in stream.text_stream:
                         raw_text += chunk
                     final_msg = stream.get_final_message()
@@ -271,8 +333,13 @@ class LiveRunner:
             elapsed = _time.monotonic() - t0
             if self.verbose:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
-                print(f"[{agent_name}] model={model} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}",
+                print(f"[{agent_name}] model={final_msg.model} effort={effort} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}",
                       file=sys.stderr, flush=True)
+
+            # A safety-classifier decline is not a parse problem: retrying or
+            # JSON-repairing the (empty/partial) text cannot help.
+            if stop_reason == "refusal":
+                return self._refusal_error(agent_name, final_msg)
 
             parsed = _extract_json(raw_text)
             if parsed is not None:
@@ -1014,6 +1081,9 @@ if __name__ == "__main__":
         help="Output format (default: json)",
     )
     parser.add_argument("--output-dir", help="Output directory for rendered files")
+    parser.add_argument("--save", metavar="DIR",
+                        help="Save <stem>_result.{json,md,html} to DIR "
+                             "(common CLI contract used by TFL Lab)")
     args = parser.parse_args()
 
     if args.mock and args.live:
@@ -1040,7 +1110,9 @@ if __name__ == "__main__":
     )
 
     # Determine output directory
-    output_dir = Path(args.output_dir) if args.output_dir else Path("examples/output")
+    output_dir = Path(args.save or args.output_dir or "examples/output")
+    # --save uses the shared <stem>_result.* naming; --output-dir keeps <stem>.*
+    out_stem = f"{task_name}_result" if args.save else task_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Always print JSON to stdout and save all 3 formats when --render is set
@@ -1049,7 +1121,7 @@ if __name__ == "__main__":
     print(result_json)
 
     # Always save JSON
-    out_path = output_dir / f"{task_name}.json"
+    out_path = output_dir / f"{out_stem}.json"
     out_path.write_text(result_json, encoding="utf-8")
     print(f"Saved: {out_path}", file=sys.stderr)
 
@@ -1057,7 +1129,7 @@ if __name__ == "__main__":
     try:
         from dcfl_system.renderer import render_markdown
         md_text = render_markdown(result)
-        md_path = output_dir / f"{task_name}.md"
+        md_path = output_dir / f"{out_stem}.md"
         md_path.write_text(md_text, encoding="utf-8")
         print(f"Saved: {md_path}", file=sys.stderr)
     except ImportError:
@@ -1069,7 +1141,7 @@ if __name__ == "__main__":
     try:
         from dcfl_system.renderer import render_html
         html_text = render_html(result)
-        html_path = output_dir / f"{task_name}.html"
+        html_path = output_dir / f"{out_stem}.html"
         html_path.write_text(html_text, encoding="utf-8")
         print(f"Saved: {html_path}", file=sys.stderr)
     except ImportError:
