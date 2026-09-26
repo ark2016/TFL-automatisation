@@ -129,6 +129,7 @@ Opus response → _extract_json (3 strategies: whole / fenced / braces)
 
 - **Streaming API** is mandatory — non-streaming requests are rejected by the Anthropic SDK when `max_tokens × projected latency > 10 min`, which the older 4096-token runs silently hit on formalizer / proof_checker.
 - **Request parameters per model.** Opus 5.5 / Sonnet 5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; only legacy models (Haiku 4.5) get `temperature`. See `LiveRunner._build_request_kwargs()`.
+- **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-4-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
 - **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`).
 
 ---

@@ -72,3 +72,21 @@ def test_refusal_returns_agent_error_without_retry(runner):
     assert "refusal" in out["errors"][0] and "bio" in out["errors"][0]
     assert runner.client.messages.stream.call_count == 1
     runner.client.messages.create.assert_not_called()  # no Haiku repair
+
+
+def test_model_override_env_forces_haiku(monkeypatch):
+    monkeypatch.setenv("TFL_MODEL_OVERRIDE", "claude-haiku-4-5")
+    runner = LiveRunner(api_key="sk-ant-test-not-used")
+    final = SimpleNamespace(stop_reason="end_turn", model="claude-haiku-4-5", usage=None)
+    stream = MagicMock()
+    stream.__enter__.return_value = stream
+    stream.text_stream = iter(['{"status": "success"}'])
+    stream.get_final_message.return_value = final
+    runner.client = MagicMock()
+    runner.client.messages.stream.return_value = stream
+
+    assert runner.run_agent("classifier", {}) == {"status": "success"}
+
+    kwargs = runner.client.messages.stream.call_args.kwargs
+    assert kwargs["model"] == "claude-haiku-4-5"
+    assert "temperature" in kwargs and "output_config" not in kwargs

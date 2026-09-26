@@ -187,7 +187,15 @@ class LLMRunner:
         return path.read_text(encoding="utf-8")
 
     def _get_model(self, agent_name: str) -> str:
-        """Get model ID for an agent. Checks: env override → model_map → default."""
+        """Get model ID for an agent. Checks: env override → model_map → default.
+
+        TFL_MODEL_OVERRIDE forces every agent onto one model (cheap live test
+        runs, e.g. claude-haiku-4-5); TFL_MODEL_FAST / TFL_MODEL_DEEP override
+        the fast / deep tier only.
+        """
+        override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
+        if override:
+            return override
         prompt_name = self._resolve_prompt_name(agent_name)
         # Env overrides (TFL_MODEL_DEEP, TFL_MODEL_FAST)
         if prompt_name in ("input_parser", "classifier"):

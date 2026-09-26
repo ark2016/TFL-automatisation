@@ -147,6 +147,9 @@ class LiveRunner:
             )
         self.client = anthropic.Anthropic(api_key=resolved_key)
         self.models = MODELS
+        # TFL_MODEL_OVERRIDE forces every agent onto one model — used for cheap
+        # live test runs (e.g. TFL_MODEL_OVERRIDE=claude-haiku-4-5).
+        self.model_override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
         self.temperatures = TEMPERATURES
         self.efforts = EFFORT
         self.default_effort = DEFAULT_EFFORT
@@ -305,7 +308,7 @@ class LiveRunner:
             logger.warning("Skipping agent '%s': %s", agent_name, exc)
             return None
 
-        model = self.models.get(agent_name, "claude-sonnet-5")
+        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5")
         temperature = self.temperatures.get(agent_name, 0.0)
         effort = self.efforts.get(agent_name, self.default_effort)
         max_tokens = self.max_tokens_per_agent.get(agent_name, self.max_tokens)

@@ -75,3 +75,10 @@ def test_refusal_returns_none(runner):
     _mock_stream(runner, message)
 
     assert runner.run_agent("classifier", {"language": "a*"}) is None
+
+
+def test_model_override_env(monkeypatch, runner):
+    monkeypatch.setenv("TFL_MODEL_DEEP", "claude-opus-5-5")
+    monkeypatch.setenv("TFL_MODEL_OVERRIDE", "claude-haiku-4-5")
+    assert runner._get_model("reasoning_agent") == "claude-haiku-4-5"
+    assert runner._get_model("classifier") == "claude-haiku-4-5"
