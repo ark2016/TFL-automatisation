@@ -1081,6 +1081,9 @@ if __name__ == "__main__":
         help="Output format (default: json)",
     )
     parser.add_argument("--output-dir", help="Output directory for rendered files")
+    parser.add_argument("--save", metavar="DIR",
+                        help="Save <stem>_result.{json,md,html} to DIR "
+                             "(common CLI contract used by TFL Lab)")
     args = parser.parse_args()
 
     if args.mock and args.live:
@@ -1107,7 +1110,9 @@ if __name__ == "__main__":
     )
 
     # Determine output directory
-    output_dir = Path(args.output_dir) if args.output_dir else Path("examples/output")
+    output_dir = Path(args.save or args.output_dir or "examples/output")
+    # --save uses the shared <stem>_result.* naming; --output-dir keeps <stem>.*
+    out_stem = f"{task_name}_result" if args.save else task_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Always print JSON to stdout and save all 3 formats when --render is set
@@ -1116,7 +1121,7 @@ if __name__ == "__main__":
     print(result_json)
 
     # Always save JSON
-    out_path = output_dir / f"{task_name}.json"
+    out_path = output_dir / f"{out_stem}.json"
     out_path.write_text(result_json, encoding="utf-8")
     print(f"Saved: {out_path}", file=sys.stderr)
 
@@ -1124,7 +1129,7 @@ if __name__ == "__main__":
     try:
         from dcfl_system.renderer import render_markdown
         md_text = render_markdown(result)
-        md_path = output_dir / f"{task_name}.md"
+        md_path = output_dir / f"{out_stem}.md"
         md_path.write_text(md_text, encoding="utf-8")
         print(f"Saved: {md_path}", file=sys.stderr)
     except ImportError:
@@ -1136,7 +1141,7 @@ if __name__ == "__main__":
     try:
         from dcfl_system.renderer import render_html
         html_text = render_html(result)
-        html_path = output_dir / f"{task_name}.html"
+        html_path = output_dir / f"{out_stem}.html"
         html_path.write_text(html_text, encoding="utf-8")
         print(f"Saved: {html_path}", file=sys.stderr)
     except ImportError:

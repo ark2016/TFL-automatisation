@@ -695,6 +695,11 @@ def main() -> None:
                         help="Write rendered output to file instead of stdout")
     parser.add_argument("--notes", metavar="TEXT", default=None,
                         help="Student notes/ideas to inject into agent prompts")
+    parser.add_argument("--save", metavar="DIR", default=None,
+                        help="Save <stem>_result.{json,md,html} to DIR "
+                             "(common CLI contract used by TFL Lab)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Accepted for CLI parity with the other pipelines")
 
     args = parser.parse_args()
 
@@ -738,8 +743,28 @@ def main() -> None:
                 sys.exit(1)
         result = pipeline.run_from_ir(ir, dfa)
 
+    # Top-level verdict (regular / non_regular), same place as in the
+    # cfl / dcfl / ll results, so callers don't dig through evidence.
+    result.setdefault("verdict", _result_verdict(result))
+
     # JSON output
     print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    if args.save:
+        from .lib.renderer import render_to_file
+
+        save_dir = Path(args.save)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"{Path(args.ir_json).stem}_result"
+        (save_dir / f"{stem}.json").write_text(
+            json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8",
+        )
+        for fmt in ("md", "html"):
+            try:
+                render_to_file(result, str(save_dir / f"{stem}.{fmt}"), fmt=fmt)
+            except Exception as exc:
+                print(f"Renderer ({fmt}) failed: {exc}", file=sys.stderr)
+        print(f"Result saved to {save_dir / (stem + '.json')}", file=sys.stderr)
 
     # Render
     if args.render:
@@ -816,6 +841,19 @@ def main() -> None:
 
 
 
-# Direct script execution is NOT supported with relative imports.
-# Use:  python -m agent_system <args>
-# Or:   python agent_system/__main__.py <args>
+def _result_verdict(result: dict) -> str | None:
+    """Verdict of the reasoning agent (falls back to the hypothesis)."""
+    evidence = result.get("evidence", {}) or {}
+    reasoning = evidence.get("reasoning", {}) or {}
+    r_ev = reasoning.get("evidence", reasoning) if isinstance(reasoning, dict) else {}
+    return (r_ev.get("verdict")
+            or reasoning.get("verdict")
+            or (evidence.get("hypothesis", {}) or {}).get("hypothesis"))
+
+
+# Direct script execution (python agent_system/orchestrator.py) is NOT
+# supported with relative imports. Use:
+#   python -m agent_system <args>
+#   python -m agent_system.orchestrator <args>
+if __name__ == "__main__":
+    main()

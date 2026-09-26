@@ -18,6 +18,10 @@ Usage:
     .venv/Scripts/python -m ui_server.server [--port 8000]
 
 Security note: binds to 127.0.0.1 only. No auth. Do not expose externally.
+Requests are only served for a loopback Host header (blocks DNS rebinding),
+POST /api/run additionally requires a same-origin JSON request (blocks
+cross-site "no-cors" form posts from other pages starting paid live runs),
+and every file route is confined to its directory.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -53,6 +58,17 @@ PROJECTS: list[dict] = [
     {"id": "ll_system",    "label": "LL",   "module": "ll_system.orchestrator"},
 ]
 PROJECT_IDS = {p["id"] for p in PROJECTS}
+
+RUN_ID_RE = re.compile(r"[0-9a-f]{12}")
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+MAX_BODY_BYTES = 1_000_000
+
+
+def _safe_child(base: Path, rel: str) -> Path | None:
+    """`base / rel` if it stays inside `base` (no `..`, no absolute paths)."""
+    base = base.resolve()
+    candidate = (base / rel).resolve()
+    return candidate if candidate.is_relative_to(base) else None
 
 # In-memory run registry. Threading lock protects concurrent access.
 # {run_id: {"status", "lines" (list[str]), "started", "elapsed",
@@ -161,15 +177,16 @@ def api_run(payload: dict) -> dict:
     }
 
 
-def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
-                         run_dir: Path, live: bool, verbose: bool) -> None:
-    """Run `python -m <project>.orchestrator <ir> --save <run_dir>`, stream
-    stderr into the run's log buffer."""
-    proj_cfg = next(p for p in PROJECTS if p["id"] == project)
-    module = proj_cfg["module"]
+def build_command(project: str, ir_path: Path, run_dir: Path,
+                  live: bool, verbose: bool) -> list[str]:
+    """argv for `python -m <project>.orchestrator <ir> --save <run_dir>`.
 
+    Every orchestrator accepts this contract and writes
+    <ir stem>_result.{json,md,html} with a top-level "verdict".
+    """
+    proj_cfg = next(p for p in PROJECTS if p["id"] == project)
     cmd = [
-        sys.executable, "-m", module,
+        sys.executable, "-m", proj_cfg["module"],
         str(ir_path),
         "--save", str(run_dir),
     ]
@@ -177,6 +194,14 @@ def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
         cmd.append("--live")
     if verbose:
         cmd.append("--verbose")
+    return cmd
+
+
+def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
+                         run_dir: Path, live: bool, verbose: bool) -> None:
+    """Run the project's orchestrator (see build_command), stream stderr
+    into the run's log buffer."""
+    cmd = build_command(project, ir_path, run_dir, live, verbose)
 
     started = time.time()
     try:
@@ -197,9 +222,14 @@ def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
     # Stream both stdout (result JSON) and stderr (log) in parallel.
     stdout_buf: list[str] = []
 
+    stderr_tail: list[str] = []
+
     def pump_stderr() -> None:
         for line in proc.stderr:
-            _append_log(run_id, line.rstrip("\n"))
+            line = line.rstrip("\n")
+            _append_log(run_id, line)
+            stderr_tail.append(line)
+            del stderr_tail[:-20]
 
     def pump_stdout() -> None:
         for line in proc.stdout:
@@ -247,8 +277,11 @@ def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
         else:
             # Exit codes: 0=ok, 1=failure, 2=inconclusive (per orchestrator CLI)
             run["status"] = "completed" if rc in (0, 2) and result_json.exists() else "error"
-            if rc not in (0, 2) and not result_json.exists():
-                run["error"] = f"exit code {rc}, no result JSON produced"
+            if not result_json.exists():
+                tail = "\n".join(stderr_tail[-10:])
+                run["error"] = f"exit code {rc}, no result JSON produced" + (
+                    f"\n{tail}" if tail else ""
+                )
 
 
 def _append_log(run_id: str, line: str) -> None:
@@ -312,8 +345,30 @@ class Handler(BaseHTTPRequestHandler):
     def _send_error_json(self, status: int, msg: str) -> None:
         self._send_json({"error": msg}, status=status)
 
+    # -- Request guards --
+    def _allowed_origins(self) -> set[str]:
+        port = self.server.server_address[1]
+        return {f"http://{h}:{port}" for h in LOOPBACK_HOSTS}
+
+    def _host_ok(self) -> bool:
+        """Only answer requests addressed to a loopback host (anti DNS rebinding)."""
+        host = (self.headers.get("Host") or "").lower()
+        return f"http://{host}" in self._allowed_origins()
+
+    def _post_ok(self) -> bool:
+        """Same-origin JSON only: a cross-site page can send a "simple"
+        (no-cors) POST, but not with Content-Type: application/json."""
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return False
+        origin = self.headers.get("Origin")
+        return origin is None or origin in self._allowed_origins()
+
     # -- Routing --
     def do_GET(self):  # noqa: N802
+        if not self._host_ok():
+            self._send_error_json(403, "forbidden host")
+            return
         try:
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -323,8 +378,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path.startswith("/static/"):
-                rel = path[len("/static/"):]
-                self._send_file(STATIC_DIR / rel)
+                fpath = _safe_child(STATIC_DIR, path[len("/static/"):])
+                if fpath is None:
+                    self._send_error_json(404, "not found")
+                    return
+                self._send_file(fpath)
                 return
 
             if path == "/api/projects":
@@ -357,8 +415,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_error_json(400, "bad run path")
                     return
                 run_id, fname = parts
-                safe = Path(fname).name
-                fpath = RUNS_DIR / run_id / safe
+                fpath = _safe_child(RUNS_DIR / run_id, Path(fname).name)
+                if not RUN_ID_RE.fullmatch(run_id) or fpath is None:
+                    self._send_error_json(404, "not found")
+                    return
                 self._send_file(fpath)
                 return
 
@@ -373,10 +433,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error_json(500, f"internal: {exc}")
 
     def do_POST(self):  # noqa: N802
+        if not self._host_ok() or not self._post_ok():
+            self._send_error_json(403, "forbidden: same-origin application/json requests only")
+            return
         try:
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             length = int(self.headers.get("Content-Length", "0"))
+            if length > MAX_BODY_BYTES:
+                self._send_error_json(413, "request body too large")
+                return
             raw = self.rfile.read(length) if length else b""
             try:
                 payload = json.loads(raw.decode("utf-8")) if raw else {}
@@ -409,6 +475,11 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        sys.stderr.write(
+            f"WARNING: binding to {args.host} — TFL Lab has no auth; "
+            "requests are still only answered for a loopback Host header.\n"
+        )
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}/"
     sys.stderr.write(f"TFL Lab UI → {url}\n")

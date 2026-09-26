@@ -1575,6 +1575,9 @@ if __name__ == "__main__":
     parser.add_argument("--mock", metavar="DIR", help="Mock responses directory")
     parser.add_argument("--live", action="store_true", help="Use live LLM (requires API key)")
     parser.add_argument("--out", metavar="DIR", help="Output directory")
+    parser.add_argument("--save", metavar="DIR",
+                        help="Save <stem>_result.{json,md,html} to DIR "
+                             "(common CLI contract used by TFL Lab)")
     parser.add_argument("--task", metavar="NAME", help="Task name for mock file lookup")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
@@ -1620,12 +1623,20 @@ if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
-    if args.out:
-        save_dir = Path(args.out)
+    if args.out or args.save:
+        save_dir = Path(args.save or args.out)
         save_dir.mkdir(parents=True, exist_ok=True)
         out_path = save_dir / f"{task_name}_result.json"
         out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"Result saved to {out_path}", file=sys.stderr)
+
+    if args.save:
+        try:
+            from ll_system.renderer import render_html, render_markdown
+            (save_dir / f"{task_name}_result.md").write_text(render_markdown(result), encoding="utf-8")
+            (save_dir / f"{task_name}_result.html").write_text(render_html(result), encoding="utf-8")
+        except Exception as exc:
+            print(f"Renderer failed: {exc}", file=sys.stderr)
 
     # Exit code reflects pipeline outcome
     verdict = result.get("verdict")
