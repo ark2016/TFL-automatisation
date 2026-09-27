@@ -33,6 +33,8 @@
 - live-прогоны на Haiku (`TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`, 2026-09-27) на всех 5 exam-задачах
   раунда 2 (`dcfl_exam_01/02/03`, `task_grammar_filter_49`, `wbcwR`/`{w b c wᴿ}`) — все сошлись с новыми эталонами
   (`docs/THEORY.md` Часть II, §1.10);
+- эталон `task_wwvvR` (`cfl_system/tests/test_e2e.py`) — заменён на `non_cfl` (язык {w w v vᴿ} доказанно не КС,
+  проверено перебором на словах длины ≤ 10, `docs/THEORY.md` §2.5);
 - шаг 1 таксономии доверия (`well_formed`/`verified`/`bounded_pass`/`not_verified`/`refuted`) и гейт R1–R7 —
   реализованы по `docs/VERDICT_POLICY.md` во всех четырёх системах (см. `result["verdict_gate"]`);
 - LL: `not_ll` с оговоркой `k ≤ K` (`max_k_checked`) вместо conclusive без сертификата (`docs/VERDICT_POLICY.md` R5);
@@ -70,6 +72,10 @@
 - [ ] ⚪ **M** **Калибровка потолков confidence после прогонов на Opus.** Потолки в `docs/VERDICT_POLICY.md` §2
   (0.98/0.85/0.60/0.40/0.50) подобраны по опыту с Haiku (см. живые прогоны 2026-09-27); нужна повторная калибровка
   на Opus 5.5 (только по явному запросу — прогоны на Opus стоят реальных денег, см. `CLAUDE.md`).
+- [ ] 🟠 **M** **Статус языка `task_grammar_aSSb` (exam_04, dcfl) не установлен.** Мок `stack_strategy` без
+  `proof_sketch` ⇒ trust `not_verified` ⇒ вердикт по гейту `inconclusive` (не `dcfl 0.55`, `docs/THEORY.md` §5) —
+  это верно по политике, но не заменяет теорию: нужно доказать принадлежность/непринадлежность языка DCFL, чтобы
+  можно было завести конструктивный мок с настоящим `proof_sketch` и conclusive-эталон.
 
 **Находки live-прогона 2026-09-27 (Haiku, все 5 exam-задач раунда 2 сошлись с новыми эталонами):**
 

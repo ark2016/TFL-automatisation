@@ -19,8 +19,9 @@ pair/context instantiation) and the destructive-trust combinator.
 """
 
 import unittest
+from unittest.mock import patch
 
-from agent_system.graph import assemble_result_node
+from agent_system.graph import assemble_result_node, run_retry_planner_node
 from agent_system.lib.claim_verifier import (
     CONFIDENCE_CAPS,
     closure_trust_from_verification,
@@ -426,6 +427,185 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
         result = assemble_result_node(state)["result"]
         self.assertNotEqual(result["status"], "success")
         self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["not_verified"])
+
+
+# ---------------------------------------------------------------------------
+# docs/VERDICT_POLICY.md R7 — the retry planner reads trust + counterexamples
+# ---------------------------------------------------------------------------
+
+def _retry_state(**overrides):
+    """Minimal state dict for run_retry_planner_node."""
+    state = {
+        "reasoning_output": None,
+        "dispatch": {"pumping": True, "nerode": True, "re_builder": False,
+                     "dfa_builder": False, "closure": False},
+        "evidence": {},
+        "test_result": None,
+        "hypothesis": {"hypothesis": "non_regular"},
+        "retry_round": 0,
+        "mock_runner": None,
+        "agent_runner": None,
+        "verbose": False,
+    }
+    state.update(overrides)
+    return state
+
+
+class TestRetryPlannerReadsTrustAndCounterexamples(unittest.TestCase):
+
+    @patch("agent_system.graph.run_agent")
+    def test_planner_input_carries_trust_per_agent(self, mock_run_agent):
+        mock_run_agent.return_value = {"evidence": {"agents_to_retry": ["pumping"]}}
+
+        state = _retry_state(
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "bounded_pass", "checked_p": [2, 3, 4]},
+                "nerode": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "nerode_verification": {"trust": "well_formed", "reason": "no oracle"},
+            },
+        )
+        run_retry_planner_node(state)
+
+        planner_input = mock_run_agent.call_args[0][2]
+        self.assertEqual(
+            planner_input["specialist_results"]["pumping"]["trust"], "bounded_pass",
+        )
+        self.assertEqual(
+            planner_input["specialist_results"]["nerode"]["trust"], "well_formed",
+        )
+
+    @patch("agent_system.graph.run_agent")
+    def test_refuted_pumping_proof_carries_partition_hint(self, mock_run_agent):
+        """R7: a refuted pumping proof's oracle counterexample reaches the
+        planner as a Russian hint 'слово ... при p=... накачивается
+        разбиением ...', not just a bare status/verdict pair."""
+        mock_run_agent.return_value = {"evidence": {"agents_to_retry": ["pumping"]}}
+
+        state = _retry_state(
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {
+                    "trust": "refuted",
+                    "reason": "partition x='' y='a' z='b' pumps within L at p=2",
+                    "counterexample": {"p": 2, "word": "ab", "x": "", "y": "a", "z": "b"},
+                },
+            },
+        )
+        run_retry_planner_node(state)
+
+        planner_input = mock_run_agent.call_args[0][2]
+        self.assertEqual(
+            planner_input["specialist_results"]["pumping"]["trust"], "refuted",
+        )
+        hint = planner_input["counterexamples"]["pumping"]["hint"]
+        self.assertIn("слово", hint)
+        self.assertIn("p=2", hint)
+        self.assertIn("накачивается разбиением", hint)
+
+    @patch("agent_system.graph.run_agent")
+    def test_refuted_nerode_proof_carries_hint(self, mock_run_agent):
+        mock_run_agent.return_value = {"evidence": {"agents_to_retry": ["nerode"]}}
+
+        state = _retry_state(
+            evidence={
+                "nerode": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "nerode_verification": {
+                    "trust": "refuted",
+                    "reason": "context 'b' does not distinguish 'aa' from 'aaa'",
+                    "counterexample": {"i": 2, "j": 3, "w_i": "aa", "w_j": "aaa", "context": "b"},
+                },
+            },
+        )
+        run_retry_planner_node(state)
+
+        planner_input = mock_run_agent.call_args[0][2]
+        self.assertIn("nerode", planner_input["counterexamples"])
+        self.assertIn("hint", planner_input["counterexamples"]["nerode"])
+
+    @patch("agent_system.graph.run_agent")
+    def test_oracle_test_failure_reaches_counterexamples(self, mock_run_agent):
+        mock_run_agent.return_value = {"evidence": {"agents_to_retry": []}}
+
+        state = _retry_state(
+            evidence={},
+            test_result={
+                "status": "fail",
+                "counterexample": {"word": "ab", "oracle_says": True, "automaton_says": False},
+            },
+        )
+        run_retry_planner_node(state)
+
+        planner_input = mock_run_agent.call_args[0][2]
+        self.assertEqual(
+            planner_input["counterexamples"]["oracle_test"]["word"], "ab",
+        )
+        # Back-compat: the old top-level field is still populated too.
+        self.assertEqual(planner_input["oracle_counterexample"]["word"], "ab")
+
+    @patch("agent_system.graph.run_agent")
+    def test_no_refuted_evidence_leaves_counterexamples_empty(self, mock_run_agent):
+        mock_run_agent.return_value = {"evidence": {"agents_to_retry": []}}
+
+        state = _retry_state(
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "bounded_pass", "checked_p": [2, 3, 4]},
+            },
+        )
+        run_retry_planner_node(state)
+
+        planner_input = mock_run_agent.call_args[0][2]
+        self.assertEqual(planner_input["counterexamples"], {})
+
+
+# ---------------------------------------------------------------------------
+# verify_nerode_claim — context depending on the shared pair variable
+# ("i, j или обе" — both patterns using the same variable name)
+# ---------------------------------------------------------------------------
+
+class TestNerodeContextSharedVariable(unittest.TestCase):
+
+    def test_context_sharing_the_pair_variable_name_is_instantiated_correctly(self):
+        """Both pair patterns share the variable name 'i' (e.g. 'a^i' vs
+        'b^i'); the context also uses 'i'. This is neither the pair[0]-only
+        nor the pair[1]-only case -- it must still instantiate (at m/n
+        respectively) instead of silently falling back to well_formed."""
+
+        def oracle(word: str) -> bool:
+            # L = {a^n b^n | n >= 0} again, phrased so pattern_i="a^i" and
+            # pattern_j="b^i" both stay meaningful claims about L.
+            n_a = 0
+            while n_a < len(word) and word[n_a] == "a":
+                n_a += 1
+            rest = word[n_a:]
+            return rest == "b" * n_a and n_a + len(rest) == len(word)
+
+        proof = {
+            "status": "success",
+            "proof": {
+                "distinguishing_contexts": [
+                    {"pair": ["a^i", "a^j"], "condition": "i < j", "context": "b^i"},
+                ],
+            },
+        }
+        result = verify_nerode_claim(proof, oracle=oracle)
+        self.assertEqual(result["trust"], "bounded_pass")
+        self.assertEqual(result["checked_pairs"], [[2, 3], [2, 4], [3, 4]])
+
+    def test_context_variable_matching_neither_pair_variable_is_well_formed(self):
+        """R7 fix, item 2: an unrecognized context variable must never be
+        treated as refuted -- it stays well_formed (structural-only)."""
+        proof = {
+            "status": "success",
+            "proof": {
+                "distinguishing_contexts": [
+                    {"pair": ["a^i", "a^j"], "condition": "i < j", "context": "c^k"},
+                ],
+            },
+        }
+        result = verify_nerode_claim(proof, oracle=lambda w: True)
+        self.assertEqual(result["trust"], "well_formed")
 
 
 if __name__ == "__main__":

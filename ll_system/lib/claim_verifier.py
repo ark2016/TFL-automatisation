@@ -247,6 +247,7 @@ def _apply_constructive_step2(grammar: dict, ir: dict) -> tuple[str, list[str], 
             f"grammar terminals {bad_terminals} are not in the task alphabet "
             "(docs/VERDICT_POLICY.md step 2: validate_grammar_symbols)"
         )
+        details["invalid_terminals"] = bad_terminals
         return "refuted", issues, details
 
     lang_trust, lang_details = _task_language_equivalence_trust(grammar, ir)
@@ -275,6 +276,29 @@ def _apply_constructive_step2(grammar: dict, ir: dict) -> tuple[str, list[str], 
 
 _EXP_TOKEN_RE = re.compile(r"([A-Za-z])\^\{?([^\s\^}]+)\}?")
 _SAFE_EXPR_RE = re.compile(r"^[0-9nk()+\-*\s]+$")
+_EXP_DEPENDS_ON_N_RE = re.compile(r"\bn\b")
+
+
+def _tail_token_depends_on_n(template: Any) -> bool:
+    """Whether a branch-word template's LAST <terminal>^<exponent> token has
+    an exponent expression that actually depends on n (e.g. "n", "n+1"),
+    rather than a bare constant (e.g. "1", "3") or an expression only in k.
+
+    The branch-point/substitution argument (docs/THEORY.md §3.3 (C)) needs
+    the discriminating tail (the part after the shared a-run, e.g. b^n vs
+    c^n) to encode a count tied to n: that is what lets the pigeonhole step
+    substitute a mismatched n' in and land outside the language. A tail that
+    doesn't depend on n at all (b^1 vs c^1, or b^n vs c^1) can never produce
+    that contradiction, no matter how large n grows — such a pair is not a
+    valid witness even if it happens to pass the oracle/FIRST_k checks below.
+    """
+    if not isinstance(template, str) or not template.strip():
+        return False
+    tokens = _EXP_TOKEN_RE.findall(template)
+    if not tokens:
+        return False
+    _, exp = tokens[-1]
+    return bool(_EXP_DEPENDS_ON_N_RE.search(exp))
 
 
 def _eval_exponent(expr: str, n: int, k: int) -> int | None:
@@ -313,8 +337,47 @@ def _instantiate_word_template(template: Any, n: int, k: int) -> str | None:
 def _verify_branch_words_by_oracle(bw: dict, ir: dict) -> tuple[str | None, dict]:
     """Best-effort semantic check of substitution branch_words.
 
+    Instantiates word_1/word_2 at n = k + 2 for k in {1, 2} and checks, via
+    the task's word oracle (docs/VERDICT_POLICY.md §4 "ll / substitution"):
+
+    1. **Refutation is ONLY an oracle counterexample**: if either
+       instantiated word is not in L, the whole instantiated example is
+       wrong regardless of anything else — `refuted`.
+    2. Otherwise, a candidate confirmation at a given k requires the literal
+       substrings w1[boundary:boundary+k] and w2[boundary:boundary+k] (with
+       boundary = n - k) to be equal — this checks that the shared literal
+       prefix reaches at least length n (a common-prefix-length test, NOT a
+       comparison of FIRST_k as *sets* the way earlier revisions of this
+       docstring claimed: with the words agreeing up to `boundary`, equality
+       of that window is exactly the statement "the words still agree once
+       more up through position n"). It is a real precondition of the
+       branch-point argument (THEORY.md §3.3 (C): the sentential form a^j·δ
+       shared by both derivations, for j in (n-k, n]), but not sufficient on
+       its own — see point 4.
+    3. A short common run (the two words' actual literal agreement doesn't
+       even reach position n - k, i.e. they diverge earlier than the claimed
+       branch point) is NOT a refutation — it is simply not enough data to
+       confirm the claim, so it stays `well_formed` (returned as None here,
+       same as "no oracle" — the caller only ever upgrades trust on an
+       explicit bounded_pass).
+    4. `bounded_pass` additionally requires, per docs/VERDICT_POLICY.md §4,
+       that point 2 be confirmed at **both** instantiated k in {1, 2} (`all`,
+       not `any` — a template that only survives at one k, e.g. a constant
+       tail confirmed by chance at k=1 but not k=2, is not a valid witness),
+       AND that the discriminating tail of *both* templates actually depends
+       on n (`_tail_token_depends_on_n`): a claim like "a^n b^1" vs "a^n c^1"
+       (or "a^3 b^1" vs "a^3 c^1") can pass the literal-prefix check above by
+       sheer coincidence — both words happen to still agree through position
+       n because the tail is a fixed-length constant unrelated to n — without
+       the tail encoding any real count tied to n, so the pigeonhole/
+       substitution step that would derive a contradiction from it can never
+       go through, no matter how large n grows. Such a pair is rejected here
+       even when every individual k's oracle/prefix check passes.
+
     Returns (trust, details); trust in {"bounded_pass", "refuted", None}.
-    None means "not instantiable, or no oracle" — caller keeps well_formed.
+    None means "insufficient data to confirm the claim, or not instantiable /
+    no oracle / tail doesn't depend on n" — caller keeps well_formed. It is
+    never a refutation on its own.
     """
     oracle = _try_word_oracle(ir)
     if oracle is None:
@@ -322,7 +385,12 @@ def _verify_branch_words_by_oracle(bw: dict, ir: dict) -> tuple[str | None, dict
 
     word_1_t = bw.get("word_1")
     word_2_t = bw.get("word_2")
+    template_depends_on_n = (
+        _tail_token_depends_on_n(word_1_t) and _tail_token_depends_on_n(word_2_t)
+    )
     checked: list[dict] = []
+    data_count = 0
+    confirmed_count = 0
     for k in (1, 2):
         n = k + 2
         w1 = _instantiate_word_template(word_1_t, n, k)
@@ -334,24 +402,53 @@ def _verify_branch_words_by_oracle(bw: dict, ir: dict) -> tuple[str | None, dict
             w2_in_l = bool(oracle(w2))
         except Exception:
             continue
-        common_len = 0
+        if not (w1_in_l and w2_in_l):
+            checked.append({
+                "k": k, "n": n, "word_1": w1, "word_2": w2,
+                "word_1_in_l": w1_in_l, "word_2_in_l": w2_in_l,
+            })
+            return "refuted", {"checked": checked}
+
+        actual_common = 0
         for a, b in zip(w1, w2):
             if a != b:
                 break
-            common_len += 1
-        shares_long_run = common_len >= max(n - k, 0)
+            actual_common += 1
+        boundary = max(n - k, 0)
+        sufficient_data = (
+            actual_common >= boundary
+            and len(w1) >= boundary + k
+            and len(w2) >= boundary + k
+        )
+        if sufficient_data:
+            first_k_1 = w1[boundary:boundary + k]
+            first_k_2 = w2[boundary:boundary + k]
+            first_k_equal = first_k_1 == first_k_2
+        else:
+            first_k_1 = first_k_2 = None
+            first_k_equal = False
         entry = {
             "k": k, "n": n, "word_1": w1, "word_2": w2,
             "word_1_in_l": w1_in_l, "word_2_in_l": w2_in_l,
-            "common_run": common_len, "shares_long_run": shares_long_run,
+            "common_run": actual_common, "boundary": boundary,
+            "first_k_remainder_1": first_k_1, "first_k_remainder_2": first_k_2,
+            "sufficient_data": sufficient_data, "first_k_equal": first_k_equal,
         }
         checked.append(entry)
-        if not (w1_in_l and w2_in_l) or not shares_long_run:
-            return "refuted", {"checked": checked}
+        if sufficient_data:
+            data_count += 1
+            if first_k_equal:
+                confirmed_count += 1
 
     if not checked:
         return None, {}
-    return "bounded_pass", {"checked": checked}
+    # Require BOTH instantiated k in {1, 2} to have sufficient data and
+    # confirm (docs/VERDICT_POLICY.md §4), and the tails to genuinely depend
+    # on n -- otherwise this is not evidence AGAINST the claim (no oracle
+    # counterexample was found), just not enough to confirm it.
+    if data_count == 2 and confirmed_count == 2 and template_depends_on_n:
+        return "bounded_pass", {"checked": checked}
+    return None, {"checked": checked}
 
 
 # ---------------------------------------------------------------------------

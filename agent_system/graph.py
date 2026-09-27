@@ -889,8 +889,68 @@ def decide_retry(state: PipelineState) -> str:
     return "done"
 
 
+def _specialist_trust(agent: str, evidence: dict) -> str | None:
+    """Look up the deterministic trust label for a dispatched specialist,
+    per docs/VERDICT_POLICY.md §1/§4 (pumping/nerode step-2 checks; closure
+    via its own Nerode-index estimate). ``None`` when nothing was computed
+    for this agent (e.g. re_builder/dfa_builder, or closure without an
+    oracle) -- the retry planner then falls back to status/verdict alone."""
+    if agent == "pumping":
+        check = evidence.get("pumping_verification")
+        return check.get("trust") if isinstance(check, dict) else None
+    if agent == "nerode":
+        check = evidence.get("nerode_verification")
+        return check.get("trust") if isinstance(check, dict) else None
+    if agent == "closure":
+        from .lib.claim_verifier import closure_trust_from_verification
+
+        closure_verification = evidence.get("closure_verification")
+        return closure_trust_from_verification(
+            evidence.get("closure"), closure_verification,
+        )
+    return None
+
+
+def _pumping_refuted_hint(pumping_check: dict) -> str:
+    """Human-readable hint for the retry planner: which word, at which p,
+    the claimed pumping proof actually pumps within L at (VERDICT_POLICY.md
+    R7) -- built from `verify_pumping_claim`'s `refuted` counterexample."""
+    cx = pumping_check.get("counterexample") or {}
+    word, p = cx.get("word"), cx.get("p")
+    x, y, z = cx.get("x"), cx.get("y"), cx.get("z")
+    if word is not None and p is not None and x is not None:
+        return (
+            f"слово {word!r} при p={p} накачивается разбиением "
+            f"x={x!r}, y={y!r}, z={z!r}"
+        )
+    return pumping_check.get("reason", "pumping proof refuted by oracle")
+
+
+def _nerode_refuted_hint(nerode_check: dict) -> str:
+    """Human-readable hint for a refuted Myhill-Nerode distinguishability
+    proof (VERDICT_POLICY.md R7): which instantiated pair the claimed
+    context fails to distinguish."""
+    cx = nerode_check.get("counterexample") or {}
+    w_i, w_j, ctx = cx.get("w_i"), cx.get("w_j"), cx.get("context")
+    if w_i is not None and w_j is not None and ctx is not None:
+        return (
+            f"контекст {ctx!r} не различает {w_i!r} и {w_j!r} "
+            f"(оба слова оракул относит к одному классу)"
+        )
+    return nerode_check.get("reason", "nerode proof refuted by oracle")
+
+
 def run_retry_planner_node(state: PipelineState) -> dict:
-    """Run the retry planner agent to decide which specialists to re-run."""
+    """Run the retry planner agent to decide which specialists to re-run.
+
+    docs/VERDICT_POLICY.md R7: the planner input carries each dispatched
+    specialist's deterministic `trust` (from the pumping/nerode step-2
+    checks and the closure Nerode-index estimate) plus the oracle
+    counterexamples behind a `refuted` verdict -- from
+    `pumping_verification`/`nerode_verification`/`test_result` -- not just
+    status/verdict strings, so the planner can tell "failed honestly" apart
+    from "produced a proof the oracle disproves".
+    """
     reasoning_output = state.get("reasoning_output")
     r_ev = (reasoning_output or {}).get("evidence", reasoning_output or {})
     issues = r_ev.get(
@@ -903,6 +963,25 @@ def run_retry_planner_node(state: PipelineState) -> dict:
     evidence = state.get("evidence", {})
     test_result = state.get("test_result")
 
+    counterexamples: dict[str, Any] = {}
+
+    pumping_check = evidence.get("pumping_verification")
+    if isinstance(pumping_check, dict) and pumping_check.get("trust") == "refuted":
+        counterexamples["pumping"] = {
+            **(pumping_check.get("counterexample") or {}),
+            "hint": _pumping_refuted_hint(pumping_check),
+        }
+
+    nerode_check = evidence.get("nerode_verification")
+    if isinstance(nerode_check, dict) and nerode_check.get("trust") == "refuted":
+        counterexamples["nerode"] = {
+            **(nerode_check.get("counterexample") or {}),
+            "hint": _nerode_refuted_hint(nerode_check),
+        }
+
+    if test_result and test_result.get("status") == "fail":
+        counterexamples["oracle_test"] = test_result.get("counterexample")
+
     planner_input = {
         "issues_found": issues,
         "oracle_counterexample": (
@@ -914,10 +993,12 @@ def run_retry_planner_node(state: PipelineState) -> dict:
                 "verdict": evidence[k]
                     .get("evidence", evidence[k])
                     .get("verdict", "?"),
+                "trust": _specialist_trust(k, evidence),
             }
             for k in dispatched
             if k in evidence
         },
+        "counterexamples": counterexamples,
         "current_hypothesis": state.get("hypothesis", {}).get("hypothesis"),
     }
 
@@ -939,6 +1020,7 @@ def run_retry_planner_node(state: PipelineState) -> dict:
     retry_context = {
         "issues": issues,
         "oracle_counterexample": planner_input["oracle_counterexample"],
+        "counterexamples": counterexamples,
         "feedback": feedback_map,
         "instruction": (
             "Previous attempt had issues. See 'feedback' for "

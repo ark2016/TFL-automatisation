@@ -37,37 +37,42 @@ def test_e2e_w1w2w1w3():
 
 
 # ---------------------------------------------------------------------------
-# Test 2: task_wwvvR -> inconclusive (docs/VERDICT_POLICY.md R1/R2, §2)
+# Test 2: task_wwvvR -> non_cfl (docs/THEORY.md §2.5, docs/VERDICT_POLICY.md §2)
 #
-# The old `cfl 0.8` reference was never actually earned by the mocks: the
-# mock grammar (S -> W W V, ONE nonterminal W used twice INDEPENDENTLY)
-# generates {w1 w2 v v^R} (no requirement w1 == w2), not L = {w w v v^R}.
-# The real oracle (CYK against the task's own language_spec, not L(G))
-# refutes it with concrete counterexamples ('baaba', 'a', 'b', 'ab', 'ba', ...
-# see result["oracle_test"]["counterexamples"]) -- every string in L has
-# even length (2|w| + 2|v|), so these can never be members. The mock
-# decomposition agent fares no better: {ww} is famously not CFL, but "one
-# component of a concatenation is not CFL" is not evidence that the
-# concatenation isn't CFL either (CFL is not closed, in either direction,
-# under concatenation with a non-CFL language) -- cfl_decomposition.md's own
-# worked example (§ "Example 1") stops at exactly this point and refuses to
-# conclude cfl from it. With no artifact anywhere reaching >= bounded_pass
-# in either direction, R1/R2 make `inconclusive` the only honest verdict --
-# this used to read `cfl 0.8` only because the trust-collection bug fixed in
-# this branch (`_strongest_trust` not checking the agent's own verdict
-# direction) let a well_formed but PRO-cfl decomposition claim get silently
-# read as unrelated evidence. Determining L's true CFL status is an open
-# question outside this fix's scope; the system's job is to say so, not
-# invent an answer it never verified.
+# The OLD reference verdict here was `cfl 0.8`, and before that `inconclusive`
+# (see git history) -- neither survives docs/THEORY.md §2.5: L = {w w v v^R}
+# is honestly non-CFL, proved by intersecting with the regular language
+# R* = a(aa)*b a(aa)*b a(aa)*b a(aa)*b (all four a-blocks of ODD length).
+# On R*, the even-palindromic-suffix characterization of L collapses to
+# exactly one disjunct (i == k and j == l), so L ∩ R* = {a^i b a^j b a^i b
+# a^j b | i, j odd} -- a copy language ({ss}), proved non-CFL by pumping
+# z = a^{2p+1} b a^{2p+1} b a^{2p+1} b a^{2p+1} b (see the closure_reduction
+# mock). The mock's cfg_builder honestly fails (S -> W W V does not link the
+# two W's -- it generates a strict superset of L, refuted by the oracle on
+# 'b', 'ab', 'ba', 'baaba', none of which are in L) and decomposition
+# honestly returns inconclusive ({ww} is not a CFL component, so "L = {ww}.
+# {vv^R}" proves nothing in either direction) -- neither counts as evidence
+# either way (R1), leaving closure_reduction as the sole basis.
+#
+# closure_reduction's intersection_examples/intersection_non_examples are
+# checked against the oracle (docs/VERDICT_POLICY.md §4) and pass, so its
+# trust is `bounded_pass` (not `well_formed`) -> confidence capped at 0.85,
+# not 0.60. No contradiction: cfg_builder/decomposition never reach
+# bounded_pass, so there is no competing constructive artifact.
 # ---------------------------------------------------------------------------
 
 def test_e2e_wwvvR():
     ir = load_json("task_wwvvR.json")
     mock = MockRunner(str(MOCK_DIR), "task_wwvvR")
     result = run_pipeline(ir, mock_runner=mock)
-    assert result["verdict"] == "inconclusive"
-    assert result["confidence"] <= 0.40
-    assert result["verdict_gate"]["downgrades"]
+    assert result["verdict"] == "non_cfl"
+    # bounded_pass ceiling (docs/VERDICT_POLICY.md §2): closure_reduction's
+    # intersection examples/non-examples were confirmed by the oracle, so
+    # trust is bounded_pass (cap 0.85), not well_formed (cap 0.60).
+    assert result["confidence"] == 0.85
+    assert result["verdict_gate"]["basis_trust"] == "bounded_pass"
+    assert result["verdict_gate"]["contradiction"] is False
+    assert result["verdict_gate"]["downgrades"] == []
 
 
 # ---------------------------------------------------------------------------

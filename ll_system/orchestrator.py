@@ -120,6 +120,7 @@ class PipelineState(TypedDict):
     reasoning_output: dict
     retry_round: int
     retry_context: dict
+    verdict_gate: dict           # {basis, contradiction, downgrades, confidence_cap}
 
     # -- Accumulated --
     errors: Annotated[list, operator.add]
@@ -1161,6 +1162,303 @@ def _fallback_reasoning(state: PipelineState) -> dict:
     }
 
 
+def _agent_retry_hint(claim_verification: dict, agent_name: str) -> dict:
+    """docs/VERDICT_POLICY.md R7: per-agent retry hint carrying this round's
+    trust plus any concrete counterexamples / invalid symbols the verifier
+    already found, so the next round's specialist prompt (via
+    retry_context['hints'] -> run_specialist_node's `retry_params`) sees WHY
+    it is being retried, not just that it is."""
+    v = claim_verification.get(agent_name)
+    if not isinstance(v, dict):
+        return {"trust": "not_verified"}
+    trust = v.get("trust") or v.get("verification_status") or "not_verified"
+    hint: dict[str, Any] = {"trust": trust}
+    details = v.get("details")
+    if not isinstance(details, dict):
+        details = {}
+
+    counterexamples: list[str] = []
+    le = details.get("language_equivalence")
+    if isinstance(le, dict):
+        for key in ("mismatches", "missing_from_grammar"):
+            counterexamples.extend(w for w in (le.get(key) or []) if isinstance(w, str))
+    bwi = details.get("branch_words_instantiation")
+    if isinstance(bwi, dict):
+        for entry in bwi.get("checked") or []:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("word_1_in_l") is False and isinstance(entry.get("word_1"), str):
+                counterexamples.append(entry["word_1"])
+            if entry.get("word_2_in_l") is False and isinstance(entry.get("word_2"), str):
+                counterexamples.append(entry["word_2"])
+    if counterexamples:
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for w in counterexamples:
+            if w not in seen:
+                seen.add(w)
+                uniq.append(w)
+        hint["counterexamples"] = uniq
+
+    invalid_terminals = details.get("invalid_terminals")
+    if isinstance(invalid_terminals, list) and invalid_terminals:
+        hint["invalid_terminals"] = list(invalid_terminals)
+
+    issues = v.get("issues")
+    if isinstance(issues, list) and issues:
+        hint["issues"] = issues[:5]
+
+    return hint
+
+
+def apply_verdict_gate(state: PipelineState) -> dict:
+    """Deterministic gate (docs/VERDICT_POLICY.md §§1-3, R1-R5) applied to the
+    reasoning agent's proposed action/verdict/confidence -- mirrors
+    cfl_system.orchestrator.apply_verdict_gate. Runs right after reasoning
+    (see verdict_gate_node / build_ll_pipeline_graph), BEFORE decide_retry:
+    a done/ll (or done/not_ll) proposal that fails R1/R2's trust floor is
+    downgraded to retry when budget remains, and only falls back to
+    inconclusive once the retry budget is exhausted. Reviewer round 4: this
+    same check used to run only inside assemble_result_node, i.e. AFTER
+    decide_retry had already routed straight to formalize_node on the LLM's
+    raw (ungated) action -- a refuted constructive artifact never actually
+    got retried, it was only ever reported as inconclusive after the fact.
+
+    Every downgrade is logged into verdict_gate.downgrades (R4); a gate-
+    triggered retry gets a retry_plan with per-agent trust + counterexamples
+    in `hints` (R7) -- and an already-retry proposal from reasoning itself
+    gets the same hints attached, if it did not already carry them.
+
+    Returns {"reasoning_output": ..., "verdict_gate": ...} to merge into
+    state -- past this point, reasoning_output's action/verdict/confidence
+    reflect the gate's decision, never the LLM's raw proposal.
+    """
+    reasoning = dict(state.get("reasoning_output") or {})
+    agent_results = state.get("agent_results", {}) or {}
+    claim_verification = state.get("claim_verification", {}) or {}
+    ff_result = state.get("first_follow_result") or {}
+    retry_round = state.get("retry_round", 0)
+    budget_left = retry_round < MAX_RETRIES
+
+    action = reasoning.get("action", "done")
+    if action not in ("done", "retry"):
+        action = "done"
+
+    if action == "retry" and budget_left:
+        # R7: attach trust + counterexamples to whatever retry_plan reasoning
+        # itself proposed. Nothing to gate on verdict/confidence -- there
+        # isn't a final one yet this round.
+        retry_plan = dict(reasoning.get("retry_plan") or {})
+        agents_to_retry = retry_plan.get("agents_to_retry")
+        if isinstance(agents_to_retry, list) and agents_to_retry:
+            hints = dict(retry_plan.get("hints") or {})
+            for name in agents_to_retry:
+                if isinstance(name, str) and not (isinstance(hints.get(name), dict) and hints[name]):
+                    hints[name] = _agent_retry_hint(claim_verification, name)
+            retry_plan["hints"] = hints
+            reasoning["retry_plan"] = retry_plan
+        reasoning["action"] = "retry"
+        return {
+            "reasoning_output": reasoning,
+            "verdict_gate": {
+                "basis": [], "contradiction": False, "downgrades": [], "confidence_cap": None,
+            },
+        }
+
+    if action == "retry" and not budget_left:
+        # Reasoning wants another round but the retry budget is exhausted
+        # (retry_round >= MAX_RETRIES). decide_retry (which runs after this
+        # gate) will force "done" in that case regardless of `action`, so
+        # falling through here to the normal done/verdict gating below is
+        # required -- returning early (as the retry branch above does) would
+        # let a raw, ungated LLM verdict/confidence leak straight through
+        # assemble_result_node once decide_retry routes to formalize_node.
+        action = "done"
+
+    raw_verdict = reasoning.get("verdict")
+    verdict = _normalize_verdict(raw_verdict) or "uncertain"
+    confidence = _clamp_confidence(reasoning.get("confidence", 0.0))
+    primary_agent = reasoning.get("primary_agent", "")
+
+    def _best_trust_for(agent_names: set, expected_verdict: str) -> tuple:
+        """Strongest non-refuted trust among agents claiming `expected_verdict`,
+        plus that agent's name."""
+        best_trust, best_agent = None, None
+        for name in agent_names:
+            out = agent_results.get(name)
+            if not isinstance(out, dict) or _normalize_verdict(out.get("verdict")) != expected_verdict:
+                continue
+            t = _trust_of_agent(claim_verification, name) or "not_verified"
+            if t == "refuted":
+                continue
+            if best_agent is None or _trust_rank(t) > _trust_rank(best_trust):
+                best_trust, best_agent = t, name
+        return best_trust, best_agent
+
+    def _any_refuted(agent_names: set, expected_verdict: str) -> str | None:
+        for name in agent_names:
+            out = agent_results.get(name)
+            if not isinstance(out, dict) or _normalize_verdict(out.get("verdict")) != expected_verdict:
+                continue
+            if _trust_of_agent(claim_verification, name) == "refuted":
+                return name
+        return None
+
+    constructive_trust, constructive_agent = _best_trust_for(_CONSTRUCTIVE_AGENTS, "ll")
+    destructive_trust, destructive_agent = _best_trust_for(_DESTRUCTIVE_AGENTS, "not_ll")
+
+    if primary_agent == "first_follow_oracle" and isinstance(ff_result, dict) and ff_result.get("found"):
+        # docs/VERDICT_POLICY.md R2: the oracle only ever confirms that ONE
+        # specific candidate grammar is LL(k) -- that says nothing by itself
+        # about whether the candidate generates the TASK's language.
+        grammar_source = ff_result.get("grammar_source")
+        if grammar_source == "given_grammar":
+            # Format 2: the oracle tested the TASK's OWN grammar -- a full
+            # LL(k)-table pass on the grammar actually in question is a
+            # complete, deterministic proof: verified.
+            if constructive_trust is None or _trust_rank("verified") > _trust_rank(constructive_trust):
+                constructive_trust, constructive_agent = "verified", "first_follow_oracle"
+        elif grammar_source:
+            # Format 1: equivalence with the task's language is exactly what
+            # that agent's own claim_verification trust measures.
+            source_trust = _trust_of_agent(claim_verification, grammar_source)
+            if source_trust == "refuted":
+                pass  # constructive verdict via this grammar stays forbidden
+            elif source_trust is not None and (
+                constructive_trust is None or _trust_rank(source_trust) > _trust_rank(constructive_trust)
+            ):
+                constructive_trust, constructive_agent = source_trust, grammar_source
+
+    has_constructive = constructive_trust is not None and _trust_rank(constructive_trust) >= _TRUST_RANK["bounded_pass"]
+    has_destructive = destructive_trust is not None and _trust_rank(destructive_trust) >= _TRUST_RANK["well_formed"]
+
+    basis: list[dict] = []
+    downgrades: list[str] = []
+    confidence_cap = 0.40  # docs/VERDICT_POLICY.md §2: only-LLM self-assessment ceiling
+
+    def _apply_downgrade(reason: str, agents: list) -> None:
+        nonlocal action, verdict, confidence_cap
+        agents = [a for a in agents if a]
+        if budget_left and agents:
+            downgrades.append(f"{reason} -> retry")
+            action = "retry"
+            hints = {name: _agent_retry_hint(claim_verification, name) for name in agents}
+            reasoning["retry_plan"] = {
+                "agents_to_retry": agents,
+                "hints": hints,
+                "reason": downgrades[-1],
+            }
+        else:
+            downgrades.append(f"{reason} -> inconclusive")
+            verdict = "uncertain"
+            confidence_cap = 0.40
+
+    if verdict == "ll":
+        if has_constructive:
+            confidence_cap = 0.98 if constructive_trust == "verified" else 0.85
+            basis = [{"agent": constructive_agent, "trust": constructive_trust}]
+        else:
+            refuted_agent = _any_refuted(_CONSTRUCTIVE_AGENTS, "ll")
+            if refuted_agent:
+                # R1/R2: a refuted constructive artifact is not weak evidence
+                # for "ll", it is evidence AGAINST this specific attempt --
+                # retry that agent if there is budget left.
+                _apply_downgrade(
+                    f"reasoning proposed done/ll but {refuted_agent}'s grammar was refuted "
+                    "(docs/VERDICT_POLICY.md R2)",
+                    [refuted_agent],
+                )
+            elif constructive_agent:
+                # A constructive "ll" verdict needs trust >= bounded_pass;
+                # well_formed is structure-only (no language-equivalence
+                # oracle actually ran) and must not carry a positive "ll"
+                # verdict on its own.
+                _apply_downgrade(
+                    f"reasoning proposed done/ll with {constructive_agent}'s grammar only "
+                    "well_formed (no equivalence oracle) (docs/VERDICT_POLICY.md R2)",
+                    [constructive_agent],
+                )
+            else:
+                _apply_downgrade(
+                    "reasoning proposed done/ll with no constructive artifact at all "
+                    "(docs/VERDICT_POLICY.md R2)",
+                    list(_CONSTRUCTIVE_AGENTS),
+                )
+    elif verdict == "not_ll":
+        if has_destructive:
+            # R2: destructive not_ll by agent >= well_formed; oracle-checked
+            # words raise the ceiling from 0.60 to 0.85.
+            confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.60
+            basis = [{"agent": destructive_agent, "trust": destructive_trust}]
+        else:
+            # R1: a failed/refuted constructive attempt is never, by itself,
+            # evidence for the destructive verdict (task_grammar_filter_49
+            # precedent) -- retry the destructive agents if budget allows.
+            _apply_downgrade(
+                "reasoning proposed done/not_ll without a destructive claim >= well_formed "
+                "(docs/VERDICT_POLICY.md R1, basis: constructive_failure_only)",
+                list(_DESTRUCTIVE_AGENTS),
+            )
+
+    # R3: contradiction -- both sides clear their threshold. This is mutually
+    # exclusive with the downgrade branches above in practice (those only
+    # fire when has_constructive/has_destructive is False for the claimed
+    # side), so it never fights with an already-decided retry.
+    contradiction = has_constructive and has_destructive
+    if contradiction:
+        if _trust_rank(constructive_trust) > _trust_rank(destructive_trust):
+            verdict = "ll"
+        elif _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
+            verdict = "not_ll"
+        else:
+            verdict = "uncertain"
+        confidence_cap = 0.50
+        downgrades.append(
+            f"contradiction: constructive={constructive_agent}({constructive_trust}) vs "
+            f"destructive={destructive_agent}({destructive_trust}) -> {verdict}, "
+            "confidence <= 0.50 (docs/VERDICT_POLICY.md R3)"
+        )
+        basis = [
+            {"agent": constructive_agent, "trust": constructive_trust},
+            {"agent": destructive_agent, "trust": destructive_trust},
+        ]
+
+    confidence = min(confidence, confidence_cap)
+
+    reasoning["action"] = action
+    reasoning["verdict"] = verdict
+    reasoning["confidence"] = confidence
+
+    verdict_gate = {
+        "basis": basis,
+        "contradiction": contradiction,
+        "downgrades": downgrades,
+        "confidence_cap": confidence_cap,
+    }
+    return {"reasoning_output": reasoning, "verdict_gate": verdict_gate}
+
+
+def verdict_gate_node(state: PipelineState) -> dict:
+    """Deterministic gate (docs/VERDICT_POLICY.md) run right after reasoning,
+    mirroring cfl_system.orchestrator.verdict_gate_node. See
+    apply_verdict_gate for the rules; this node just wires it into the graph,
+    logging, before decide_retry reads the (possibly gated) action."""
+    log_msg(state, "verdict_gate_node...")
+    gate = apply_verdict_gate(state)
+    if state.get("verbose"):
+        vg = gate["verdict_gate"]
+        if vg.get("downgrades"):
+            log_msg(state, f"  downgrades: {vg['downgrades']}")
+        log_msg(
+            state,
+            f"  gated action={gate['reasoning_output'].get('action')} "
+            f"verdict={gate['reasoning_output'].get('verdict')} "
+            f"confidence={gate['reasoning_output'].get('confidence')} "
+            f"contradiction={vg.get('contradiction')}",
+        )
+    return gate
+
+
 def decide_retry(state: PipelineState) -> str:
     """Conditional edge after reasoning: done or retry."""
     reasoning = state.get("reasoning_output", {})
@@ -1202,19 +1500,23 @@ def formalize_node(state: PipelineState) -> dict:
 
     agent_results = state.get("agent_results", {})
     # Compute proof_was_verified based on the primary agent chosen by reasoning.
-    # docs/VERDICT_POLICY.md §1: `bounded_pass` is real, checked evidence too
-    # (not just the full `verified` level) — a claim reaches at least
-    # bounded_pass whenever it counts as this proof's trust basis.
+    # docs/VERDICT_POLICY.md §1/R5 (reviewer round 4): `proof_was_verified` is
+    # the formalizer's cue to write "верифицировано" -- reserve that word for
+    # a deterministic, COMPLETE check (trust == "verified": a full LL(k)-table
+    # test of the exact grammar/claim in question), not `bounded_pass` (a real
+    # but bounded/sample check) -- the renderer/formalizer distinguish
+    # "проверено полностью" from "проверено выборочно" (§5), this flag must
+    # only ever mean the former.
     claim_verification = state.get("claim_verification", {})
     primary_agent = reasoning.get("primary_agent", "")
     primary_trust = _trust_of_agent(claim_verification, primary_agent)
     if primary_agent and primary_trust is not None:
-        proof_was_verified = _trust_rank(primary_trust) >= _TRUST_RANK["bounded_pass"]
+        proof_was_verified = primary_trust == "verified"
     else:
         # No primary agent identified — fall back conservatively to any
-        # claim reaching at least bounded_pass.
+        # claim reaching the full "verified" level.
         proof_was_verified = any(
-            isinstance(v, dict) and _trust_rank(v.get("trust") or v.get("verification_status")) >= _TRUST_RANK["bounded_pass"]
+            isinstance(v, dict) and (v.get("trust") or v.get("verification_status")) == "verified"
             for v in claim_verification.values()
         )
     formalizer_input = {
@@ -1346,6 +1648,7 @@ def assemble_result_node(state: PipelineState) -> dict:
     raw_verdict = reasoning.get("verdict")
     verdict = _normalize_verdict(raw_verdict) or "uncertain"
     confidence = _clamp_confidence(reasoning.get("confidence", 0.0))
+    claim_verification = state.get("claim_verification", {})
 
     # Find best proof aligned with the final verdict.
     # Prefer primary_agent named by reasoning; fall back to set iteration.
@@ -1441,155 +1744,38 @@ def assemble_result_node(state: PipelineState) -> dict:
     # --- Verdict gate (docs/VERDICT_POLICY.md §§1-3, R1-R5) ---
     # R4: reasoning is primary, but the orchestrator checks it deterministically
     # against the trust of the underlying agent claims before trusting its
-    # confidence — this runs regardless of whether `reasoning` came from a live
-    # reasoning agent or `_fallback_reasoning`.
-    claim_verification = state.get("claim_verification", {})
+    # confidence. Reviewer round 4: this gate now runs in verdict_gate_node
+    # right after run_reasoning_node (see build_ll_pipeline_graph), BEFORE the
+    # retry/done decision, so a done/<verdict> proposal that fails R1/R2's
+    # trust floor actually gets retried (when budget remains) instead of only
+    # being reported as inconclusive after the fact. When that node has
+    # already run, `state["reasoning_output"]` is already gated and
+    # `state["verdict_gate"]` already holds its output — reuse both (note
+    # `verdict`/`confidence` above were already read from that gated
+    # reasoning_output). Only self-gate (call apply_verdict_gate again) when
+    # this function is invoked directly, e.g. in unit tests, without that
+    # node having run first — this keeps proof/grammar selection above (which
+    # reads the pre-gate verdict/primary_agent) identical to before this
+    # refactor for such direct calls.
+    if state.get("verdict_gate") is not None:
+        verdict_gate = state["verdict_gate"]
+    else:
+        # assemble_result_node is terminal (only reachable via decide_retry
+        # returning "done") -- it can never actually act on a gate-proposed
+        # retry, so force the gate's budget check to see no budget left: the
+        # self-gate fallback always resolves to done/inconclusive, exactly
+        # like this same downgrade used to behave unconditionally before
+        # this refactor, rather than nonsensically returning action="retry"
+        # from a function whose job is to assemble a FINAL result.
+        gate_state = dict(state)
+        gate_state["retry_round"] = MAX_RETRIES
+        gate = apply_verdict_gate(gate_state)
+        gated_reasoning = gate["reasoning_output"]
+        verdict = _normalize_verdict(gated_reasoning.get("verdict")) or "uncertain"
+        confidence = _clamp_confidence(gated_reasoning.get("confidence", 0.0))
+        verdict_gate = gate["verdict_gate"]
 
-    def _best_trust_for(agent_names: set[str], expected_verdict: str) -> tuple[str | None, str | None]:
-        """Strongest non-refuted trust among agents claiming `expected_verdict`,
-        plus that agent's name. Returns (None, None) only if no agent claims
-        `expected_verdict` at all — a claiming agent with no claim_verification
-        entry (verification never ran) counts as "not_verified", not as absent."""
-        best_trust, best_agent = None, None
-        for name in agent_names:
-            out = agent_results.get(name)
-            if not isinstance(out, dict) or _normalize_verdict(out.get("verdict")) != expected_verdict:
-                continue
-            t = _trust_of_agent(claim_verification, name) or "not_verified"
-            if t == "refuted":
-                continue
-            if best_agent is None or _trust_rank(t) > _trust_rank(best_trust):
-                best_trust, best_agent = t, name
-        return best_trust, best_agent
-
-    def _any_refuted(agent_names: set[str], expected_verdict: str) -> str | None:
-        for name in agent_names:
-            out = agent_results.get(name)
-            if not isinstance(out, dict) or _normalize_verdict(out.get("verdict")) != expected_verdict:
-                continue
-            if _trust_of_agent(claim_verification, name) == "refuted":
-                return name
-        return None
-
-    constructive_trust, constructive_agent = _best_trust_for(_CONSTRUCTIVE_AGENTS, "ll")
-    destructive_trust, destructive_agent = _best_trust_for(_DESTRUCTIVE_AGENTS, "not_ll")
-
-    if primary_agent == "first_follow_oracle" and isinstance(ff_result, dict) and ff_result.get("found"):
-        # docs/VERDICT_POLICY.md R2 fix (reviewer finding): the oracle only
-        # ever confirms that ONE specific candidate grammar is LL(k) — that
-        # says nothing by itself about whether the candidate generates the
-        # TASK's language. Forcing bounded_pass here regardless of the
-        # grammar's own trust let a candidate REFUTED as non-equivalent (or
-        # invented terminals outside the task alphabet) still carry a "ll"
-        # verdict at 0.85, purely because the LL(k)-table check happened to
-        # pass on that (wrong) grammar.
-        grammar_source = ff_result.get("grammar_source")
-        if grammar_source == "given_grammar":
-            # Format 2: the oracle tested the TASK's OWN grammar (not a
-            # candidate) — a full LL(k)-table pass on the grammar actually in
-            # question is a complete, deterministic proof: verified.
-            if constructive_trust is None or _trust_rank("verified") > _trust_rank(constructive_trust):
-                constructive_trust, constructive_agent = "verified", "first_follow_oracle"
-        elif grammar_source:
-            # Format 1: equivalence with the task's language is exactly what
-            # that agent's own claim_verification trust measures (bidirectional
-            # sample equivalence, or refuted/well_formed otherwise) — never
-            # substitute the LL(k)-table's structural pass for it.
-            source_trust = _trust_of_agent(claim_verification, grammar_source)
-            if source_trust == "refuted":
-                pass  # constructive verdict via this grammar stays forbidden
-            elif source_trust is not None and (
-                constructive_trust is None or _trust_rank(source_trust) > _trust_rank(constructive_trust)
-            ):
-                constructive_trust, constructive_agent = source_trust, grammar_source
-
-    has_constructive = constructive_trust is not None and _trust_rank(constructive_trust) >= _TRUST_RANK["bounded_pass"]
-    has_destructive = destructive_trust is not None and _trust_rank(destructive_trust) >= _TRUST_RANK["well_formed"]
-
-    basis: list[dict] = []
-    downgrades: list[str] = []
-    contradiction = False
-    confidence_cap = 0.40  # docs/VERDICT_POLICY.md §2: only-LLM self-assessment ceiling
-
-    if has_constructive and has_destructive:
-        # R3: contradiction — verdict goes to the strictly stronger side; a tie
-        # is inconclusive. Either way confidence <= 0.50.
-        contradiction = True
-        if _trust_rank(constructive_trust) > _trust_rank(destructive_trust):
-            verdict = "ll"
-        elif _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
-            verdict = "not_ll"
-        else:
-            verdict = "uncertain"
-        confidence_cap = 0.50
-        downgrades.append(
-            f"contradiction: constructive={constructive_agent}({constructive_trust}) vs "
-            f"destructive={destructive_agent}({destructive_trust}) -> {verdict}, "
-            "confidence <= 0.50 (docs/VERDICT_POLICY.md R3)"
-        )
-        basis = [
-            {"agent": constructive_agent, "trust": constructive_trust},
-            {"agent": destructive_agent, "trust": destructive_trust},
-        ]
-    elif verdict == "ll":
-        if has_constructive:
-            confidence_cap = 0.98 if constructive_trust == "verified" else 0.85
-            basis = [{"agent": constructive_agent, "trust": constructive_trust}]
-        else:
-            refuted_agent = _any_refuted(_CONSTRUCTIVE_AGENTS, "ll")
-            if refuted_agent:
-                # R1/R2: a refuted constructive artifact is not weak evidence
-                # for "ll", it is evidence AGAINST this specific attempt.
-                downgrades.append(
-                    f"reasoning proposed done/ll but {refuted_agent}'s grammar was refuted "
-                    "-> inconclusive (docs/VERDICT_POLICY.md R2)"
-                )
-                verdict, confidence_cap = "uncertain", 0.40
-            elif constructive_agent:
-                # docs/VERDICT_POLICY.md R2 fix (reviewer finding): a
-                # constructive "ll" verdict needs trust >= bounded_pass, same
-                # as every other system's constructive direction — well_formed
-                # is structure-only (no language-equivalence oracle actually
-                # ran) and must NOT carry a positive "ll" verdict on its own,
-                # only inconclusive (this used to cap at 0.60 and keep the
-                # "ll" verdict, which is exactly the over-promotion R2 forbids
-                # — a well_formed grammar could be for an entirely different
-                # language than the task's).
-                downgrades.append(
-                    f"reasoning proposed done/ll with {constructive_agent}'s grammar only "
-                    "well_formed (no equivalence oracle) -> inconclusive "
-                    "(docs/VERDICT_POLICY.md R2)"
-                )
-                verdict, confidence_cap = "uncertain", 0.40
-            else:
-                downgrades.append(
-                    "reasoning proposed done/ll with no constructive artifact at all "
-                    "-> inconclusive (docs/VERDICT_POLICY.md R2)"
-                )
-                verdict, confidence_cap = "uncertain", 0.40
-    elif verdict == "not_ll":
-        if has_destructive:
-            # R2: destructive not_ll by agent >= well_formed; oracle-checked
-            # words raise the ceiling from 0.60 to 0.85.
-            confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.60
-            basis = [{"agent": destructive_agent, "trust": destructive_trust}]
-        else:
-            # R1: a failed/refuted constructive attempt is never, by itself,
-            # evidence for the destructive verdict (task_grammar_filter_49 precedent).
-            downgrades.append(
-                "reasoning proposed done/not_ll without a destructive claim >= well_formed "
-                "-> inconclusive (docs/VERDICT_POLICY.md R1, basis: constructive_failure_only)"
-            )
-            verdict, confidence_cap = "uncertain", 0.40
-
-    confidence = min(confidence, confidence_cap)
-
-    verdict_gate = {
-        "basis": basis,
-        "contradiction": contradiction,
-        "downgrades": downgrades,
-        "confidence_cap": confidence_cap,
-    }
+    downgrades = verdict_gate.get("downgrades") or []
     if downgrades:
         log_msg(state, f"  verdict_gate downgrades: {downgrades}")
 
@@ -1744,6 +1930,7 @@ def build_ll_pipeline_graph() -> Any:
     graph.add_node("collect_specialists_node", collect_specialists_node)
     graph.add_node("verify_claims_node", verify_claims_node)
     graph.add_node("run_reasoning_node", run_reasoning_node)
+    graph.add_node("verdict_gate_node", verdict_gate_node)
     graph.add_node("handle_retry_node", handle_retry_node)
     graph.add_node("formalize_node", formalize_node)
     graph.add_node("assemble_result_node", assemble_result_node)
@@ -1801,9 +1988,13 @@ def build_ll_pipeline_graph() -> Any:
 
     graph.add_edge("verify_claims_node", "run_reasoning_node")
 
-    # Reasoning → retry or done
+    # Reasoning → verdict gate (docs/VERDICT_POLICY.md R1-R4, §2) → retry or done.
+    # The gate runs BEFORE the retry/done decision so a done/<verdict>
+    # proposal that fails its trust floor is downgraded to an actual retry
+    # (when budget remains), not just reported as inconclusive afterward.
+    graph.add_edge("run_reasoning_node", "verdict_gate_node")
     graph.add_conditional_edges(
-        "run_reasoning_node",
+        "verdict_gate_node",
         decide_retry,
         {
             "retry": "handle_retry_node",

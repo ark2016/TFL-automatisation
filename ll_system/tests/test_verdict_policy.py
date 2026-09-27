@@ -6,12 +6,29 @@ R1-R5 gate (§3), plus the two named TODO §1 sub-items:
   (a) the regularity shortcut reads regularity_confidence/regularity_reason
       (not confidence/reason) and never raises a less-confident heuristic to 0.95;
   (b) Format 2's given grammar is itself tested by the first/follow oracle.
+
+Reviewer round 4 (VERDICT_POLICY R4/R7/§4) adds:
+  1. The gate now runs right after reasoning (verdict_gate_node / apply_verdict_gate),
+     BEFORE the retry/done decision -- a refuted constructive artifact must
+     actually retry (budget permitting), not just report inconclusive.
+  2. A gate-triggered (or reasoning-proposed) retry_plan carries per-agent
+     trust + counterexamples in `hints` (R7).
+  3. claim_verifier's substitution step 2 (FIRST_k equality of the
+     remainders, not "common prefix >= n - k"; refutation ONLY via the oracle).
 """
 from __future__ import annotations
 
 import pytest
 
-from ll_system.orchestrator import assemble_result_node, preprocess_node, first_follow_oracle_node
+from ll_system.orchestrator import (
+    MAX_RETRIES,
+    apply_verdict_gate,
+    assemble_result_node,
+    preprocess_node,
+    first_follow_oracle_node,
+    verdict_gate_node,
+)
+from ll_system.lib.claim_verifier import verify_substitution_claim
 from ll_system.lib.preprocess import compute_preprocess_hints
 
 
@@ -476,3 +493,318 @@ class TestFirstFollowOracleDoesNotOverrideRefutedGrammar:
         result = out["result"]
         assert result["verdict"] == "ll"
         assert result["confidence"] <= 0.85
+
+
+# ---------------------------------------------------------------------------
+# Reviewer round 4, item 1 (R4) — the gate runs right after reasoning, not
+# only inside assemble_result_node: a refuted constructive artifact must
+# trigger an actual retry when budget remains, and only fall back to
+# inconclusive once the budget is exhausted.
+# ---------------------------------------------------------------------------
+
+class TestGateRunsRightAfterReasoning:
+    def _state_refuted_ll(self, retry_round: int) -> dict:
+        return _state(
+            retry_round=retry_round,
+            agent_results={
+                "ll_grammar_builder": {
+                    "verdict": "ll",
+                    "confidence": 0.9,
+                    "proof_sketch": {"method": "ll_grammar_construction", "k": 1, "grammar": {}},
+                },
+            },
+            claim_verification={
+                "ll_grammar_builder": {"trust": "refuted", "verification_status": "refuted"},
+            },
+            first_follow_result={
+                "found": True, "min_k": 1, "k": 1,
+                "grammar_source": "ll_grammar_builder",
+            },
+            reasoning_output={
+                "action": "done",
+                "verdict": "ll",
+                "confidence": 0.9,
+                "primary_agent": "first_follow_oracle",
+                "summary": "test",
+            },
+        )
+
+    def test_retries_when_budget_available(self):
+        """ll_grammar_builder refuted + ff found -> the gate must ask for a
+        retry (not immediately settle for inconclusive) while budget remains."""
+        state = self._state_refuted_ll(retry_round=0)
+        gate = apply_verdict_gate(state)
+        assert gate["reasoning_output"]["action"] == "retry"
+        assert gate["verdict_gate"]["downgrades"]
+        plan = gate["reasoning_output"]["retry_plan"]
+        assert "ll_grammar_builder" in plan["agents_to_retry"]
+
+    def test_inconclusive_once_budget_exhausted(self):
+        state = self._state_refuted_ll(retry_round=MAX_RETRIES)
+        gate = apply_verdict_gate(state)
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "uncertain"
+        assert gate["reasoning_output"]["confidence"] <= 0.40
+        assert gate["verdict_gate"]["downgrades"]
+
+    def test_full_node_downgrades_and_logs(self):
+        state = self._state_refuted_ll(retry_round=MAX_RETRIES)
+        result = verdict_gate_node(state)
+        assert result["reasoning_output"]["verdict"] == "uncertain"
+        assert result["reasoning_output"]["confidence"] <= 0.40
+        assert result["verdict_gate"]["downgrades"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: reasoning itself proposes action="retry" (not a gate-triggered
+# downgrade), but the retry budget is already exhausted (retry_round >=
+# MAX_RETRIES). decide_retry forces "done" in that case regardless of the
+# raw `action`, so the gate must fall through to the normal done/verdict
+# gating (R1-R3 + confidence caps) instead of returning the ungated
+# verdict/confidence unchanged (which would then leak straight through
+# assemble_result_node once decide_retry routes to formalize_node).
+# ---------------------------------------------------------------------------
+
+class TestReasoningProposedRetryAtExhaustedBudget:
+    def _state_reasoning_retry(self, verdict: str, agent_verdict: str) -> dict:
+        """A refuted constructive artifact (ll_grammar_builder) plus a
+        reasoning output that itself asks for a retry with a confident
+        verdict already attached -- as an LLM output plausibly would."""
+        return _state(
+            retry_round=MAX_RETRIES,
+            agent_results={
+                "ll_grammar_builder": {
+                    "verdict": agent_verdict,
+                    "confidence": 0.9,
+                    "proof_sketch": {"method": "ll_grammar_construction", "k": 1, "grammar": {}},
+                },
+            },
+            claim_verification={
+                "ll_grammar_builder": {"trust": "refuted", "verification_status": "refuted"},
+            },
+            reasoning_output={
+                "action": "retry",
+                "verdict": verdict,
+                "confidence": 0.95,
+                "primary_agent": "ll_grammar_builder",
+                "summary": "test",
+            },
+        )
+
+    def test_retry_ll_at_exhausted_budget_downgrades_to_uncertain(self):
+        state = self._state_reasoning_retry(verdict="ll", agent_verdict="ll")
+        gate = apply_verdict_gate(state)
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "uncertain"
+        assert gate["reasoning_output"]["confidence"] <= 0.40
+        assert gate["verdict_gate"]["downgrades"]
+
+    def test_retry_not_ll_at_exhausted_budget_downgrades_to_uncertain(self):
+        state = self._state_reasoning_retry(verdict="not_ll", agent_verdict="not_ll")
+        gate = apply_verdict_gate(state)
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "uncertain"
+        assert gate["reasoning_output"]["confidence"] <= 0.40
+        assert gate["verdict_gate"]["downgrades"]
+
+    def test_retry_with_budget_left_still_returns_retry_ungated(self):
+        """Sanity check: with budget remaining, reasoning's own retry
+        proposal is still honored as-is (not forced through done gating)."""
+        state = self._state_reasoning_retry(verdict="ll", agent_verdict="ll")
+        state["retry_round"] = 0
+        gate = apply_verdict_gate(state)
+        assert gate["reasoning_output"]["action"] == "retry"
+
+
+# ---------------------------------------------------------------------------
+# Reviewer round 4, item 2 (R7) — retry_plan carries per-agent trust and
+# counterexamples in `hints`.
+# ---------------------------------------------------------------------------
+
+class TestRetryPlanCarriesTrustAndCounterexamples:
+    def test_gate_triggered_retry_hints_include_mismatched_words(self):
+        state = _state(
+            retry_round=0,
+            agent_results={
+                "ll_grammar_builder": {
+                    "verdict": "ll",
+                    "confidence": 0.9,
+                    "proof_sketch": {"method": "ll_grammar_construction", "k": 1, "grammar": {}},
+                },
+            },
+            claim_verification={
+                "ll_grammar_builder": {
+                    "trust": "refuted",
+                    "verification_status": "refuted",
+                    "issues": ["grammar does not generate the task language"],
+                    "details": {
+                        "language_equivalence": {"mismatches": ["ab", "aabb"]},
+                    },
+                },
+            },
+            reasoning_output={
+                "action": "done",
+                "verdict": "ll",
+                "confidence": 0.9,
+                "primary_agent": "ll_grammar_builder",
+                "summary": "test",
+            },
+        )
+        gate = apply_verdict_gate(state)
+        plan = gate["reasoning_output"]["retry_plan"]
+        hint = plan["hints"]["ll_grammar_builder"]
+        assert hint["trust"] == "refuted"
+        assert "ab" in hint["counterexamples"]
+        assert "aabb" in hint["counterexamples"]
+
+    def test_reasoning_proposed_retry_also_gets_hints_attached(self):
+        """Even when reasoning itself already proposed a retry (not a
+        gate-triggered downgrade), the gate fills in missing hints (R7) so
+        the next round's specialist prompt sees the counterexamples too."""
+        state = _state(
+            retry_round=0,
+            claim_verification={
+                "substitution_agent": {
+                    "trust": "refuted",
+                    "verification_status": "refuted",
+                    "details": {
+                        "branch_words_instantiation": {
+                            "checked": [
+                                {
+                                    "k": 1, "word_1": "aab", "word_1_in_l": False,
+                                    "word_2": "aac", "word_2_in_l": True,
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+            reasoning_output={
+                "action": "retry",
+                "verdict": None,
+                "confidence": 0.2,
+                "retry_plan": {"agents_to_retry": ["substitution_agent"]},
+                "summary": "test",
+            },
+        )
+        gate = apply_verdict_gate(state)
+        hint = gate["reasoning_output"]["retry_plan"]["hints"]["substitution_agent"]
+        assert hint["trust"] == "refuted"
+        assert "aab" in hint["counterexamples"]
+
+
+# ---------------------------------------------------------------------------
+# Reviewer round 4, item 3 — claim_verifier substitution step 2: bounded_pass
+# requires oracle membership AND FIRST_k equality of the remainders after the
+# common prefix (not "common prefix >= n - k"); refutation is ONLY an oracle
+# counterexample; a short common run is well_formed, not refuted.
+# ---------------------------------------------------------------------------
+
+_ANBN_ANCN_IR = {
+    "task_type": "ll_check_language",
+    "source_text": "test",
+    "language_spec": {
+        "kind": "grammar",
+        "nonterminals": ["S", "A", "B"],
+        "terminals": ["a", "b", "c"],
+        "start": "S",
+        "rules": [
+            {"lhs": "S", "rhs": ["A"]},
+            {"lhs": "S", "rhs": ["B"]},
+            {"lhs": "A", "rhs": ["a", "A", "b"]},
+            {"lhs": "A", "rhs": ["a", "b"]},
+            {"lhs": "B", "rhs": ["a", "B", "c"]},
+            {"lhs": "B", "rhs": ["a", "c"]},
+        ],
+    },
+}
+
+# Trivial L = (a|b|c)* -- used for the "short common prefix" scenario, where
+# both instantiated words are (trivially) in L but diverge immediately, well
+# before the claimed branch point at n - k.
+_ALL_STRINGS_IR = {
+    "task_type": "ll_check_language",
+    "source_text": "test",
+    "language_spec": {
+        "kind": "grammar",
+        "nonterminals": ["S"],
+        "terminals": ["a", "b", "c"],
+        "start": "S",
+        "rules": [
+            {"lhs": "S", "rhs": ["a", "S"]},
+            {"lhs": "S", "rhs": ["b", "S"]},
+            {"lhs": "S", "rhs": ["c", "S"]},
+            {"lhs": "S", "rhs": []},
+        ],
+    },
+}
+
+
+def _substitution_proof_sketch(word_1: str, word_2: str) -> dict:
+    return {
+        "method": "substitution",
+        "for_all_k": True,
+        "branch_words": {
+            "common_prefix": "a^j",
+            "word_1": word_1,
+            "word_2": word_2,
+            "lookahead_equal_because": "shared a-run",
+        },
+        "common_form_argument": "x",
+        "deciding_nonterminal_argument": "x",
+        "pigeonhole_argument": "x",
+        "proof_explanation": "x",
+    }
+
+
+class TestSubstitutionStep2FirstKEquality:
+    def test_correct_branch_words_give_bounded_pass(self):
+        """word_1/word_2 instantiated at n = k+2 for k in {1, 2}: both in L,
+        and FIRST_k of the remainders after the branch point are equal."""
+        out = verify_substitution_claim(
+            _substitution_proof_sketch("a^n b^n", "a^n c^n"), _ANBN_ANCN_IR,
+        )
+        assert out["trust"] == "bounded_pass"
+
+    def test_word_not_in_language_is_refuted(self):
+        """A branch_words word that the oracle rejects refutes the claim --
+        the only refutation trigger this step recognizes."""
+        out = verify_substitution_claim(
+            _substitution_proof_sketch("a^n b^n", "a^n c^(n+1)"), _ANBN_ANCN_IR,
+        )
+        assert out["trust"] == "refuted"
+
+    def test_short_common_prefix_is_well_formed_not_refuted(self):
+        """Both words are (trivially) in L, but they diverge immediately --
+        far short of the claimed branch point at n - k. Insufficient data to
+        confirm the FIRST_k-equality claim is well_formed, never refuted."""
+        out = verify_substitution_claim(
+            _substitution_proof_sketch("a^n b^n", "b^n a^n"), _ALL_STRINGS_IR,
+        )
+        assert out["trust"] == "well_formed"
+
+    def test_constant_tail_confirmed_only_at_one_k_is_not_bounded_pass(self):
+        """'a^3 b^1'/'a^3 c^1': the tail is a constant unrelated to n, and
+        the literal-prefix check only happens to confirm at k=1 (at k=2 the
+        window straddles the divergence and 'ab' != 'ac'). Requiring *all*
+        instantiated k (not just any) means this must never reach
+        bounded_pass -- it must not stay 'll' at full confidence through the
+        gate either way it resolves (well_formed or refuted, never
+        bounded_pass)."""
+        out = verify_substitution_claim(
+            _substitution_proof_sketch("a^3 b^1", "a^3 c^1"), _ANBN_ANCN_IR,
+        )
+        assert out["trust"] != "bounded_pass"
+
+    def test_tail_not_depending_on_n_is_never_bounded_pass_even_on_sigma_star(self):
+        """'a^n b^1'/'a^n c^1' on Sigma* (regular, LL(1)): both instantiated
+        words are trivially in L (everything is), and the literal window
+        happens to fall entirely inside the shared a-run for every k, so the
+        old any-k / literal-prefix-only check wrongly reached bounded_pass
+        (docs/VERDICT_POLICY.md §4). The tail ('b^1'/'c^1') does not depend
+        on n at all, so this can never be a valid branch-point witness --
+        must stay well_formed."""
+        out = verify_substitution_claim(
+            _substitution_proof_sketch("a^n b^1", "a^n c^1"), _ALL_STRINGS_IR,
+        )
+        assert out["trust"] == "well_formed"
