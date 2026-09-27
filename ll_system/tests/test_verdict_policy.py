@@ -662,6 +662,89 @@ class TestReasoningProposedRetryAtExhaustedBudget:
 
 
 # ---------------------------------------------------------------------------
+# Cost ceiling (config.MAX_CALLS_PER_AGENT): apply_verdict_gate must not hand
+# a fully-capped agent back for another wasted graph round -- neither via the
+# reasoning agent's own retry_plan, nor via a gate-triggered _apply_downgrade.
+# ---------------------------------------------------------------------------
+
+class TestApplyVerdictGateRespectsCallCap:
+    def _capped(self, agent: str) -> list[tuple[str, dict]]:
+        return [(agent, {"agent": agent, "status": "success"})] * MAX_CALLS_PER_AGENT
+
+    def test_reasoning_proposed_retry_of_a_fully_capped_agent_falls_through_to_done(self):
+        """Budget IS left (retry_round=0), but the only agent reasoning
+        named is already at its call cap -- must not be honored as
+        action=='retry' (handle_retry_node would otherwise reinterpret the
+        resulting empty agents_to_retry as "retry everything"); falls
+        through to the normal done/verdict gating instead, and the
+        exclusion is recorded for verdict_gate.downgrades."""
+        state = _state(
+            retry_round=0,
+            specialist_outputs=self._capped("ll_grammar_builder"),
+            reasoning_output={
+                "action": "retry",
+                "retry_plan": {"agents_to_retry": ["ll_grammar_builder"], "hints": {}},
+                "summary": "test",
+            },
+        )
+        gate = apply_verdict_gate(state)
+
+        assert gate["reasoning_output"]["action"] == "done"
+        notes = " ".join(gate["verdict_gate"]["downgrades"])
+        assert "ll_grammar_builder" in notes and "call cap reached" in notes
+
+    def test_reasoning_proposed_retry_keeps_the_non_capped_agent(self):
+        """Only the capped agent is dropped from reasoning's own retry_plan
+        -- a co-proposed agent still under budget is retried normally."""
+        state = _state(
+            retry_round=0,
+            specialist_outputs=self._capped("ll_grammar_builder"),
+            reasoning_output={
+                "action": "retry",
+                "retry_plan": {
+                    "agents_to_retry": ["ll_grammar_builder", "substitution_agent"],
+                    "hints": {},
+                },
+                "summary": "test",
+            },
+        )
+        gate = apply_verdict_gate(state)
+
+        assert gate["reasoning_output"]["action"] == "retry"
+        agents = gate["reasoning_output"]["retry_plan"]["agents_to_retry"]
+        assert agents == ["substitution_agent"]
+        assert any("ll_grammar_builder" in n for n in gate["verdict_gate"]["downgrades"])
+
+    def test_apply_downgrade_with_every_candidate_agent_capped_ends_retries(self):
+        """`reasoning` proposed done/ll with no constructive artifact at
+        all -- normally `_apply_downgrade` retries every constructive
+        agent (budget permitting); with ALL of them already at their call
+        cap, it must fall to the same "no retry left" treatment as a
+        budget-exhausted gate instead, not spend a round retrying nothing
+        new."""
+        state = _state(
+            retry_round=0,
+            specialist_outputs=(
+                self._capped("ll_grammar_builder")
+                + self._capped("marker_analyzer")
+                + self._capped("grammar_transformer")
+            ),
+            reasoning_output={
+                "action": "done", "verdict": "ll", "confidence": 0.9,
+                "primary_agent": "", "summary": "test",
+            },
+        )
+        gate = apply_verdict_gate(state)
+
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "uncertain"
+        notes = " ".join(gate["verdict_gate"]["downgrades"])
+        assert "call cap reached" in notes
+        for agent in ("ll_grammar_builder", "marker_analyzer", "grammar_transformer"):
+            assert agent in notes
+
+
+# ---------------------------------------------------------------------------
 # R4' — retry budget exhausted: the gate picks the strongest admissible
 # basis instead of defaulting straight to `uncertain`. Precedent: live-run
 # eval 2026-09-27, cfl-07/cfl-12 ended `failure 0.0` despite a well_formed

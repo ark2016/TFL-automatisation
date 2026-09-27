@@ -850,6 +850,45 @@ def _normalize_retry_hints(hints_raw: Any) -> dict:
     return {}
 
 
+def _normalize_morphism_mapping(out: dict | None) -> dict | None:
+    """Normalize ``morphism``'s ``evidence.morphism.mapping`` back to the
+    ``{symbol: image}`` dict every worked example in ``cfl_morphism.md`` and
+    every consumer downstream (the renderer's generic evidence panel)
+    expects, immediately after parsing -- same idea as
+    ``_normalize_retry_hints`` for ``reasoning``/``retry_planner``'s
+    ``hints``.
+
+    A genuine ``output_config.format`` call now produces an **array** of
+    ``{"symbol": ..., "image": ...}`` objects instead (see
+    ``cfl_system.lib.agent_output_schema._MORPHISM_MAPPING_SCHEMA``'s
+    docstring for why: ``additionalProperties: false`` can't leave open a
+    key set that varies per task, so the mapping had no schema at all until
+    it was remodelled as an array of a fixed shape). The legacy
+    prose-extraction fallback path (no schema) still produces the ``{symbol:
+    image}`` dict shape unchanged, so this only touches the array shape;
+    anything else (missing/not-a-dict `evidence`, `evidence.morphism`,
+    or `mapping`, or a list entry missing `symbol`/`image`) is left alone
+    rather than raising -- the LLM may still emit malformed JSON via the
+    legacy path, same as before this normalization existed."""
+    if not isinstance(out, dict):
+        return out
+    evidence = out.get("evidence")
+    if not isinstance(evidence, dict):
+        return out
+    morphism = evidence.get("morphism")
+    if not isinstance(morphism, dict):
+        return out
+    mapping = morphism.get("mapping")
+    if not isinstance(mapping, list):
+        return out
+    morphism["mapping"] = {
+        item["symbol"]: item["image"] for item in mapping
+        if isinstance(item, dict) and isinstance(item.get("symbol"), str)
+        and isinstance(item.get("image"), str)
+    }
+    return out
+
+
 def _normalize_claim_verification(raw: dict | None) -> dict:
     """Normalize claim_verification for the reasoning agent prompt.
 
@@ -1624,6 +1663,8 @@ def run_specialist_node(state: PipelineState) -> dict:
     log_msg(state, f"  specialist: {agent_name}...")
     inp = _build_specialist_input(state, agent_name)
     out = _run_agent(state, agent_name, inp)
+    if agent_name == "morphism":
+        out = _normalize_morphism_mapping(out)
 
     # Treat agent_error as a failed run — emit None marker so collect
     # can drop previous stale results for this agent on retry. Also
@@ -2144,6 +2185,32 @@ def run_retry_planner_node(state: PipelineState) -> dict:
             log_msg(state, f"  WARNING: unknown agents in retry list: {invalid}")
         agents_to_retry = valid_agents
 
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): an agent already at its call
+    # cap must not be handed back to run_specialist_node only to be silently
+    # skipped there (a wasted graph round: dispatch, fan-out, fan-in, all for
+    # zero new specialist output) -- filter it out of the retry plan itself,
+    # counted the same way run_specialist_node counts it (from the full,
+    # never-reset `specialist_outputs` history). A plan made ENTIRELY of
+    # capped agents becomes an empty plan, which the terminal check below
+    # already treats as "give up". Each dropped agent is noted for
+    # verdict_gate.downgrades, same as a cap hit inside run_specialist_node.
+    call_cap_notes: list[str] = []
+    if isinstance(agents_to_retry, list) and agents_to_retry:
+        specialist_outputs = state.get("specialist_outputs", [])
+        filtered_agents = []
+        for a in agents_to_retry:
+            prior = sum(1 for n, _ in specialist_outputs if n == a)
+            if prior >= MAX_CALLS_PER_AGENT:
+                call_cap_notes.append(
+                    f"agent {a} call cap reached ({MAX_CALLS_PER_AGENT} calls), "
+                    "excluded from retry plan"
+                )
+            else:
+                filtered_agents.append(a)
+        if call_cap_notes:
+            log_msg(state, f"  retry_planner: capped, excluded from retry: {call_cap_notes}")
+        agents_to_retry = filtered_agents
+
     # Terminal condition: planner returns empty retry list, max_retries_remaining<=0,
     # OR retry_round will exceed MAX_RETRIES, and no USABLE inversion requested → give up.
     # An inversion is usable only if we haven't already exhausted MAX_INVERSIONS.
@@ -2161,7 +2228,7 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         f"should_invert={should_invert}, terminal={terminal}",
     )
 
-    return {
+    result = {
         "agents_to_retry": agents_to_retry,
         "retry_params": hints,
         "retry_round": next_round,
@@ -2172,6 +2239,9 @@ def run_retry_planner_node(state: PipelineState) -> dict:
             "terminal": terminal,
         },
     }
+    if call_cap_notes:
+        result["call_cap_notes"] = call_cap_notes
+    return result
 
 
 def decide_after_retry_planner(state: PipelineState) -> str:

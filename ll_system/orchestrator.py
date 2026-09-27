@@ -1268,26 +1268,72 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     if action not in ("done", "retry"):
         action = "done"
 
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): shared by every retry
+    # proposal below (the reasoning agent's own retry_plan just here, and
+    # every _apply_downgrade call further down) -- an agent already at its
+    # call cap must not be handed back to run_specialist_node only to be
+    # silently skipped there, counted the same way run_specialist_node
+    # counts it (from the full, never-reset `specialist_outputs` history).
+    # `downgrades` is declared here (not at its original spot further down)
+    # so this early branch can record cap exclusions into the same list the
+    # rest of this function's downgrades end up in.
+    specialist_outputs = state.get("specialist_outputs", [])
+    downgrades: list[str] = []
+
+    def _prior_calls(agent_name: str) -> int:
+        return sum(1 for n, _ in specialist_outputs if n == agent_name)
+
+    def _filter_capped(agents: list) -> list:
+        """`agents` with any already-capped one dropped (noted in
+        `downgrades`)."""
+        kept = []
+        for a in agents:
+            if _prior_calls(a) >= MAX_CALLS_PER_AGENT:
+                downgrades.append(
+                    f"agent {a} call cap reached ({MAX_CALLS_PER_AGENT} calls), "
+                    "excluded from retry plan"
+                )
+            else:
+                kept.append(a)
+        return kept
+
     if action == "retry" and budget_left:
         # R7: attach trust + counterexamples to whatever retry_plan reasoning
         # itself proposed. Nothing to gate on verdict/confidence -- there
         # isn't a final one yet this round.
         retry_plan = dict(reasoning.get("retry_plan") or {})
         agents_to_retry = retry_plan.get("agents_to_retry")
-        if isinstance(agents_to_retry, list) and agents_to_retry:
-            hints = dict(retry_plan.get("hints") or {})
-            for name in agents_to_retry:
-                if isinstance(name, str) and not (isinstance(hints.get(name), dict) and hints[name]):
-                    hints[name] = _agent_retry_hint(claim_verification, name)
-            retry_plan["hints"] = hints
-            reasoning["retry_plan"] = retry_plan
-        reasoning["action"] = "retry"
-        return {
-            "reasoning_output": reasoning,
-            "verdict_gate": {
-                "basis": [], "contradiction": False, "downgrades": [], "confidence_cap": None,
-            },
-        }
+        named_agents = isinstance(agents_to_retry, list) and bool(agents_to_retry)
+        if named_agents:
+            agents_to_retry = _filter_capped(agents_to_retry)
+
+        if not named_agents or agents_to_retry:
+            # Either the planner named no specific agents (retry everything
+            # -- unaffected by the cap check) or at least one named agent
+            # survived the cap filter.
+            if named_agents:
+                hints = dict(retry_plan.get("hints") or {})
+                for name in agents_to_retry:
+                    if isinstance(name, str) and not (isinstance(hints.get(name), dict) and hints[name]):
+                        hints[name] = _agent_retry_hint(claim_verification, name)
+                retry_plan["hints"] = hints
+                retry_plan["agents_to_retry"] = agents_to_retry
+                reasoning["retry_plan"] = retry_plan
+            reasoning["action"] = "retry"
+            return {
+                "reasoning_output": reasoning,
+                "verdict_gate": {
+                    "basis": [], "contradiction": False, "downgrades": downgrades,
+                    "confidence_cap": None,
+                },
+            }
+        # Every explicitly named agent was already at its call cap -- fall
+        # through to the normal done/verdict gating below (same as the
+        # budget-exhausted case) instead of retrying a now-explicitly-empty
+        # list, which handle_retry_node would otherwise silently
+        # reinterpret as "retry everything"
+        # (`agents_to_retry or list(LL_SPECIALIST_NAMES)`).
+        action = "done"
 
     if action == "retry" and not budget_left:
         # Reasoning wants another round but the retry budget is exhausted
@@ -1357,12 +1403,20 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     has_destructive = destructive_trust is not None and _trust_rank(destructive_trust) >= _TRUST_RANK["well_formed"]
 
     basis: list[dict] = []
-    downgrades: list[str] = []
+    # `downgrades` was already declared above (shared with the early
+    # retry-proposal branch's cap-exclusion notes) -- not reinitialized here.
     confidence_cap = 0.40  # docs/VERDICT_POLICY.md §2: only-LLM self-assessment ceiling
 
     def _apply_downgrade(reason: str, agents: list) -> None:
         nonlocal action, verdict, confidence_cap
         agents = [a for a in agents if a]
+        # Cost ceiling (config.MAX_CALLS_PER_AGENT): drop any agent already
+        # at its call cap from this retry proposal -- if that empties
+        # `agents` entirely, the branch below naturally falls to the "no
+        # retry" else (same treatment as retry budget exhausted: pick the
+        # strongest admissible basis instead of spending a graph round on a
+        # dispatch that would produce no new specialist output).
+        agents = _filter_capped(agents)
         if budget_left and agents:
             downgrades.append(f"{reason} -> retry")
             action = "retry"

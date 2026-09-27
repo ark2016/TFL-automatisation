@@ -1182,6 +1182,16 @@ def run_retry_planner_node(state: PipelineState) -> dict:
     `MAX_INVERSIONS`), and an explicitly EMPTY `agents_to_retry` is a
     terminal decision (nothing more to run) -- never silently re-read as
     "no preference, retry everything" (`decide_after_retry_planner`).
+
+    Cost ceiling (config.MAX_CALLS_PER_AGENT): any agent the planner names
+    that has already used up its call budget is dropped from
+    `agents_to_retry` right here, not left for `run_specialist_node` to
+    silently no-op on -- a plan made ENTIRELY of capped agents becomes an
+    empty plan, which is the terminal case above, instead of spending a
+    whole extra graph round (dispatch + fan-out + fan-in) for zero new
+    specialist output. Each dropped agent is noted in `call_cap_notes` for
+    `verdict_gate.downgrades`, same as a cap hit inside
+    `run_specialist_node` itself.
     """
     reasoning_output = state.get("reasoning_output")
     r_ev = (reasoning_output or {}).get("evidence", reasoning_output or {})
@@ -1273,9 +1283,31 @@ def run_retry_planner_node(state: PipelineState) -> dict:
     feedback_map = p_ev.get("feedback", {})
     skip_agents = set(p_ev.get("skip_agents", []))
 
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): an agent already at its call
+    # cap must not be handed back to run_specialist_node only to be silently
+    # skipped there (a wasted graph round: dispatch, fan-out, fan-in, all for
+    # zero new specialist output) -- filter it out of the retry plan itself,
+    # counted the same way run_specialist_node counts it (from the full,
+    # never-reset `specialist_outputs` history), and note the exclusion for
+    # verdict_gate.downgrades the same way a cap hit inside
+    # run_specialist_node already does.
+    capped_notes = []
+    filtered_retry = []
+    for a in requested_retry:
+        prior = sum(1 for n, _ in state.get("specialist_outputs", []) if n == a)
+        if prior >= MAX_CALLS_PER_AGENT:
+            capped_notes.append(
+                f"agent {a} call cap reached ({MAX_CALLS_PER_AGENT} calls), "
+                "excluded from retry plan"
+            )
+        else:
+            filtered_retry.append(a)
+    requested_retry = filtered_retry
+
     log_msg(
         state,
-        f"  retry_planner: retry {requested_retry}, skip {list(skip_agents)}",
+        f"  retry_planner: retry {requested_retry}, skip {list(skip_agents)}"
+        + (f", capped {capped_notes}" if capped_notes else ""),
     )
 
     all_names = set(dispatched) | set(requested_retry)
@@ -1306,6 +1338,8 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         # configured").
         "retry_plan": {"should_invert": False, "has_retry": bool(requested_retry)},
     }
+    if capped_notes:
+        result["call_cap_notes"] = capped_notes
     if err_msgs:
         result["errors"] = err_msgs
     return result

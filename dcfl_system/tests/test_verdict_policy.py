@@ -198,16 +198,30 @@ def _nerode_proof(distinguishing_suffix: str) -> dict:
     return {
         "kind": "shallit",
         "technique": "nerode_classes",
-        "dead_class_finite": "D is empty",
+        "dead_class_status": "empty",
         "distinguishing_suffix": distinguishing_suffix,
         "separation_argument": "uw in L, vw not in L",
         "argument": "by contrapositive of Theorem 4.7.4",
     }
 
 
+def _bypass_dead_class_check(monkeypatch):
+    """These tests are about the REPRESENTATIVE-PAIR separation logic only
+    (root docstring: "only the step-2 PLUMBING ... is under test, not the
+    truth of any theorem about this toy language") -- ANBN_TASK_IR's REAL
+    dead class is actually infinite (e.g. 'ba' never continues into
+    a^n b^n), which the mandatory oracle-based dead_class_status check
+    (VERDICT_POLICY.md §4) would otherwise (correctly) refute regardless of
+    the pair-separation outcome under test here. That check has its own
+    dedicated tests below; bypass it here so it doesn't shadow the
+    pair-separation behavior these tests target."""
+    monkeypatch.setattr(ov, "_check_dead_class_finite", lambda *a, **k: (None, None, []))
+
+
 def test_shallit_nerode_semantic_check_bounded_pass(monkeypatch):
     # 'ab' (+'b' -> 'abb', not in L) and 'aab' (+'b' -> 'aabb', in L):
     # a real, oracle-checked separation on two concrete words.
+    _bypass_dead_class_check(monkeypatch)
     monkeypatch.setattr(
         ov, "sample_words",
         lambda ir, count=10, max_len=12: [
@@ -233,6 +247,7 @@ def test_shallit_nerode_semantic_check_not_refuted_by_unrelated_random_words(mon
     # at well_formed rather than being falsely "refuted" (was the bug this
     # test used to lock in; see VERDICT_POLICY.md §4 and the reviewer note
     # on oracle_verifier.py in the verdict-gate branch).
+    _bypass_dead_class_check(monkeypatch)
     monkeypatch.setattr(
         ov, "sample_words",
         lambda ir, count=10, max_len=12: [
@@ -252,6 +267,7 @@ def test_shallit_nerode_semantic_check_refuted_by_own_representative_pairs(monke
     # When the proof DOES supply concrete representative_pairs (its general
     # argument instantiated at a chosen n), a suffix that fails to separate
     # THAT pair is a genuine refutation (docs/VERDICT_POLICY.md §4).
+    _bypass_dead_class_check(monkeypatch)
     proof = _nerode_proof("b")
     proof["representative_pairs"] = [{"u": "ab", "v": "aabb"}]
     agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
@@ -262,10 +278,11 @@ def test_shallit_nerode_semantic_check_refuted_by_own_representative_pairs(monke
     assert "representative pair" in entry["issues"][0]
 
 
-def test_shallit_nerode_semantic_check_skipped_for_parametric_suffix():
+def test_shallit_nerode_semantic_check_skipped_for_parametric_suffix(monkeypatch):
     # Realistic prose (as in dcfl_system/examples/mock) — contains symbols
     # outside the alphabet (letters, spaces, '^') -- must not be
     # mechanically instantiated; trust stays well_formed.
+    _bypass_dead_class_check(monkeypatch)
     proof = _nerode_proof("w = b a^N b u^R")
     agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, ANBN_TASK_IR)
@@ -273,22 +290,24 @@ def test_shallit_nerode_semantic_check_skipped_for_parametric_suffix():
 
 
 def test_shallit_nerode_semantic_check_refuted_when_dead_class_finite_is_false(monkeypatch):
-    # The proof CLAIMS dead_class_finite ("D is empty"), but for a^n b^n the
-    # dead class is actually infinite ('ba' and every word outside a*b* can
-    # never be continued into L) -- the bounded, exhaustive dead-class
+    # The proof CLAIMS dead_class_status "empty", but for a^n b^n the dead
+    # class is actually infinite ('b', 'ba' and every word outside a*b* can
+    # never be continued into L) -- the mandatory, exhaustive dead-class
     # search (VERDICT_POLICY.md §4) must catch this and refute the whole
     # nerode_classes proof, even though the separating pair it also supplies
-    # is perfectly real.
-    proof = _nerode_proof("b")
-    proof["dead_class_finite"] = "D is empty (FALSE for a^n b^n -- e.g. 'ba' is dead)"
+    # is perfectly real. Unlike the plumbing tests above, this one does NOT
+    # bypass the dead-class check -- it is the dedicated test for it.
+    proof = _nerode_proof("b")  # dead_class_status: "empty" (FALSE for a^n b^n)
     proof["representative_pairs"] = [{"u": "ab", "v": "aab"}]
     agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, ANBN_TASK_IR)
     entry = result["shallit"]
     assert entry["verification_status"] == "refuted"
     assert entry["trust"] == "refuted"
-    assert "dead_class_finite" in entry["issues"][0]
-    assert "'ba'" in entry["issues"][0]
+    assert "dead_class_status" in entry["issues"][0]
+    # the shortest dead word the exhaustive enumeration hits first (a bare
+    # 'b' can never gain a matching 'a' before it) -- not necessarily 'ba'.
+    assert "'b'" in entry["issues"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -474,11 +493,12 @@ def test_shallit_nerode_exam02_style_language_bounded_pass(monkeypatch):
         ],
     )
     task_ir = {"input_format": "set_builder", "alphabet": ["a", "b"], "language_spec": {}}
+    # dead_class_status: "empty" (via _nerode_proof) is TRUE here -- any
+    # word extends into L2 by appending one more 'a' (v a b^r -> v a b^r a)
+    # -- so the mandatory oracle-based dead-class check finds no
+    # contradiction and this exercises the (unbypassed) representative-pair
+    # logic for real.
     proof = _nerode_proof("b")
-    proof["dead_class_finite"] = (
-        "any word extends into L2 by appending one more 'a' "
-        "(v a b^r -> v a b^r a), so D is empty"
-    )
     proof["representative_pairs"] = [{"u": "a", "v": "aa"}]
     agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, task_ir)
@@ -1027,7 +1047,7 @@ def _minimal_result(oracle_entry: dict, verdict: str = "non_dcfl", proof_method:
         {
             "kind": "shallit",
             "technique": "nerode_classes",
-            "dead_class_finite": "D is empty",
+            "dead_class_status": "empty",
             "derived_language": "L2 = {...}",
         }
     )
@@ -1081,7 +1101,7 @@ def test_markdown_and_html_render_new_contract_fields_not_ignored():
     nerode = _minimal_result({"trust": "bounded_pass"}, proof_method="shallit")
     for field_value, result in (
         ("cond1", pumping), ("cond2", pumping),
-        ("D is empty", nerode), ("L2 = {...}", nerode),
+        ("empty", nerode), ("L2 = {...}", nerode),
     ):
         md = render_markdown(result)
         html = render_html(result)

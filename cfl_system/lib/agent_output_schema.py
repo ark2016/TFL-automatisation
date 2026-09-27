@@ -29,11 +29,24 @@ multipliers *every* proof instantiates, per ``cfl_pumping.md`` /
 ``cfl_ogden.md``'s own "## Word choice strategies" — not a value chosen
 per-task), and ``lib/claim_verifier.py``'s semantic check reads them the
 same fixed way (``for p in {3, 4}``) — so both now get a real, closed
-schema below. ``morphism`` keeps no entry (``schema_for`` returns ``None``,
-same as ``input_parser``): its ``evidence.morphism.mapping`` really is
-keyed by the language's own alphabet symbols, which differ per task and
-can't be enumerated — ``additionalProperties: false`` would forbid the
-very keys the model needs to emit.
+schema below.
+
+``morphism`` was, for the same reason, also believed dynamically-keyed
+(``evidence.morphism.mapping``, keyed by the language's own alphabet
+symbols, which really do differ per task and can't be enumerated in a
+closed schema) and kept no entry at all (``schema_for`` returned ``None``,
+same as ``input_parser``). Same fix as the retry-hint map below: model the
+mapping as an **array** of ``{"symbol": ..., "image": ...}`` objects
+(``_MORPHISM_MAPPING_SCHEMA``) instead of an object keyed by the symbols
+themselves — one shared, closed item schema, no per-task keys to
+enumerate. This changes what a genuine ``output_config.format`` call
+produces (an array) from what the prompt's own "## Output Format"
+documents and what the legacy prose-extraction fallback path still
+produces (a ``{symbol: image}`` object) — same tradeoff as the retry-hint
+map, and the same fix: ``cfl_system.orchestrator``'s
+``_normalize_morphism_mapping`` converts either shape back to the object
+every downstream consumer (worked examples, the renderer) expects,
+immediately after parsing.
 
 The 9 specialists' shared retry-hint map (``reasoning.retry_plan.hints`` /
 ``retry_planner.hints``) is the schema that actually hit the API's
@@ -197,6 +210,24 @@ _RETRY_HINT_ITEM = schema_object(
     required=["agent", "hint", "strategy"],
 )
 _RETRY_HINTS_SCHEMA = schema_array(_RETRY_HINT_ITEM)
+
+# morphism's evidence.morphism.mapping: an ARRAY of {symbol, image} entries
+# (not an object keyed by the language's own alphabet symbols -- see the
+# module docstring for why: those keys differ per task and
+# additionalProperties:false can't leave a per-task-variable key set open).
+# One shared item schema, both fields always present per every worked
+# example in cfl_morphism.md.
+_MORPHISM_MAPPING_ITEM = schema_object(
+    {"symbol": schema_string(), "image": schema_string()},
+    required=["symbol", "image"],
+)
+_MORPHISM_MAPPING_SCHEMA = schema_array(_MORPHISM_MAPPING_ITEM)
+
+_MORPHISM_SCHEMA = schema_object({
+    "domain_alphabet": schema_string_array(),
+    "codomain_alphabet": schema_string_array(),
+    "mapping": _MORPHISM_MAPPING_SCHEMA,
+})
 
 
 def _specialist_schema(agent: str, verdict: dict, evidence_properties: dict, *,
@@ -367,6 +398,20 @@ _FIELD_SCHEMAS: dict[str, dict[str, dict]] = {
             "interchange_analysis": schema_string(),
             "interchange_result": schema_string(),
             "contradiction": schema_string(),
+            "conclusion": schema_string(),
+        },
+    ),
+    "morphism": _specialist_schema(
+        "morphism", _NON_CFL_VERDICT,
+        {
+            "morphism_type": schema_string(),
+            "morphism": _MORPHISM_SCHEMA,
+            "image_language": schema_string(),
+            "image_not_cfl_proof": nullable(schema_object({
+                "method": schema_string(),
+                "details": schema_string(),
+            })),
+            "explanation": schema_string(),
             "conclusion": schema_string(),
         },
     ),

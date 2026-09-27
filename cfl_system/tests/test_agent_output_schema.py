@@ -23,14 +23,14 @@ from agent_system.lib.testing.schema_checks import (
     assert_schemas_within_union_typed_limit,
 )
 
-# `evidence.morphism.mapping` (morphism) is keyed by the language's own
-# alphabet symbols, chosen per task -- additionalProperties:false can't
-# express that, so it gets no schema at all. See the module docstring in
-# cfl_system/lib/agent_output_schema.py -- `pumping_cfl` / `ogden`'s
-# `word_instances` / `marked_positions` turned out to be keyed by the fixed
-# literal strings "3"/"4" (not a per-task choice) and are no longer
-# exempted.
-_DYNAMIC_KEY_EXEMPT = frozenset({"morphism"})
+# No agent is exempt any more: `pumping_cfl` / `ogden`'s `word_instances` /
+# `marked_positions` turned out to be keyed by the fixed literal strings
+# "3"/"4" (not a per-task choice), and `morphism`'s `evidence.morphism.
+# mapping` (genuinely keyed by the language's own per-task alphabet
+# symbols) was remodelled as an array of {symbol, image} objects instead of
+# an object keyed by those symbols -- see the module docstring in
+# cfl_system/lib/agent_output_schema.py.
+_DYNAMIC_KEY_EXEMPT: frozenset[str] = frozenset()
 
 
 def test_dynamic_key_exempt_agents_are_in_required_keys_but_not_field_schemas():

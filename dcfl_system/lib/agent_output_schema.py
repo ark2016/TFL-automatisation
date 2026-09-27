@@ -127,7 +127,19 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
         # exactly one technique's fields are populated per response; the
         # other technique's fields are null (prompt: "Ровно одна техника
         # используется за раз; поля другой техники — null").
-        "dead_class_finite": nullable(schema_string()),
+        # Required (non-null) whenever technique == "nerode_classes"; null
+        # for prefix_continuation (docs/VERDICT_POLICY.md §4 dcfl/shallit --
+        # dead_class_status ∈ {"empty", "finite", "infinite"}; "infinite"
+        # means the technique is inapplicable, and oracle_verifier.py
+        # refutes a proof that claims "infinite" but status == "success").
+        # NB: the dead class D is closed under right-extension (x ∈ D ⇒
+        # xy ∈ D for all y), so D is always either empty or infinite --
+        # "finite and nonempty" cannot actually occur. "finite" is kept in
+        # the enum for schema/prompt-history stability, but
+        # oracle_verifier._check_dead_class_finite treats it exactly like
+        # "empty" (refuted by the very first confirmed dead word, not only
+        # once dead words are found at every enumerated length).
+        "dead_class_status": nullable(schema_string(enum=["empty", "finite", "infinite"])),
         "distinguishing_suffix": nullable(schema_string()),
         "separation_argument": nullable(schema_string()),
         "derived_language": nullable(schema_string()),

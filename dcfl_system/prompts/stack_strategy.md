@@ -112,6 +112,29 @@ determinism and simulate against the task's own language oracle. See
   the pop phase). Give each phase its OWN state so that once the phase
   boundary is crossed, the symbol that belongs only to the earlier phase has
   no transition at all and is correctly rejected.
+- **Do not signal "done, accept" with a dedicated `read: null` transition into
+  a separate `q_accept` state.** When `accept_mode` is `final_state` (the
+  default), mark the state that is ALREADY reached once the last matching
+  letter has been consumed as accepting directly (add it to `accept_states`)
+  instead of adding one more epsilon hop into a fresh sink state — an epsilon
+  transition that coexists with a letter transition on the same `(state, top)`
+  is non-determinism, full stop, exactly like any other coexisting pair (see
+  above). `oracle_verifier` DOES apply one narrow, mechanical normalization for
+  this exact pattern before checking determinism (docs/VERDICT_POLICY.md R2',
+  normalization paragraph) — but only when the source state can ALSO be proven
+  to never occur with any OTHER stack top (`dcfl_system/lib/dpda.py`'s
+  `normalize_epsilon_accept_sinks`); a state that is reused across a pop loop
+  (entered both with the "done" top AND with a "still popping" top, e.g. via a
+  shared `q_pop` self-loop) does NOT qualify, and the epsilon there stays
+  refuted non-determinism no matter what. **Do not rely on this normalization**
+  — design the automaton so the "last pop reveals the bottom marker" moment is
+  itself a distinct, LETTER-triggered transition into an already-accepting
+  state (e.g. give the FIRST symbol pushed in a counting block its own stack
+  symbol — a "bottom of this block" marker — so popping it, on the same
+  letter that pops every other symbol of the block, is a transition with a
+  DIFFERENT `top` and can target a different, accepting state outright; see
+  the `qB` branch of the example below, which needs no epsilon transition at
+  all for exactly this reason).
 
 ## FULL example: L = {$aⁿbⁿcᵐ | n,m ≥ 1} ∪ {d aᵐbⁿcⁿ | m,n ≥ 1}
 
@@ -169,10 +192,10 @@ determinism and simulate against the task's own language oracle. See
         "trigger": "смена символа a→b однозначно видна по входу"
       },
       {
-        "name": "Фаза 3 (ветвь d): pop на cⁿ, принять при пустом стеке",
+        "name": "Фаза 3 (ветвь d): pop на cⁿ, принять letter-переходом на снятии дна блока",
         "action": "pop",
-        "what": "на каждую букву c снимается один символ b со стека; слово принимается, если по концу входа стек пуст (bⁿ=cⁿ)",
-        "trigger": "смена символа b→c однозначно видна по входу; конец входа проверяет пустоту стека"
+        "what": "на каждую букву c снимается один символ b со стека; первый положенный символ блока b — отдельный маркер «дно блока» (B1, а не обычный B), поэтому снятие ИМЕННО его (по той же букве c, но с top=B1) — это переход по букве в отдельное принимающее состояние qB_done, а не ε-переход",
+        "trigger": "смена символа b→c однозначно видна по входу; переход, снимающий B1, сам по себе означает bⁿ=cⁿ — без обращения к пустоте стека и без ε-шага"
       }
     ],
     "separator": "$ | d (первый символ слова)",
@@ -180,10 +203,10 @@ determinism and simulate against the task's own language oracle. See
     "determinism_argument": "Первый символ входа — это $ или d — не встречается больше нигде в слове (не входит в алфавит {a,b,c} основной части), поэтому это настоящий разделитель, а не просто часто встречающаяся подстрока: он однозначно и безальтернативно выбирает один из двух детерминированных стековых сценариев, которые дальше не пересекаются. Дальнейший разбор в каждой ветви — обычный левый-направо стек с двумя счётными фазами (push/pop) плюс один свободный счётчик, читаемый без обращения к стеку, что стандартно детерминировано.",
     "regex_in_states": [],
     "dpda": {
-      "states": ["q0", "qA0", "qA_push", "qA_pop", "qA_c", "qB0", "qB_skip", "qB_push", "qB_pop", "qB_accept"],
+      "states": ["q0", "qA0", "qA_push", "qA_pop", "qA_c", "qB0", "qB_skip", "qB_push", "qB_pop", "qB_done"],
       "start": "q0",
-      "accept_states": ["qA_c", "qB_accept"],
-      "stack_alphabet": ["Z0", "A", "B"],
+      "accept_states": ["qA_c", "qB_done"],
+      "stack_alphabet": ["Z0", "A", "B", "B1"],
       "initial_stack": ["Z0"],
       "transitions": [
         {"from": "q0", "read": "$", "top": "Z0", "to": "qA0", "push": ["Z0"]},
@@ -198,11 +221,13 @@ determinism and simulate against the task's own language oracle. See
 
         {"from": "qB0", "read": "a", "top": "Z0", "to": "qB_skip", "push": ["Z0"]},
         {"from": "qB_skip", "read": "a", "top": "Z0", "to": "qB_skip", "push": ["Z0"]},
-        {"from": "qB_skip", "read": "b", "top": "Z0", "to": "qB_push", "push": ["B", "Z0"]},
+        {"from": "qB_skip", "read": "b", "top": "Z0", "to": "qB_push", "push": ["B1", "Z0"]},
+        {"from": "qB_push", "read": "b", "top": "B1", "to": "qB_push", "push": ["B", "B1"]},
         {"from": "qB_push", "read": "b", "top": "B", "to": "qB_push", "push": ["B", "B"]},
+        {"from": "qB_push", "read": "c", "top": "B1", "to": "qB_done", "push": []},
         {"from": "qB_push", "read": "c", "top": "B", "to": "qB_pop", "push": []},
         {"from": "qB_pop", "read": "c", "top": "B", "to": "qB_pop", "push": []},
-        {"from": "qB_pop", "read": null, "top": "Z0", "to": "qB_accept", "push": ["Z0"]}
+        {"from": "qB_pop", "read": "c", "top": "B1", "to": "qB_done", "push": []}
       ]
     }
   },

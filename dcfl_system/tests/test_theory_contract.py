@@ -133,7 +133,11 @@ def test_shallit_json_blocks_parse_and_have_required_keys():
             assert old_field not in proof
 
         if technique == "nerode_classes":
-            for field in ("dead_class_finite", "distinguishing_suffix", "separation_argument", "argument"):
+            assert proof.get("dead_class_status") in ("empty", "finite", "infinite"), (
+                "nerode_classes example must have a valid 'dead_class_status' "
+                f"(empty/finite/infinite): {proof.get('dead_class_status')!r}"
+            )
+            for field in ("distinguishing_suffix", "separation_argument", "argument"):
                 assert proof.get(field), f"nerode_classes example missing non-empty '{field}'"
         elif technique == "prefix_continuation":
             for field in ("derived_language", "regular_filter", "non_cfl_argument", "argument"):
@@ -199,7 +203,7 @@ def test_verifier_accepts_shallit_nerode_classes_contract():
     proof_sketch = {
         "kind": "shallit",
         "technique": "nerode_classes",
-        "dead_class_finite": "D пуст: любое слово продолжается до палиндрома",
+        "dead_class_status": "empty",
         "distinguishing_suffix": "w = b a^N b u^R",
         "separation_argument": "uw палиндром, vw — нет",
         "argument": "по контрапозиции теоремы 4.7.4",
@@ -242,7 +246,7 @@ def test_verifier_rejects_shallit_missing_technique_specific_fields():
     entry = result["shallit"]
     assert entry["verification_status"] == "not_verified"
     issues = " ".join(entry.get("issues", []))
-    assert "dead_class_finite" in issues
+    assert "dead_class_status" in issues
     assert "distinguishing_suffix" in issues
     assert "separation_argument" in issues
 

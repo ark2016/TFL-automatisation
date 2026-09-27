@@ -27,6 +27,7 @@ from typing import Any
 from unittest.mock import patch
 
 from agent_system.graph import (
+    MAX_CALLS_PER_AGENT,
     MAX_INVERSIONS,
     build_specialist_input,
     decide_after_retry_planner,
@@ -476,6 +477,86 @@ class TestShouldInvertHypothesisIsHonored(unittest.TestCase):
 
         self.assertFalse(result["retry_plan"]["should_invert"])
         self.assertIn("dispatch", result)  # normal agent-retry path ran instead
+
+
+# ---------------------------------------------------------------------------
+# 3c. Cost ceiling (config.MAX_CALLS_PER_AGENT): the retry planner must not
+# hand a fully-capped agent back for another wasted graph round.
+# ---------------------------------------------------------------------------
+
+class TestRetryPlannerRespectsCallCap(unittest.TestCase):
+
+    def test_all_proposed_agents_capped_ends_retries_with_a_downgrade_note(self):
+        """`pumping` already has MAX_CALLS_PER_AGENT entries in
+        `specialist_outputs`; the planner (or reasoning's own retry_plan
+        fallback) proposing ONLY `pumping` again must not be honored --
+        the plan is filtered down to nothing, which is the same terminal
+        case as an explicitly empty `agents_to_retry`, and the exclusion is
+        recorded in `call_cap_notes` for `verdict_gate.downgrades`."""
+        state = {
+            "reasoning_output": {"evidence": {"issues_found": []}},
+            "dispatch": {"pumping": True},
+            "evidence": {
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+            },
+            "specialist_outputs": [
+                ("pumping", {"module": "pumping", "status": "success"})
+                for _ in range(MAX_CALLS_PER_AGENT)
+            ],
+            "test_result": None,
+            "hypothesis": {"hypothesis": "non_regular"},
+            "retry_round": 0,
+            "inversions_done": 0,
+            "lang_kind": "",
+            "mock_runner": None, "agent_runner": None, "verbose": False,
+        }
+        with patch(
+            "agent_system.graph.run_agent",
+            return_value={"evidence": {"agents_to_retry": ["pumping"]}},
+        ):
+            result = run_retry_planner_node(state)
+
+        self.assertEqual(
+            result["retry_plan"], {"should_invert": False, "has_retry": False},
+        )
+        self.assertEqual(result["dispatch"], {"pumping": False})
+        self.assertIn("call_cap_notes", result)
+        self.assertTrue(
+            any("pumping" in n and "call cap reached" in n for n in result["call_cap_notes"]),
+            result["call_cap_notes"],
+        )
+
+    def test_one_of_several_proposed_agents_capped_keeps_the_others(self):
+        """Only the capped agent is dropped -- a co-proposed agent still
+        under budget is retried normally, not swept away with it."""
+        state = {
+            "reasoning_output": {"evidence": {"issues_found": []}},
+            "dispatch": {"pumping": True, "nerode": True},
+            "evidence": {
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "nerode": {"status": "success", "evidence": {"verdict": "non_regular"}},
+            },
+            "specialist_outputs": [
+                ("pumping", {"module": "pumping", "status": "success"})
+                for _ in range(MAX_CALLS_PER_AGENT)
+            ],
+            "test_result": None,
+            "hypothesis": {"hypothesis": "non_regular"},
+            "retry_round": 0,
+            "inversions_done": 0,
+            "lang_kind": "",
+            "mock_runner": None, "agent_runner": None, "verbose": False,
+        }
+        with patch(
+            "agent_system.graph.run_agent",
+            return_value={"evidence": {"agents_to_retry": ["pumping", "nerode"]}},
+        ):
+            result = run_retry_planner_node(state)
+
+        self.assertTrue(result["retry_plan"]["has_retry"])
+        self.assertEqual(result["dispatch"], {"pumping": False, "nerode": True})
+        self.assertIn("call_cap_notes", result)
+        self.assertTrue(any("pumping" in n for n in result["call_cap_notes"]))
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import pytest
 from cfl_system.orchestrator import (
     MAX_RETRIES,
     MAX_INVERSIONS,
+    MAX_CALLS_PER_AGENT,
     CFL_SPECIALIST_NAMES,
     MockRunner,
     LiveRunner,
@@ -39,6 +40,7 @@ from cfl_system.orchestrator import (
     _fallback_reasoning,
     _collect_failed_agents,
     _run_agent,
+    _normalize_morphism_mapping,
 )
 
 
@@ -230,6 +232,109 @@ class TestSetupDispatchNode:
         assert all(v is True for v in result["dispatch"].values())
 
 
+class TestNormalizeMorphismMapping:
+    """``_normalize_morphism_mapping`` (TODO.md §3 M): a genuine
+    ``output_config.format`` call now produces ``evidence.morphism.mapping``
+    as an array of ``{"symbol": ..., "image": ...}`` objects (closed schema
+    -- see ``cfl_system.lib.agent_output_schema``'s module docstring for
+    why a map keyed by the language's own alphabet can't be closed); this
+    must convert that array back to the ``{symbol: image}`` dict shape
+    every worked example and downstream consumer expects, immediately
+    after parsing -- same idea as ``_normalize_retry_hints`` for ``hints``.
+    """
+
+    def _output(self, mapping):
+        return {
+            "agent": "morphism",
+            "status": "success",
+            "verdict": "non_cfl",
+            "evidence": {
+                "morphism_type": "direct",
+                "morphism": {
+                    "domain_alphabet": ["a", "b", "c"],
+                    "codomain_alphabet": ["a", "b"],
+                    "mapping": mapping,
+                },
+                "image_language": "...",
+                "image_not_cfl_proof": {"method": "known_non_cfl", "details": "..."},
+                "explanation": "...",
+                "conclusion": "...",
+            },
+            "confidence": 0.9,
+            "errors": [],
+        }
+
+    def test_array_shape_is_converted_to_dict(self):
+        out = self._output([
+            {"symbol": "a", "image": "a"},
+            {"symbol": "b", "image": "b"},
+            {"symbol": "c", "image": ""},
+        ])
+        result = _normalize_morphism_mapping(out)
+        assert result["evidence"]["morphism"]["mapping"] == {"a": "a", "b": "b", "c": ""}
+
+    def test_dict_shape_is_left_unchanged(self):
+        """The legacy prose-extraction fallback path (no schema) still
+        produces the {symbol: image} dict directly -- must pass through
+        untouched, not break on a shape that was never a list."""
+        out = self._output({"a": "a", "b": "b", "c": ""})
+        result = _normalize_morphism_mapping(out)
+        assert result["evidence"]["morphism"]["mapping"] == {"a": "a", "b": "b", "c": ""}
+
+    def test_malformed_entries_are_dropped_not_raised(self):
+        out = self._output([
+            {"symbol": "a", "image": "a"},
+            {"symbol": "b"},  # missing "image" -- dropped
+            "not a dict",  # dropped
+            {"symbol": 1, "image": "x"},  # symbol not a string -- dropped
+        ])
+        result = _normalize_morphism_mapping(out)
+        assert result["evidence"]["morphism"]["mapping"] == {"a": "a"}
+
+    def test_none_output_passes_through(self):
+        assert _normalize_morphism_mapping(None) is None
+
+    def test_agent_error_output_without_evidence_passes_through(self):
+        out = {"agent": "morphism", "status": "agent_error", "evidence": {}, "errors": ["x"]}
+        result = _normalize_morphism_mapping(out)
+        assert result == out
+
+    def test_run_specialist_node_normalizes_morphism_mapping(self, base_state, tmp_path):
+        """End-to-end through run_specialist_node: a runner that returns the
+        array shape (as a genuine structured-outputs call would) must come
+        out the other side already normalized to the dict shape."""
+        class _ArrayMappingRunner:
+            def run_agent(self, agent_name, input_data=None):
+                return {
+                    "agent": "morphism",
+                    "status": "success",
+                    "verdict": "non_cfl",
+                    "evidence": {
+                        "morphism_type": "direct",
+                        "morphism": {
+                            "domain_alphabet": ["a", "b"],
+                            "codomain_alphabet": ["a"],
+                            "mapping": [
+                                {"symbol": "a", "image": "a"},
+                                {"symbol": "b", "image": ""},
+                            ],
+                        },
+                        "image_language": "...",
+                        "image_not_cfl_proof": None,
+                        "explanation": "...",
+                        "conclusion": "...",
+                    },
+                    "confidence": 0.5,
+                    "errors": [],
+                }
+
+        base_state["_specialist_name"] = "morphism"
+        base_state["mock_runner"] = _ArrayMappingRunner()
+        result = run_specialist_node(base_state)
+        _, out = result["specialist_outputs"][0]
+        assert out["evidence"]["morphism"]["mapping"] == {"a": "a", "b": ""}
+
+
 class TestRunSpecialistNode:
     def test_runs_single_agent(self, base_state):
         base_state["_specialist_name"] = "pumping_cfl"
@@ -406,6 +511,38 @@ class TestRetryPlannerNode:
         state = {"ir": sample_ir, "mock_runner": None, "agent_runner": None, "reasoning_output": {}}
         result = run_retry_planner_node(state)
         assert result["agents_to_retry"] is None  # retry all
+
+
+class TestRetryPlannerNodeRespectsCallCap:
+    """Cost ceiling (config.MAX_CALLS_PER_AGENT): the mock planner
+    (``retry_planner.json``) always proposes ``["pumping_cfl", "ogden"]`` --
+    if BOTH are already at their call cap, that proposal must be filtered
+    down to nothing (the terminal case, same as the planner proposing an
+    explicitly empty list), not dispatched for a wasted extra round, and
+    the exclusion must be recorded for ``verdict_gate.downgrades``."""
+
+    def _capped(self, agent: str) -> list[tuple[str, dict]]:
+        return [(agent, {"agent": agent, "status": "success"})] * MAX_CALLS_PER_AGENT
+
+    def test_all_proposed_agents_capped_ends_retries_with_a_downgrade_note(self, base_state):
+        base_state["specialist_outputs"] = self._capped("pumping_cfl") + self._capped("ogden")
+        result = run_retry_planner_node(base_state)
+
+        assert result["agents_to_retry"] == []
+        assert result["retry_context"]["terminal"] is True
+        assert "call_cap_notes" in result
+        notes = " ".join(result["call_cap_notes"])
+        assert "pumping_cfl" in notes and "call cap reached" in notes
+        assert "ogden" in notes
+
+    def test_one_of_two_proposed_agents_capped_keeps_the_other(self, base_state):
+        base_state["specialist_outputs"] = self._capped("pumping_cfl")
+        result = run_retry_planner_node(base_state)
+
+        assert result["agents_to_retry"] == ["ogden"]
+        assert result["retry_context"]["terminal"] is False
+        assert "call_cap_notes" in result
+        assert any("pumping_cfl" in n for n in result["call_cap_notes"])
 
 
 class TestFormalizeNodeBaseState:

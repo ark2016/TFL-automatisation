@@ -279,7 +279,7 @@ def nullable(schema: dict[str, Any]) -> dict[str, Any]:
 # case (TODO.md §3 M).
 #
 # "too many optional parameters" / "optional parameters" / "grammar
-# compilation" / "too many" (2026-09-27 round): a live cfl eval run hit
+# compilation" (2026-09-27 round): a live cfl eval run hit
 # ``"Schemas contains too many optional parameters (63), which would make
 # grammar compilation inefficient. Reduce the number of optional
 # parameters in your tool schemas (limit: 24)."`` on `reasoning` /
@@ -301,13 +301,18 @@ def nullable(schema: dict[str, Any]) -> dict[str, Any]:
 # (49 parameters with type arrays or anyOf). This causes exponential
 # compilation cost. Reduce the number of nullable or union-typed
 # parameters (limit: 16 parameters with unions)."`` — also reproduced
-# live 2026-09-27 (see ``schema_checks.py`` again). "too many" above
-# already matches this text too, but the extra markers make the match
-# obvious without relying on that coincidence.
+# live 2026-09-27 (see ``schema_checks.py`` again).
+#
+# A bare "too many" was tried as a catch-all for both messages above, but a
+# live run then hit an unrelated 400 rate-limit error ("too many requests,
+# please try again later") on the same model — the generic marker matched
+# it too and silently disabled structured outputs for that model for the
+# rest of the process (see ``_schema_rejected_models`` below), so it is
+# gone; only the specific phrasings above are matched.
 _SCHEMA_REJECTION_MARKERS = (
     "output_config", "json_schema", "additionalproperties", "output format",
     "structured output", "too many optional parameters", "optional parameters",
-    "grammar compilation", "too many", "union types", "union-typed",
+    "grammar compilation", "union types", "union-typed",
     "nullable or union-typed",
 )
 

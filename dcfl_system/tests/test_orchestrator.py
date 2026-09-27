@@ -13,6 +13,7 @@ import pytest
 
 from dcfl_system.orchestrator import (
     run_pipeline, MockRunner, DCFL_SPECIALIST_NAMES, collect_specialists_node,
+    retry_planner_node, MAX_CALLS_PER_AGENT,
 )
 
 # ---------------------------------------------------------------------------
@@ -311,3 +312,53 @@ def test_none_ir_early_failure():
     result = run_pipeline({})
     assert result["verdict"] in ("failure", "inconclusive")
     assert len(result.get("errors", [])) > 0
+
+
+class TestRetryPlannerNodeRespectsCallCap:
+    """Cost ceiling (config.MAX_CALLS_PER_AGENT): ``retry_planner_node``
+    must not hand a fully-capped agent back for another wasted graph
+    round -- the terminal case (``needs_retry`` False) once every proposed
+    agent is capped, and each exclusion recorded for
+    ``verdict_gate.downgrades``."""
+
+    def _capped(self, agent: str) -> list[tuple[str, dict]]:
+        return [(agent, {"agent": agent, "status": "success"})] * MAX_CALLS_PER_AGENT
+
+    def test_all_proposed_agents_capped_ends_retries_with_a_downgrade_note(self):
+        state = {
+            "reasoning": {
+                "retry_plan": {"agents_to_retry": ["stack_strategy"], "hints": {}},
+            },
+            "agent_results": {},
+            "oracle_verification": {},
+            "retry_count": 0,
+            "specialist_outputs": self._capped("stack_strategy"),
+            "verbose": False,
+        }
+        result = retry_planner_node(state)
+
+        assert result["agents_to_retry"] == []
+        assert result["retry_plan"]["needs_retry"] is False
+        assert "call_cap_notes" in result
+        notes = " ".join(result["call_cap_notes"])
+        assert "stack_strategy" in notes and "call cap reached" in notes
+
+    def test_one_of_two_proposed_agents_capped_keeps_the_other(self):
+        state = {
+            "reasoning": {
+                "retry_plan": {
+                    "agents_to_retry": ["stack_strategy", "shallit"], "hints": {},
+                },
+            },
+            "agent_results": {},
+            "oracle_verification": {},
+            "retry_count": 0,
+            "specialist_outputs": self._capped("stack_strategy"),
+            "verbose": False,
+        }
+        result = retry_planner_node(state)
+
+        assert result["agents_to_retry"] == ["shallit"]
+        assert result["retry_plan"]["needs_retry"] is True
+        assert "call_cap_notes" in result
+        assert any("stack_strategy" in n for n in result["call_cap_notes"])

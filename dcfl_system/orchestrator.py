@@ -1187,9 +1187,38 @@ def retry_planner_node(state: DCFLState) -> dict:
                     plan["hints"] = merged_hints
 
     agents_to_retry = plan.get("agents_to_retry", [])
-    # Recompute needs_retry from the MERGED list, not build_retry_plan's raw
-    # (pre-merge) one — otherwise a reasoning-agent override that adds agents
-    # to an empty plan would be silently dropped by setup_dispatch_node.
+
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): an agent already at its call
+    # cap must not be handed back to run_specialist_node only to be silently
+    # skipped there (a wasted graph round: dispatch, fan-out, fan-in, all for
+    # zero new specialist output) -- filter it out of the retry plan itself,
+    # counted the same way run_specialist_node counts it (from the full,
+    # never-reset `specialist_outputs` history). A plan made ENTIRELY of
+    # capped agents becomes an empty plan (needs_retry below already treats
+    # that as terminal). Each dropped agent is noted for
+    # verdict_gate.downgrades, same as a cap hit inside run_specialist_node.
+    call_cap_notes: list[str] = []
+    if agents_to_retry:
+        specialist_outputs = state.get("specialist_outputs", [])
+        filtered_agents = []
+        for a in agents_to_retry:
+            prior = sum(1 for n, _ in specialist_outputs if n == a)
+            if prior >= MAX_CALLS_PER_AGENT:
+                call_cap_notes.append(
+                    f"agent {a} call cap reached ({MAX_CALLS_PER_AGENT} calls), "
+                    "excluded from retry plan"
+                )
+            else:
+                filtered_agents.append(a)
+        if call_cap_notes:
+            log_msg(state, f"  retry_planner: capped, excluded from retry: {call_cap_notes}")
+        agents_to_retry = filtered_agents
+        plan["agents_to_retry"] = agents_to_retry
+
+    # Recompute needs_retry from the MERGED (and now cap-filtered) list, not
+    # build_retry_plan's raw (pre-merge) one — otherwise a reasoning-agent
+    # override that adds agents to an empty plan would be silently dropped by
+    # setup_dispatch_node.
     plan["needs_retry"] = bool(agents_to_retry)
     next_count = retry_count + 1
 
@@ -1199,11 +1228,14 @@ def retry_planner_node(state: DCFLState) -> dict:
         f"needs_retry={plan.get('needs_retry')}",
     )
 
-    return {
+    result = {
         "agents_to_retry": agents_to_retry,
         "retry_plan": plan,
         "retry_count": next_count,
     }
+    if call_cap_notes:
+        result["call_cap_notes"] = call_cap_notes
+    return result
 
 
 def decide_after_retry_planner(state: DCFLState) -> str:

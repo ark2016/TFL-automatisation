@@ -653,10 +653,10 @@ class DPDA:
   "determinism_argument": "Первый символ ($ или d) не встречается больше нигде в слове — настоящий разделитель, однозначно выбирающий один из двух непересекающихся детерминированных сценариев; дальше в каждой ветви — обычный левый-направо стек с двумя счётными фазами.",
   "regex_in_states": [],
   "dpda": {
-    "states": ["q0", "qA0", "qA_push", "qA_pop", "qA_c", "qB0", "qB_skip", "qB_push", "qB_pop", "qB_accept"],
+    "states": ["q0", "qA0", "qA_push", "qA_pop", "qA_c", "qB0", "qB_skip", "qB_push", "qB_pop", "qB_done"],
     "start": "q0",
-    "accept_states": ["qA_c", "qB_accept"],
-    "stack_alphabet": ["Z0", "A", "B"],
+    "accept_states": ["qA_c", "qB_done"],
+    "stack_alphabet": ["Z0", "A", "B", "B1"],
     "initial_stack": ["Z0"],
     "transitions": [
       {"from": "q0", "read": "$", "top": "Z0", "to": "qA0", "push": ["Z0"]},
@@ -669,11 +669,13 @@ class DPDA:
       {"from": "qA_c", "read": "c", "top": "Z0", "to": "qA_c", "push": ["Z0"]},
       {"from": "qB0", "read": "a", "top": "Z0", "to": "qB_skip", "push": ["Z0"]},
       {"from": "qB_skip", "read": "a", "top": "Z0", "to": "qB_skip", "push": ["Z0"]},
-      {"from": "qB_skip", "read": "b", "top": "Z0", "to": "qB_push", "push": ["B", "Z0"]},
+      {"from": "qB_skip", "read": "b", "top": "Z0", "to": "qB_push", "push": ["B1", "Z0"]},
+      {"from": "qB_push", "read": "b", "top": "B1", "to": "qB_push", "push": ["B", "B1"]},
       {"from": "qB_push", "read": "b", "top": "B", "to": "qB_push", "push": ["B", "B"]},
+      {"from": "qB_push", "read": "c", "top": "B1", "to": "qB_done", "push": []},
       {"from": "qB_push", "read": "c", "top": "B", "to": "qB_pop", "push": []},
       {"from": "qB_pop", "read": "c", "top": "B", "to": "qB_pop", "push": []},
-      {"from": "qB_pop", "read": null, "top": "Z0", "to": "qB_accept", "push": ["Z0"]}
+      {"from": "qB_pop", "read": "c", "top": "B1", "to": "qB_done", "push": []}
     ]
   }
 }
@@ -681,6 +683,15 @@ class DPDA:
 
 Обратите внимание: `qA_push`/`qA_pop` и `qB_push`/`qB_pop` — РАЗНЫЕ состояния (не одно общее
 «счётное» состояние на push и pop) именно из-за детерминизма-по-смыслу, описанного выше в §5.2.
+Обратите внимание также на `B1` — отдельный символ стека для ПЕРВОГО (самого нижнего) `b`
+своего блока: именно поэтому снятие последнего `b` блока (`top: "B1"`) — переход по РЕАЛЬНОЙ
+букве `c` прямо в принимающее состояние `qB_done`, а не `ε`-переход из `qB_pop` в отдельный
+`qB_accept` (как в более ранней, некорректной ревизии этого примера — см. правило про ε-переходы
+в `stack_strategy.md` и `normalize_epsilon_accept_sinks` в §6.1.1 ниже: тот же `qB_pop`
+одновременно достижим и с `top: "B"` (ещё не всё снято), и с `top: "B1"` (снято всё) — если бы
+`qB_pop` был просто помечен принимающим вместо ε-перехода, слово остановилось бы на середине
+блока `b` тоже принималось бы, что неверно; поэтому нужен ИМЕННО отдельный стековый символ и
+переход по букве, а не одна лишь пометка состояния).
 
 ### 5.3. closure_reduction (конструктивный + деструктивный)
 
@@ -766,9 +777,13 @@ class DCFLPumpingProof:
 **Техника 1 — nerode_classes (теорема 4.7.4 [Sh]).** Если L — DCFL, хотя бы один класс
 эквивалентности Майхилла–Нероуда языка L бесконечен. Контрапозиция: если все классы конечны, то
 L ∉ DCFL — обычно доказывается предъявлением разделяющего суффикса w(u,v) для любых u ≠ v.
-Ограничение: «мёртвый» класс D = {x | ∄z: xz ∈ L} — тоже класс Нероуда; если D бесконечен
-(например L ⊆ a*b*c*), теорема ничего не даёт — агент обязан явно обосновать конечность D
-(поле `dead_class_finite`), иначе возвращает `not_applicable`.
+Техника применима только если ВСЕ классы Нероуда, включая мёртвый класс D (слова, не продолжаемые
+ни в одно слово L), конечны (THEORY.md §1.2). «Бесконечно много классов» — не аргумент: у {aⁿbⁿ}
+бесконечно много классов, а язык DCFL. Если D бесконечен (например, bbΣ* ⊆ D), верните status
+not_applicable. Агент обязан явно заявить это в обязательном поле `dead_class_status ∈ {"empty",
+"finite", "infinite"}`; `"infinite"` означает, что техника неприменима — тогда `status` должен
+быть `not_applicable`, а не `success` (заявить `dead_class_status: "infinite"` и всё же вернуть
+`success`/`non_dcfl` — самопротиворечие, оракул-верификатор отвергает это как `refuted`).
 
 **Техника 2 — prefix_continuation (лемма о продолжении).** Пусть L — DCFL, $ ∉ Σ. Тогда
 haspref(L) = {xy | x ∈ L, xy ∈ L, y ≠ ε} и L_$ = {x$y | x ∈ L, xy ∈ L} — DCFL. Если для
@@ -781,7 +796,7 @@ haspref(L) = {xy | x ∈ L, xy ∈ L, y ≠ ε} и L_$ = {x$y | x ∈ L, xy ∈ 
 class ShallitProof:
     kind: Literal["shallit"]
     technique: Literal["nerode_classes", "prefix_continuation"]
-    dead_class_finite: str | None       # nerode_classes: почему мёртвый класс D конечен/пуст (обязательно для этой техники)
+    dead_class_status: Literal["empty", "finite", "infinite"] | None  # nerode_classes: ОБЯЗАТЕЛЬНО; null для prefix_continuation
     distinguishing_suffix: str | None   # nerode_classes: w(u,v) для произвольных u != v
     separation_argument: str | None     # nerode_classes: почему uw in L, vw not in L
     derived_language: str | None        # prefix_continuation: L_$ ∩ R или haspref(L) ∩ R = {...}
@@ -795,7 +810,7 @@ class ShallitProof:
 {
   "kind": "shallit",
   "technique": "nerode_classes",
-  "dead_class_finite": "Любое x продолжается до x·x^R ∈ L, значит D = ∅",
+  "dead_class_status": "empty",
   "distinguishing_suffix": "Для u != v: N = 2|uv|, w = b a^N b u^R",
   "separation_argument": "u·w — палиндром (∈ L); v·w — не палиндром при v != u (∉ L)",
   "derived_language": null,
@@ -810,7 +825,7 @@ class ShallitProof:
 {
   "kind": "shallit",
   "technique": "prefix_continuation",
-  "dead_class_finite": null,
+  "dead_class_status": null,
   "distinguishing_suffix": null,
   "separation_argument": null,
   "derived_language": "L_$ ∩ a*b*$b⁺ = {aⁿbⁿ$bⁿ | n >= 1}",
@@ -889,6 +904,27 @@ class InherentAmbiguityProof:
 - **Без поля `dpda`** в `proof_sketch` — как раньше, только структурные проверки выше,
   trust не выше `well_formed` (словесная стратегия — не сертификат, R2').
 - **С полем `dpda`** (§5.2):
+  0. **(0) Нормализация** (docs/VERDICT_POLICY.md R2', абзац про каноническую нормализацию;
+     `dpda.normalize_epsilon_accept_sinks`) — выполняется ПЕРВОЙ, до всего остального, над
+     ДМПА как он есть в `proof_sketch`. Для каждого ε-перехода `(q, Z) → q_acc`, где `q_acc`
+     принимающий и без исходящих переходов, И где `q` доказуемо достижимо ТОЛЬКО с `top = Z`
+     (`dpda._pushes_only_onto`: либо `q` — стартовое состояние с `initial_stack[0] == Z`, либо
+     КАЖДЫЙ переход, ведущий в `q`, кладёт непустой список с `Z` наверху — попытка снятия без
+     докладывания не даёт статической гарантии верхушки и не годится), — переход удаляется, а
+     `q` добавляется в `accept_states`. Второе условие обязательно: одной лишь «`q_acc` —
+     сток» (буквальная формулировка политики) недостаточно для сохранения языка — контрпример
+     на реальных данных (`live_c5/dcfl04`, ДМПА для {aⁿbⁿcᵐ}): состояние `q_b` тоже стоит перед
+     таким ε-переходом (`(q_b, Z0) → q_accept`), но `q_b` ТАКЖЕ достижимо с `top = A` через
+     собственный цикл снятия (`(q_b, A, read=b) → q_b`); если бы `q_b` было помечено принимающим
+     безусловно, слово `"aab"` (2 a, 1 b) ошибочно принималось бы (вход исчерпан в `q_b` с
+     `top = A`, ещё не все `A` сняты) — тест `test_dpda.py::TestNormalizeEpsilonAcceptSinks`
+     фиксирует это как регрессионный случай. На этом же автомате нормализация корректно
+     применяется к `q0` и `q_c` (оба достижимы только с `top = Z0`), а конфликт в `q_b`
+     остаётся насто ящим недетерминизмом (`refuted`) — сам ДМПА нужно перестраивать (отдельный
+     символ «дно блока», как в исправленном примере `stack_strategy.md`/§5.2 выше), а не
+     полагаться на нормализацию. Заметки о каждой применённой замене пишутся в
+     `details["normalization"]` независимо от итогового результата шагов (a)/(b) ниже, которые
+     всегда работают уже над НОРМАЛИЗОВАННЫМ автоматом.
   1. **(a) Синтаксическая проверка детерминизма** (`dpda.check_determinism`) — для каждой
      пары (состояние, верхушка стека) не более одного перехода на каждую букву, и
      эпсилон-переход не сосуществует с переходом по букве для той же пары. Проверка
@@ -921,11 +957,22 @@ class InherentAmbiguityProof:
 
 **6.1.4. Проверка shallit:**
 - Проверить наличие полей по указанной `technique`: для `nerode_classes` обязательны
-  `dead_class_finite`, `distinguishing_suffix`, `separation_argument` (в частности,
-  `dead_class_finite` не может быть пустым — без него доказательство неполно); для
-  `prefix_continuation` обязательны `derived_language`, `regular_filter`, `non_cfl_argument`.
-- Для `nerode_classes`: для конкретных u, v и w = w(u,v) проверить uw ∈ L и vw ∉ L (через CYK
-  или подстановку).
+  `dead_class_status` (∈ {"empty", "finite", "infinite"}), `distinguishing_suffix`,
+  `separation_argument` (отсутствие или невалидное значение `dead_class_status` ⇒ `not_verified`);
+  для `prefix_continuation` обязательны `derived_language`, `regular_filter`, `non_cfl_argument`.
+- `dead_class_status == "infinite"` при `status == "success"` ⇒ `refuted` (доказательство само
+  признаёт технику неприменимой — должно было вернуть `not_applicable`), без обращения к оракулу.
+- Для `nerode_classes`, когда есть оракул принадлежности (`build_membership_oracle_from_ir`,
+  ВСЕГДА, независимо от вида `distinguishing_suffix`): перебрать слова длины ≤ 8 над алфавитом
+  (не более 5000 слов) и для каждого проверить непродолжаемость в L (`_continuable`, поиск до
+  `max(6, |слово|)` символов — граница растёт вместе со словом, а не фиксирована на +6, иначе
+  восьмисимвольное слово, которому нужно 7-8 символов продолжения, ложно считается мёртвым; с
+  бюджетом узлов, ответ "неизвестно" — слово пропускается). D замкнут вправо (если x мёртв, то и
+  xy мёртв для любого y), поэтому непустой D всегда бесконечен, а «конечен, но не пуст» не
+  бывает: найдено ХОТЯ БЫ ОДНО непродолжаемое слово ⇒ `refuted` — одинаково и для `"empty"`, и
+  для `"finite"` (не только когда непродолжаемые слова находятся на каждой длине). Иначе — для
+  конкретных u, v и w = w(u,v) (только если суффикс буквальный) проверить uw ∈ L и vw ∉ L (через
+  CYK или подстановку).
 - Для `prefix_continuation`: проверить, что производный язык (L_$ ∩ R или haspref(L) ∩ R)
   вычислен согласно указанному R на sample_words, и что заявленный не-КС аргумент не содержит
   явных противоречий (полная проверка не-КС неразрешима — проверяем необходимые условия).

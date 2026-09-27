@@ -35,6 +35,7 @@ from dcfl_system.lib.dpda import (
     DPDAFormatError,
     check_determinism,
     dpda_accepts,
+    normalize_epsilon_accept_sinks,
     to_cfl_pda,
 )
 
@@ -251,7 +252,10 @@ def _verify_stack_strategy(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         issues.append(dpda_issue)
 
     if dpda_status == "refuted":
-        return _make_result("refuted", checks_run, n_passed, issues)
+        refuted_result = _make_result("refuted", checks_run, n_passed, issues)
+        if dpda_details:
+            refuted_result["details"] = dpda_details
+        return refuted_result
 
     if dpda_status is not None:
         status = dpda_status
@@ -269,10 +273,28 @@ def _verify_stack_strategy_dpda(
     """R2' (docs/VERDICT_POLICY.md): verify a stack_strategy proof's `dpda`
     artifact.
 
+    (0) Normalization (docs/VERDICT_POLICY.md R2', normalization paragraph):
+        ``dpda.normalize_epsilon_accept_sinks`` runs FIRST, on the dpda AS
+        SUBMITTED -- it is the one canonical, language-preserving rewrite the
+        policy allows before determinism is checked (an epsilon transition
+        into a dead-end accepting state, whose source state can only ever
+        occur with that transition's required stack top, is replaced by
+        marking the source state accepting directly). Every subsequent step
+        -- (a) and (b) below -- runs against the NORMALIZED automaton, never
+        the original; the rewrite's notes (empty if nothing qualified) are
+        recorded in the returned ``details["normalization"]`` regardless of
+        the final trust, so the report always shows exactly what was
+        rewritten before determinism was judged.
     (a) Syntactic determinism (``dpda.check_determinism``) -- a COMPLETE
         check, so a violation is a genuine, deterministic counterexample:
-        ``refuted``, with the conflicting transitions named.
-    (b) Simulation: convert the DPDA (``dcfl_system.lib.dpda.to_cfl_pda``,
+        ``refuted``, with the conflicting transitions named. An epsilon
+        transition that normalization could NOT safely remove (because its
+        source state can also occur with some other stack top -- see
+        ``dpda.normalize_epsilon_accept_sinks``'s docstring for why that
+        makes the blanket rewrite unsound) still coexisting with a letter
+        transition on the same (state, top) is exactly this kind of genuine
+        non-determinism, not a normalization gap to paper over.
+    (b) Simulation: convert the (normalized) DPDA (``dcfl_system.lib.dpda.to_cfl_pda``,
         which reuses ``cfl_system.lib.pda_simulator`` -- it already supports
         epsilon transitions and both `final_state`/`empty_stack` acceptance
         modes, so no second simulator is written here) and run it on words
@@ -294,29 +316,34 @@ def _verify_stack_strategy_dpda(
     if not isinstance(dpda, dict):
         return "refuted", check_name, "dpda must be an object", None
 
+    dpda, normalization_notes = normalize_epsilon_accept_sinks(dpda)
+    base_details: dict[str, Any] = {}
+    if normalization_notes:
+        base_details["normalization"] = normalization_notes
+
     conflicts = check_determinism(dpda)
     if conflicts:
         return "refuted", check_name, (
             "dpda is not deterministic: " + "; ".join(conflicts)
-        ), {"determinism": "violated", "conflicts": conflicts}
+        ), {**base_details, "determinism": "violated", "conflicts": conflicts}
 
     try:
         to_cfl_pda(dpda)
     except DPDAFormatError as exc:
         return "refuted", check_name, f"dpda is structurally invalid: {exc}", {
-            "determinism": "verified", "structure": "invalid",
+            **base_details, "determinism": "verified", "structure": "invalid",
         }
 
     oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
-        return "well_formed", check_name, "", {"determinism": "verified"}
+        return "well_formed", check_name, "", {**base_details, "determinism": "verified"}
 
     try:
         samples = sample_words(task_ir, count=60, max_len=_DPDA_MAX_WORD_LEN)
     except Exception as exc:
         return "well_formed", check_name, (
             f"could not sample words for simulation: {exc}"
-        ), {"determinism": "verified"}
+        ), {**base_details, "determinism": "verified"}
 
     candidates = sorted(
         {s["word"] for s in samples
@@ -345,16 +372,19 @@ def _verify_stack_strategy_dpda(
         return "refuted", check_name, (
             "dpda simulation disagrees with the task's language oracle: "
             + "; ".join(mismatches)
-        ), {"determinism": "verified", "counterexamples": mismatches, "words_checked": checked}
+        ), {
+            **base_details, "determinism": "verified",
+            "counterexamples": mismatches, "words_checked": checked,
+        }
 
     if checked < _DPDA_MIN_WORDS:
         return "well_formed", check_name, (
             f"only {checked} words could be decisively checked (< {_DPDA_MIN_WORDS}) "
             "-- coverage incomplete, trust stays well_formed"
-        ), {"determinism": "verified", "words_checked": checked}
+        ), {**base_details, "determinism": "verified", "words_checked": checked}
 
     return "bounded_pass", check_name, "", {
-        "determinism": "verified", "words_checked": checked,
+        **base_details, "determinism": "verified", "words_checked": checked,
     }
 
 
@@ -956,8 +986,18 @@ def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         return isinstance(value, str) and len(value) > 0
 
     if technique == "nerode_classes":
+        # dead_class_status is a closed enum, not a free-text field (VERDICT_POLICY.md
+        # §4 dcfl/shallit): absent/invalid ⇒ this check fails ⇒ not_verified below;
+        # "infinite" is a valid VALUE but makes the technique self-admittedly
+        # inapplicable, handled by the explicit early-refute right after this loop.
+        _check(
+            "dead_class_status_valid",
+            proof_sketch.get("dead_class_status") in ("empty", "finite", "infinite"),
+            "dead_class_status must be one of 'empty', 'finite', 'infinite' -- the mёртвый "
+            "класс D (THEORY.md §1.2); nerode_classes is inapplicable when D is infinite",
+            checks_run, passed, issues,
+        )
         for field, ru_hint in (
-            ("dead_class_finite", "почему мёртвый класс D конечен/пуст"),
             ("distinguishing_suffix", "разделяющий суффикс w(u, v) для произвольных u != v"),
             ("separation_argument", "почему uw ∈ L, vw ∉ L (или наоборот)"),
             ("argument", "полное рассуждение"),
@@ -967,6 +1007,21 @@ def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
                 _non_empty_str(proof_sketch.get(field)),
                 f"{field} must be a non-empty string ({ru_hint})",
                 checks_run, passed, issues,
+            )
+        # VERDICT_POLICY.md §4: "infinite при status success ⇒ refuted (доказательство
+        # само признаёт технику неприменимой)" -- a proof that claims dead_class_status
+        # == "infinite" but was still returned as a "success" (this verifier is never
+        # reached for status == "not_applicable", see verify_agent_results) is
+        # self-contradictory: it should have returned not_applicable instead.
+        if proof_sketch.get("dead_class_status") == "infinite":
+            return _make_result(
+                "refuted", checks_run, sum(1 for p in passed if p),
+                issues + [
+                    "dead_class_status = 'infinite': proof admits the technique is "
+                    "inapplicable (dead class D infinite ⇒ theorem 4.7.4 [Sh] gives no "
+                    "information about DCFL membership, THEORY.md §1.2) -- should have "
+                    "returned status 'not_applicable', not a non_dcfl verdict"
+                ],
             )
     elif technique == "prefix_continuation":
         for field, ru_hint in (
@@ -1068,55 +1123,137 @@ def _continuable(
         return None
 
 
-def _check_dead_class_finite(
-    task_ir: dict,
-) -> tuple[bool | None, str | None, list[str]]:
-    """Step 2, dead-class part (VERDICT_POLICY.md §4): sample words of
-    length <= 4 and check each is continuable into L within a bounded,
-    EXHAUSTIVE search of up to 6 more symbols.
+_DEAD_CLASS_MAX_WORD_LEN = 8
+_DEAD_CLASS_WORD_LIMIT = 5000
+# _continuable's node budget for the dead-class search: with max_extra now
+# scaling up to 2 * _DEAD_CLASS_MAX_WORD_LEN + 2 = 18, an exhaustive DFS
+# proving a genuine "no continuation" (which must visit the whole bounded
+# tree, unlike finding a witness, which can return early) needs real
+# headroom -- well beyond _continuable's own 20_000 default -- so a
+# longer/larger-alphabet word doesn't spuriously exceed budget (and get
+# skipped as None, safe but less useful) on an otherwise-decidable word.
+_DEAD_CLASS_NODE_BUDGET = 2_000_000
 
-    Because ``_continuable`` only returns False after visiting every
-    extension within the bound (not a truncated heuristic), a False result
-    here is treated as a genuine (if bounded) counterexample: a proof that
-    claims ``dead_class_finite`` (typically that D is empty) is refuted by a
-    short word with provably no continuation within this search.
 
-    Returns (all_ok, counterexample, issues):
-    - (None, None, [])   — no oracle / no testable short words.
-    - (True, None, [])   — every testable short word continues into L.
-    - (False, word, [msg]) — ``word`` has no continuation within the bound.
+def _enumerate_words_up_to_length(
+    alphabet: list[str], max_len: int = _DEAD_CLASS_MAX_WORD_LEN,
+    limit: int = _DEAD_CLASS_WORD_LIMIT,
+) -> list[str]:
+    """Every word over ``alphabet`` of length 0..``max_len``, shortest
+    first (breadth-first, deterministic order per ``alphabet``'s own
+    order), capped at ``limit`` words total (VERDICT_POLICY.md §4
+    dcfl/shallit: "перебрать все слова длины <= 8 ... ограничить 5000
+    слов"). Empty ``alphabet`` -> ``[]``.
     """
+    if not alphabet:
+        return []
+    words: list[str] = [""]
+    frontier = [""]
+    for _ in range(max_len):
+        next_frontier: list[str] = []
+        for w in frontier:
+            for ch in alphabet:
+                next_frontier.append(w + ch)
+                if len(words) + len(next_frontier) >= limit:
+                    words.extend(next_frontier)
+                    return words[:limit]
+        frontier = next_frontier
+        words.extend(frontier)
+    return words[:limit]
+
+
+def _check_dead_class_finite(
+    task_ir: dict, claimed_status: str | None,
+) -> tuple[str | None, list[str] | None, list[str]]:
+    """Step 2, dead-class part (VERDICT_POLICY.md §4 dcfl/shallit): cross-
+    check the proof's own ``dead_class_status`` claim (``"empty"`` /
+    ``"finite"``) against the oracle. Runs ALWAYS whenever a membership
+    oracle exists for this task, independent of the shape of
+    ``distinguishing_suffix`` (the caller, ``_semantic_check_shallit_nerode``,
+    no longer gates this on a literal suffix).
+
+    Enumerates EVERY word of length <= 8 over the task alphabet (capped at
+    5000 words, shortest first) and, for each, checks continuability into L
+    via ``_continuable`` — an EXHAUSTIVE bounded search of up to
+    ``max(6, 2 * len(w) + 2)`` more symbols (never fewer than 6, but growing
+    with the word's own length), not a truncated heuristic, so a ``False``
+    result is a genuine (if bounded) counterexample. The bound must scale
+    with ``len(w)``: a fixed ``+6`` regardless of ``w``'s length is unsound
+    once ``w`` itself is close to the 8-symbol enumeration cap. Two
+    concrete counterexamples drove the ``2 * len(w) + 2`` choice (a plain
+    ``len(w)`` is NOT always enough): (1) the generic "double the word to
+    close it" witness that proves many languages' dead class empty (e.g.
+    {ww^R}'s own `x -> x·x^R`, shallit.md's own worked example) needs
+    exactly ``len(w)`` extra symbols — an 8-symbol word needs up to 8 more,
+    not 6; a fixed ``+6`` bound falsely called such words dead ('aaaaaab'
+    wrongly 'refuted' an 'empty' claim, needing the 7-symbol continuation
+    'baaaaaa'); (2) `task_u1au2_u3au4`'s own language needs as much as
+    ``len(w) + 2`` for an all-one-letter word (e.g. a run of b's has to
+    wait for two fresh 'a's plus a padding block at least as long as the
+    run itself) — strictly more than ``len(w)``, which is why the bound
+    uses ``2 * len(w) + 2`` and not just ``len(w)``. On `task_grammar_aSSb`
+    the old fixed bound also wrongly listed 'aaaaaaa'/'aaaaaaaa' (7/8 a's)
+    as dead even though a⁷b⁷, a⁸b⁸ ∈ L (continuations of length 7/8).
+    Words where the oracle can't decide some extension, or where the
+    deeper search exceeds its node budget, are skipped entirely
+    (``_continuable`` returns ``None``; R1: absence of evidence is not
+    evidence) — never miscounted as dead.
+
+    - ``claimed_status == "empty"`` or ``"finite"``: ANY single dead word
+      found ⇒ contradicted, for BOTH claims equally. D is closed under
+      right-extension: if x has no continuation into L, then neither does
+      xy for any y (a continuation z of xy would make yz a continuation of
+      x). So a nonempty D is always infinite (xΣ* ⊆ D for any x ∈ D) --
+      "D finite and nonempty" is not a state D can actually be in. One
+      confirmed dead word therefore refutes "empty" (D is not empty) and,
+      by the very same closure argument, refutes "finite" just as
+      decisively (a nonempty D is never finite) -- there is no theoretical
+      basis for demanding dead words at multiple/every length before
+      treating a "finite" claim as contradicted.
+    - any other ``claimed_status`` (``"infinite"``, missing, invalid): this
+      function does nothing (that case is handled structurally by
+      ``_verify_shallit`` itself, or is not a claim this check can test).
+
+    Returns ``(outcome, evidence_words, issues)``:
+    - ``(None, None, [])`` — no oracle / no alphabet / no contradiction
+      found (genuinely inconclusive or consistent with the claim; the
+      caller must NOT treat this as confirming the claim either).
+    - ``("empty_contradicted", [word], [msg])`` (``claimed_status == "empty"``)
+    - ``("finite_contradicted", [word], [msg])`` (``claimed_status == "finite"``)
+    """
+    if claimed_status not in ("empty", "finite"):
+        return None, None, []
     alphabet = task_ir.get("alphabet", [])
+    if not alphabet:
+        return None, None, []
     oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
         return None, None, []
-    try:
-        samples = sample_words(task_ir, count=10, max_len=4)
-    except Exception:
-        return None, None, []
-    short_words = sorted(
-        {
-            s.get("word") for s in samples
-            if isinstance(s.get("word"), str) and len(s.get("word")) <= 4
-        },
-        key=len,
-    )
-    if not short_words:
-        return None, None, []
-    checked = 0
-    for w in short_words[:8]:
-        cont = _continuable(oracle, w, alphabet, max_extra=6)
-        if cont is None:
+
+    for w in _enumerate_words_up_to_length(alphabet):
+        max_extra = max(6, 2 * len(w) + 2)
+        cont = _continuable(oracle, w, alphabet, max_extra=max_extra,
+                             node_budget=_DEAD_CLASS_NODE_BUDGET)
+        if cont is None or cont:
             continue
-        checked += 1
-        if not cont:
-            return False, w, [
-                f"dead_class_finite check: {w!r} has NO continuation into L "
-                f"within an exhaustive bounded search (up to 6 more symbols)"
+        # w is dead (provably no continuation into L within the bound) --
+        # D is not empty, and (D closed under right-extension) therefore
+        # not finite either: this one witness refutes both claims alike.
+        if claimed_status == "empty":
+            return "empty_contradicted", [w], [
+                f"dead_class_status claims 'empty' but {w!r} has NO continuation "
+                "into L within an exhaustive bounded search (up to "
+                f"{max_extra} more symbols) -- the dead class D is not empty"
             ]
-    if checked == 0:
-        return None, None, []
-    return True, None, []
+        return "finite_contradicted", [w], [
+            f"dead_class_status claims 'finite' but {w!r} has NO continuation "
+            "into L within an exhaustive bounded search (up to "
+            f"{max_extra} more symbols) -- D is not empty, and D is closed "
+            "under right-extension (x dead => xy dead for all y), so a "
+            "nonempty D is always infinite: 'finite' is contradicted by the "
+            "same single witness as 'empty' would be"
+        ]
+    return None, None, []
 
 
 def _semantic_check_shallit_nerode(
@@ -1140,14 +1277,29 @@ def _semantic_check_shallit_nerode(
     the task alphabet (no free parameters) and a set_builder membership
     oracle is available; otherwise trust stays at ``well_formed`` per the
     fallback in VERDICT_POLICY.md §4.
+
+    The dead-class part is the one exception to "only literal suffixes":
+    it runs ALWAYS whenever a membership oracle exists for this task,
+    independent of the shape of ``distinguishing_suffix`` -- the proof's
+    own ``dead_class_status`` claim (``"empty"`` / ``"finite"``) is checked
+    against the oracle regardless of how the rest of the proof is phrased
+    (VERDICT_POLICY.md §4 fix).
     """
-    distinguishing_suffix = proof_sketch.get("distinguishing_suffix")
     check_name = "semantic_nerode_separation[pairs]"
+    alphabet = task_ir.get("alphabet", [])
+    alphabet_set = set(alphabet)
+
+    claimed_status = proof_sketch.get("dead_class_status")
+    dead_outcome, _dead_evidence, dead_issues = _check_dead_class_finite(
+        task_ir, claimed_status,
+    )
+    if dead_outcome is not None:
+        return "refuted", check_name + " + dead_class_status", "; ".join(dead_issues)
+
+    distinguishing_suffix = proof_sketch.get("distinguishing_suffix")
     if not isinstance(distinguishing_suffix, str) or not distinguishing_suffix:
         return None, check_name, ""
 
-    alphabet = task_ir.get("alphabet", [])
-    alphabet_set = set(alphabet)
     if any(ch not in alphabet_set for ch in distinguishing_suffix):
         # Contains variables/prose (e.g. "b a^N b u^R") — not a literal we
         # can instantiate mechanically.
@@ -1248,18 +1400,6 @@ def _semantic_check_shallit_nerode(
         # If the suffix fails to separate arbitrary random samples, that is
         # NOT evidence against the proof (VERDICT_POLICY.md §4 fix) — leave
         # status None so trust stays at well_formed.
-
-    # Dead-class check runs regardless of the separation-pair outcome above:
-    # a proof that claims dead_class_finite is refuted by a real (bounded,
-    # exhaustive) counterexample, independent of whether a separating pair
-    # was also found (VERDICT_POLICY.md §4).
-    dead_ok, dead_word, dead_issues = _check_dead_class_finite(task_ir)
-    if dead_ok is False:
-        return "refuted", check_name + " + dead_class_finite", (
-            "; ".join(dead_issues)
-            + f" — proof claims dead_class_finite but {dead_word!r} has no "
-              "continuation into L"
-        )
 
     return status, check_name, issue
 

@@ -224,6 +224,26 @@ def test_unrelated_fatal_error_is_not_treated_as_schema_rejection():
     assert len(fake.stream_calls) == 1
 
 
+def test_too_many_requests_rate_limit_is_not_treated_as_schema_rejection():
+    """A 400 that happens to contain the words "too many" but is actually an
+    unrelated rate-limit error ("too many requests, please try again later")
+    must NOT be recognised as a schema rejection -- a bare "too many" marker
+    was tried once and matched this too, silently disabling structured
+    outputs for the model for the rest of the process (see
+    ``_schema_rejected_models``); it was removed in favour of the specific
+    phrasings ("too many optional parameters", "grammar compilation", ...)."""
+    fake = FakeAnthropic([raises_turn(fatal_error(
+        400, "too many requests, please try again later",
+    ))])
+    with pytest.raises(FatalAPIError):
+        _client().call(
+            fake, model="claude-sonnet-5", max_tokens=1000,
+            system="sys", user="u", output_schema=SCHEMA,
+        )
+    assert len(fake.stream_calls) == 1
+    assert not llm_client._model_schema_known_rejected("claude-sonnet-5")
+
+
 def test_no_schema_requested_verbose_flag_is_plain_so_no():
     """No schema was ever requested (e.g. input_parser) -- the verbose
     flag has nothing to explain, unlike a real fallback."""
