@@ -21,7 +21,8 @@ pair/context instantiation) and the destructive-trust combinator.
 import unittest
 from unittest.mock import patch
 
-from agent_system.graph import assemble_result_node, run_retry_planner_node
+from agent_system.config import MAX_CALLS_PER_AGENT
+from agent_system.graph import assemble_result_node, run_retry_planner_node, run_specialist_node
 from agent_system.lib.claim_verifier import (
     CONFIDENCE_CAPS,
     closure_trust_from_verification,
@@ -831,6 +832,91 @@ class TestR3PrimeCrossCheckReg(unittest.TestCase):
         self.assertEqual(result["status"], "partial")
         self.assertLessEqual(result["confidence"], 0.50)
         self.assertIsNone(result["evidence"]["reasoning"]["verdict"])
+
+
+# ---------------------------------------------------------------------------
+# Cost ceiling (TODO.md backlog round C2): config.MAX_CALLS_PER_AGENT — the
+# orchestrator must never call the same specialist more than this many times
+# for one task. Precedent: live cfl-12 eval run, cfg_builder alone was
+# called 6 times across retries (130 706 output tokens, $0.80).
+# ---------------------------------------------------------------------------
+
+class _CountingRunner:
+    """A mock runner that records every agent name it was actually asked to
+    run — used to assert the call cap is enforced at the call site itself,
+    not just in whatever the runner happens to return."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run_agent(self, agent_name, input_data=None):
+        self.calls.append(agent_name)
+        return {
+            "agent": agent_name, "status": "success", "evidence": {"verdict": "non_regular"},
+        }
+
+
+class TestCallCapAtSpecialistCallSite(unittest.TestCase):
+    def _specialist_state(self, agent_name, specialist_outputs, runner):
+        return {
+            "_specialist_name": agent_name,
+            "specialist_outputs": specialist_outputs,
+            "mock_runner": runner,
+            "agent_runner": None,
+            "verbose": False,
+            "ir": {},
+            "hypothesis": {},
+            "classifier_evidence": {},
+            "retry_context": {},
+        }
+
+    def test_specialist_skipped_once_cap_reached(self):
+        runner = _CountingRunner()
+        history = [("pumping", {"status": "success"})] * MAX_CALLS_PER_AGENT
+        state = self._specialist_state("pumping", history, runner)
+        result = run_specialist_node(state)
+        self.assertEqual(runner.calls, [])  # no LLM call made
+        self.assertNotIn("specialist_outputs", result)
+        self.assertTrue(any(
+            "pumping" in note and "call cap reached" in note
+            for note in result.get("call_cap_notes", [])
+        ))
+
+    def test_specialist_still_called_below_cap(self):
+        runner = _CountingRunner()
+        history = [("pumping", {"status": "success"})] * (MAX_CALLS_PER_AGENT - 1)
+        state = self._specialist_state("pumping", history, runner)
+        result = run_specialist_node(state)
+        self.assertEqual(runner.calls, ["pumping"])
+        self.assertNotIn("call_cap_notes", result)
+
+    def test_mock_retry_scenario_never_exceeds_cap(self):
+        """Simulate the retry planner asking for the SAME agent every round
+        (the cfl-12 precedent) across more rounds than the cap allows — the
+        runner must never see more than MAX_CALLS_PER_AGENT actual calls."""
+        runner = _CountingRunner()
+        specialist_outputs: list = []
+        for _ in range(MAX_CALLS_PER_AGENT + 4):
+            state = self._specialist_state("pumping", specialist_outputs, runner)
+            result = run_specialist_node(state)
+            specialist_outputs = specialist_outputs + list(result.get("specialist_outputs", []))
+        self.assertEqual(runner.calls.count("pumping"), MAX_CALLS_PER_AGENT)
+
+    def test_call_cap_note_surfaces_in_verdict_gate_downgrades(self):
+        state = _state(
+            test_result={
+                "status": "fail",
+                "counterexample": {"word": "ab", "oracle_says": True, "automaton_says": False},
+            },
+            call_cap_notes=[
+                "agent pumping call cap reached (3 calls)",
+                "agent pumping call cap reached (3 calls)",  # duplicate
+            ],
+        )
+        result = assemble_result_node(state)["result"]
+        downgrades = result["verdict_gate"]["downgrades"]
+        matches = [d for d in downgrades if "pumping call cap reached" in d]
+        self.assertEqual(len(matches), 1)
 
 
 if __name__ == "__main__":

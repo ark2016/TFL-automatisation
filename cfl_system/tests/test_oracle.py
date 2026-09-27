@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from cfl_system.lib.cfl_oracle import (
+    UnsupportedOracleKindError,
     cfl_oracle_from_ir,
     grammar_oracle,
     pda_oracle,
@@ -393,6 +394,49 @@ class TestCflOracleFromIR:
     def test_unsupported_kind_raises(self):
         with pytest.raises(ValueError, match="Unsupported"):
             cfl_oracle_from_ir({"language_spec": {"kind": "unknown_kind"}})
+
+
+# ---------------------------------------------------------------------------
+# Tests: "natural" kind falls back to exponent-notation parsing
+# (docs/VERDICT_POLICY.md §4) before raising UnsupportedOracleKindError.
+# ---------------------------------------------------------------------------
+
+class TestNaturalKindExponentFallback:
+    def test_natural_kind_exponent_description_builds_oracle(self):
+        ir = {
+            "language_spec": {
+                "kind": "natural",
+                "alphabet": ["a", "b", "c", "d"],
+                "description": "{a^i b^j c^k d^l | i = 0 or j = k = l}",
+            },
+        }
+        oracle = cfl_oracle_from_ir(ir)
+        assert oracle("aabbccdd") is True    # i=2, j=k=l=2
+        assert oracle("aabccddd") is False   # neither branch holds
+
+    def test_natural_kind_non_exponent_description_still_raises(self):
+        ir = {
+            "language_spec": {
+                "kind": "natural",
+                "alphabet": ["a", "b"],
+                "description": "{ww | w in {a,b}*}",
+            },
+        }
+        with pytest.raises(UnsupportedOracleKindError):
+            cfl_oracle_from_ir(ir)
+
+    def test_natural_kind_missing_description_raises(self):
+        with pytest.raises(UnsupportedOracleKindError):
+            cfl_oracle_from_ir({"language_spec": {"kind": "natural"}})
+
+    def test_already_supported_kinds_unaffected(self):
+        # grammar/predicate/etc. dispatch is decided before the natural/
+        # arithmetic_index branch is ever reached — adding the exponent
+        # fallback there must not change their behaviour.
+        ir = {"language_spec": _anbn_grammar()}
+        oracle = cfl_oracle_from_ir(ir)
+        assert oracle("aabb") is True
+        assert oracle("aab") is False
 
 
 # ---------------------------------------------------------------------------

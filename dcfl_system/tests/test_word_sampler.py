@@ -8,6 +8,7 @@ import pathlib
 import pytest
 
 from dcfl_system.lib.word_sampler import (
+    build_membership_oracle_from_ir,
     check_constraints,
     generate_negative_examples,
     sample_from_grammar,
@@ -429,3 +430,186 @@ class TestExampleTasks:
         assert len(positives) > 0
         for sw in positives:
             assert sw["source"] == "substitution"
+
+
+# ===================================================================
+# 9. build_membership_oracle_from_ir (single entry point, root CLAUDE.md
+#    item 3 / docs/VERDICT_POLICY.md §4)
+# ===================================================================
+
+
+class TestBuildMembershipOracleFromIR:
+    def test_set_builder_with_variables_uses_segment_matcher(self):
+        task = _load_task("task_u1au2_u3au4.json")
+        oracle = build_membership_oracle_from_ir(task)
+        assert oracle is not None
+        assert oracle("aa") is True  # u1="" a u2="a" u3="" a u4="" (fits)
+        assert oracle("bb") is False
+
+    def test_grammar_input_format_uses_cyk(self):
+        task = _load_task("task_grammar_aSSb.json")
+        oracle = build_membership_oracle_from_ir(task)
+        assert oracle is not None
+        assert oracle("ab") is True
+        assert oracle("aa") is False
+
+    def test_set_builder_without_variables_falls_back_to_exponent_pattern(self):
+        # dcfl-04 shape: {a^n b^n c^m | n, m >= 0}, variables=[].
+        ir = {
+            "input_format": "set_builder",
+            "alphabet": ["a", "b", "c"],
+            "language_spec": {
+                "kind": "set_builder",
+                "word_pattern": "{a^n b^n c^m | n, m >= 0}",
+                "variables": [],
+                "constraints": [],
+            },
+        }
+        oracle = build_membership_oracle_from_ir(ir)
+        assert oracle is not None
+        assert oracle("aabbccc") is True
+        assert oracle("aab") is False
+
+    def test_natural_kind_uses_exponent_pattern(self):
+        ir = {
+            "language_spec": {
+                "kind": "natural",
+                "description": "{a^i b^j c^k d^l | i = 0 or j = k = l}",
+            },
+            "alphabet": ["a", "b", "c", "d"],
+        }
+        oracle = build_membership_oracle_from_ir(ir)
+        assert oracle is not None
+        assert oracle("aabbccdd") is True
+        assert oracle("aabccddd") is False
+
+    def test_generic_word_variable_pattern_not_exponent_notation_returns_none(self):
+        # dcfl-15/16 shape before their IR fix: plain word variables
+        # ("u1 a u2"), no exponent blocks — exponent_pattern correctly
+        # refuses rather than mis-parsing "u1"/"u2" as letters.
+        ir = {
+            "input_format": "set_builder",
+            "alphabet": ["a", "b"],
+            "language_spec": {
+                "kind": "set_builder",
+                "word_pattern": "{u1 a u2 | |u1| <= |u2|}",
+                "variables": [],
+                "constraints": [],
+            },
+        }
+        assert build_membership_oracle_from_ir(ir) is None
+
+    def test_unknown_format_returns_none(self):
+        ir = {"input_format": "unknown", "alphabet": ["a", "b"], "language_spec": {}}
+        assert build_membership_oracle_from_ir(ir) is None
+
+    def test_dcfl_15_and_16_eval_json_build_after_fix(self):
+        eval_dir = _EXAMPLES_DIR / "eval"
+        for name in ("dcfl-15.json", "dcfl-16.json"):
+            ir = json.loads((eval_dir / name).read_text(encoding="utf-8"))
+            oracle = build_membership_oracle_from_ir(ir)
+            assert oracle is not None, f"{name}: oracle should build"
+            assert oracle("a") is True, f"{name}: 'a' (u=empty, u'=empty) should be in L"
+
+
+# ===================================================================
+# 10. sample_words enumeration fallback (plain oracle function, no
+#     `variables`) -- root CLAUDE.md item 3
+# ===================================================================
+
+
+class TestSampleWordsEnumerationFallback:
+    def test_dcfl04_shape_produces_positive_and_negative_via_enumeration(self):
+        ir = {
+            "task_id": "dcfl-04-like",
+            "input_format": "set_builder",
+            "alphabet": ["a", "b", "c"],
+            "language_spec": {
+                "kind": "set_builder",
+                "word_pattern": "{a^n b^n c^m | n, m >= 0}",
+                "variables": [],
+                "constraints": [],
+            },
+        }
+        results = sample_words(ir, count=10, max_len=8)
+        assert len(results) > 0
+        positives = [sw for sw in results if sw["in_language"] is True]
+        negatives = [sw for sw in results if sw["in_language"] is False]
+        assert len(positives) > 0
+        assert len(negatives) > 0
+        for sw in positives:
+            assert sw["source"] == "enumeration"
+
+    def test_no_oracle_available_falls_back_to_random(self):
+        ir = {
+            "input_format": "set_builder",
+            "alphabet": ["a", "b"],
+            "language_spec": {
+                "kind": "set_builder",
+                "word_pattern": "{ww | w in {a,b}*}",
+                "variables": [],
+                "constraints": [],
+            },
+        }
+        results = sample_words(ir, count=5)
+        assert len(results) > 0
+        sources = {sw["source"] for sw in results}
+        assert "random" in sources
+
+    def test_deterministic(self):
+        ir = {
+            "input_format": "set_builder",
+            "alphabet": ["a", "b"],
+            "language_spec": {
+                "kind": "set_builder",
+                "word_pattern": "a^n b^m",
+                "variables": [],
+                "constraints": [],
+            },
+        }
+        run1 = sample_words(ir, count=8, max_len=8)
+        run2 = sample_words(ir, count=8, max_len=8)
+        assert run1 == run2
+
+
+# ===================================================================
+# 11. sample_words negatives must be verified against the IR's own oracle
+#     when one is available (dcfl-15/16 trap: a mutated positive word can
+#     still be in L for a dense language) -- root CLAUDE.md item 3 /
+#     docs/VERDICT_POLICY.md §4 "never guess".
+# ===================================================================
+
+
+class TestSampleWordsNegativesMatchOracle:
+    @pytest.mark.parametrize("filename", ["dcfl-15.json", "dcfl-16.json"])
+    def test_every_in_language_label_matches_the_oracle(self, filename):
+        eval_dir = _EXAMPLES_DIR / "eval"
+        ir = json.loads((eval_dir / filename).read_text(encoding="utf-8"))
+        oracle = build_membership_oracle_from_ir(ir)
+        assert oracle is not None
+
+        results = sample_words(ir, count=20, max_len=30)
+        negatives = [sw for sw in results if sw["in_language"] is False]
+        assert len(negatives) > 0, f"{filename}: expected at least one negative"
+        for sw in negatives:
+            verdict = oracle(sw["word"])
+            assert verdict is not True, (
+                f"{filename}: {sw['word']!r} labelled in_language=False but "
+                f"the oracle says it IS in L"
+            )
+
+    @pytest.mark.parametrize("filename", ["dcfl-15.json", "dcfl-16.json"])
+    def test_positive_labels_also_match_the_oracle(self, filename):
+        eval_dir = _EXAMPLES_DIR / "eval"
+        ir = json.loads((eval_dir / filename).read_text(encoding="utf-8"))
+        oracle = build_membership_oracle_from_ir(ir)
+        assert oracle is not None
+
+        results = sample_words(ir, count=20, max_len=30)
+        positives = [sw for sw in results if sw["in_language"] is True]
+        assert len(positives) > 0
+        for sw in positives:
+            assert oracle(sw["word"]) is not False, (
+                f"{filename}: {sw['word']!r} labelled in_language=True but "
+                f"the oracle says it is NOT in L"
+            )

@@ -11,19 +11,72 @@ against.
 whose full contract is actually representable in ``output_config.format``'s
 JSON-schema subset (built with ``schema_string`` / ``schema_object`` / etc.
 from ``agent_system.lib.llm_client`` — see that module for exactly what the
-API accepts and rejects: an empty ``{}`` subschema is rejected outright, and
+API accepts and rejects: an empty ``{}`` subschema is rejected outright,
 ``additionalProperties: false`` is required at *every* nesting level, not
-just the top). Three specialists in :data:`REQUIRED_KEYS` have no entry
-there and so get no schema at all (``schema_for`` returns ``None``, same as
-``input_parser``): each documents a nested field that's a map keyed by
-something chosen at *generation* time, which a closed schema can't express
-without forbidding the very keys the model needs to emit —
+just the top, and — the actual live bug this round fixed (a live cfl eval
+run: 7x 400 on ``reasoning``/``retry_planner``, zero successful reasoning
+calls, no matching entry in ``llm_client._SCHEMA_REJECTION_MARKERS`` so the
+schema-rejection fallback never fired) — the whole schema tree may not have
+more than 24 **optional** properties (a property not in its own object's
+``required`` list), counted recursively at every nesting level; see
+``agent_system/lib/testing/schema_checks.py``'s module docstring for the
+exact API error text and how the 24 is confirmed live to count
+recursively). ``pumping_cfl`` / ``ogden`` were, until this round, wrongly
+believed dynamically-keyed (``evidence.word_instances`` /
+``evidence.marked_positions``) — every prompt worked example actually keys
+them by the fixed literal strings ``"3"`` and ``"4"`` (the two pumping
+multipliers *every* proof instantiates, per ``cfl_pumping.md`` /
+``cfl_ogden.md``'s own "## Word choice strategies" — not a value chosen
+per-task), and ``lib/claim_verifier.py``'s semantic check reads them the
+same fixed way (``for p in {3, 4}``) — so both now get a real, closed
+schema below. ``morphism`` keeps no entry (``schema_for`` returns ``None``,
+same as ``input_parser``): its ``evidence.morphism.mapping`` really is
+keyed by the language's own alphabet symbols, which differ per task and
+can't be enumerated — ``additionalProperties: false`` would forbid the
+very keys the model needs to emit.
 
-- ``pumping_cfl`` / ``ogden``: ``evidence.word_instances`` (and, for
-  ``ogden``, ``evidence.marked_positions``) is keyed by the pumping
-  multipliers the agent itself chooses (``"3"``, ``"4"``, ...);
-- ``morphism``: ``evidence.morphism.mapping`` is keyed by the language's
-  own alphabet symbols.
+The 9 specialists' shared retry-hint map (``reasoning.retry_plan.hints`` /
+``retry_planner.hints``) is the schema that actually hit the API's
+24-optional-property limit: modelling "only the retried specialists' keys
+are present, and only the fields that specialist's hint actually uses" as
+`required=[]` at both the map level (9 optional entries) and each entry's
+own level (6 optional fields each) came to 9 + 9*6 = 63 optional
+properties — confirmed live as the exact number the API's 400 named.
+
+The first fix tried (required+nullable instead of `required=[]`
+everywhere) traded that problem for a *second*, separate live-confirmed
+limit: the API also caps how many **union-typed** (``anyOf`` /
+``type: [..., "null"]``) parameters a schema may carry — "Schemas
+contains too many parameters with union types (49 parameters with type
+arrays or anyOf) ... (limit: 16 parameters with unions)" — turning every
+one of those same 63 slots ``nullable(...)`` traded 9 + 9*6 optional
+properties for 9 + 9*4 = 45 union-typed ones (the map's own 9 entries,
+plus 4 of each entry's 6 fields — ``hint``/``strategy`` stayed plain
+required strings, not nullable), still over the (different) limit.
+
+Both limits share the same root cause: **one map with 9 property keys is
+9 separate copies of `_RETRY_HINT`'s subschema** — the API walks the
+whole tree once per *distinct* subschema occurrence, so anything
+per-entry (optional or nullable) is multiplied by 9 regardless of which
+axis it's expressed on. An **array** of one shared item schema does not
+have this problem: ``schema_array(items)`` has exactly ONE `items`
+subschema, walked once no matter how many elements the model actually
+returns at runtime. `_RETRY_HINTS_SCHEMA` is that array — each item names
+its own specialist explicitly (``"agent": "pumping_cfl"``) instead of
+being keyed by it, with `hint`/`strategy` required and only
+`avoid`/`suggested_regex`/`suggested_word`/`counterexample` optional (one
+copy of 4 optional properties total, not 9 copies of 4 or their nullable
+equivalent) — confirmed live (2026-09-27) to compile with
+`used_structured_output=True`, no 400 on either axis.
+
+This changes what a genuine ``output_config.format`` call produces (an
+array of ``{"agent": ..., ...}`` objects) from what the prompt's own
+"## Output Format" documents and what the *legacy* prose-extraction
+fallback path (no schema) still produces unchanged (a
+``{agent_name: {...}}`` map) — ``cfl_system.orchestrator``'s
+``_normalize_retry_hints`` converts either shape back to the map every
+downstream consumer expects immediately after parsing, so nothing past
+that one point ever sees the array form.
 """
 
 from __future__ import annotations
@@ -93,6 +146,15 @@ _GRAMMAR = schema_object({
     })),
 })
 
+# pumping_cfl / ogden: instantiate the parametric word at the two fixed
+# pumping multipliers every worked example uses (p=3, p=4 -- literally
+# "3"/"4" as string keys, never a value the agent picks itself; see the
+# module docstring and lib/claim_verifier.py's own `for p in {3, 4}`).
+_PUMP_WORD_INSTANCES = schema_object({
+    "3": schema_string(),
+    "4": schema_string(),
+})
+
 _PDA = schema_object({
     "states": schema_string_array(),
     "input_alphabet": schema_string_array(),
@@ -109,12 +171,18 @@ _PDA = schema_object({
     })),
 })
 
-# retry_planner.hints / reasoning.retry_plan.hints: one per-specialist hint
-# object, all fields optional since different specialists' hints carry
-# different subsets (a suggested regex only makes sense for
-# closure_reduction, a suggested word only for pumping_cfl, ...).
-_RETRY_HINT = schema_object(
+# retry_planner.hints / reasoning.retry_plan.hints: an ARRAY of per-agent
+# hint objects (not a map keyed by specialist name -- see the module
+# docstring for why: one shared item schema avoids the 9x-duplication that
+# blew past first the optional-property limit, then the union-typed-
+# parameter limit). "always present" per the prompt's own field
+# descriptions (`hint`, `strategy`) plus the specialist name itself stay
+# plain required; "Optional fields" per the prompt (`avoid`,
+# `suggested_word`, `suggested_regex`, `counterexample`) are genuinely
+# optional here -- one copy of 4 optional properties, not 9.
+_RETRY_HINT_ITEM = schema_object(
     {
+        "agent": schema_string(enum=list(_SPECIALISTS)),
         "hint": schema_string(),
         "strategy": schema_string(),
         "avoid": schema_string_array(),
@@ -126,11 +194,9 @@ _RETRY_HINT = schema_object(
             "got": schema_boolean(),
         }),
     },
-    required=[],
+    required=["agent", "hint", "strategy"],
 )
-_RETRY_HINTS_MAP = schema_object(
-    {name: _RETRY_HINT for name in _SPECIALISTS}, required=[],
-)
+_RETRY_HINTS_SCHEMA = schema_array(_RETRY_HINT_ITEM)
 
 
 def _specialist_schema(agent: str, verdict: dict, evidence_properties: dict, *,
@@ -207,6 +273,67 @@ _FIELD_SCHEMAS: dict[str, dict[str, dict]] = {
             "explanation": schema_string(),
         },
     ),
+    "pumping_cfl": _specialist_schema(
+        "pumping_cfl", _NON_CFL_VERDICT,
+        {
+            "word_chosen": schema_string(),
+            "word_parametric": schema_string(),
+            # NOT in evidence_required below: cfl_pumping.md's own Example 2
+            # (status="inconclusive", direct pumping unreliable -- defer to
+            # closure_reduction) has every OTHER evidence field populated
+            # but omits word_instances entirely, unlike ogden's own
+            # inconclusive example (which uses evidence: null wholesale).
+            "word_instances": _PUMP_WORD_INSTANCES,
+            "membership_argument": schema_string(),
+            "length_argument": schema_string(),
+            "cases": schema_array(schema_object({
+                "case": schema_string(),
+                "vwx_region": schema_string(),
+                "pump_value": schema_number(),
+                "pumped_word": schema_string(),
+                "why_not_in_L": schema_string(),
+            })),
+            "all_cases_covered": schema_boolean(),
+            "conclusion": schema_string(),
+        },
+        evidence_required=[
+            "all_cases_covered", "cases", "conclusion", "length_argument",
+            "membership_argument", "word_chosen", "word_parametric",
+        ],
+    ),
+    "ogden": _specialist_schema(
+        "ogden", _NON_CFL_VERDICT,
+        {
+            "word_chosen": schema_string(),
+            "word_parametric": schema_string(),
+            "word_instances": _PUMP_WORD_INSTANCES,
+            "membership_argument": schema_string(),
+            # keyed the same fixed way as word_instances ("3"/"4"), plus a
+            # "description" entry (cfl_ogden.md's own "## Output Format").
+            "marked_positions": schema_object({
+                "description": schema_string(),
+                "3": schema_array(schema_number()),
+                "4": schema_array(schema_number()),
+            }),
+            "num_marked": schema_string(),
+            "marking_rationale": schema_string(),
+            "cases": schema_array(schema_object({
+                "case": schema_string(),
+                "vwx_region": schema_string(),
+                "marked_in_vwx": schema_string(),
+                "pump_value": schema_number(),
+                "pumped_word": schema_string(),
+                "why_not_in_L": schema_string(),
+            })),
+            "all_cases_covered": schema_boolean(),
+            "conclusion": schema_string(),
+        },
+        # word_instances/marked_positions are, per cfl_ogden.md, "REQUIRED
+        # whenever status = success, even when all_cases_covered is true" --
+        # ogden's own inconclusive worked example sets the whole evidence
+        # object to null rather than omitting just these two, so (unlike
+        # pumping_cfl) every evidence field here stays required.
+    ),
     "closure_reduction": _specialist_schema(
         "closure_reduction", _NON_CFL_VERDICT,
         {
@@ -265,7 +392,7 @@ _FIELD_SCHEMAS: dict[str, dict[str, dict]] = {
         "retry_plan": nullable(schema_object({
             "agents_to_retry": schema_string_array(),
             "reason": schema_string(),
-            "hints": _RETRY_HINTS_MAP,
+            "hints": _RETRY_HINTS_SCHEMA,
             "max_retries_remaining": schema_number(),
         })),
         "hints_for_human": schema_string_array(),
@@ -275,7 +402,7 @@ _FIELD_SCHEMAS: dict[str, dict[str, dict]] = {
         "agent": schema_string(enum=["retry_planner"]),
         "agents_to_retry": schema_string_array(),
         "skip_agents": schema_string_array(),
-        "hints": _RETRY_HINTS_MAP,
+        "hints": _RETRY_HINTS_SCHEMA,
         "max_retries_remaining": schema_number(),
         "should_invert_hypothesis": schema_boolean(),
         "reasoning": schema_string(),

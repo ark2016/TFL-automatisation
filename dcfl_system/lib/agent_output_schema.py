@@ -79,8 +79,13 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
         # the oracle_verifier can mechanically check for determinism and
         # simulate. `transitions` is an ARRAY of transition objects (same
         # convention as cfl_pda_builder's PDA), not a map keyed by state,
-        # so it's fully representable here.
-        "dpda": schema_object({
+        # so it's fully representable here. Nullable (C2 review): the
+        # schema only says the KEY is always present -- whether it must be
+        # non-null (i.e. status == "success") is the prompt's /
+        # oracle_verifier's contract to enforce, not output_config.format's
+        # (a status == "failure"/"inconclusive" response has nothing to
+        # put here).
+        "dpda": nullable(schema_object({
             "states": schema_string_array(),
             "start": schema_string(),
             "accept_states": schema_string_array(),
@@ -94,7 +99,7 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
                 "to": schema_string(),
                 "push": schema_string_array(),
             })),
-        }),
+        })),
     }),
     "closure_reduction": schema_object({
         "kind": schema_string(enum=["closure_reduction"]),

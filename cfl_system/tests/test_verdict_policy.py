@@ -24,8 +24,10 @@ since the gate is a pure function of `state`.
 from __future__ import annotations
 
 from cfl_system.orchestrator import (
+    MAX_CALLS_PER_AGENT,
     MAX_RETRIES,
     apply_verdict_gate,
+    run_specialist_node,
     verdict_gate_node,
 )
 
@@ -538,6 +540,33 @@ class TestR4PrimeStrongestAdmissibleBasis:
         assert gate["reasoning_output"]["confidence"] <= 0.40
         assert any("strongest admissible basis: inconclusive" in d for d in vg["downgrades"])
 
+    def test_destructive_well_formed_wins_despite_unrelated_agent_refuted(self):
+        """Reviewer finding (backlog round C2): `not destructive_refuted`
+        used to drop an otherwise-admissible destructive basis whenever ANY
+        other destructive agent was refuted, even one unrelated to the
+        winning trust. ogden is refuted, pumping_cfl is well_formed and
+        argues non_cfl -> the well_formed pumping_cfl claim must still win
+        (non_cfl, confidence <= 0.60), not fall through to inconclusive."""
+        state = _base_state(
+            retry_round=MAX_RETRIES,
+            agent_results={
+                "ogden": {"status": "success", "verdict": "non_cfl", "evidence": {}},
+                "pumping_cfl": {"status": "success", "verdict": "non_cfl", "evidence": {}},
+            },
+            oracle_test_result={},
+            claim_verification={
+                "ogden": {"trust": "refuted"},
+                "pumping_cfl": {"trust": "well_formed", "verification_status": "well_formed"},
+            },
+            reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.9},
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "non_cfl"
+        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert any("retry budget exhausted" in d and "strongest admissible basis" in d for d in vg["downgrades"])
+
     def test_constructive_bounded_pass_rescues_unsupported_destructive_proposal(self):
         """Symmetric case: reasoning proposes done/non_cfl without adequate
         destructive evidence, retries exhausted, but a constructive artifact
@@ -725,3 +754,92 @@ class TestR3PrimeNestedWitnessLeavingRNoLongerFalseRefutes:
         assert vg["contradiction"] is False
         assert gate["reasoning_output"]["verdict"] == "non_cfl"
         assert "pda_builder" not in gate["trust"]
+
+
+# ---------------------------------------------------------------------------
+# Cost ceiling (TODO.md backlog round C2): config.MAX_CALLS_PER_AGENT — the
+# orchestrator must never call the same specialist more than this many times
+# for one task. Precedent: live cfl-12 eval run, cfg_builder alone was
+# called 6 times across retries (130 706 output tokens, $0.80).
+# ---------------------------------------------------------------------------
+
+class _CountingRunner:
+    """A mock runner that records every agent name it was actually asked to
+    run — used to assert the call cap is enforced at the call site itself,
+    not just in whatever the runner happens to return."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run_agent(self, agent_name, input_data=None):
+        self.calls.append(agent_name)
+        return {
+            "agent": agent_name, "status": "success", "verdict": "non_cfl",
+            "confidence": 0.5, "evidence": {},
+        }
+
+
+def _specialist_state(agent_name: str, specialist_outputs: list, runner: _CountingRunner) -> dict:
+    return {
+        "_specialist_name": agent_name,
+        "specialist_outputs": specialist_outputs,
+        "mock_runner": runner,
+        "agent_runner": None,
+        "verbose": False,
+        "ir": {},
+        "hypothesis": {},
+        "classifier_output": {},
+        "preprocess_output": {},
+        "retry_context": {},
+    }
+
+
+class TestCallCapAtSpecialistCallSite:
+    def test_specialist_skipped_once_cap_reached(self):
+        runner = _CountingRunner()
+        history = [("ogden", {"status": "success"})] * MAX_CALLS_PER_AGENT
+        state = _specialist_state("ogden", history, runner)
+        result = run_specialist_node(state)
+        assert runner.calls == []  # no LLM call made
+        assert "specialist_outputs" not in result
+        assert any(
+            "ogden" in note and "call cap reached" in note
+            for note in result.get("call_cap_notes", [])
+        )
+
+    def test_specialist_still_called_below_cap(self):
+        runner = _CountingRunner()
+        history = [("ogden", {"status": "success"})] * (MAX_CALLS_PER_AGENT - 1)
+        state = _specialist_state("ogden", history, runner)
+        result = run_specialist_node(state)
+        assert runner.calls == ["ogden"]
+        assert "call_cap_notes" not in result
+
+    def test_mock_retry_scenario_never_exceeds_cap(self):
+        """Simulate the retry planner asking for the SAME agent every round
+        (the cfl-12 precedent) across more rounds than the cap allows — the
+        runner must never see more than MAX_CALLS_PER_AGENT actual calls."""
+        runner = _CountingRunner()
+        specialist_outputs: list = []
+        for _ in range(MAX_CALLS_PER_AGENT + 4):  # far more "retry rounds" than the cap
+            state = _specialist_state("ogden", specialist_outputs, runner)
+            result = run_specialist_node(state)
+            specialist_outputs = specialist_outputs + list(result.get("specialist_outputs", []))
+        assert runner.calls.count("ogden") == MAX_CALLS_PER_AGENT
+
+    def test_call_cap_note_surfaces_in_verdict_gate_downgrades(self):
+        state = _base_state(
+            retry_round=MAX_RETRIES,
+            agent_results={},
+            oracle_test_result={},
+            claim_verification={},
+            reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.9},
+            call_cap_notes=[
+                "agent ogden call cap reached (3 calls)",
+                "agent ogden call cap reached (3 calls)",  # duplicate, from a later round
+            ],
+        )
+        gate = apply_verdict_gate(state)
+        downgrades = gate["verdict_gate"]["downgrades"]
+        matches = [d for d in downgrades if "ogden call cap reached" in d]
+        assert len(matches) == 1

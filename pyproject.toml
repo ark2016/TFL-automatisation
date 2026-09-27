@@ -63,4 +63,5 @@ testpaths = [
     "ll_system/tests",
     "ui_server/tests",
     "tests",
+    "tfl_eval/tests",
 ]

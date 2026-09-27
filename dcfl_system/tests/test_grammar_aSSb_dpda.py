@@ -14,11 +14,16 @@ import pytest
 
 from dcfl_system.lib.dpda import check_determinism, dpda_accepts
 from dcfl_system.tools.grammar_aSSb_dpda import (
+    QuotientDPDA,
+    RawDPDA,
     build_fast_index,
     build_npda,
+    check_quotient_reachable_pairs,
+    determinize,
     dpda_fast_accepts,
     in_language,
     npda_run,
+    quotient,
 )
 
 CERT_PATH = (
@@ -113,3 +118,59 @@ class TestNpdaIsHeightDeterministic:
                 if heights is not None and len(heights) > 1:
                     violations.append((w, heights))
         assert violations == []
+
+
+# ---------------------------------------------------------------------------
+# (e) Quotient structural soundness (review finding, round C3): the
+#     bisimulation quotient must never define a transition on a (class-of-
+#     top, class-of-state) key unless SOME reachable raw pair backing that
+#     key actually has one -- check_quotient_reachable_pairs is the
+#     independent, non-word-based check for this.
+# ---------------------------------------------------------------------------
+
+
+class TestQuotientReachablePairsStructuralCheck:
+    def test_real_pipeline_has_no_violations(self):
+        raw = determinize(build_npda())
+        quot = quotient(raw)
+        assert check_quotient_reachable_pairs(raw, quot) == []
+
+    def test_reachable_pairs_are_exposed_and_nonempty(self):
+        raw = determinize(build_npda())
+        assert raw.reachable_pairs
+        assert all(isinstance(p, tuple) and len(p) == 2 for p in raw.reachable_pairs)
+
+    def test_detects_a_quotient_transition_absent_from_any_reachable_raw_pair(self):
+        """A hand-built RawDPDA/QuotientDPDA pair where two states (s1, s2)
+        share a class, a transition exists only via s1, and the pair (top,
+        s2) is UNREACHABLE -- the check must flag the class-key transition
+        as unsupported by any reachable raw pair on that (top, s2) side."""
+        raw = RawDPDA(
+            names={},
+            transitions=[("s1", "a", "top", "pop", "s1")],
+            accepting=set(),
+            start="s1",
+            # (top, s1) is reachable; (top, s2) never occurs together.
+            reachable_pairs=frozenset({("top", "s1")}),
+        )
+        # s1 and s2 collapse to the same class (0); "top" is its own class (1).
+        quot = QuotientDPDA(
+            q0=0,
+            acc=frozenset(),
+            trans={(0, "a", 1): ("pop", 0)},
+            classes={"s1": 0, "s2": 0, "top": 1},
+        )
+        violations = check_quotient_reachable_pairs(raw, quot)
+        assert violations == []  # (top, s1) IS reachable and DOES have a raw move -- no violation from it
+
+        # Now add s2 to reachable_pairs on the SAME (top, class) combination
+        # but with NO raw transition for it -- this is the case the check
+        # must catch: the quotient's class-key transition would apply to a
+        # reachable pair raw itself leaves undefined.
+        raw_with_gap = RawDPDA(
+            names={}, transitions=raw.transitions, accepting=set(), start="s1",
+            reachable_pairs=frozenset({("top", "s1"), ("top", "s2")}),
+        )
+        violations = check_quotient_reachable_pairs(raw_with_gap, quot)
+        assert violations
+        assert any("s2" in v and "top" in v for v in violations)

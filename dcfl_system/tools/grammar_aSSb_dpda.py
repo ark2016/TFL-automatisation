@@ -225,12 +225,26 @@ class RawDPDA:
     the two finite-control moves of the "ba at an empty stack" branch);
     `accepting`/`start` are names too. `top_name` "BOT" denotes height 0
     (nothing below).
+
+    `reachable_pairs` is the set of (top_name, state_name) combinations the
+    BFS in `determinize` actually reached (i.e. every (Y, T) pair explored
+    there, by name) -- distinct from a (top, state) combination that is
+    merely a Cartesian-product member of "some name" x "some name" but was
+    NEVER live together on the same stack in any run. `quotient` uses this
+    to build each state's bisimulation signature only from pairs that can
+    really occur, rather than treating "this pair never happens" and "this
+    pair happens but has no move on this letter" as the same thing (review
+    finding, round C3): conflating them let two names differ only on
+    irrelevant, unreachable pairs and get compared on that irrelevant
+    difference anyway, so the quotient's class assignment was not provably
+    tied to the automaton's actual reachable behaviour.
     """
 
     names: dict[frozenset, str]
     transitions: list[tuple[str, str, str, str, str]]
     accepting: set[str]
     start: str
+    reachable_pairs: frozenset[tuple[str, str]]
 
 
 _BOTNAME = "BOT"
@@ -345,7 +359,15 @@ def determinize(npda: NPDA | None = None) -> RawDPDA:
                 if nt is not None:
                     transitions.append((names[T], ch, top_name, "pop", names[nt]))
 
-    return RawDPDA(names=names, transitions=transitions, accepting=accepting, start=names[T0])
+    # (top_name, state_name) for every (Y, T) BFS actually explored -- the
+    # ground truth for "this pair can really occur" that `quotient` restricts
+    # its signature-building to (see RawDPDA.reachable_pairs docstring).
+    reachable_pairs = frozenset((names.get(Y, _BOTNAME), names[T]) for (Y, T) in pairs)
+
+    return RawDPDA(
+        names=names, transitions=transitions, accepting=accepting, start=names[T0],
+        reachable_pairs=reachable_pairs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -357,18 +379,35 @@ def determinize(npda: NPDA | None = None) -> RawDPDA:
 class QuotientDPDA:
     """Minimized summary DPDA: states/stack symbols are equivalence-class ids
     (int), -1 reserved for the bottom-of-stack class ("BOT" / "Z0"). `trans`
-    maps (from_class, letter, top_class) -> (kind, to_class).
+    maps (from_class, letter, top_class) -> (kind, to_class). `classes` is
+    the raw-name -> class-id map the refinement converged to (exposed so
+    `check_quotient_reachable_pairs` can relate `raw`'s reachable pairs back
+    to their class-level keys in `trans`).
     """
 
     q0: int
     acc: frozenset[int]
     trans: dict[tuple[int, str, int], tuple[str, int]]
+    classes: dict[str, int]
 
 
 def quotient(raw: RawDPDA, max_iterations: int = 100) -> QuotientDPDA:
     """Bisimulation-minimize `raw`: states are merged while they agree, for
     every letter, on the (class-of-top, kind, class-of-target) behaviour for
-    every stack-top class -- refined to a fixed point (partition refinement).
+    every REACHABLE stack-top -- refined to a fixed point (partition
+    refinement).
+
+    Only `raw.reachable_pairs` (top, state) combinations feed each state's
+    signature (review finding, round C3): a (top, state) pair that was never
+    live together on the same stack in any BFS-explored run is simply left
+    out, rather than folded into the same "no move" bucket a REACHABLE pair
+    with no transition on some letter would produce. The two are not the
+    same thing -- "this exact situation cannot arise" says nothing about
+    behaviour, while "this situation arises and then there is no move"
+    is itself a real, distinguishing fact about the state -- and conflating
+    them made the class assignment depend on irrelevant, never-occurring
+    combinations instead of purely on the automaton's actual reachable
+    behaviour.
     """
     state_names = set(raw.names.values())
     all_symbols = state_names | {_BOTNAME}
@@ -384,6 +423,8 @@ def quotient(raw: RawDPDA, max_iterations: int = 100) -> QuotientDPDA:
         for ch in "ab":
             m: dict[Any, set] = {}
             for top in all_symbols:
+                if (top, s) not in raw.reachable_pairs:
+                    continue  # never live together -- not this state's behaviour to report
                 r = tm.get((s, ch, top))
                 key = cls[top]
                 val = None if r is None else (r[0], cls[r[1]])
@@ -417,7 +458,35 @@ def quotient(raw: RawDPDA, max_iterations: int = 100) -> QuotientDPDA:
 
     qacc = frozenset(cls[s] for s in raw.accepting)
     q0 = cls[raw.start]
-    return QuotientDPDA(q0=q0, acc=qacc, trans=qtrans)
+    return QuotientDPDA(q0=q0, acc=qacc, trans=qtrans, classes=dict(cls))
+
+
+def check_quotient_reachable_pairs(raw: RawDPDA, quot: QuotientDPDA) -> list[str]:
+    """Structural soundness check (review finding, round C3): for every
+    REACHABLE (top, state) pair (``raw.reachable_pairs``) on which `raw`
+    itself has no transition for some letter, `quot` must not have one
+    either at the corresponding class-level key -- a defined quotient
+    transition there would mean the minimization invented behaviour that no
+    reachable raw configuration actually exhibits (see `quotient`'s
+    docstring). Returns a list of violation descriptions (empty = sound).
+    """
+    tm: dict[tuple[str, str, str], tuple[str, str]] = {}
+    for s, ch, top, kind, tgt in raw.transitions:
+        tm[(s, ch, top)] = (kind, tgt)
+
+    violations: list[str] = []
+    for (top, s) in sorted(raw.reachable_pairs):
+        for ch in "ab":
+            if (s, ch, top) in tm:
+                continue  # raw itself defines a move here -- nothing to check
+            key = (quot.classes[s], ch, quot.classes[top])
+            if key in quot.trans:
+                violations.append(
+                    f"reachable pair (top={top!r}, state={s!r}) has no raw transition on "
+                    f"{ch!r}, but quotient class-key {key} defines {quot.trans[key]!r} -- "
+                    "the minimization invented behaviour absent from any reachable run"
+                )
+    return violations
 
 
 # ---------------------------------------------------------------------------
@@ -495,10 +564,22 @@ def dpda_fast_accepts(
 # ---------------------------------------------------------------------------
 
 
+def _build_pipeline() -> tuple[RawDPDA, QuotientDPDA, dict[str, Any]]:
+    """Run build_npda -> determinize -> quotient -> export_dpda, returning
+    the intermediate RawDPDA/QuotientDPDA alongside the exported certificate.
+    `main`'s ``--check`` needs the intermediates for
+    `check_quotient_reachable_pairs`; `build_certificate` is the plain
+    public entry point that only wants the certificate itself."""
+    raw = determinize(build_npda())
+    quot = quotient(raw)
+    return raw, quot, export_dpda(quot)
+
+
 def build_certificate() -> dict[str, Any]:
     """Run the full pipeline (build_npda -> determinize -> quotient ->
     export_dpda) and return the certificate dict."""
-    return export_dpda(quotient(determinize(build_npda())))
+    _, _, cert = _build_pipeline()
+    return cert
 
 
 def _check(cert: dict[str, Any], max_len: int) -> int:
@@ -533,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    cert = build_certificate()
+    raw, quot, cert = _build_pipeline()
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(cert, separators=(",", ":")), encoding="utf-8")
@@ -544,6 +625,17 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.check is not None:
+        # Structural soundness check (review finding, round C3), independent
+        # of any specific word: on every reachable (top, state) pair, raw
+        # being undefined on a letter must mean the quotient is undefined
+        # there too -- see check_quotient_reachable_pairs's docstring.
+        violations = check_quotient_reachable_pairs(raw, quot)
+        print(f"quotient structural check: {len(violations)} violation(s)")
+        for v in violations[:10]:
+            print(f"  - {v}")
+        if violations:
+            return 1
+
         mismatches = _check(cert, args.check)
         print(f"check up to length {args.check}: mismatches={mismatches}")
         if mismatches:

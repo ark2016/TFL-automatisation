@@ -150,6 +150,70 @@ def test_schema_rejection_memory_is_per_model():
     assert fake.stream_calls[2]["output_config"]["format"] == {"type": "json_schema", "schema": SCHEMA}
 
 
+def test_too_many_optional_parameters_falls_back_to_plain_call():
+    """A 400 naming "too many optional parameters" (the actual live bug this
+    round fixed: cfl's `reasoning`/`retry_planner` schemas had 63 optional
+    properties in their shared retry-hint map -- see
+    cfl_system/lib/agent_output_schema.py's module docstring) must be
+    recognised as a schema rejection and retried once without the schema,
+    same as any other output_config rejection -- not fall through as a
+    hard FatalAPIError. Message text reproduced live 2026-09-27 (see
+    agent_system/lib/testing/schema_checks.py's module docstring)."""
+    fake = FakeAnthropic([
+        raises_turn(fatal_error(
+            400,
+            "Schemas contains too many optional parameters (63), which "
+            "would make grammar compilation inefficient. Reduce the "
+            "number of optional parameters in your tool schemas "
+            "(limit: 24).",
+        )),
+        text_turn('{"status": "success", "confidence": 0.5, "errors": []}'),
+    ])
+    result = _client().call(
+        fake, model="claude-haiku-4-5", max_tokens=1000,
+        system="sys", user="u", output_schema=SCHEMA,
+    )
+    assert result.used_structured_output is False
+    assert result.requested_structured_output is True
+    assert len(fake.stream_calls) == 2
+    assert fake.stream_calls[0]["output_config"]["format"] == {"type": "json_schema", "schema": SCHEMA}
+    assert "format" not in fake.stream_calls[1].get("output_config", {})
+    assert result.schema_fallback_reason is not None
+    assert "too many optional parameters" in result.schema_fallback_reason
+    assert json.loads(result.text) == {"status": "success", "confidence": 0.5, "errors": []}
+
+
+def test_too_many_union_typed_parameters_falls_back_to_plain_call():
+    """A SEPARATE 400 from the "too many optional parameters" one above --
+    hit live while fixing that one (converting cfl's 63 optional
+    properties straight to required+nullable traded that rejection for
+    this one instead, at 49 vs. a limit of 16). Must also be recognised
+    as a schema rejection, not fall through as a hard FatalAPIError."""
+    fake = FakeAnthropic([
+        raises_turn(fatal_error(
+            400,
+            "Schemas contains too many parameters with union types (49 "
+            "parameters with type arrays or anyOf). This causes "
+            "exponential compilation cost. Reduce the number of nullable "
+            "or union-typed parameters (limit: 16 parameters with "
+            "unions).",
+        )),
+        text_turn('{"status": "success", "confidence": 0.5, "errors": []}'),
+    ])
+    result = _client().call(
+        fake, model="claude-haiku-4-5", max_tokens=1000,
+        system="sys", user="u", output_schema=SCHEMA,
+    )
+    assert result.used_structured_output is False
+    assert result.requested_structured_output is True
+    assert len(fake.stream_calls) == 2
+    assert fake.stream_calls[0]["output_config"]["format"] == {"type": "json_schema", "schema": SCHEMA}
+    assert "format" not in fake.stream_calls[1].get("output_config", {})
+    assert result.schema_fallback_reason is not None
+    assert "union types" in result.schema_fallback_reason
+    assert json.loads(result.text) == {"status": "success", "confidence": 0.5, "errors": []}
+
+
 def test_unrelated_fatal_error_is_not_treated_as_schema_rejection():
     fake = FakeAnthropic([raises_turn(fatal_error(400, "invalid task IR: missing 'alphabet'"))])
     with pytest.raises(FatalAPIError):

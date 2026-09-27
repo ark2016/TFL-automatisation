@@ -28,6 +28,7 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
+from dcfl_system.config import MAX_CALLS_PER_AGENT
 from dcfl_system.lib.dcfl_ir_schema import validate_dcfl_ir
 from dcfl_system.lib.hypothesis_module import analyze_dcfl_hypothesis
 from dcfl_system.lib.pattern_db import match_patterns
@@ -67,10 +68,13 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
 
-# docs/VERDICT_POLICY.md R3: when a contradiction is not resolved (R3' has
-# no executable DCFL artifact to cross-check against, per dcfl_system/CLAUDE.md
-# "Formal verification NOT implemented" -- falls back to the plain rule), a
-# `verified` side still wins, but capped at 0.85, not the normal 0.98 ceiling.
+# docs/VERDICT_POLICY.md R3: when a contradiction is not resolved (R3' has no
+# cross-check wired into this orchestrator yet -- dcfl_system/lib/dpda.py DOES
+# provide an executable DCFL artifact (check_determinism + dpda_accepts over
+# stack_strategy's `dpda` proof_sketch field), but nothing here runs it
+# against the destructive proof's witness words the way cfl_system's R3'
+# cross-check does, so the plain rule below still applies), a `verified`
+# side still wins, but capped at 0.85, not the normal 0.98 ceiling.
 _CONTRADICTION_VERIFIED_CAP = 0.85
 
 DCFL_SPECIALIST_NAMES = (
@@ -108,6 +112,10 @@ class DCFLState(TypedDict):
     specialist_outputs: Annotated[list, operator.add]      # [(name, output)]
     evidence: dict
     errors: Annotated[list, operator.add]
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): notes accumulated whenever a
+    # specialist's call cap is reached and a requested retry is skipped for
+    # it -- surfaced in the final verdict_gate.downgrades (reasoning_agent_node).
+    call_cap_notes: Annotated[list, operator.add]
     _specialist_name: str
     result: dict
 
@@ -634,9 +642,12 @@ def _apply_verdict_gate(
                 # docs/VERDICT_POLICY.md R3 (post-R3' revision): "bounded_pass
                 # vs well_formed" no longer settles this by rank -- only a
                 # `verified` side wins (capped at 0.85, not 0.98); otherwise
-                # it stays inconclusive (R3': no executable DCFL artifact
-                # exists yet to cross-check against, so this falls back to
-                # the plain inconclusive rule rather than a real R3' check).
+                # it stays inconclusive (R3': dcfl_system/lib/dpda.py now
+                # gives stack_strategy's `dpda` field an executable artifact
+                # (determinism check + simulation), but no cross-check against
+                # the destructive proof's witnesses is wired into this gate
+                # yet, so this falls back to the plain inconclusive rule
+                # rather than a real R3' check).
                 if constructive_trust_val == "verified" and destructive_trust_val != "verified":
                     winner_verdict = "dcfl"
                     cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
@@ -765,7 +776,11 @@ def _apply_verdict_gate(
                     f"reasoning proposed done/{verdict} with no {required_trust}+ {direction} "
                     "artifact (basis: constructive_failure_only, R1/R2)"
                 )
-                _r4prime_rescue(reason)
+                if retry_count < max_retries:
+                    downgrades.append(f"{reason} -> retry/inconclusive -> retry")
+                    action, verdict, cap = "retry", None, 0.25
+                else:
+                    _r4prime_rescue(reason)
             else:
                 basis.append({"agent": primary, "trust": primary_trust})
                 cap = confidence_cap_for(primary_trust)
@@ -877,8 +892,28 @@ def dispatch_all_agents_node(state: DCFLState) -> list[Send]:
 
 
 def run_specialist_node(state: DCFLState) -> dict:
-    """Run a single specialist agent. Invoked via Send() fan-out."""
+    """Run a single specialist agent. Invoked via Send() fan-out.
+
+    Cost ceiling: a specialist that has already been called
+    ``MAX_CALLS_PER_AGENT`` times for this task (counted from the full,
+    never-reset ``specialist_outputs`` history) is not called again -- the
+    retry planner may still have named it, but the call is skipped and a
+    note is recorded for ``verdict_gate.downgrades`` instead of making
+    another LLM call.
+    """
     agent_name = state["_specialist_name"]
+    prior_calls = sum(1 for n, _ in state.get("specialist_outputs", []) if n == agent_name)
+    if prior_calls >= MAX_CALLS_PER_AGENT:
+        log_msg(
+            state,
+            f"  specialist: {agent_name} call cap reached "
+            f"({prior_calls}/{MAX_CALLS_PER_AGENT}), skipping retry",
+        )
+        return {
+            "call_cap_notes": [
+                f"agent {agent_name} call cap reached ({MAX_CALLS_PER_AGENT} calls)"
+            ],
+        }
     log_msg(state, f"  specialist: {agent_name}...")
     inp = _build_specialist_input(state, agent_name)
     out = _run_agent(state, agent_name, inp)
@@ -990,6 +1025,19 @@ def reasoning_agent_node(state: DCFLState) -> dict:
         retry_count=state.get("retry_count", 0),
         max_retries=MAX_RETRIES,
     )
+
+    # Surface any skipped-retry-due-to-call-cap notes (run_specialist_node)
+    # in the final verdict_gate.downgrades, deduplicated (the same agent may
+    # have been capped across more than one retry round).
+    cap_notes = state.get("call_cap_notes") or []
+    if cap_notes:
+        gate = dict(output.get("verdict_gate") or {})
+        existing = list(gate.get("downgrades") or [])
+        for note in cap_notes:
+            if note not in existing:
+                existing.append(note)
+        gate["downgrades"] = existing
+        output["verdict_gate"] = gate
 
     action = _get_action(output)
     log_msg(state, f"  action={action} verdict={output.get('verdict')}")
@@ -1459,6 +1507,7 @@ def run_pipeline(
         "specialist_outputs": [],
         "evidence": {},
         "errors": [],
+        "call_cap_notes": [],
         "_specialist_name": "",
         "result": {},
     }

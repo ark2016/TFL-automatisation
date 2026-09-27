@@ -67,6 +67,44 @@ class TestCheckDeterminismInvalid:
         assert conflicts
         assert any("epsilon transition coexists" in c for c in conflicts)
 
+    @pytest.mark.parametrize("spelling", ["", "ε", "eps", "epsilon", "EPS", "Epsilon"])
+    def test_epsilon_written_as_string_still_coexistence_conflicts(self, spelling):
+        """An epsilon transition recorded as a string (any of dpda.py's
+        recognized spellings, case-insensitive) must be normalized to the
+        canonical `None` before the coexistence check, so it is caught
+        exactly like a `None`-read epsilon transition (reviewer finding:
+        a string-spelled epsilon used to be treated as an ordinary,
+        distinct 'letter', silently hiding a real non-determinism)."""
+        bad = {
+            **ANBNCM_DPDA,
+            "transitions": [
+                *ANBNCM_DPDA["transitions"],
+                {"from": "q_pop", "read": spelling, "top": "A", "to": "q_c", "push": []},
+            ],
+        }
+        conflicts = check_determinism(bad)
+        assert conflicts
+        assert any("epsilon transition coexists" in c for c in conflicts)
+
+    @pytest.mark.parametrize("spelling", ["", "ε", "eps", "epsilon"])
+    def test_two_string_spelled_epsilon_transitions_on_same_pair_conflict(self, spelling):
+        """Two epsilon transitions on the same (state, top), one spelled
+        `None` and one spelled as a string, must be recognized as the SAME
+        read (both normalize to `None`) and therefore reported as a
+        multiple-transition conflict, not silently accepted as two
+        different reads."""
+        dpda = {
+            **ANBNCM_DPDA,
+            "transitions": [
+                *ANBNCM_DPDA["transitions"],
+                {"from": "q_c", "read": None, "top": "Z0", "to": "q_pop", "push": ["Z0"]},
+                {"from": "q_c", "read": spelling, "top": "Z0", "to": "q_push", "push": ["Z0"]},
+            ],
+        }
+        conflicts = check_determinism(dpda)
+        assert conflicts
+        assert any("q_c" in c and "2 transitions" in c for c in conflicts)
+
 
 # ---------------------------------------------------------------------------
 # Conversion + simulation
@@ -95,6 +133,25 @@ class TestToCflPda:
         with pytest.raises(DPDAFormatError):
             to_cfl_pda(bad)
 
+    @pytest.mark.parametrize("spelling", ["", "ε", "eps", "epsilon"])
+    def test_string_spelled_epsilon_normalizes_to_none(self, spelling):
+        """`read` written as a string epsilon spelling must convert to the
+        same `input: None` the simulator expects for an epsilon move (not a
+        literal one-character input alphabet symbol)."""
+        dpda = {
+            "states": ["p0", "p_accept"],
+            "start": "p0",
+            "accept_states": ["p_accept"],
+            "stack_alphabet": ["Z0"],
+            "initial_stack": ["Z0"],
+            "transitions": [
+                {"from": "p0", "read": spelling, "top": "Z0", "to": "p_accept", "push": ["Z0"]},
+            ],
+        }
+        pda = to_cfl_pda(dpda)
+        assert pda["transitions"][0]["input"] is None
+        assert spelling not in pda["input_alphabet"]
+
     def test_multi_symbol_initial_stack(self):
         # A trivial DPDA whose initial stack already has two symbols
         # (topmost-first: "A" on top of "Z0"), immediately accepting on
@@ -107,6 +164,23 @@ class TestToCflPda:
             "initial_stack": ["A", "Z0"],
             "transitions": [
                 {"from": "p0", "read": None, "top": "A", "to": "p_accept", "push": []},
+            ],
+        }
+        assert dpda_accepts(dpda, "") is True
+
+    def test_string_spelled_epsilon_is_simulated_as_epsilon(self):
+        """A DPDA whose only path to acceptance goes through a `read: "eps"`
+        transition must be simulated exactly like `read: None` -- a string
+        epsilon spelling that is not normalized would look like it wants an
+        input symbol literally named "eps" and reject every real word."""
+        dpda = {
+            "states": ["p0", "p_accept"],
+            "start": "p0",
+            "accept_states": ["p_accept"],
+            "stack_alphabet": ["Z0", "A"],
+            "initial_stack": ["A", "Z0"],
+            "transitions": [
+                {"from": "p0", "read": "eps", "top": "A", "to": "p_accept", "push": []},
             ],
         }
         assert dpda_accepts(dpda, "") is True

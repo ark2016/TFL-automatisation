@@ -277,9 +277,38 @@ def nullable(schema: dict[str, Any]) -> dict[str, Any]:
 # genuinely unrelated 400 must still propagate as a real FatalAPIError
 # instead of being silently swallowed as a "just retry without the schema"
 # case (TODO.md §3 M).
+#
+# "too many optional parameters" / "optional parameters" / "grammar
+# compilation" / "too many" (2026-09-27 round): a live cfl eval run hit
+# ``"Schemas contains too many optional parameters (63), which would make
+# grammar compilation inefficient. Reduce the number of optional
+# parameters in your tool schemas (limit: 24)."`` on `reasoning` /
+# `retry_planner` (their shared 9-agent retry-hint map — see
+# ``cfl_system/lib/agent_output_schema.py``'s module docstring) — none of
+# the markers above matched it (no "output_config", "json_schema", etc. in
+# the text), so the schema-rejection fallback never fired and every
+# `reasoning` call failed outright as a hard `agent_error` instead of
+# falling back to prose extraction. Text reproduced live (2026-09-27, see
+# ``agent_system/lib/testing/schema_checks.py``'s module docstring for the
+# full exact wording and how the 24-property limit was confirmed to count
+# recursively) with schemas of 30, and separately 20+10, optional
+# properties — the exact same wording, just a different N.
+#
+# "union types" / "union-typed" / "nullable or union-typed" (same round): a
+# SEPARATE 400 hit while fixing the one above — converting those 63
+# optional properties to required+nullable traded the optional-properties
+# rejection for ``"Schemas contains too many parameters with union types
+# (49 parameters with type arrays or anyOf). This causes exponential
+# compilation cost. Reduce the number of nullable or union-typed
+# parameters (limit: 16 parameters with unions)."`` — also reproduced
+# live 2026-09-27 (see ``schema_checks.py`` again). "too many" above
+# already matches this text too, but the extra markers make the match
+# obvious without relying on that coincidence.
 _SCHEMA_REJECTION_MARKERS = (
     "output_config", "json_schema", "additionalproperties", "output format",
-    "structured output",
+    "structured output", "too many optional parameters", "optional parameters",
+    "grammar compilation", "too many", "union types", "union-typed",
+    "nullable or union-typed",
 )
 
 

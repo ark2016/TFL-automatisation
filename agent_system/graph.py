@@ -30,6 +30,7 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
+from .config import MAX_CALLS_PER_AGENT
 from .lib.ir_schema import validate_ir
 from .lib.oracle import oracle_from_ir
 from .lib.oracle_test import oracle_test as run_oracle_test
@@ -118,6 +119,10 @@ class PipelineState(TypedDict):
     # -- Accumulated --
     evidence: dict
     errors: Annotated[list, operator.add]
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): notes accumulated whenever a
+    # specialist's call cap is reached and a requested retry is skipped for
+    # it -- surfaced in the final verdict_gate.downgrades (assemble_result_node).
+    call_cap_notes: Annotated[list, operator.add]
 
     # -- Fan-out helper --
     _specialist_name: str
@@ -657,8 +662,27 @@ def dispatch_to_specialists(state: PipelineState) -> list[Send]:
 
 
 def run_specialist_node(state: PipelineState) -> dict:
-    """Run a single specialist agent.  Invoked via Send() fan-out."""
+    """Run a single specialist agent.  Invoked via Send() fan-out.
+
+    Cost ceiling: a specialist that has already been called
+    ``MAX_CALLS_PER_AGENT`` times for this task (counted from the full,
+    never-reset ``specialist_outputs`` history) is not called again -- the
+    retry planner may still have named it, but the call is skipped and a
+    note is recorded for ``verdict_gate.downgrades`` instead of making
+    another LLM call.
+    """
     agent_name = state["_specialist_name"]
+    prior_calls = sum(1 for n, _ in state.get("specialist_outputs", []) if n == agent_name)
+    if prior_calls >= MAX_CALLS_PER_AGENT:
+        log_msg(
+            state,
+            f"  {agent_name}: call cap reached ({prior_calls}/{MAX_CALLS_PER_AGENT}), skipping retry",
+        )
+        return {
+            "call_cap_notes": [
+                f"agent {agent_name} call cap reached ({MAX_CALLS_PER_AGENT} calls)"
+            ],
+        }
     inp = build_specialist_input(state, agent_name)
     out = run_agent(state, agent_name, inp)
     err_msgs = _agent_error_messages(agent_name, out)
@@ -1940,6 +1964,13 @@ def assemble_result_node(state: PipelineState) -> dict:
 
     log_msg(state, f"  final: status={status}, confidence={confidence}")
 
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): surface any skipped-retry-
+    # due-to-call-cap notes (run_specialist_node) here too, deduplicated (the
+    # same agent may have been capped across more than one retry round).
+    for note in state.get("call_cap_notes") or []:
+        if note not in downgrades:
+            downgrades.append(note)
+
     verdict_gate = {
         "basis": basis,
         "contradiction": contradiction,
@@ -2129,6 +2160,7 @@ def run_pipeline(
         "retry_plan": {},
         "evidence": {},
         "errors": [],
+        "call_cap_notes": [],
         "_specialist_name": "",
         "result": {},
     }

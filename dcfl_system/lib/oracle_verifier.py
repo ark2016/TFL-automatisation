@@ -28,8 +28,7 @@ from typing import Any, Callable
 from dcfl_system.lib.word_sampler import (
     check_constraints,
     sample_words,
-    build_set_builder_membership_oracle,
-    build_grammar_membership_oracle,
+    build_membership_oracle_from_ir,
     instantiate_exponent_pattern,
 )
 from dcfl_system.lib.dpda import (
@@ -279,9 +278,9 @@ def _verify_stack_strategy_dpda(
         modes, so no second simulator is written here) and run it on words
         sampled by ``word_sampler`` (positive and negative, length <=
         ``_DPDA_MAX_WORD_LEN``) against the task's OWN language oracle
-        (``build_set_builder_membership_oracle`` for ``set_builder`` tasks,
-        ``build_grammar_membership_oracle`` -- CYK on the grammar's CNF form,
-        via ``cfl_system.lib.cfl_oracle`` -- for ``grammar`` tasks; never the
+        (``word_sampler.build_membership_oracle_from_ir`` -- the single
+        oracle-building entry point, dispatching on ``set_builder``
+        (variables or exponent-notation pattern) / ``grammar``; never the
         proof's own claims). All of at least ``_DPDA_MIN_WORDS`` decisively-
         oracled words agree -> ``bounded_pass`` (details:
         ``determinism: "verified"``); any disagreement -> ``refuted`` with
@@ -308,15 +307,7 @@ def _verify_stack_strategy_dpda(
             "determinism": "verified", "structure": "invalid",
         }
 
-    input_format = task_ir.get("input_format", "")
-    spec = task_ir.get("language_spec", {})
-    alphabet = task_ir.get("alphabet", [])
-    if input_format == "set_builder":
-        oracle = build_set_builder_membership_oracle(spec, alphabet)
-    elif input_format == "grammar":
-        oracle = build_grammar_membership_oracle(spec, alphabet)
-    else:
-        oracle = None
+    oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
         return "well_formed", check_name, "", {"determinism": "verified"}
 
@@ -840,15 +831,11 @@ def _semantic_check_dcfl_pumping(
     if not isinstance(word_w, str) or not isinstance(word_w_prime, str):
         return None, check_name, ""
 
-    input_format = task_ir.get("input_format", "")
-    if input_format != "set_builder":
-        return None, check_name, ""
-
-    spec = task_ir.get("language_spec", {})
-    alphabet = task_ir.get("alphabet", [])
-    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
         return None, check_name, ""
+
+    alphabet = task_ir.get("alphabet", [])
 
     alphabet_set = set(alphabet)
     instances: list[tuple[int, str, str]] = []
@@ -1099,12 +1086,8 @@ def _check_dead_class_finite(
     - (True, None, [])   — every testable short word continues into L.
     - (False, word, [msg]) — ``word`` has no continuation within the bound.
     """
-    input_format = task_ir.get("input_format", "")
-    if input_format != "set_builder":
-        return None, None, []
-    spec = task_ir.get("language_spec", {})
     alphabet = task_ir.get("alphabet", [])
-    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
         return None, None, []
     try:
@@ -1163,10 +1146,6 @@ def _semantic_check_shallit_nerode(
     if not isinstance(distinguishing_suffix, str) or not distinguishing_suffix:
         return None, check_name, ""
 
-    input_format = task_ir.get("input_format", "")
-    if input_format != "set_builder":
-        return None, check_name, ""
-
     alphabet = task_ir.get("alphabet", [])
     alphabet_set = set(alphabet)
     if any(ch not in alphabet_set for ch in distinguishing_suffix):
@@ -1174,8 +1153,7 @@ def _semantic_check_shallit_nerode(
         # can instantiate mechanically.
         return None, check_name, ""
 
-    spec = task_ir.get("language_spec", {})
-    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
         return None, check_name, ""
 
@@ -1339,14 +1317,9 @@ def _semantic_check_shallit_prefix_continuation(
     if not isinstance(derived, str) or "$" not in derived:
         return None, check_name, ""
 
-    input_format = task_ir.get("input_format", "")
-    if input_format != "set_builder":
-        return None, check_name, ""
-
     alphabet = task_ir.get("alphabet", [])
     alphabet_set = set(alphabet)
-    spec = task_ir.get("language_spec", {})
-    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
         return None, check_name, ""
 

@@ -21,11 +21,13 @@ from __future__ import annotations
 import pytest
 
 from ll_system.orchestrator import (
+    MAX_CALLS_PER_AGENT,
     MAX_RETRIES,
     apply_verdict_gate,
     assemble_result_node,
     preprocess_node,
     first_follow_oracle_node,
+    run_specialist_node,
     verdict_gate_node,
 )
 from ll_system.lib.claim_verifier import verify_substitution_claim
@@ -942,3 +944,90 @@ class TestSubstitutionStep2FirstKEquality:
             _substitution_proof_sketch("a^n b^1", "a^n c^1"), _ALL_STRINGS_IR,
         )
         assert out["trust"] == "well_formed"
+
+
+# ---------------------------------------------------------------------------
+# Cost ceiling (TODO.md backlog round C2): config.MAX_CALLS_PER_AGENT — the
+# orchestrator must never call the same specialist more than this many times
+# for one task. Precedent: live cfl-12 eval run, cfg_builder alone was
+# called 6 times across retries (130 706 output tokens, $0.80).
+# ---------------------------------------------------------------------------
+
+class _CountingRunner:
+    """A mock runner that records every agent name it was actually asked to
+    run — used to assert the call cap is enforced at the call site itself,
+    not just in whatever the runner happens to return."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run_agent(self, agent_name, input_data=None):
+        self.calls.append(agent_name)
+        return {
+            "agent": agent_name, "status": "success", "verdict": "not_ll",
+            "confidence": 0.5, "evidence": {},
+        }
+
+
+def _specialist_state(agent_name: str, specialist_outputs: list, runner: _CountingRunner) -> dict:
+    return {
+        "_specialist_name": agent_name,
+        "specialist_outputs": specialist_outputs,
+        "mock_runner": runner,
+        "agent_runner": None,
+        "verbose": False,
+        "ir": {},
+        "preprocess_hints": {},
+        "classifier_output": {},
+        "retry_context": {},
+    }
+
+
+class TestCallCapAtSpecialistCallSite:
+    def test_specialist_skipped_once_cap_reached(self):
+        runner = _CountingRunner()
+        history = [("substitution_agent", {"status": "success"})] * MAX_CALLS_PER_AGENT
+        state = _specialist_state("substitution_agent", history, runner)
+        result = run_specialist_node(state)
+        assert runner.calls == []  # no LLM call made
+        assert "specialist_outputs" not in result
+        assert any(
+            "substitution_agent" in note and "call cap reached" in note
+            for note in result.get("call_cap_notes", [])
+        )
+
+    def test_specialist_still_called_below_cap(self):
+        runner = _CountingRunner()
+        history = [("substitution_agent", {"status": "success"})] * (MAX_CALLS_PER_AGENT - 1)
+        state = _specialist_state("substitution_agent", history, runner)
+        result = run_specialist_node(state)
+        assert runner.calls == ["substitution_agent"]
+        assert "call_cap_notes" not in result
+
+    def test_mock_retry_scenario_never_exceeds_cap(self):
+        """Simulate the retry planner asking for the SAME agent every round
+        (the cfl-12 precedent) across more rounds than the cap allows — the
+        runner must never see more than MAX_CALLS_PER_AGENT actual calls."""
+        runner = _CountingRunner()
+        specialist_outputs: list = []
+        for _ in range(MAX_CALLS_PER_AGENT + 4):  # far more "retry rounds" than the cap
+            state = _specialist_state("substitution_agent", specialist_outputs, runner)
+            result = run_specialist_node(state)
+            specialist_outputs = specialist_outputs + list(result.get("specialist_outputs", []))
+        assert runner.calls.count("substitution_agent") == MAX_CALLS_PER_AGENT
+
+    def test_call_cap_note_surfaces_in_verdict_gate_downgrades(self):
+        state = _state(
+            retry_round=MAX_RETRIES,
+            agent_results={},
+            first_follow_result={},
+            reasoning_output={"action": "done", "verdict": "ll", "confidence": 0.9},
+            call_cap_notes=[
+                "agent substitution_agent call cap reached (3 calls)",
+                "agent substitution_agent call cap reached (3 calls)",  # duplicate
+            ],
+        )
+        gate = apply_verdict_gate(state)
+        downgrades = gate["verdict_gate"]["downgrades"]
+        matches = [d for d in downgrades if "substitution_agent call cap reached" in d]
+        assert len(matches) == 1

@@ -29,6 +29,7 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
+from cfl_system.config import MAX_CALLS_PER_AGENT
 from cfl_system.lib.cfl_ir_schema import validate_cfl_ir
 from cfl_system.lib.cfl_hypothesis import analyze_cfl_hypothesis
 from cfl_system.lib.language_preprocess import preprocess_language
@@ -144,6 +145,10 @@ class PipelineState(TypedDict):
     # -- Accumulated --
     evidence: dict
     errors: Annotated[list, operator.add]
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): notes accumulated whenever a
+    # specialist's call cap is reached and a requested retry is skipped for
+    # it -- surfaced in the final verdict_gate.downgrades (apply_verdict_gate).
+    call_cap_notes: Annotated[list, operator.add]
 
     # -- Fan-out helper --
     _specialist_name: str
@@ -804,6 +809,47 @@ def _normalize_oracle_test(raw: dict | None) -> dict:
     return normalized
 
 
+def _normalize_retry_hints(hints_raw: Any) -> dict:
+    """Normalize ``retry_planner.hints`` / ``reasoning.retry_plan.hints`` to
+    the ``{agent_name: {...hint fields...}}`` dict every downstream consumer
+    (this function's own caller, ``run_retry_planner_node``) expects.
+
+    Accepts two shapes:
+
+    - a **dict** keyed by specialist name (``{"pumping_cfl": {...}, ...}``)
+      -- what the prompt's own "## Output Format" documents, and what the
+      legacy prose-extraction fallback path (no ``output_config.format``)
+      still produces, unchanged;
+    - a **list** of ``{"agent": "<name>", ...hint fields...}`` objects --
+      what a genuine ``output_config.format`` structured-outputs call now
+      produces (``agent_output_schema._RETRY_HINTS_SCHEMA``): the API caps
+      how many *union-typed* (nullable/anyOf) parameters a schema may carry
+      (separately from its optional-parameter cap -- both confirmed live,
+      see ``agent_system/lib/testing/schema_checks.py``'s module
+      docstring), and a *map* with one subschema copy per specialist
+      multiplies either kind of per-field flexibility by 9 copies; an
+      *array* of one shared item schema does not -- the schema is walked
+      once regardless of how many elements the model actually returns. The
+      trade-off is that a structured-outputs call must now name the agent
+      explicitly inside each hint object instead of as its dict key, so
+      this immediately restores the dict shape every consumer already
+      expects, before any of them see it.
+
+    Anything else (not a dict, not a list, a list entry missing ``"agent"``
+    or not a dict at all) is dropped rather than raising -- the LLM may
+    still produce malformed JSON via the legacy path, same as before this
+    normalization existed.
+    """
+    if isinstance(hints_raw, dict):
+        return hints_raw
+    if isinstance(hints_raw, list):
+        return {
+            item["agent"]: item for item in hints_raw
+            if isinstance(item, dict) and isinstance(item.get("agent"), str)
+        }
+    return {}
+
+
 def _normalize_claim_verification(raw: dict | None) -> dict:
     """Normalize claim_verification for the reasoning agent prompt.
 
@@ -1178,13 +1224,24 @@ def apply_verdict_gate(state: PipelineState) -> dict:
         # below from the unchanged constructive_trust/destructive_trust)
         # takes care of the cap; this function only picks the verdict.
         action = "done"
-        if not destructive_refuted and _trust_rank(destructive_trust) >= _trust_rank("well_formed"):
+        # docs/VERDICT_POLICY.md R4' — `destructive_trust`/`constructive_trust`
+        # (from `_strongest_trust`/`_strongest_destructive_trust`) are already
+        # computed over only the NON-refuted agents on each side; the
+        # `_refuted` flags mean "at least one agent on this side is refuted"
+        # (any agent, not necessarily the one behind the best trust), so
+        # gating on them here on top of the rank check would wrongly throw
+        # away a real admissible basis whenever some OTHER, unrelated agent
+        # on the same side happened to be refuted (reviewer finding:
+        # ogden=refuted + pumping_cfl=well_formed was being read as "no
+        # admissible destructive basis" even though pumping_cfl's own
+        # well_formed claim is exactly what R1/R2 asks for).
+        if _trust_rank(destructive_trust) >= _trust_rank("well_formed"):
             verdict = "non_cfl"
             downgrades.append(
                 f"{reason} -> retry budget exhausted -> strongest admissible basis: "
                 f"destructive claim (trust={destructive_trust}) -> non_cfl"
             )
-        elif not constructive_refuted and _trust_rank(constructive_trust) >= _trust_rank("bounded_pass"):
+        elif _trust_rank(constructive_trust) >= _trust_rank("bounded_pass"):
             verdict = "cfl"
             downgrades.append(
                 f"{reason} -> retry budget exhausted -> strongest admissible basis: "
@@ -1355,6 +1412,13 @@ def apply_verdict_gate(state: PipelineState) -> dict:
             "hints": {},
             "reason": downgrades[-1] if downgrades else "verdict_gate",
         }
+
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): surface any skipped-retry-
+    # due-to-call-cap notes (run_specialist_node) here too, deduplicated (the
+    # same agent may have been capped across more than one retry round).
+    for note in state.get("call_cap_notes") or []:
+        if note not in downgrades:
+            downgrades.append(note)
 
     verdict_gate: dict[str, Any] = {
         "basis": basis,
@@ -1536,8 +1600,27 @@ def run_specialist_node(state: PipelineState) -> dict:
     Emits a tuple (agent_name, output_or_None). `None` signals that the
     retried agent failed (either runner returned None, or output was
     agent_error). This lets `collect_specialists_node` drop stale results.
+
+    Cost ceiling: a specialist that has already been called
+    ``MAX_CALLS_PER_AGENT`` times for this task (counted from the full,
+    never-reset ``specialist_outputs`` history) is not called again -- the
+    retry planner may still have named it, but the call is skipped and a
+    note is recorded for ``verdict_gate.downgrades`` instead of making
+    another LLM call.
     """
     agent_name = state["_specialist_name"]
+    prior_calls = sum(1 for n, _ in state.get("specialist_outputs", []) if n == agent_name)
+    if prior_calls >= MAX_CALLS_PER_AGENT:
+        log_msg(
+            state,
+            f"  specialist: {agent_name} call cap reached "
+            f"({prior_calls}/{MAX_CALLS_PER_AGENT}), skipping retry",
+        )
+        return {
+            "call_cap_notes": [
+                f"agent {agent_name} call cap reached ({MAX_CALLS_PER_AGENT} calls)"
+            ],
+        }
     log_msg(state, f"  specialist: {agent_name}...")
     inp = _build_specialist_input(state, agent_name)
     out = _run_agent(state, agent_name, inp)
@@ -2026,13 +2109,18 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         should_invert = bool(r_plan.get("should_invert_hypothesis", False))
         max_retries_remaining = r_plan.get("max_retries_remaining")
 
-    # Validate and coerce types defensively (LLM may produce malformed JSON)
-    if not isinstance(hints_raw, dict):
-        log_msg(state, f"  hints is not a dict (type={type(hints_raw).__name__}), ignoring")
-        hints = {}
-    else:
-        # Ensure per-agent hints are also dicts
-        hints = {k: v for k, v in hints_raw.items() if isinstance(v, dict)}
+    # Validate and coerce types defensively (LLM may produce malformed JSON).
+    # `hints_raw` may be the legacy per-agent dict OR (a genuine
+    # output_config.format call) a list of {"agent": ..., ...} objects --
+    # see `_normalize_retry_hints`.
+    hints_dict = _normalize_retry_hints(hints_raw)
+    if hints_raw and not hints_dict:
+        log_msg(
+            state,
+            f"  hints in unrecognized shape (type={type(hints_raw).__name__}), ignoring",
+        )
+    # Ensure per-agent hints are also dicts
+    hints = {k: v for k, v in hints_dict.items() if isinstance(v, dict)}
 
     if max_retries_remaining is not None:
         try:
@@ -2475,6 +2563,7 @@ def run_pipeline(
         "retry_params": {},
         "evidence": {},
         "errors": [],
+        "call_cap_notes": [],
         "_specialist_name": "",
         "result": {},
     }

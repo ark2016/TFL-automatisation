@@ -5,8 +5,11 @@
   "task_type": "classify_and_prove_dcfl",
   "language_spec": {
     "kind": "set_builder",
-    "word_pattern": "{u1 a u2 | |u1| <= |u2|}",
-    "variables": [],
+    "word_pattern": "u1au2",
+    "variables": [
+      {"name": "u1", "domain": null, "quantifier": "forall"},
+      {"name": "u2", "domain": null, "quantifier": "forall"}
+    ],
     "constraints": [
       {
         "kind": "length_cmp",

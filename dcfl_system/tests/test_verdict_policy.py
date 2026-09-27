@@ -25,8 +25,10 @@ from dcfl_system.lib.oracle_verifier import (
 )
 from dcfl_system.lib.retry_logic import build_retry_plan, MAX_RETRIES
 from dcfl_system.orchestrator import (
+    MAX_CALLS_PER_AGENT,
     _apply_verdict_gate,
     decide_after_retry_planner,
+    run_specialist_node,
 )
 from dcfl_system.renderer import render_markdown, render_html, _trust_label
 
@@ -138,8 +140,8 @@ def test_dcfl_pumping_semantic_check_bounded_pass_theory_worked_example(monkeypa
     # genuine, hand-verified non-DCFL proof — both condition (1) and (2)
     # must close for every decomposition the brute force tries.
     monkeypatch.setattr(
-        ov, "build_set_builder_membership_oracle",
-        lambda spec, alphabet: _anbn_union_anb2n_oracle,
+        ov, "build_membership_oracle_from_ir",
+        lambda ir, max_word_len=60: _anbn_union_anb2n_oracle,
     )
     proof = _pumping_proof("aⁿbⁿ", "aⁿb²ⁿ")
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
@@ -310,8 +312,8 @@ def test_shallit_prefix_continuation_bounded_pass(monkeypatch):
     # xy = a^n b^2n (in L, branch 2): the necessary precondition for this
     # to be a real L_$ instance holds for every sampled n.
     monkeypatch.setattr(
-        ov, "build_set_builder_membership_oracle",
-        lambda spec, alphabet: _anbn_union_anb2n_oracle,
+        ov, "build_membership_oracle_from_ir",
+        lambda ir, max_word_len=60: _anbn_union_anb2n_oracle,
     )
     proof = _prefix_continuation_proof("aⁿbⁿ$bⁿ")
     agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
@@ -328,8 +330,8 @@ def test_shallit_prefix_continuation_refuted_when_continuation_word_is_wrong(mon
     # is never in L -- a factual error in the proof's derived_language,
     # caught mechanically rather than trusted at face value.
     monkeypatch.setattr(
-        ov, "build_set_builder_membership_oracle",
-        lambda spec, alphabet: _anbn_union_anb2n_oracle,
+        ov, "build_membership_oracle_from_ir",
+        lambda ir, max_word_len=60: _anbn_union_anb2n_oracle,
     )
     proof = _prefix_continuation_proof("aⁿbⁿ$aⁿ")
     agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
@@ -409,8 +411,8 @@ def test_dcfl_pumping_exam03_style_two_branch_language_bounded_pass(monkeypatch)
     # exam_03: word_w = a^n b^n c^n a (branch c^n), word_w_prime = a^n b^n a
     # (branch b^n, m=0) -- the fixed §1.8 proof from dcfl_pumping.md.
     monkeypatch.setattr(
-        ov, "build_set_builder_membership_oracle",
-        lambda spec, alphabet: _in_exam03_language,
+        ov, "build_membership_oracle_from_ir",
+        lambda ir, max_word_len=60: _in_exam03_language,
     )
     proof = _pumping_proof("aⁿbⁿcⁿa", "aⁿbⁿa")
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
@@ -429,8 +431,8 @@ def test_dcfl_pumping_exam03_style_two_branch_language_refuted_for_wrong_pair(mo
     # prefix), so this concrete proof is wrong even though the underlying
     # theorem (L not DCFL) is true.
     monkeypatch.setattr(
-        ov, "build_set_builder_membership_oracle",
-        lambda spec, alphabet: _in_exam03_language,
+        ov, "build_membership_oracle_from_ir",
+        lambda ir, max_word_len=60: _in_exam03_language,
     )
     proof = _pumping_proof("aⁿbⁿa", "aⁿbⁿ⁺¹a")
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
@@ -460,8 +462,8 @@ def test_shallit_nerode_exam02_style_language_bounded_pass(monkeypatch):
     # an empty b-tail); u='a', v='aa' are separated by suffix 'b'
     # (u+'b'='ab' not in L2, v+'b'='aab' in L2) — a real class separation.
     monkeypatch.setattr(
-        ov, "build_set_builder_membership_oracle",
-        lambda spec, alphabet: _in_exam02_style_language,
+        ov, "build_membership_oracle_from_ir",
+        lambda ir, max_word_len=60: _in_exam02_style_language,
     )
     monkeypatch.setattr(
         ov, "sample_words",
@@ -490,8 +492,8 @@ def test_shallit_nerode_exam02_style_language_refuted_for_wrong_separating_pair(
     # ALSO not in L2 -- 'b' does not separate this pair, so the proof's own
     # representative_pairs claim is refuted.
     monkeypatch.setattr(
-        ov, "build_set_builder_membership_oracle",
-        lambda spec, alphabet: _in_exam02_style_language,
+        ov, "build_membership_oracle_from_ir",
+        lambda ir, max_word_len=60: _in_exam02_style_language,
     )
     task_ir = {"input_format": "set_builder", "alphabet": ["a", "b"], "language_spec": {}}
     proof = _nerode_proof("b")
@@ -616,6 +618,51 @@ def test_refuted_primary_artifact_terminal_inconclusive_when_budget_exhausted():
     assert gated["action"] == "done"
     assert gated["verdict"] is None
     assert gated["confidence"] <= 0.40
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding (backlog round C2, not yet fixed): the "no {required_trust}+
+# artifact" branch (primary ran successfully but its trust is below what R2
+# requires -- NOT refuted) used to call _r4prime_rescue unconditionally,
+# logging "retry budget exhausted" even when retry_count < max_retries and
+# skipping a retry the refuted-artifact branch right above it would have
+# taken. It must retry while budget remains, exactly like the refuted branch,
+# and only rescue once the budget is actually gone.
+# ---------------------------------------------------------------------------
+
+def test_no_required_trust_artifact_retries_when_budget_remains():
+    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
+                 "primary_evidence": "stack_strategy"}
+    agent_results = {
+        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {"kind": "stack_strategy"}},
+    }
+    # well_formed is below required_trust=bounded_pass for a constructive
+    # "dcfl" verdict (R2) -- but it is NOT refuted, so this must retry, not
+    # go straight to R4' rescue.
+    oracle_verification = {"stack_strategy": {"trust": "well_formed"}}
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=0, max_retries=MAX_RETRIES)
+    assert gated["action"] == "retry"
+    assert gated["verdict"] is None
+    assert gated["confidence"] <= 0.25
+    assert not any("retry budget exhausted" in d for d in gated["verdict_gate"]["downgrades"])
+
+
+def test_no_required_trust_artifact_rescues_when_budget_exhausted():
+    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
+                 "primary_evidence": "stack_strategy"}
+    agent_results = {
+        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {"kind": "stack_strategy"}},
+    }
+    oracle_verification = {"stack_strategy": {"trust": "well_formed"}}
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
+    assert gated["action"] == "done"
+    # well_formed doesn't meet the bounded_pass R2 needs for "dcfl", and
+    # there's no destructive evidence either -> R4' finds nothing admissible.
+    assert gated["verdict"] is None
+    assert gated["confidence"] <= 0.40
+    assert any("retry budget exhausted" in d for d in gated["verdict_gate"]["downgrades"])
 
 
 # ---------------------------------------------------------------------------
@@ -1048,3 +1095,100 @@ def test_oracle_table_shows_trust_word_not_raw_status():
     html = render_html(result)
     assert "проверено выборочно" in md
     assert "проверено выборочно" in html
+
+
+# ---------------------------------------------------------------------------
+# Cost ceiling (TODO.md backlog round C2): config.MAX_CALLS_PER_AGENT — the
+# orchestrator must never call the same specialist more than this many times
+# for one task. Precedent: live cfl-12 eval run, cfg_builder alone was
+# called 6 times across retries (130 706 output tokens, $0.80).
+# ---------------------------------------------------------------------------
+
+class _CountingRunner:
+    """A mock runner that records every agent name it was actually asked to
+    run — used to assert the call cap is enforced at the call site itself,
+    not just in whatever the runner happens to return."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run_agent(self, agent_name, input_data=None):
+        self.calls.append(agent_name)
+        return {
+            "agent": agent_name, "status": "success", "verdict": "non_dcfl",
+            "confidence": 0.5, "evidence": {},
+        }
+
+
+def _specialist_state(agent_name: str, specialist_outputs: list, runner: _CountingRunner) -> dict:
+    return {
+        "_specialist_name": agent_name,
+        "specialist_outputs": specialist_outputs,
+        "mock_runner": runner,
+        "agent_runner": None,
+        "verbose": False,
+        "task_ir": {},
+        "hypothesis": {},
+        "classifier_hint": {},
+        "preprocess": {},
+        "retry_context": {},
+    }
+
+
+class TestCallCapAtSpecialistCallSite:
+    def test_specialist_skipped_once_cap_reached(self):
+        runner = _CountingRunner()
+        history = [("dcfl_pumping", {"status": "success"})] * MAX_CALLS_PER_AGENT
+        state = _specialist_state("dcfl_pumping", history, runner)
+        result = run_specialist_node(state)
+        assert runner.calls == []  # no LLM call made
+        assert "specialist_outputs" not in result
+        assert any(
+            "dcfl_pumping" in note and "call cap reached" in note
+            for note in result.get("call_cap_notes", [])
+        )
+
+    def test_specialist_still_called_below_cap(self):
+        runner = _CountingRunner()
+        history = [("dcfl_pumping", {"status": "success"})] * (MAX_CALLS_PER_AGENT - 1)
+        state = _specialist_state("dcfl_pumping", history, runner)
+        result = run_specialist_node(state)
+        assert runner.calls == ["dcfl_pumping"]
+        assert "call_cap_notes" not in result
+
+    def test_mock_retry_scenario_never_exceeds_cap(self):
+        """Simulate the retry planner asking for the SAME agent every round
+        (the worst case, matching the live cfl-12 precedent) across more
+        rounds than the cap allows -- the runner must never see more than
+        MAX_CALLS_PER_AGENT actual calls for it."""
+        runner = _CountingRunner()
+        specialist_outputs: list = []
+        for _ in range(MAX_CALLS_PER_AGENT + 4):  # far more "retry rounds" than the cap
+            state = _specialist_state("dcfl_pumping", specialist_outputs, runner)
+            result = run_specialist_node(state)
+            specialist_outputs = specialist_outputs + list(result.get("specialist_outputs", []))
+        assert runner.calls.count("dcfl_pumping") == MAX_CALLS_PER_AGENT
+
+    def test_call_cap_note_surfaces_in_verdict_gate_downgrades(self):
+        """reasoning_agent_node threads run_specialist_node's call_cap_notes
+        into the final verdict_gate.downgrades (dedup across rounds)."""
+        from dcfl_system.orchestrator import reasoning_agent_node
+
+        class _NoReasoningRunner:
+            def run_agent(self, agent_name, input_data=None):
+                return None  # forces the fallback-reasoning path
+
+        state = {
+            "task_ir": {}, "hypothesis": {}, "classifier_hint": {},
+            "agent_results": {}, "oracle_verification": {},
+            "retry_count": MAX_RETRIES, "verbose": False,
+            "mock_runner": _NoReasoningRunner(), "agent_runner": None,
+            "call_cap_notes": [
+                "agent dcfl_pumping call cap reached (3 calls)",
+                "agent dcfl_pumping call cap reached (3 calls)",  # duplicate, from a later round
+            ],
+        }
+        result = reasoning_agent_node(state)
+        downgrades = result["reasoning"]["verdict_gate"]["downgrades"]
+        matches = [d for d in downgrades if "dcfl_pumping call cap reached" in d]
+        assert len(matches) == 1

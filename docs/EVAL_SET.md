@@ -41,7 +41,7 @@
 | cfl-09 | {aⁱbʲ \| i ≠ j} | cfl | S → aSb \| A \| B, A → aA \| a, B → bB \| b |
 | cfl-10 | {a^{2ⁿ} \| n ≥ 0} | non_cfl | унарный КС = регулярный; Париха |
 | cfl-11 | {a^{6n}b^{6n}c^{6n}} | non_cfl | как cfl-01 **[trap: множитель 6]** |
-| cfl-12 | {aⁱbʲcᵏdˡ \| i = 0 ∨ j = k = l} | non_cfl | лемма Огдена (стандартная накачка не работает) **[trap: Огден]** |
+| cfl-12 | {aⁱbʲcᵏdˡ \| i = 0 ∨ j = k = l} | non_cfl | лемма Огдена (стандартная накачка не работает) **[trap: Огден]** [IR: `language_spec.kind: "natural"`, без word-оракула до раунда C4 — `cfl_system/lib/exponent_pattern.py` теперь парсит эту формулировку напрямую; live-подтверждение см. `docs/EVAL_RESULTS.md`] |
 | cfl-13 | язык Дика над {(, )} | cfl | S → (S)S \| ε |
 | cfl-14 | {aⁿbᵐ \| n ≥ m} | cfl | S → aS \| T, T → aTb \| ε |
 | cfl-15 | {aⁱbʲcᵏ \| i + j = k} | cfl | S → aSc \| T, T → bTc \| ε |
@@ -58,7 +58,7 @@
 | dcfl-01 | {aⁿbⁿ} | dcfl | стек |
 | dcfl-02 | {wcwᴿ \| w ∈ {a,b}*} | dcfl | уникальный маркер |
 | dcfl-03 | {wwᴿ \| w ∈ {a,b}*} | non_dcfl | THEORY.md §1.2 (Thm 4.7.4) |
-| dcfl-04 | {aⁿbⁿcᵐ \| n,m ≥ 0} | dcfl | **[trap: старая формулировка леммы Ю отвергала его]** |
+| dcfl-04 | {aⁿbⁿcᵐ \| n,m ≥ 0} | dcfl | **[trap: старая формулировка леммы Ю отвергала его]** [IR: `input_format: "set_builder"`, `variables: []`, `word_pattern` — экспоненциальная строка (`"a^n b^n c^m"`), не конкатенация именованных `variables` → `build_set_builder_membership_oracle` возвращала `None` до раунда C4; см. `docs/EVAL_RESULTS.md`] |
 | dcfl-05 | {aⁿbⁿ} ∪ {aⁿb²ⁿ} | non_dcfl | THEORY.md §1.1 (лемма Ю) / §1.3 (L_$) |
 | dcfl-06 | {aⁱbʲcᵏ \| i = j ∨ j = k} | non_dcfl | существенная неоднозначность |
 | dcfl-07 | {aⁱbʲ \| i ≠ j} | dcfl | ДМПА: несовпадение счётчиков |
@@ -69,9 +69,9 @@
 | dcfl-12 | {aⁱbʲcᵏ \| i ≤ j ∨ j = k; i,j,k ≥ 1} | non_dcfl | лемма Ю (курс, 2025_22; x = aⁿ) |
 | dcfl-13 | язык Дика | dcfl | стек |
 | dcfl-14 | {aⁿbᵐ \| n ≥ m} | dcfl | стек с остатком |
-| dcfl-15 | {u₁au₂ \| \|u₁\| ≤ \|u₂\|} | dcfl | THEORY.md §1.7 (L₁) **[trap: пара с dcfl-16]** |
+| dcfl-15 | {u₁au₂ \| \|u₁\| ≤ \|u₂\|} | dcfl | THEORY.md §1.7 (L₁) **[trap: пара с dcfl-16]** [IR правлен в раунде C4: добавлены `variables` + конкатенационный `word_pattern`, чтобы заработал существующий segment-matcher — `dcfl_system/examples/eval/dcfl-15.json`, не подтверждено вживую] |
 | dcfl-16 | {u₃au₄ \| \|u₃\| ≥ \|u₄\|} | non_dcfl | THEORY.md §1.7 (L₂: все классы Нероуда конечны) |
-| dcfl-17 | грамматика S → aS \| Sa \| a (Format 2) | dcfl | L = a⁺ регулярен **[trap: грамматика неоднозначна, язык — DCFL]** |
+| dcfl-17 | грамматика S → aS \| Sa \| a (Format 2) | dcfl | L = a⁺ регулярен **[trap: грамматика неоднозначна, язык — DCFL]** [IR: `input_format: "grammar"` — `build_grammar_membership_oracle` (CYK через `cfl_system.lib.cfl_oracle`) закрыт в раунде C2; живой прогон до C4 всё ещё дал `inconclusive` (см. `docs/EVAL_RESULTS.md`), перепроверка не проводилась] |
 | dcfl-18 | {aⁿbⁿ} ∪ {aⁿbᵐcⁿ}, n,m ≥ 1 | non_dcfl | haspref(L) = {aⁿbᵐcⁿ \| m ≥ n} ∉ CFL (THEORY.md §1.3) |
 | dcfl-19 | {w ∈ {a,b}* \| w ≠ xx} | non_dcfl | дополнение ∩ … = {xx} ∉ CFL (Sh Ex. 4.7.2) |
 | dcfl-20 | {aⁱbʲcᵏ \| i ≠ j ∨ j ≠ k} | non_dcfl | дополнение ∩ a*b*c* = {aⁿbⁿcⁿ} ∉ CFL |

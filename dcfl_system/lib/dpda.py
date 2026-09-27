@@ -32,6 +32,27 @@ class DPDAFormatError(ValueError):
     """Raised when a ``dpda`` dict is too malformed to check or simulate."""
 
 
+# Agent-written proof_sketches spell an epsilon transition's ``read`` field a
+# number of different ways ("", "ε", "eps", "epsilon", besides the canonical
+# None) -- normalize every one of them to the canonical `None` that
+# `check_determinism`'s coexistence check and `to_cfl_pda`'s conversion (and,
+# downstream, cfl_system.lib.pda_simulator) both expect, so an epsilon
+# transition recorded as a string is caught and simulated exactly like one
+# recorded as `None`, not silently treated as a same-letter transition.
+_EPSILON_SPELLINGS = {None, "", "ε", "eps", "epsilon"}
+
+
+def _normalize_read(read: Any) -> Any:
+    """Map any of ``dpda.py``'s recognized epsilon spellings to `None`
+    (canonical epsilon); anything else (an actual input letter) passes
+    through unchanged."""
+    if isinstance(read, str) and read.strip().lower() in {"", "ε", "eps", "epsilon"}:
+        return None
+    if read is None:
+        return None
+    return read
+
+
 # ---------------------------------------------------------------------------
 # (a) Syntactic determinism check
 # ---------------------------------------------------------------------------
@@ -40,8 +61,8 @@ def check_determinism(dpda: dict) -> list[str]:
     """Purely syntactic DPDA determinism check (docs/VERDICT_POLICY.md R2'):
     for every (state, stack_top) pair seen among ``dpda["transitions"]``, at
     most one transition per input letter, and an epsilon transition (``read``
-    is ``None``) never coexists with a letter transition for the same
-    (state, stack_top).
+    normalizing to ``None`` -- see ``_normalize_read``) never coexists with a
+    letter transition for the same (state, stack_top).
 
     Returns a list of human-readable conflict descriptions (empty list means
     deterministic). This is independent of structural well-formedness
@@ -54,7 +75,7 @@ def check_determinism(dpda: dict) -> list[str]:
         if not isinstance(t, dict):
             continue
         key = (t.get("from"), t.get("top"))
-        by_pair.setdefault(key, {}).setdefault(t.get("read"), []).append(t)
+        by_pair.setdefault(key, {}).setdefault(_normalize_read(t.get("read")), []).append(t)
 
     conflicts: list[str] = []
     for (state, top), by_read in by_pair.items():
@@ -119,13 +140,17 @@ def to_cfl_pda(dpda: dict) -> dict:
         raise DPDAFormatError("dpda.transitions must be a list")
 
     input_alphabet = sorted(
-        {t.get("read") for t in transitions if isinstance(t, dict) and t.get("read") is not None}
+        {
+            _normalize_read(t.get("read"))
+            for t in transitions
+            if isinstance(t, dict) and _normalize_read(t.get("read")) is not None
+        }
     )
 
     out_transitions = [
         {
             "from": t.get("from"),
-            "input": t.get("read"),
+            "input": _normalize_read(t.get("read")),
             "stack_top": t.get("top"),
             "to": t.get("to"),
             "push": list(reversed(t.get("push") or [])),

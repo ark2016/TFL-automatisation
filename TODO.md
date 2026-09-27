@@ -120,6 +120,18 @@
   `oracle_verifier` теперь может дать `bounded_pass` и для `input_format: "grammar"`-задач (закрывает заодно
   половину пункта про `dcfl-17`, см. открытый список ниже) — E2E `dcfl_system/tests/test_orchestrator.py`
   эталон `dcfl 0.85`; открыто: компактный ДМПА вручную (не требуется для вердикта, см. §7);
+- раунд C4: **оракулы для экспоненциальной нотации (`cfl-12`, `dcfl-04`) и для
+  переписанного IR (`dcfl-15/16`)** — новый парсер `cfl_system/lib/exponent_pattern.py`
+  (строки вида `aⁿbⁿcᵐ`) вписан в `cfl_oracle_from_ir` (`language_spec.kind: "natural"`)
+  и в единую точку `dcfl_system/lib/word_sampler.py::build_membership_oracle_from_ir`
+  (на неё переведён весь `oracle_verifier.py`); `dcfl-15/16` вместо парсера получили
+  правку eval-IR (`variables` + конкатенационный `word_pattern`). Не проверено вживую —
+  см. `docs/EVAL_RESULTS.md` «Перепроверка после C2» / «Что исправляет C4» и открытый
+  пункт в §7;
+- раунд C4: **вердикт-гейт R4′ retry-budget баг (dcfl)** — ветка «primary отработал, но
+  ниже `{required_trust}`, НЕ refuted» в `_apply_verdict_gate`
+  (`dcfl_system/orchestrator.py`) вызывала `_r4prime_rescue` безусловно вместо повтора,
+  пока `retry_count < max_retries`; исправлено, чтобы вести себя как ветка refuted;
 
 Легенда: 🔴 high · 🟠 medium · ⚪ low; объём: S ≤ 30 мин · M ≤ день · L > дня.
 
@@ -214,23 +226,28 @@
 - [x] **M** **`tfl-eval`: первый живой прогон.** 24 ловушки (не все 73, набор на тот момент) прогнаны на Haiku
   2026-09-27 — 19/19 решённых верно, 0 ложно-уверенных ошибок; результаты, диагнозы и что уже исправлено —
   `docs/EVAL_RESULTS.md`.
-- [ ] 🟠 **M** **Живой прогон полного eval-набора (74 задачи) после раунда C2.** Прогонялись только 24 ловушки
-  (`docs/EVAL_RESULTS.md`), и это было **до** C2 (сертификат DCFL, R4′, structured outputs, Ogden-контракт) и до
-  добавления `dcfl-21` (`task_grammar_aSSb`, THEORY.md §1.10) — нужно перепрогнать те же 24 ловушки, чтобы
-  подтвердить, что `cfl-07/12` теперь дают `non_cfl` вместо `failure`, и что `structured_output_calls > 0`;
-  затем прогнать `dcfl-21` (новая, ещё не прогнанная ловушка) и оставшиеся ~49 нетравматичных задач из
-  `docs/EVAL_SET.md`. `dcfl-04/15` **не** ожидаются закрыты этим перепрогоном — см. следующий пункт; `dcfl-21`
-  ожидаемо тоже не построит компактный ДМПА вживую (агент, скорее всего, не воспроизведёт машинную
-  детерминизацию из THEORY.md §1.10 за один вызов) — см. `docs/EVAL_RESULTS.md`.
-- [ ] 🟠 **M** **R2′ не закрывает `dcfl-04/15`: нет оракула членства для их IR-формы (экспоненциальный
-  `word_pattern`).** `build_set_builder_membership_oracle` (`dcfl_system/lib/word_sampler.py`) требует
-  `input_format == "set_builder"` и `word_pattern` как чистую конкатенацию именованных `variables`;
-  `dcfl-04`/`dcfl-15` (`docs/EVAL_SET.md`) заданы `variables: []` с `word_pattern` в виде экспоненциальной строки
-  (`"{a^n b^n c^m | ...}"`) — оракул возвращает `None`, `_verify_stack_strategy_dpda` максимум даёт `well_formed`,
-  и R2/R2′ по-прежнему запрещают вердикт `dcfl` (нужен `bounded_pass`+). Нужен парсер экспоненциальных
-  `word_pattern`-строк вида `aⁿbⁿcᵐ` в `word_sampler.py`; без него эти две задачи останутся `inconclusive` — см.
-  `docs/EVAL_RESULTS.md`. (`dcfl-17`, `input_format: "grammar"`, закрыт: `build_grammar_membership_oracle` —
-  CYK по грамматике задачи через `cfl_system.lib.cfl_oracle` — см. «Уже исправлено».)
+- [x] **S** **Частичная перепроверка 5 ловушек после C2 (до C4).** `dcfl-04/15/17`, `cfl-07/12` — все
+  5 дали `inconclusive 0.40` (не регрессия: ожидаемые gap'ы на тот момент, см. диагнозы в
+  `docs/EVAL_RESULTS.md` «Перепроверка после C2»); подтвердило, что `structured_output_calls > 0`
+  (баг «пустая `{}`-подсхема травит модель» закрыт) и выявило ранее незадокументированный баг cfl-07
+  (лимит optional-параметров инструмента reasoning/retry_planner, не пойман `_looks_like_schema_rejection`).
+- [ ] 🟠 **M** **Живой прогон полного eval-набора (74 задачи) после раунда C4.** Раунд C4 (см. «Уже
+  исправлено») должен закрыть `dcfl-04/15`/`cfl-12` (оракулы для экспоненциальной нотации/переписанного
+  IR) — не подтверждено вживую. Нужно перепрогнать `dcfl-04/15/17/21`, `cfl-07/12` (после проверки диффа
+  `agent_system/lib/llm_client.py` — см. пункт про cfl-07 выше) и затем оставшиеся ~49 нетравматичных задач
+  из `docs/EVAL_SET.md`. `dcfl-21` ожидаемо не построит компактный ДМПА вживую (агент, скорее всего, не
+  воспроизведёт машинную детерминизацию из THEORY.md §1.10 за один вызов) — см. `docs/EVAL_RESULTS.md`.
+- [ ] 🟠 **S** **cfl-07 живая перепроверка после C4 (лимит optional-параметров).** Live-прогон до C4
+  показал `reasoning`/`retry_planner` 400-падающими 7× подряд («Schemas contains too many optional
+  parameters (63)… limit: 24», не распознано как отказ схемы, узел уходил в `refuted`×3 без
+  admissible-основания для R4′ → `inconclusive`). Один из C4-агентов правил
+  `agent_system/lib/llm_client.py`, но сдал резюме-заглушку (`"summary": "test"`) — **непонятно, что именно
+  изменено и закрыт ли лимит**; нужно прочитать дифф и перепрогнать `cfl-07` вживую, прежде чем считать
+  закрытым (см. `docs/EVAL_RESULTS.md` «Перепроверка после C2»).
+- [x] **M** **Оракулы для `dcfl-04`/`dcfl-15`/`cfl-12` (экспоненциальный `word_pattern`/`natural`).**
+  Закрыто раундом C4 — см. «Уже исправлено» выше и `docs/EVAL_RESULTS.md`. Не подтверждено вживую (см.
+  следующий пункт про полный перепрогон). (`dcfl-17`, `input_format: "grammar"`, закрыт ранее в C2:
+  `build_grammar_membership_oracle` — CYK по грамматике задачи через `cfl_system.lib.cfl_oracle`.)
 - [ ] ⚪ **M** **Калибровка потолков confidence на Opus.** См. §1 — только по явному запросу (реальные деньги).
 - [ ] ⚪ **S** **Lean 4 в CI не выполняет реальную компиляцию** — см. §5 (3 skipped-теста нужен Docker `tfl-lean4`,
   CI-джоба неблокирующая).

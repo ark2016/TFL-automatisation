@@ -85,3 +85,11 @@ ORACLE_MAX_EXHAUSTIVE = 7
 # Retry counts
 LLM_JSON_RETRIES = 1        # retry if LLM returns non-JSON
 FORMALIZER_RETRIES = 2       # retry if Lean type check fails (§5.2 Level 4)
+
+# Cost ceiling (TODO.md backlog round C2): the retry planner must never call
+# the same specialist more than this many times for one task -- precedent:
+# live cfl-12 eval run, cfg_builder alone was called 6 times across retries,
+# 130 706 output tokens / $0.80 for a single agent. Once an agent hits this
+# cap, further retries route to other agents (or terminate) and a
+# "agent X call cap reached" note is logged to verdict_gate.downgrades.
+MAX_CALLS_PER_AGENT = 3

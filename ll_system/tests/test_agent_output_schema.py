@@ -18,7 +18,10 @@ import pytest
 from ll_system.lib.agent_output_schema import (
     REQUIRED_KEYS, _FIELD_SCHEMAS, _NO_FIXED_CONTRACT, schema_for,
 )
-from agent_system.lib.testing.schema_checks import assert_field_schemas_are_valid
+from agent_system.lib.testing.schema_checks import (
+    assert_field_schemas_are_valid, assert_schemas_within_optional_limit,
+    assert_schemas_within_union_typed_limit,
+)
 
 # `ll_grammar_builder` / `grammar_transformer` populate
 # `artifacts.first_follow_table` keyed by the grammar's own nonterminal
@@ -56,6 +59,28 @@ def test_field_schema_keys_match_required_keys_exactly(agent_name):
 
 def test_field_schemas_have_no_empty_or_open_subschema():
     assert_field_schemas_are_valid(_FIELD_SCHEMAS)
+
+
+def test_field_schemas_are_within_the_api_optional_properties_limit():
+    """The API rejects a schema with more than 24 optional properties
+    anywhere in its tree (recursively) outright -- verified live 2026-09-27,
+    see agent_system/lib/testing/schema_checks.py's module docstring."""
+    assert_schemas_within_optional_limit(
+        {name: schema_for(name) for name in _FIELD_SCHEMAS}
+    )
+
+
+def test_field_schemas_are_within_the_api_union_typed_properties_limit():
+    """A SEPARATE API limit from the optional-properties one above: no
+    more than 16 union-typed (nullable/anyOf) properties anywhere in the
+    tree -- verified live 2026-09-27 (see
+    agent_system/lib/testing/schema_checks.py's module docstring); this
+    round's first fix for the optional-properties limit (converting
+    every optional property to required+nullable) traded that rejection
+    for this one instead."""
+    assert_schemas_within_union_typed_limit(
+        {name: schema_for(name) for name in _FIELD_SCHEMAS}
+    )
 
 
 def test_schema_for_builds_a_closed_top_level_schema():
