@@ -83,10 +83,13 @@ _DESTRUCTIVE_AGENTS = (
 _TRUST_RANK = {"not_verified": 0, "well_formed": 1, "bounded_pass": 2, "verified": 3}
 
 # docs/VERDICT_POLICY.md §2: confidence ceiling by strongest supporting basis.
+# well_formed capped at 0.55 (not 0.60): without a machine check, confidence
+# must not reach 0.6, the threshold at which tfl-eval treats a verdict as
+# "confident" (docs/VERDICT_POLICY.md §2, 2026-09-27).
 _CONFIDENCE_CAP_BY_TRUST = {
     "verified": 0.98,
     "bounded_pass": 0.85,
-    "well_formed": 0.60,
+    "well_formed": 0.55,
     "not_verified": 0.40,
 }
 _CONTRADICTION_CONFIDENCE_CAP = 0.50

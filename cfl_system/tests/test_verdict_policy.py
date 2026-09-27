@@ -13,7 +13,7 @@ system's own agents/trust sources:
    reaches the "verified" trust level, so its confidence ceiling is 0.85, not
    0.98) -> confidence allowed up to that ceiling, not silently higher.
 4. only well_formed destructive proof (no constructive artifact at all) ->
-   verdict allowed, confidence <= 0.60.
+   verdict allowed, confidence <= 0.55.
 
 Each scenario drives `apply_verdict_gate` (and, for #1, the full
 `verdict_gate_node`) directly against a hand-built state dict — this is the
@@ -205,11 +205,11 @@ class TestScenario3BoundedPassCeiling:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 4: only well_formed destructive proof -> verdict allowed, cap 0.60
+# Scenario 4: only well_formed destructive proof -> verdict allowed, cap 0.55
 # ---------------------------------------------------------------------------
 
 class TestScenario4WellFormedCeiling:
-    def test_verdict_allowed_confidence_capped_at_0_60(self):
+    def test_verdict_allowed_confidence_capped_at_0_55(self):
         # docs/VERDICT_POLICY.md R1 fix: agent_results must carry pumping_cfl's
         # own non_cfl verdict for it to count as destructive evidence at all
         # (see cfl_system.orchestrator._destructive_agent_argues_non_cfl).
@@ -224,7 +224,7 @@ class TestScenario4WellFormedCeiling:
         )
         gate = apply_verdict_gate(state)
         assert gate["reasoning_output"]["verdict"] == "non_cfl"
-        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert gate["reasoning_output"]["confidence"] <= 0.55
         assert gate["verdict_gate"]["contradiction"] is False
         assert gate["verdict_gate"]["proof_verified"] is False
 
@@ -432,7 +432,7 @@ class TestR3PrimeCrossCheck:
         assert cc["destructive_refuted"] is False
         assert vg["contradiction"] is False
         assert gate["reasoning_output"]["verdict"] == "non_cfl"
-        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert gate["reasoning_output"]["confidence"] <= 0.55
         assert gate["trust"]["cfg_builder"] == "refuted"
 
     def test_both_sides_survive_cross_check_stays_inconclusive(self):
@@ -501,7 +501,7 @@ class TestR3PrimeCrossCheck:
 class TestR4PrimeStrongestAdmissibleBasis:
     def test_destructive_well_formed_wins_when_constructive_has_no_artifact(self):
         """reasoning proposes done/cfl with no artifact at all; retries are
-        exhausted; ogden is well_formed and argues non_cfl -> non_cfl 0.60,
+        exhausted; ogden is well_formed and argues non_cfl -> non_cfl 0.55,
         not inconclusive and not `failure`."""
         state = _base_state(
             retry_round=MAX_RETRIES,
@@ -516,7 +516,7 @@ class TestR4PrimeStrongestAdmissibleBasis:
         vg = gate["verdict_gate"]
         assert gate["reasoning_output"]["action"] == "done"
         assert gate["reasoning_output"]["verdict"] == "non_cfl"
-        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert gate["reasoning_output"]["confidence"] <= 0.55
         assert any("retry budget exhausted" in d and "strongest admissible basis" in d for d in vg["downgrades"])
         # R1/R3 must still hold: this is a real destructive claim, not a
         # constructive-failure inference.
@@ -546,7 +546,7 @@ class TestR4PrimeStrongestAdmissibleBasis:
         other destructive agent was refuted, even one unrelated to the
         winning trust. ogden is refuted, pumping_cfl is well_formed and
         argues non_cfl -> the well_formed pumping_cfl claim must still win
-        (non_cfl, confidence <= 0.60), not fall through to inconclusive."""
+        (non_cfl, confidence <= 0.55), not fall through to inconclusive."""
         state = _base_state(
             retry_round=MAX_RETRIES,
             agent_results={
@@ -564,7 +564,7 @@ class TestR4PrimeStrongestAdmissibleBasis:
         vg = gate["verdict_gate"]
         assert gate["reasoning_output"]["action"] == "done"
         assert gate["reasoning_output"]["verdict"] == "non_cfl"
-        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert gate["reasoning_output"]["confidence"] <= 0.55
         assert any("retry budget exhausted" in d and "strongest admissible basis" in d for d in vg["downgrades"])
 
     def test_constructive_bounded_pass_rescues_unsupported_destructive_proposal(self):

@@ -1982,7 +1982,7 @@ def assemble_result_node(state: PipelineState) -> dict:
             confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["well_formed"])
             downgrades.append(
                 "reasoning verdict has no deterministic evidence behind it "
-                "-> capped at well_formed 0.60 (VERDICT_POLICY.md §2)"
+                "-> capped at well_formed 0.55 (VERDICT_POLICY.md §2)"
             )
 
         elif errors:

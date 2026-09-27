@@ -106,12 +106,27 @@ def test_dcfl_pumping_json_blocks_parse_and_have_required_keys():
     required = {
         "kind", "pumping_length", "word_w", "word_w_prime", "common_prefix_x",
         "suffix_y", "suffix_z", "first_letters_match",
-        "condition1_argument", "condition2_argument",
+        "condition1_argument", "condition2_argument", "word_instances",
     }
     for proof in proof_blocks:
         missing = required - set(proof.keys())
         assert not missing, f"proof_sketch missing keys: {missing}"
         assert "no_pumping_argument" not in proof
+        # docs/VERDICT_POLICY.md §4 dcfl/dcfl_pumping: "без word_instances
+        # trust не выше not_verified" -- every worked example must actually
+        # carry concrete instantiated words for p in {2, 3}, not just the key.
+        word_instances = proof["word_instances"]
+        assert isinstance(word_instances, dict)
+        for p in (2, 3):
+            entry = word_instances.get(str(p))
+            assert isinstance(entry, dict), f"word_instances missing entry for p={p}"
+            w, w_prime, x_length = entry.get("w"), entry.get("w_prime"), entry.get("x_length")
+            assert isinstance(w, str) and w
+            assert isinstance(w_prime, str) and w_prime
+            assert isinstance(x_length, int) and p < x_length < len(w) and x_length < len(w_prime)
+            assert w[:x_length] == w_prime[:x_length]
+            y, z = w[x_length:], w_prime[x_length:]
+            assert y and z and y[0] == z[0]
 
 
 def test_shallit_json_blocks_parse_and_have_required_keys():
@@ -133,9 +148,10 @@ def test_shallit_json_blocks_parse_and_have_required_keys():
             assert old_field not in proof
 
         if technique == "nerode_classes":
-            assert proof.get("dead_class_status") in ("empty", "finite", "infinite"), (
+            assert proof.get("dead_class_status") in ("empty", "infinite"), (
                 "nerode_classes example must have a valid 'dead_class_status' "
-                f"(empty/finite/infinite): {proof.get('dead_class_status')!r}"
+                f"(empty/infinite -- the retired 'finite' value must not appear in a "
+                f"live worked example): {proof.get('dead_class_status')!r}"
             )
             for field in ("distinguishing_suffix", "separation_argument", "argument"):
                 assert proof.get(field), f"nerode_classes example missing non-empty '{field}'"
@@ -163,6 +179,13 @@ def test_verifier_accepts_dcfl_pumping_new_contract():
         "first_letters_match": "обе 'b'",
         "condition1_argument": "для любой пары (x2, x4) в окне <= p ...",
         "condition2_argument": "для любого x2 в последних p символах ...",
+        # docs/VERDICT_POLICY.md §4: REQUIRED -- without it trust cannot
+        # exceed not_verified. task_ir={} below has no oracle, so this only
+        # exercises the structural check, not the semantic upgrade.
+        "word_instances": {
+            "2": {"w": "aaabbb", "w_prime": "aaabbbbbb", "x_length": 5},
+            "3": {"w": "aaaabbbb", "w_prime": "aaaabbbbbbbb", "x_length": 7},
+        },
     }
     agent_results = {
         "dcfl_pumping": {
@@ -173,6 +196,35 @@ def test_verifier_accepts_dcfl_pumping_new_contract():
     entry = result["dcfl_pumping"]
     assert entry["verification_status"] == "well_formed"
     assert "issues" not in entry
+
+
+def test_verifier_caps_dcfl_pumping_at_not_verified_without_word_instances():
+    # docs/VERDICT_POLICY.md §4: "без word_instances trust не выше
+    # not_verified" -- a structurally-correct proof (all prose fields
+    # present) but with no word_instances at all must NOT reach well_formed
+    # (the live dcfl-21 bug this locks in).
+    proof_sketch = {
+        "kind": "dcfl_pumping",
+        "pumping_length": "p",
+        "word_w": "aⁿbⁿ",
+        "word_w_prime": "aⁿb²ⁿ",
+        "common_prefix_x": "aⁿbⁿ⁻¹",
+        "suffix_y": "b",
+        "suffix_z": "bⁿ⁺¹",
+        "first_letters_match": "обе 'b'",
+        "condition1_argument": "для любой пары (x2, x4) в окне <= p ...",
+        "condition2_argument": "для любого x2 в последних p символах ...",
+    }
+    agent_results = {
+        "dcfl_pumping": {
+            "status": "success", "verdict": "non_dcfl", "proof_sketch": proof_sketch,
+        }
+    }
+    result = verify_agent_results(agent_results, {})
+    entry = result["dcfl_pumping"]
+    assert entry["verification_status"] == "not_verified"
+    assert entry["verification_status"] != "well_formed"
+    assert any("word_instances" in issue for issue in entry.get("issues", []))
 
 
 def test_verifier_flags_obsolete_no_pumping_argument():

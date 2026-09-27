@@ -121,13 +121,16 @@ determinism and simulate against the task's own language oracle. See
   is non-determinism, full stop, exactly like any other coexisting pair (see
   above). `oracle_verifier` DOES apply one narrow, mechanical normalization for
   this exact pattern before checking determinism (docs/VERDICT_POLICY.md R2',
-  normalization paragraph) — but only when the source state can ALSO be proven
-  to never occur with any OTHER stack top (`dcfl_system/lib/dpda.py`'s
-  `normalize_epsilon_accept_sinks`); a state that is reused across a pop loop
-  (entered both with the "done" top AND with a "still popping" top, e.g. via a
-  shared `q_pop` self-loop) does NOT qualify, and the epsilon there stays
-  refuted non-determinism no matter what. **Do not rely on this normalization**
-  — design the automaton so the "last pop reveals the bottom marker" moment is
+  normalization paragraph, `dcfl_system/lib/dpda.py`'s
+  `normalize_epsilon_accept_sinks`): the epsilon transition is deleted and the
+  exact pair `(state, top)` it fired from is recorded as an accepting
+  *configuration* instead of blanket-marking the state — so it applies even
+  to a state reused across a pop loop (entered both with the "done" top and a
+  "still popping" top), without that making the rewrite unsound. **Do not
+  rely on this normalization** — it can turn a language-INCORRECT design into
+  one that is syntactically deterministic (so `check_determinism` no longer
+  catches the mistake) while still being wrong for the language; design the
+  automaton so the "last pop reveals the bottom marker" moment is
   itself a distinct, LETTER-triggered transition into an already-accepting
   state (e.g. give the FIRST symbol pushed in a counting block its own stack
   symbol — a "bottom of this block" marker — so popping it, on the same

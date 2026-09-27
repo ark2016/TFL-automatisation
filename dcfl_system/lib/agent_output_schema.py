@@ -120,6 +120,32 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
         "first_letters_match": schema_string(),
         "condition1_argument": schema_string(),
         "condition2_argument": schema_string(),
+        # REQUIRED whenever status == "success" (docs/VERDICT_POLICY.md §4
+        # dcfl/dcfl_pumping: "без word_instances trust не выше not_verified"
+        # -- a structurally well-formed but never-instantiated proof, e.g.
+        # live dcfl-21's well_formed non_dcfl 0.60 on an actual DCFL
+        # language, is not a proof). A CLOSED object keyed by the two
+        # tested pumping lengths ("2", "3" -- JSON object keys are always
+        # strings): each entry is the concrete word_w = x + y and
+        # word_w_prime = x + z instantiated at n = p + 1, plus the common
+        # prefix's own length so oracle_verifier never has to re-derive x
+        # from scratch (`_xyz_from_common_prefix`'s backoff-by-one heuristic
+        # is a fallback for prose it can't parse, not the primary path any
+        # more). Nullable for the same reason `stack_strategy`'s `dpda` is:
+        # the schema only says the KEY is always present, not that it must
+        # be non-null on every status.
+        "word_instances": nullable(schema_object({
+            "2": schema_object({
+                "w": schema_string(),
+                "w_prime": schema_string(),
+                "x_length": schema_number(),
+            }),
+            "3": schema_object({
+                "w": schema_string(),
+                "w_prime": schema_string(),
+                "x_length": schema_number(),
+            }),
+        })),
     }),
     "shallit": schema_object({
         "kind": schema_string(enum=["shallit"]),
@@ -129,17 +155,17 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
         # используется за раз; поля другой техники — null").
         # Required (non-null) whenever technique == "nerode_classes"; null
         # for prefix_continuation (docs/VERDICT_POLICY.md §4 dcfl/shallit --
-        # dead_class_status ∈ {"empty", "finite", "infinite"}; "infinite"
-        # means the technique is inapplicable, and oracle_verifier.py
-        # refutes a proof that claims "infinite" but status == "success").
-        # NB: the dead class D is closed under right-extension (x ∈ D ⇒
-        # xy ∈ D for all y), so D is always either empty or infinite --
-        # "finite and nonempty" cannot actually occur. "finite" is kept in
-        # the enum for schema/prompt-history stability, but
-        # oracle_verifier._check_dead_class_finite treats it exactly like
-        # "empty" (refuted by the very first confirmed dead word, not only
-        # once dead words are found at every enumerated length).
-        "dead_class_status": nullable(schema_string(enum=["empty", "finite", "infinite"])),
+        # dead_class_status ∈ {"empty", "infinite"}; "infinite" means the
+        # technique is inapplicable, and oracle_verifier.py refutes a proof
+        # that claims "infinite" but status == "success"). The dead class D
+        # is closed under right-extension (x ∈ D ⇒ xΣ* ⊆ D), so a nonempty D
+        # is always infinite -- "D конечен" can only ever mean D = ∅. The
+        # old three-way enum's "finite" value is retired from the *schema*
+        # (new live generations only ever emit "empty"/"infinite"), but
+        # oracle_verifier._verify_shallit still reads a legacy "finite" value
+        # in already-recorded output (older mocks/live runs) as "empty" for
+        # backward compatibility, with a note in `issues`.
+        "dead_class_status": nullable(schema_string(enum=["empty", "infinite"])),
         "distinguishing_suffix": nullable(schema_string()),
         "separation_argument": nullable(schema_string()),
         "derived_language": nullable(schema_string()),

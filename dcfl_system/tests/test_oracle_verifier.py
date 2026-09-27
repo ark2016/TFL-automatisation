@@ -7,6 +7,7 @@ invalid outputs, empty inputs, and mixed scenarios.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -272,6 +273,146 @@ def test_xyz_from_proof_decomposition_none_when_inconsistent_with_the_words():
 
 
 # ---------------------------------------------------------------------------
+# word_instances (docs/VERDICT_POLICY.md §4 dcfl/dcfl_pumping) -- structural
+# validation, and the exam_04 (task_grammar_aSSb) regression: this language
+# IS actually DCFL, so no dcfl_pumping proof about it -- however
+# structurally tidy -- may reach `well_formed` on its own; the mandatory
+# semantic check must resolve it one way or the other (refuted, generally,
+# since a real counterexample decomposition genuinely exists for a true
+# DCFL language and the bounded brute force is expected to find it).
+# ---------------------------------------------------------------------------
+
+def test_validate_word_instance_entry_accepts_a_genuine_instance():
+    entry = {"w": "aaabbb", "w_prime": "aaabbbbbb", "x_length": 5}
+    assert ov._validate_word_instance_entry(entry, 2) == 5
+    assert ov._validate_word_instance_entry(entry, 4) == 5  # p < x_length still holds (4<5)
+
+
+@pytest.mark.parametrize("bad_entry,p", [
+    (None, 2),
+    ({}, 2),
+    ({"w": "", "w_prime": "aaabbbbbb", "x_length": 5}, 2),
+    ({"w": "aaabbb", "w_prime": "aaabbbbbb", "x_length": "5"}, 2),  # not an int
+    ({"w": "aaabbb", "w_prime": "aaabbbbbb", "x_length": 2}, 2),    # x_length must be > p, not ==
+    ({"w": "aaabbb", "w_prime": "aaabbbbbb", "x_length": 6}, 2),    # x_length >= len(w): y would be empty
+    ({"w": "aaabbb", "w_prime": "bbaaaa", "x_length": 3}, 2),       # common prefix mismatch
+    ({"w": "aaabbbbbb", "w_prime": "aaabbb", "x_length": 6}, 2),    # x_length == len(w_prime): z empty
+])
+def test_validate_word_instance_entry_rejects_malformed_entries(bad_entry, p):
+    assert ov._validate_word_instance_entry(bad_entry, p) is None
+
+
+def test_validate_word_instance_entry_rejects_mismatched_first_letters():
+    # y = w[x_length:] = "a...", z = w_prime[x_length:] = "b..." -- lemma's
+    # own precondition (⁽¹⁾y = ⁽¹⁾z) violated.
+    entry = {"w": "aaaab", "w_prime": "aaaba", "x_length": 3}
+    assert ov._validate_word_instance_entry(entry, 2) is None
+
+
+def test_verify_dcfl_pumping_exam04_grammar_never_reaches_well_formed_or_bounded_pass():
+    # task_grammar_aSSb (dcfl_exam_04, THEORY.md §1.10) IS DCFL -- for
+    # SEVERAL different genuine member-word pairs (one a literal prefix of
+    # the other, per `_xyz_from_common_prefix`'s own backoff-by-one
+    # convention, reused here as x_length for BOTH p=2 and p=3), the
+    # mandatory word_instances + semantic check must never let the proof
+    # sit at `well_formed` (structurally tidy but unverified) OR at
+    # `bounded_pass` (a genuine but INCORRECT "non_dcfl" claim about an
+    # actually-DCFL language) -- only `refuted` or `not_verified` are
+    # acceptable outcomes.
+    member_pairs = [
+        ("ab", "abaabb"),
+        ("aabb", "aabbab"),
+        ("aaabbb", "aaabbbab"),
+        ("ba", "baaabbb"),
+    ]
+    for w, w_prime in member_pairs:
+        xyz = ov._xyz_from_common_prefix(w, w_prime)
+        assert xyz is not None, (w, w_prime)
+        x, _y, _z = xyz
+        x_length = len(x)
+        if x_length <= 3:
+            continue  # too short to test both p=2 and p=3 -- skip this pair
+        proof_sketch = {
+            "kind": "dcfl_pumping",
+            "pumping_length": "p",
+            "word_w": w,
+            "word_w_prime": w_prime,
+            "common_prefix_x": x,
+            "suffix_y": w[x_length:],
+            "suffix_z": w_prime[x_length:],
+            "first_letters_match": "см. word_instances",
+            "condition1_argument": "см. word_instances",
+            "condition2_argument": "см. word_instances",
+            "word_instances": {
+                "2": {"w": w, "w_prime": w_prime, "x_length": x_length},
+                "3": {"w": w, "w_prime": w_prime, "x_length": x_length},
+            },
+        }
+        agent_results = {
+            "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof_sketch}
+        }
+        result = verify_agent_results(agent_results, GRAMMAR_ASSB_TASK_IR)
+        entry = result["dcfl_pumping"]
+        assert entry["verification_status"] in ("refuted", "not_verified"), (
+            w, w_prime, entry["verification_status"]
+        )
+
+
+def test_verify_dcfl_pumping_exam04_small_p_closure_does_not_reach_bounded_pass():
+    # Backlog review (BLOCKER): concrete word_instances for exam_04
+    # (task_grammar_aSSb, an ACTUALLY-DCFL language) where conditions (1)/(2)
+    # both close at p=2 and p=3 (found by brute-force enumeration of the
+    # review over members of length <= 10: 101 such instances at p=2, 42 at
+    # p=3) -- these two specific instances close both conditions within this
+    # module's own decomposition budget (no refuting decomposition happens
+    # to be found at this small p), which used to be scored `bounded_pass`
+    # 0.85 for a FALSE "non_dcfl" claim -- exactly the dcfl-21 failure mode.
+    # A small, fixed p is not exhaustive evidence for Yu's lemma (the real
+    # pumping constant for this DPDA is far larger than 2 or 3), so trust
+    # must stay at `well_formed`, never `bounded_pass`, regardless of
+    # whether the bounded brute force also happens to refute some OTHER
+    # word_instances pair.
+    proof_sketch = {
+        "kind": "dcfl_pumping",
+        "pumping_length": "p",
+        "word_w": "aababb",
+        "word_w_prime": "aabababbab",
+        "common_prefix_x": "aaba",
+        "suffix_y": "bb",
+        "suffix_z": "babbab",
+        "first_letters_match": "см. word_instances",
+        "condition1_argument": "см. word_instances",
+        "condition2_argument": "см. word_instances",
+        "word_instances": {
+            "2": {"w": "aababb", "w_prime": "aabababbab", "x_length": 4},
+            "3": {"w": "aaabbabb", "w_prime": "aaabbabbab", "x_length": 6},
+        },
+    }
+    agent_results = {
+        "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof_sketch}
+    }
+    result = verify_agent_results(agent_results, GRAMMAR_ASSB_TASK_IR)
+    entry = result["dcfl_pumping"]
+    assert entry["verification_status"] == "well_formed"
+    assert entry["trust"] == "well_formed"
+
+
+def test_check_condition1_inconclusive_decomposition_downgrades_closed_to_limit():
+    # Backlog review (major): a decomposition the oracle can't decide (None
+    # on a pumped word) must not be silently dropped -- if ANY tried
+    # decomposition is inconclusive, the overall result must not claim
+    # "closed" (which would overstate coverage), even when other
+    # decompositions genuinely closed. An oracle that never decides anything
+    # makes EVERY decomposition inconclusive, so "closed" must never be
+    # returned.
+    status, _msg = ov._check_condition1("aaaa", "b", "c", p=2, oracle=lambda w: None)
+    assert status == "limit"
+
+    status2, _msg2 = ov._check_condition2("aaaa", "b", "c", p=2, oracle=lambda w: None)
+    assert status2 == "limit"
+
+
+# ---------------------------------------------------------------------------
 # shallit dead-class / literal-pair extraction -- low-level unit tests
 # ---------------------------------------------------------------------------
 
@@ -334,11 +475,14 @@ def test_enumerate_words_up_to_length_empty_alphabet():
     assert ov._enumerate_words_up_to_length([], max_len=8) == []
 
 
-def test_check_dead_class_finite_skips_claims_other_than_empty_or_finite():
+def test_check_dead_class_finite_skips_claims_other_than_empty():
     # "infinite" (and missing/invalid) claims are not this function's job --
     # _verify_shallit handles "infinite" structurally, without touching the
-    # oracle at all.
-    for claimed in ("infinite", None, "bogus"):
+    # oracle at all. The legacy "finite" value is normalized onto "empty" by
+    # the CALLER (`_normalize_dead_class_status`, docs/VERDICT_POLICY.md §4)
+    # before this function ever sees it, so at this low level "finite"
+    # itself is just another value this function does nothing with.
+    for claimed in ("infinite", "finite", None, "bogus"):
         assert ov._check_dead_class_finite(GRAMMAR_ASSB_TASK_IR, claimed) == (None, None, [])
 
 
@@ -353,16 +497,31 @@ def test_check_dead_class_finite_empty_contradicted_for_exam04_grammar():
     assert "empty" in issues[0] and "'bb'" in issues[0]
 
 
-def test_check_dead_class_finite_finite_contradicted_for_exam04_grammar():
+def test_normalize_dead_class_status_maps_legacy_finite_onto_empty():
+    # docs/VERDICT_POLICY.md §4: the schema's live value space is now just
+    # {"empty", "infinite"} -- the legacy "finite" value (D finite and
+    # nonempty, which cannot actually occur: D is closed under
+    # right-extension, so a nonempty D is always infinite) is accepted for
+    # backward compatibility and normalized onto "empty" everywhere.
+    assert ov._normalize_dead_class_status("finite") == "empty"
+    assert ov._normalize_dead_class_status("empty") == "empty"
+    assert ov._normalize_dead_class_status("infinite") == "infinite"
+    assert ov._normalize_dead_class_status(None) is None
+    assert ov._normalize_dead_class_status("bogus") == "bogus"
+
+
+def test_check_dead_class_finite_finite_contradicted_for_exam04_grammar_after_normalization():
     # D is closed under right-extension (x dead => xy dead for all y), so a
-    # nonempty D is always infinite -- "finite" (D finite and nonempty) is
-    # contradicted by the SAME single witness that would contradict "empty"
-    # (here: 'bb', the shortest dead word -- no word in the grammar starts
-    # with two 'b's), not only once dead words are found at every length.
-    outcome, evidence, issues = ov._check_dead_class_finite(GRAMMAR_ASSB_TASK_IR, "finite")
-    assert outcome == "finite_contradicted"
+    # nonempty D is always infinite -- the legacy "finite" claim, normalized
+    # onto "empty" by the caller before reaching this function, is
+    # contradicted by the same witness ('bb', the shortest dead word -- no
+    # word in the grammar starts with two 'b's) as "empty" itself.
+    outcome, evidence, issues = ov._check_dead_class_finite(
+        GRAMMAR_ASSB_TASK_IR, ov._normalize_dead_class_status("finite"),
+    )
+    assert outcome == "empty_contradicted"
     assert evidence == ["bb"]
-    assert "finite" in issues[0] and "bb" in issues[0]
+    assert "empty" in issues[0] and "bb" in issues[0]
 
 
 WWR_TASK_IR = {
@@ -412,6 +571,31 @@ def test_verify_shallit_wwr_empty_claim_is_not_refuted_end_to_end():
     result = verify_agent_results(agent_results, WWR_TASK_IR)
     entry = result["shallit"]
     assert entry["verification_status"] != "refuted"
+
+
+def test_verify_shallit_legacy_finite_value_accepted_with_backward_compat_note():
+    # docs/VERDICT_POLICY.md §4: the retired "finite" value is still ACCEPTED
+    # (not a structural failure) when D genuinely is empty -- normalized to
+    # "empty" for the oracle-based dead-class check (same {ww^R} example as
+    # the "empty" regression above), with a note in `issues` even though the
+    # result is not refuted.
+    proof_sketch = {
+        "kind": "shallit",
+        "technique": "nerode_classes",
+        "dead_class_status": "finite",
+        "distinguishing_suffix": "b a^N b u^R",
+        "separation_argument": "u*w — палиндром, v*w — нет при u != v",
+        "argument": "любое слово x продолжается до x*x^R в L, значит D пуст; "
+                    "по контрапозиции теоремы 4.7.4 [Sh] L не DCFL",
+    }
+    agent_results = {
+        "shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof_sketch}
+    }
+    result = verify_agent_results(agent_results, WWR_TASK_IR)
+    entry = result["shallit"]
+    assert entry["verification_status"] != "refuted"
+    issues = " ".join(entry.get("issues", []))
+    assert "finite" in issues and "empty" in issues and "обратная совместимость" in issues
 
 
 def test_verify_shallit_exam04_dead_class_status_finite_is_refuted():
@@ -648,10 +832,14 @@ ANBNCM_NM_GE_0_TASK_IR = {
 # The EXACT `dpda` from the live Haiku result docs/VERDICT_POLICY.md R2' cites
 # (live_c5/dcfl04, `specialist_outputs.stack_strategy.proof_sketch.dpda`):
 # `q0`/`q_b`/`q_c` all have an epsilon `(state, top=Z0) -> q_accept` (a dead
-# accept sink), but `q_b` is ALSO reached by a bare pop that can leave
-# `top="A"` -- so only `q0`/`q_c` may be soundly normalized (see
-# `test_dpda.py::TestNormalizeEpsilonAcceptSinksUnsafeCase`); `q_b`'s conflict
-# is a genuine, unresolved non-determinism in that submitted automaton.
+# accept sink); `q_b` is ALSO reached by a bare pop that can leave `top="A"`,
+# but normalization now applies to all three regardless (config-scoped
+# acceptance needs no guard on that -- see test_dpda.py's
+# `TestNormalizeEpsilonAcceptSinksLiveDcfl04`). The result IS syntactically
+# deterministic, but this submitted automaton is still wrong for the
+# language: a stray `q0 --b--> q_b` transition with no preceding `a` makes it
+# wrongly accept `"b"` -- a defect only simulation against the language
+# oracle catches, not the determinism check.
 LIVE_DCFL04_ANBNCM_DPDA = {
     "states": ["q0", "q_a", "q_b", "q_c", "q_accept"],
     "start": "q0",
@@ -674,12 +862,15 @@ LIVE_DCFL04_ANBNCM_DPDA = {
     ],
 }
 
-# A hand-corrected variant of the same language where EVERY epsilon-into-
-# `q_accept` source state also satisfies the extra soundness condition
-# (`dpda._pushes_only_onto`) -- see test_dpda.py's SAFE_ANBNCM_DPDA docstring
-# for the construction (a dedicated "bottom of the a-block" stack symbol so
-# the state that continues after the LAST 'a' is popped is never reached
-# with any other stack top).
+# A hand-corrected variant of the same language, additionally designed so
+# every epsilon-into-`q_accept` source state is reached with a single stack
+# top -- see test_dpda.py's SAFE_ANBNCM_DPDA docstring for the construction
+# (a dedicated "bottom of the a-block" stack symbol so the state that
+# continues after the LAST 'a' is popped is never reached with any other
+# stack top). That extra care is no longer required for soundness (config-
+# scoped `accept_configs` normalizes LIVE_DCFL04_ANBNCM_DPDA's `q_b` just as
+# well without it), but this remains a genuinely correct automaton, unlike
+# the live one above.
 SAFE_ANBNCM_DPDA = {
     "states": ["q0", "q_a", "q_b_mid", "q_b", "q_c", "q_accept"],
     "start": "q0",
@@ -705,30 +896,83 @@ SAFE_ANBNCM_DPDA = {
 }
 
 
-def test_stack_strategy_dpda_live_dcfl04_partially_normalizes_but_stays_refuted():
+def test_stack_strategy_dpda_live_dcfl04_fully_normalizes_but_refuted_by_simulation(monkeypatch):
     """The exact live dcfl-04 `dpda` (docs/VERDICT_POLICY.md R2' precedent):
-    `q0`/`q_c` get soundly normalized (their epsilons removed, `details`
-    records why), but `q_b`'s epsilon cannot be -- it is a real defect in
-    THIS submitted automaton (not something the normalization paragraph
-    licenses papering over), so the overall verdict correctly stays
-    `refuted`, not `bounded_pass`."""
+    `q0`, `q_b` AND `q_c` all normalize now (config-scoped acceptance needs no
+    guard on what else `q_b` occurs with -- see `dpda.normalize_epsilon_accept_sinks`),
+    so the result IS syntactically deterministic (no more "not deterministic"
+    issue) -- but this submitted automaton is still wrong for the language: a
+    stray `q0 --b--> q_b` transition with no preceding `a` makes it wrongly
+    accept `"b"`. `sample_words` is stubbed to include `"b"` among the
+    candidates (the real word_sampler heuristics do not happen to produce
+    this exact one-letter counterexample), so the regression is caught by
+    SIMULATION against the language oracle, not by the determinism check --
+    the overall verdict is `refuted`, but the issue text names the oracle
+    disagreement, never "not deterministic"."""
+    monkeypatch.setattr(ov, "sample_words", lambda task_ir, count=60, max_len=10: [{"word": "b"}])
     proof_sketch = {"dpda": LIVE_DCFL04_ANBNCM_DPDA}
     result = ov._verify_stack_strategy(proof_sketch, ANBNCM_NM_GE_0_TASK_IR)
     assert result["verification_status"] == "refuted"
     assert result["trust"] == "refuted"
     issues = " ".join(result.get("issues", []))
-    assert "not deterministic" in issues
-    assert "q_b" in issues
+    assert "not deterministic" not in issues
+    assert "disagrees with the task's language oracle" in issues
+    assert "'b'" in issues
     normalization = result["details"]["normalization"]
-    assert len(normalization) == 2
+    assert len(normalization) == 3
     assert any("q0" in n for n in normalization)
+    assert any("q_b" in n for n in normalization)
     assert any("q_c" in n for n in normalization)
+    assert {("q0", "Z0"), ("q_b", "Z0"), ("q_c", "Z0")} == {
+        (c[0], c[1]) for c in result["details"]["accept_configs"]
+    }
+
+
+def test_stack_strategy_dpda_live_dcfl04_refuted_without_sample_words_stub():
+    """Backlog review (major): the EXACT live dcfl-04 `dpda`, run through
+    the real `_verify_stack_strategy_dpda` with the real `sample_words` (NO
+    monkeypatch) -- the sampler's own heuristics do not happen to produce a
+    bare "b" or any other word starting with 'b', so this regressed to
+    `bounded_pass` (words_checked=60) before the full-alphabet-enumeration
+    fix. The full enumeration (added regardless of what the sampler
+    produces) must independently catch a word from `b c*` and refute this
+    automaton in the real pipeline, not just under a test-only stub."""
+    proof_sketch = {"dpda": LIVE_DCFL04_ANBNCM_DPDA}
+    result = ov._verify_stack_strategy(proof_sketch, ANBNCM_NM_GE_0_TASK_IR)
+    assert result["verification_status"] == "refuted"
+    assert result["trust"] == "refuted"
+    issues = " ".join(result.get("issues", []))
+    assert "disagrees with the task's language oracle" in issues
+    # A witness from b c* (the automaton wrongly accepts a leading 'b' with
+    # no preceding 'a').
+    assert re.search(r"word='bc*'", issues) is not None
+
+
+def test_stack_strategy_dpda_fixed_dcfl04_variant_reaches_bounded_pass():
+    """The live dcfl-04 `dpda` minus its one stray transition (`q0 --b--> q_b`)
+    normalizes completely (all three epsilons removed, `n=0` reachable only
+    directly at `(q0, "Z0")`), stays deterministic, AND now agrees with the
+    language oracle on the natural `sample_words` candidates -> `bounded_pass`,
+    with all three rewrites recorded."""
+    fixed_dpda = {
+        **LIVE_DCFL04_ANBNCM_DPDA,
+        "transitions": [
+            t for t in LIVE_DCFL04_ANBNCM_DPDA["transitions"]
+            if not (t.get("from") == "q0" and t.get("read") == "b")
+        ],
+    }
+    proof_sketch = {"dpda": fixed_dpda}
+    result = ov._verify_stack_strategy(proof_sketch, ANBNCM_NM_GE_0_TASK_IR)
+    assert result["verification_status"] == "bounded_pass"
+    assert result["trust"] == "bounded_pass"
+    assert result["details"]["determinism"] == "verified"
+    assert len(result["details"]["normalization"]) == 3
 
 
 def test_stack_strategy_dpda_fully_normalizable_reaches_bounded_pass():
     """A submitted `dpda` where every epsilon-into-accept-sink source state
-    also satisfies the soundness condition normalizes completely and reaches
-    `bounded_pass` end to end, with all three rewrites recorded."""
+    normalizes (now unconditionally) reaches `bounded_pass` end to end, with
+    all three rewrites recorded."""
     proof_sketch = {"dpda": SAFE_ANBNCM_DPDA}
     result = ov._verify_stack_strategy(proof_sketch, ANBNCM_NM_GE_0_TASK_IR)
     assert result["verification_status"] == "bounded_pass"

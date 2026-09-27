@@ -680,7 +680,10 @@ def preprocess_node(state: PipelineState) -> dict:
         # ("finite"/"regex_pattern") — cap at well_formed's ceiling either way,
         # and never raise a less-confident heuristic up to 0.95 (docs/VERDICT_POLICY.md §2).
         trust = "verified" if regularity_method in ("finite", "regex_pattern") else "well_formed"
-        trust_cap = 0.98 if trust == "verified" else 0.60
+        # well_formed capped at 0.55 (not 0.60): without a machine check,
+        # confidence must not reach 0.6, tfl-eval's "confident" threshold
+        # (docs/VERDICT_POLICY.md §2, 2026-09-27).
+        trust_cap = 0.98 if trust == "verified" else 0.55
         confidence = min(
             0.95,
             trust_cap,
@@ -1438,7 +1441,8 @@ def apply_verdict_gate(state: PipelineState) -> dict:
             # well_formed destructive proof on record).
             if has_destructive:
                 verdict = "not_ll"
-                confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.60
+                # well_formed capped at 0.55, not 0.60 (docs/VERDICT_POLICY.md §2).
+                confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.55
                 basis.append({"agent": destructive_agent, "trust": destructive_trust})
                 downgrades.append(
                     f"{reason} -> retry budget exhausted -> strongest admissible basis: "
@@ -1493,8 +1497,9 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     elif verdict == "not_ll":
         if has_destructive:
             # R2: destructive not_ll by agent >= well_formed; oracle-checked
-            # words raise the ceiling from 0.60 to 0.85.
-            confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.60
+            # words raise the ceiling from 0.55 to 0.85 (well_formed itself
+            # capped at 0.55, not 0.60 -- docs/VERDICT_POLICY.md §2).
+            confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.55
             basis = [{"agent": destructive_agent, "trust": destructive_trust}]
         else:
             # R1: a failed/refuted constructive attempt is never, by itself,

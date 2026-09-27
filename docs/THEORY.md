@@ -87,9 +87,9 @@ uw — палиндром; vw — нет (при |u| = |v| это дало бы 
 
 **Ограничение метода — «мёртвый» класс.** D = {x | ∄z: xz ∈ L} — тоже класс Нероуда. Если D
 бесконечен (например, L ⊆ a*b*: все слова вне Pref(a*b*) мертвы), теорема выполняется автоматически
-и **ничего не даёт**. Поэтому перед применением нужно проверить, что D конечен (обычно D = ∅:
-каждое слово продолжается до слова из L, как у PAL). Агент обязан явно это обосновать; иначе —
-`not_applicable`.
+и **ничего не даёт**. Поэтому перед применением нужно проверить, что D конечен, а это значит D = ∅:
+D замкнут относительно продолжений справа (x ∈ D ⇒ xΣ* ⊆ D), так что непустой D бесконечен. D = ∅ означает, что
+каждое слово продолжается до слова из L (как у PAL). Агент обязан явно это обосновать; иначе — `not_applicable`.
 
 **[ошибка]** Старая формулировка в `shallit.md`/`tz_dcfl` §5.5: «если L ∈ DCFL, то для всякого
 бесконечного M ⊆ Σ* найдётся бесконечное однородное M′ ⊆ M». Ложна: для DCFL {aⁿbⁿ} и M = {aⁿ}
@@ -267,7 +267,7 @@ LL-язык был бы регулярным): конфигурация вклю
 | Где | Что |
 |---|---|
 | `dcfl_system/prompts/dcfl_pumping.md`, `tz_dcfl` §5.4, §6.1.3 | формулировка 1.1 (пара (x₂,x₄) в условии (1)); пример {aⁿbⁿ}∪{aⁿb²ⁿ}; ловушка {aⁿbⁿcᵐ}; поля контракта `condition1_argument` (пары внутри x) и `condition2_argument` |
-| `dcfl_system/prompts/shallit.md`, `tz_dcfl` §5.5, §6.1.4, `lib/oracle_verifier.py::_verify_shallit`, моки `*_shallit.json` | теорема 4.7.4 в форме 1.2 + лемма о продолжении 1.3 (`technique`: `nerode_classes` \| `prefix_continuation`); обязательное поле `dead_class_finite` для `nerode_classes`; `not_applicable`, если мёртвый класс бесконечен |
+| `dcfl_system/prompts/shallit.md`, `tz_dcfl` §5.5, §6.1.4, `lib/oracle_verifier.py::_verify_shallit`, моки `*_shallit.json` | теорема 4.7.4 в форме 1.2 + лемма о продолжении 1.3 (`technique`: `nerode_classes` \| `prefix_continuation`); обязательное поле `dead_class_status ∈ {empty, infinite}` для `nerode_classes` (D замкнут справа, поэтому «конечен» ⇔ «пуст»); `not_applicable`, если мёртвый класс бесконечен |
 | `dcfl_system/prompts/closure_reduction.md` | таблица 1.4 (добавить L/R, MIN, MAX, haspref/L_$ как ссылку на shallit) |
 | `dcfl_system/CLAUDE.md`, `README.md` | формулировки 1.1–1.3, ссылка на этот файл |
 | `dcfl_system/tests` | тест-ловушки: проверка формулировок в промптах (contract-тест), {aⁿbⁿcᵐ} в объяснении леммы Ю |
@@ -552,7 +552,7 @@ T → c | aSab | bTb (FIRST попарно дизъюнктны).
 Пять exam-задач прогнаны с `TFL_MODEL_OVERRIDE=claude-haiku-4-5 --live` после правок раундов 1–3: `wvaavRwR` → non_dcfl 0.88,
 `u1au2_u3au4` → non_dcfl 0.88, `anb_cnbn` → non_dcfl 0.85, `grammar_filter_49` → non_cfl 0.92, `anbn_ancn` → not_ll 0.95
 (37 с, 36 с, 30 с, 7 мин 51 с с двумя ретраями и инверсией, 86 с; без ошибок API). Агенты следуют новым контрактам:
-shallit выбирает `technique` и заполняет `dead_class_finite`; dcfl_pumping даёт условия (1) и (2) с парой (x₂,x₄);
+shallit выбирает `technique` и заполняет `dead_class_status` (тогда — `dead_class_finite`); dcfl_pumping даёт условия (1) и (2) с парой (x₂,x₄);
 inh_ambiguity на `anb_cnbn` сам установил дизъюнктность ветвей и вернул not_applicable; stack_strategy на `wvaavRwR` отверг
 «aa» как разделитель; классификатор CFL не выдал автоматический cfl для фильтра |a| = |b|; prefix_classes для DCFL-языка
 {aⁿbⁿ}∪{aⁿcⁿ} корректно вернул uncertain (мёртвый класс бесконечен). Найденные дефекты: closure_reduction утверждал

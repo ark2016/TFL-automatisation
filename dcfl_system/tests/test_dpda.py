@@ -261,14 +261,17 @@ LIVE_DCFL04_ANBNCM_DPDA = {
     ],
 }
 
-# A hand-corrected variant of the same {aⁿbⁿcᵐ | n,m>=0} automaton where every
-# epsilon-into-`q_accept` source state ALSO satisfies the extra soundness
-# condition (`_pushes_only_onto`): `q_b` is entered only via transitions that
-# explicitly (re-)push "Z0" -- from `q_a` on the LAST 'a' (top="A1", the
-# dedicated "bottom of the a-block" marker) and from `q_b_mid` once it has
-# popped down to that same marker -- never via a bare, unconditioned pop.
-# `q_b_mid` (not `q_b`) is used for "more 'A's still to pop", so `q_b` itself
-# is never associated with any stack top other than "Z0".
+# A hand-corrected, genuinely correct variant of the same {aⁿbⁿcᵐ | n,m>=0}
+# automaton where every epsilon-into-`q_accept` source state ALSO happens to
+# be entered only with a single stack top: `q_b` is entered only via
+# transitions that explicitly (re-)push "Z0" -- from `q_a` on the LAST 'a'
+# (top="A1", the dedicated "bottom of the a-block" marker) and from
+# `q_b_mid` once it has popped down to that same marker -- never via a bare,
+# unconditioned pop. `q_b_mid` (not `q_b`) is used for "more 'A's still to
+# pop", so `q_b` itself is never associated with any stack top other than
+# "Z0" (this single-stack-top property is no longer REQUIRED for
+# normalization to be sound -- see TestNormalizeEpsilonAcceptSinksLiveDcfl04
+# below -- but this automaton also happens to have it, and is correct).
 SAFE_ANBNCM_DPDA = {
     "states": ["q0", "q_a", "q_b_mid", "q_b", "q_c", "q_accept"],
     "start": "q0",
@@ -311,15 +314,27 @@ def _anbncm_oracle(word: str) -> bool:
 
 
 class TestNormalizeEpsilonAcceptSinksSafeCase:
-    """SAFE_ANBNCM_DPDA: every epsilon-into-accept-sink source state also
-    satisfies `_pushes_only_onto` (single possible stack top) -- the fully
-    sound case, where normalization resolves ALL THREE conflicts and the
-    result is a genuinely deterministic DPDA for the intended language."""
+    """SAFE_ANBNCM_DPDA: a hand-designed automaton where every epsilon-into-
+    accept-sink source state happens to be reached with a single stack top
+    (by construction, via a dedicated "bottom of the a-block" symbol) -- the
+    normalization resolves ALL THREE conflicts and the result is a genuinely
+    deterministic, and genuinely correct, DPDA for the intended language.
+    (This automaton no longer needs that extra care to normalize soundly --
+    see TestNormalizeEpsilonAcceptSinksLiveDcfl04 below, where the SAME
+    normalization also applies to a state reached with more than one stack
+    top, and stays sound precisely because acceptance is now scoped to the
+    exact (state, top) pair via `accept_configs`, not a blanket state mark --
+    but it remains a good example of a stack_strategy `dpda` that is both
+    normalizable AND correct.)"""
 
     def test_all_three_epsilons_normalized(self):
         normalized, notes = normalize_epsilon_accept_sinks(SAFE_ANBNCM_DPDA)
         assert len(notes) == 3
-        assert {"q0", "q_b", "q_c"} <= set(normalized["accept_states"])
+        assert {("q0", "Z0"), ("q_b", "Z0"), ("q_c", "Z0")} <= {
+            (c[0], c[1]) for c in normalized["accept_configs"]
+        }
+        # accept_states is left untouched -- normalization no longer mutates it.
+        assert normalized["accept_states"] == SAFE_ANBNCM_DPDA["accept_states"]
 
     def test_normalized_result_is_deterministic(self):
         normalized, _ = normalize_epsilon_accept_sinks(SAFE_ANBNCM_DPDA)
@@ -347,41 +362,90 @@ class TestNormalizeEpsilonAcceptSinksSafeCase:
         assert twice is normalized
 
 
-class TestNormalizeEpsilonAcceptSinksUnsafeCase:
-    """LIVE_DCFL04_ANBNCM_DPDA: `q_b`'s epsilon into `q_accept` looks
-    identical to `q0`'s and `q_c`'s (same "(state, top=Z0) -> dead-end
-    accept" shape) but `q_b` is ALSO reached via a bare pop (`q_a` /
-    `q_b` itself popping "A") that can land on `top="A"` -- so it must NOT
-    be normalized away, or the rewrite silently changes the language."""
+# The live automaton minus its one stray transition (`q0 --b--> q_b` with no
+# preceding `a`) -- the fix docs/VERDICT_POLICY.md R2' points at: `n=0` is
+# then reachable only directly at `(q0, "Z0")` itself (via `accept_configs`),
+# never through `q_b`, so `dpda_run` agrees with the oracle on every word,
+# including "b" (see TestNormalizeEpsilonAcceptSinksLiveDcfl04 below for the
+# UNFIXED automaton's "b" bug this removes).
+FIXED_DCFL04_ANBNCM_DPDA = {
+    **LIVE_DCFL04_ANBNCM_DPDA,
+    "transitions": [
+        t for t in LIVE_DCFL04_ANBNCM_DPDA["transitions"]
+        if not (t.get("from") == "q0" and t.get("read") == "b")
+    ],
+}
 
-    def test_only_q0_and_q_c_are_normalized(self):
+
+class TestNormalizeEpsilonAcceptSinksLiveDcfl04:
+    """LIVE_DCFL04_ANBNCM_DPDA (docs/VERDICT_POLICY.md R2' precedent, the
+    exact live dcfl-04 `dpda`): `q0`, `q_b` and `q_c` each have an epsilon
+    `(state, top=Z0) -> q_accept` into the same dead-end accepting sink.
+    Under the CURRENT (config-scoped) normalization all three qualify and are
+    rewritten -- including `q_b`, even though it is ALSO reached via a bare
+    pop that can leave `top="A"` -- because acceptance is now keyed on the
+    exact pair `(q_b, "Z0")`, not on `q_b` as a whole (see
+    `normalize_epsilon_accept_sinks`'s docstring for the soundness argument;
+    an earlier revision of this function needed an extra guard,
+    `_pushes_only_onto`, and left `q_b` un-normalized for exactly this
+    reason -- that guard no longer exists because it is no longer needed).
+    The result IS syntactically deterministic, but this SUBMITTED automaton
+    is still wrong for the language: it has a stray `q0 --b--> q_b` with no
+    preceding `a`, so `"b"` reaches an `accept_configs` hit and is wrongly
+    accepted. This is exactly the kind of defect only simulation against the
+    language oracle catches, not the (clean) determinism check."""
+
+    def test_all_three_epsilons_normalize(self):
         normalized, notes = normalize_epsilon_accept_sinks(LIVE_DCFL04_ANBNCM_DPDA)
-        assert len(notes) == 2
+        assert len(notes) == 3
         assert any("q0" in n for n in notes)
+        assert any("q_b" in n for n in notes)
         assert any("q_c" in n for n in notes)
-        assert not any("q_b" in n for n in notes)
-        assert set(normalized["accept_states"]) == {"q_accept", "q0", "q_c"}
+        assert {("q0", "Z0"), ("q_b", "Z0"), ("q_c", "Z0")} == {
+            (c[0], c[1]) for c in normalized["accept_configs"]
+        }
+        # accept_states is left untouched -- normalization no longer mutates it.
+        assert normalized["accept_states"] == ["q_accept"]
 
-    def test_q_b_conflict_remains_after_normalization(self):
-        """q0/q_c's epsilons are gone, but q_b's epsilon still coexists with
-        its letter transition on (q_b, top=Z0) -- genuine non-determinism,
-        not something this rewrite is allowed to paper over."""
+    def test_normalized_result_is_deterministic(self):
+        """Unlike an earlier revision (which left q_b's epsilon in place and
+        reported one conflict there), the current normalization removes it
+        too -- check_determinism reports a clean automaton."""
         normalized, _ = normalize_epsilon_accept_sinks(LIVE_DCFL04_ANBNCM_DPDA)
-        conflicts = check_determinism(normalized)
-        assert len(conflicts) == 1
-        assert "q_b" in conflicts[0]
+        assert check_determinism(normalized) == []
 
-    def test_blanket_marking_q_b_accepting_would_be_unsound(self):
-        """Regression / adversarial-review counterexample: if `q_b` were
-        blanket-marked accepting (the naive reading of the VERDICT_POLICY.md
-        R2' normalization paragraph, ignoring `_pushes_only_onto`), "aab"
-        (2 a's, 1 b -- input ends at (q_b, top="A"), one "A" still
-        unmatched) would be wrongly ACCEPTED, even though the un-normalized
-        original automaton correctly rejects it and the word is genuinely
-        not in {aⁿbⁿcᵐ}. This proves `_pushes_only_onto`'s extra guard is
-        necessary, not merely cautious."""
+    def test_deterministic_but_wrongly_accepts_b(self):
+        """`"b"` (0 a's, 1 b) is genuinely not in {aⁿbⁿcᵐ} -- this submitted
+        automaton is wrong for the language independently of normalization
+        (it already has the stray `q0 --b--> q_b` transition with no `a`
+        ever pushed, reaching `q_accept` via `q_b`'s own epsilon once input
+        runs out at `(q_b, top="Z0")`). What normalization changes is only
+        WHICH check catches it: under an EARLIER revision (guarded by
+        `_pushes_only_onto`), `q_b`'s epsilon stayed un-normalized and kept
+        coexisting with a letter transition on `(q_b, "Z0")`, so
+        `check_determinism` refuted it directly, before simulation ever ran.
+        Under the CURRENT (config-scoped) normalization, `q_b`'s epsilon
+        normalizes away too, the result is genuinely, fully deterministic --
+        so this defect can now ONLY be caught by simulating against the
+        language oracle (docs/VERDICT_POLICY.md R2', live dcfl-04
+        precedent), never by the determinism check."""
+        assert _anbncm_oracle("b") is False
+        assert dpda_accepts(LIVE_DCFL04_ANBNCM_DPDA, "b") is True  # wrong already, pre-normalization
+
+        normalized, _ = normalize_epsilon_accept_sinks(LIVE_DCFL04_ANBNCM_DPDA)
+        assert check_determinism(normalized) == []  # genuinely deterministic now
+        assert dpda_accepts(normalized, "b") is True  # ...and still genuinely wrong
+
+    def test_config_scoped_acceptance_still_rejects_aab(self):
+        """Regression / adversarial-review counterexample an EARLIER revision
+        needed a guard (`_pushes_only_onto`) to avoid: if `q_b` were instead
+        blanket-marked accepting (ignoring which stack top it occurs with),
+        "aab" (2 a's, 1 b -- input ends at (q_b, top="A"), one "A" still
+        unmatched) would be wrongly ACCEPTED. The CURRENT mechanism needs no
+        such guard because it never blanket-marks `q_b`: it only adds the
+        exact pair `(q_b, "Z0")` to `accept_configs`, so `(q_b, "A")` --
+        "aab"'s actual halting configuration -- is correctly not accepting."""
         assert _anbncm_oracle("aab") is False
-        assert dpda_accepts(LIVE_DCFL04_ANBNCM_DPDA, "aab") is False
 
         naively_normalized = {
             **LIVE_DCFL04_ANBNCM_DPDA,
@@ -391,9 +455,9 @@ class TestNormalizeEpsilonAcceptSinksUnsafeCase:
                 if not (t.get("read") is None and t.get("to") == "q_accept")
             ],
         }
-        assert dpda_accepts(naively_normalized, "aab") is True  # the bug
+        assert dpda_accepts(naively_normalized, "aab") is True  # the bug a blanket mark would have
 
-        # The actual (guarded) normalization does not have this bug.
+        # The actual (config-scoped) normalization does not have this bug.
         normalized, _ = normalize_epsilon_accept_sinks(LIVE_DCFL04_ANBNCM_DPDA)
         assert dpda_accepts(normalized, "aab") is False
 
@@ -403,10 +467,30 @@ class TestNormalizeEpsilonAcceptSinksUnsafeCase:
     ])
     def test_normalized_still_matches_oracle_on_decided_words(self, word, expected):
         normalized, _ = normalize_epsilon_accept_sinks(LIVE_DCFL04_ANBNCM_DPDA)
-        # q_b's genuine conflict makes this dpda formally non-deterministic,
-        # but the BFS simulator still explores it correctly as an NPDA, so
-        # membership itself is unaffected by leaving q_b's epsilon in place.
         assert dpda_accepts(normalized, word) == expected
+
+
+class TestFixedDcfl04VariantReachesBoundedPass:
+    """FIXED_DCFL04_ANBNCM_DPDA: the live automaton minus the one stray
+    transition responsible for the "b" bug above. Normalization still
+    removes all three epsilons (n=0 is now reachable only directly at
+    `(q0, "Z0")`), the result is deterministic, AND it agrees with the
+    oracle on every word -- including the ones that exposed the bug."""
+
+    def test_all_three_epsilons_normalize_and_result_is_deterministic(self):
+        normalized, notes = normalize_epsilon_accept_sinks(FIXED_DCFL04_ANBNCM_DPDA)
+        assert len(notes) == 3
+        assert check_determinism(normalized) == []
+
+    @pytest.mark.parametrize("word,expected", [
+        ("", True), ("b", False), ("bb", False), ("bc", False),
+        ("c", True), ("cc", True), ("ab", True), ("aabb", True),
+        ("aabbcc", True), ("aab", False), ("aabbb", False),
+    ])
+    def test_normalized_matches_oracle(self, word, expected):
+        normalized, _ = normalize_epsilon_accept_sinks(FIXED_DCFL04_ANBNCM_DPDA)
+        assert dpda_accepts(normalized, word) == expected
+        assert _anbncm_oracle(word) == expected  # sanity: the oracle itself agrees
 
 
 class TestNormalizeEpsilonAcceptSinksNoOp:

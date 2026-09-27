@@ -28,10 +28,13 @@ from typing import Any, Callable
 _TRUST_RANK = {"not_verified": 0, "well_formed": 1, "bounded_pass": 2, "verified": 3}
 
 #: Confidence ceiling per trust level (docs/VERDICT_POLICY.md §2).
+#: well_formed capped at 0.55 (not 0.60): without a machine check, confidence
+#: must not reach 0.6, the threshold at which tfl-eval treats a verdict as
+#: "confident" (docs/VERDICT_POLICY.md §2, 2026-09-27).
 CONFIDENCE_CAPS: dict[str, float] = {
     "verified": 0.98,
     "bounded_pass": 0.85,
-    "well_formed": 0.60,
+    "well_formed": 0.55,
     "not_verified": 0.40,
 }
 

@@ -198,3 +198,54 @@ def test_all_tasks_render_all_formats(tmp_path, task_filename):
         p = Path(fpath)
         assert p.exists()
         assert p.stat().st_size > 0
+
+
+# ---------------------------------------------------------------------------
+# dcfl_pumping word_instances (docs/VERDICT_POLICY.md §4) rendering
+# ---------------------------------------------------------------------------
+
+def _pumping_sketch_with_instances() -> dict:
+    return {
+        "kind": "dcfl_pumping",
+        "pumping_length": "p",
+        "word_w": "aⁿbⁿ",
+        "word_w_prime": "aⁿb²ⁿ",
+        "common_prefix_x": "aⁿbⁿ⁻¹",
+        "suffix_y": "b",
+        "suffix_z": "bⁿ⁺¹",
+        "first_letters_match": "обе 'b'",
+        "condition1_argument": "...",
+        "condition2_argument": "...",
+        "word_instances": {
+            "2": {"w": "aaabbb", "w_prime": "aaabbbbbb", "x_length": 5},
+            "3": {"w": "aaaabbbb", "w_prime": "aaaabbbbbbbb", "x_length": 7},
+        },
+    }
+
+
+def test_render_markdown_shows_word_instances():
+    from dcfl_system.renderer import _render_proof_sketch_md
+    md = _render_proof_sketch_md(_pumping_sketch_with_instances(), "dcfl_pumping")
+    assert "Конкретные инстансы" in md
+    assert "aaabbb" in md and "aaabbbbbb" in md
+    assert "aaaabbbb" in md and "aaaabbbbbbbb" in md
+    assert "p=2" in md and "p=3" in md
+
+
+def test_render_html_shows_word_instances():
+    from dcfl_system.renderer import _render_proof_sketch_html
+    html = _render_proof_sketch_html(_pumping_sketch_with_instances(), "dcfl_pumping")
+    assert "Конкретные инстансы" in html
+    assert "aaabbb" in html and "aaabbbbbb" in html
+
+
+def test_panel_dcfl_pumping_shows_word_instances():
+    from dcfl_system.renderer import _panel_dcfl_pumping
+    output = {
+        "agent_name": "dcfl_pumping", "status": "success", "verdict": "non_dcfl",
+        "confidence": 0.85, "proof_sketch": _pumping_sketch_with_instances(),
+        "evidence": [], "errors": [],
+    }
+    panel = _panel_dcfl_pumping(output)
+    assert "Конкретные инстансы" in panel
+    assert "aaaabbbb" in panel

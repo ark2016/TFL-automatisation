@@ -214,7 +214,7 @@ class TestScenario2VerifiedWins:
         # is NOT a contradiction — it falls through to the plain R2 well_formed
         # ceiling for the constructive verdict instead.
         assert result["verdict_gate"]["contradiction"] is False
-        assert result["confidence"] <= 0.60
+        assert result["confidence"] <= 0.55
 
 
 # ---------------------------------------------------------------------------
@@ -260,11 +260,11 @@ class TestScenario3VerifiedFullTest:
 
 
 # ---------------------------------------------------------------------------
-# §6.4 — only a well_formed proof is admissible but capped at 0.60
+# §6.4 — only a well_formed proof is admissible but capped at 0.55
 # ---------------------------------------------------------------------------
 
 class TestScenario4WellFormedIsAdmissibleButCapped:
-    def test_well_formed_destructive_capped_at_060(self):
+    def test_well_formed_destructive_capped_at_055(self):
         state = _state(
             agent_results={
                 "substitution_agent": {
@@ -287,8 +287,8 @@ class TestScenario4WellFormedIsAdmissibleButCapped:
         out = assemble_result_node(state)
         result = out["result"]
         assert result["verdict"] == "not_ll"
-        assert result["confidence"] <= 0.60
-        assert result["verdict_gate"]["confidence_cap"] == 0.60
+        assert result["confidence"] <= 0.55
+        assert result["verdict_gate"]["confidence_cap"] == 0.55
 
     def test_oracle_checked_destructive_raises_cap_to_085(self):
         state = _state(
@@ -322,7 +322,7 @@ class TestScenario4WellFormedIsAdmissibleButCapped:
         threshold as every other system's constructive direction. A bare
         well_formed constructive claim (no equivalence oracle ran at all)
         must NOT stand as an accepted 'll' verdict at any confidence — it
-        downgrades to 'uncertain' <= 0.40, not 'll' <= 0.60 (that used to be
+        downgrades to 'uncertain' <= 0.40, not 'll' <= 0.55 (that used to be
         the bug this test locked in; see VERDICT_POLICY.md §2)."""
         state = _state(
             agent_results={
@@ -371,9 +371,9 @@ class TestRegularityShortcutHonorsHeuristicConfidence:
         out = preprocess_node({"ir": ir, "log": []})
         result = out["result"]
         # "trivial_constraint" is a heuristic (well_formed trust, §1), so it is
-        # additionally capped at well_formed's 0.60 ceiling (§2) — lower than
+        # additionally capped at well_formed's 0.55 ceiling (§2) — lower than
         # both the heuristic's own 0.75 and the 0.95 hard ceiling.
-        assert result["confidence"] == 0.60
+        assert result["confidence"] == 0.55
         assert result["confidence"] < hints["regularity_confidence"]
 
     def test_regex_kind_reaches_095(self):
@@ -530,7 +530,7 @@ class TestFirstFollowOracleDoesNotOverrideRefutedGrammar:
         # well_formed (no equivalence oracle available) must not be silently
         # promoted to bounded_pass just because the LL(k) table happened to
         # confirm the CANDIDATE grammar's own LL(k)-ness.
-        assert result["verdict"] != "ll" or result["confidence"] <= 0.60
+        assert result["verdict"] != "ll" or result["confidence"] <= 0.55
 
     def test_bounded_pass_grammar_source_supports_ll_at_085(self):
         state = self._state_with_ff_found("bounded_pass")
@@ -755,7 +755,7 @@ class TestR4PrimeStrongestAdmissibleBasis:
     def test_destructive_well_formed_rescues_unsupported_ll_proposal(self):
         """reasoning proposes done/ll with no constructive artifact at all;
         retries are exhausted; substitution_agent is well_formed and argues
-        not_ll -> not_ll <= 0.60, not `uncertain` and not `failure`."""
+        not_ll -> not_ll <= 0.55, not `uncertain` and not `failure`."""
         state = _state(
             retry_round=MAX_RETRIES,
             agent_results={
@@ -780,7 +780,7 @@ class TestR4PrimeStrongestAdmissibleBasis:
         vg = gate["verdict_gate"]
         assert gate["reasoning_output"]["action"] == "done"
         assert gate["reasoning_output"]["verdict"] == "not_ll"
-        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert gate["reasoning_output"]["confidence"] <= 0.55
         assert any("strongest admissible basis" in d and "not_ll" in d for d in vg["downgrades"])
 
     def test_no_admissible_basis_either_side_stays_uncertain_not_failure(self):

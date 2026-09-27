@@ -53,17 +53,28 @@ MOCK_DIR = EXAMPLES_DIR / "mock"
 # *Confidence* is NOT copied verbatim any more: docs/VERDICT_POLICY.md §2-3
 # (orchestrator.py's `_apply_verdict_gate`) caps confidence at the trust the
 # deterministic oracle assigned to the winning specialist's artifact, never
-# at the LLM's own self-reported 0.9. These three mocks' proof_sketch fields
-# (dcfl_pumping.word_w / shallit.distinguishing_suffix etc.) are free-text
-# math prose ("w = xy = W1 = (ab)^n aa (ba)^n ∈ L"), not clean instantiable
-# patterns, so `oracle_verifier`'s step-2 semantic check (§4) never fires and
-# trust stays at the structural-only `well_formed` tier -> confidence cap
-# 0.60 (§2). See dcfl_system/tests/test_verdict_policy.py for cases that DO
-# exercise the step-2 oracle path (bounded_pass / refuted) with clean mocks.
+# at the LLM's own self-reported 0.9. shallit's proof_sketch fields
+# (distinguishing_suffix etc.) for task_u1au2_u3au4 and task_anb_cnbn's
+# dcfl_pumping-style free-text math prose are not clean instantiable
+# patterns / carry no `word_instances`, so `oracle_verifier`'s step-2
+# semantic check (§4) never fires and trust stays at the structural-only
+# `well_formed` tier -> confidence cap 0.55 (§2). task_wvaavRwR's
+# dcfl_pumping mock DOES carry a mandatory `word_instances` (docs/VERDICT_
+# POLICY.md §4 dcfl/dcfl_pumping) with concrete literal words at n = p + 1
+# for p in {2, 3}, and a real set_builder oracle is available for this
+# task -> the semantic check runs conditions (1)/(2)'s brute force and
+# closes for both p -- but closure at a small, fixed p in {2, 3} is NOT
+# exhaustive evidence for Yu's lemma (backlog review, BLOCKER fix: this is
+# reproducibly reachable for an ACTUALLY-DCFL language too, e.g. dozens of
+# word_instances pairs for task_grammar_aSSb close the same way), so trust
+# stays at `well_formed` -> confidence cap 0.55, same as the other two
+# dcfl_pumping-based tasks below. See dcfl_system/tests/test_verdict_policy.py
+# for more cases that exercise the step-2 oracle path (well_formed / refuted)
+# directly.
 TASKS = [
-    ("task_wvaavRwR", "non_dcfl", 0.60),
-    ("task_u1au2_u3au4", "non_dcfl", 0.60),
-    ("task_anb_cnbn", "non_dcfl", 0.60),
+    ("task_wvaavRwR", "non_dcfl", 0.55),
+    ("task_u1au2_u3au4", "non_dcfl", 0.55),
+    ("task_anb_cnbn", "non_dcfl", 0.55),
     # task_grammar_aSSb (dcfl_exam_04, docs/THEORY.md §1.10): the language IS
     # DCFL (status established by direct construction, not just an
     # unverified word-level "стратегия") — a profile NPDA is proven

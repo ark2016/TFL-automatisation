@@ -34,7 +34,7 @@ from dcfl_system.lib.word_sampler import (
 from dcfl_system.lib.dpda import (
     DPDAFormatError,
     check_determinism,
-    dpda_accepts,
+    dpda_run,
     normalize_epsilon_accept_sinks,
     to_cfl_pda,
 )
@@ -53,10 +53,13 @@ _TRUST_LEVEL_SET = frozenset(TRUST_LEVELS)
 _TRUST_RANK: dict[str, int] = {name: i for i, name in enumerate(TRUST_LEVELS)}
 
 # VERDICT_POLICY.md §2 — confidence ceilings by the strongest trust behind a claim.
+# well_formed capped at 0.55 (not 0.60): without a machine check, confidence
+# must not reach 0.6, the threshold at which tfl-eval treats a verdict as
+# "confident" (docs/VERDICT_POLICY.md §2, 2026-09-27).
 CONFIDENCE_CAPS: dict[str, float] = {
     "verified": 0.98,
     "bounded_pass": 0.85,
-    "well_formed": 0.60,
+    "well_formed": 0.55,
     "not_verified": 0.40,
     "not_applicable": 0.40,
     "error": 0.40,
@@ -71,6 +74,38 @@ CONTRADICTION_CONFIDENCE_CAP = 0.50
 # incomplete and trust stays at `well_formed`.
 _DPDA_MIN_WORDS = 30
 _DPDA_MAX_WORD_LEN = 10
+
+# Backlog review (major): `sample_words`'s own heuristics do not reliably
+# produce short "wrong prefix" words (e.g. a bare "b" with no preceding "a"),
+# so a submitted dpda that is wrong on exactly those words (live dcfl-04:
+# `q0 --b--> q_b` accepts "b", "bc", "bcc", ...) could reach `bounded_pass`
+# in the real pipeline even though it is refuted by simulation. A full
+# enumeration of every word over the task alphabet up to this budget is
+# added to (never replaces) the sampler's candidates so short counterexamples
+# like "b" are always covered, not just under a test's `sample_words` stub.
+_DPDA_FULL_ENUM_WORD_BUDGET = 3000
+
+
+def _full_enumeration_max_len(
+    alphabet_size: int, budget: int = _DPDA_FULL_ENUM_WORD_BUDGET,
+    max_len_cap: int = _DPDA_MAX_WORD_LEN,
+) -> int:
+    """Largest word length k (capped at ``max_len_cap``, matching the
+    simulation's own ``_DPDA_MAX_WORD_LEN``) such that enumerating every word
+    over an alphabet of this size up to length k stays within ``budget``
+    total words -- for |Sigma| = 3 this gives k = 6 (3**1 + ... + 3**6 =
+    1092 <= 3000 < 1092 + 3**7), the exact bound the review asked for."""
+    if alphabet_size <= 1:
+        return max_len_cap
+    k = 0
+    total = 1  # the empty word (length 0)
+    while k < max_len_cap:
+        nxt = alphabet_size ** (k + 1)
+        if total + nxt > budget:
+            break
+        total += nxt
+        k += 1
+    return max(k, 1)
 
 
 def trust_rank(trust: str | None) -> int:
@@ -276,29 +311,35 @@ def _verify_stack_strategy_dpda(
     (0) Normalization (docs/VERDICT_POLICY.md R2', normalization paragraph):
         ``dpda.normalize_epsilon_accept_sinks`` runs FIRST, on the dpda AS
         SUBMITTED -- it is the one canonical, language-preserving rewrite the
-        policy allows before determinism is checked (an epsilon transition
-        into a dead-end accepting state, whose source state can only ever
-        occur with that transition's required stack top, is replaced by
-        marking the source state accepting directly). Every subsequent step
-        -- (a) and (b) below -- runs against the NORMALIZED automaton, never
-        the original; the rewrite's notes (empty if nothing qualified) are
-        recorded in the returned ``details["normalization"]`` regardless of
-        the final trust, so the report always shows exactly what was
-        rewritten before determinism was judged.
+        policy allows before determinism is checked: an epsilon transition
+        `(q, Z) -> q_acc` into a dead-end accepting sink is deleted, and the
+        pair `(q, Z)` is added to the normalized dpda's `accept_configs`
+        instead (acceptance is then keyed on the exact stack-top configuration,
+        not blanket-marking `q` itself -- see the function's own docstring for
+        the equivalence argument, and why this needs no extra guard on what
+        else `q` occurs with, unlike an earlier revision). Every subsequent
+        step -- (a) and (b) below -- runs against the NORMALIZED automaton,
+        never the original; the rewrite's notes (empty if nothing qualified)
+        are recorded in the returned ``details["normalization"]``, and the
+        resulting ``accept_configs`` (if any) in ``details["accept_configs"]``,
+        regardless of the final trust, so the report always shows exactly what
+        was rewritten before determinism was judged.
     (a) Syntactic determinism (``dpda.check_determinism``) -- a COMPLETE
         check, so a violation is a genuine, deterministic counterexample:
-        ``refuted``, with the conflicting transitions named. An epsilon
-        transition that normalization could NOT safely remove (because its
-        source state can also occur with some other stack top -- see
-        ``dpda.normalize_epsilon_accept_sinks``'s docstring for why that
-        makes the blanket rewrite unsound) still coexisting with a letter
-        transition on the same (state, top) is exactly this kind of genuine
-        non-determinism, not a normalization gap to paper over.
-    (b) Simulation: convert the (normalized) DPDA (``dcfl_system.lib.dpda.to_cfl_pda``,
-        which reuses ``cfl_system.lib.pda_simulator`` -- it already supports
-        epsilon transitions and both `final_state`/`empty_stack` acceptance
-        modes, so no second simulator is written here) and run it on words
-        sampled by ``word_sampler`` (positive and negative, length <=
+        ``refuted``, with the conflicting transitions named. Because
+        normalization now applies unconditionally to every qualifying
+        epsilon-into-accept-sink, a submitted dpda that is deterministic
+        AFTER normalization is not automatically CORRECT for the task's
+        language -- see (b): a stray letter transition can still make the
+        normalized, deterministic automaton accept words it shouldn't
+        (docs/VERDICT_POLICY.md R2' precedent: live dcfl-04, `q0 --b--> q_b`
+        with no preceding `a` wrongly reaches an `accept_configs` hit on
+        input `"b"`), and only simulation against the language oracle catches
+        that, not this syntactic check.
+    (b) Simulation: run the (normalized) DPDA via ``dcfl_system.lib.dpda.dpda_run``
+        (a dedicated deterministic simulator that understands `accept_configs`
+        -- NOT ``to_cfl_pda``/``pda_accepts``, which silently ignore it) on
+        words sampled by ``word_sampler`` (positive and negative, length <=
         ``_DPDA_MAX_WORD_LEN``) against the task's OWN language oracle
         (``word_sampler.build_membership_oracle_from_ir`` -- the single
         oracle-building entry point, dispatching on ``set_builder``
@@ -320,6 +361,8 @@ def _verify_stack_strategy_dpda(
     base_details: dict[str, Any] = {}
     if normalization_notes:
         base_details["normalization"] = normalization_notes
+    if dpda.get("accept_configs"):
+        base_details["accept_configs"] = dpda["accept_configs"]
 
     conflicts = check_determinism(dpda)
     if conflicts:
@@ -327,6 +370,10 @@ def _verify_stack_strategy_dpda(
             "dpda is not deterministic: " + "; ".join(conflicts)
         ), {**base_details, "determinism": "violated", "conflicts": conflicts}
 
+    # to_cfl_pda is used here ONLY as a compatibility structural-validity
+    # check (unknown states/symbols, missing required fields) -- it does not
+    # understand accept_configs, so it must never be used to simulate; (b)
+    # below uses dpda_run instead.
     try:
         to_cfl_pda(dpda)
     except DPDAFormatError as exc:
@@ -345,10 +392,21 @@ def _verify_stack_strategy_dpda(
             f"could not sample words for simulation: {exc}"
         ), {**base_details, "determinism": "verified"}
 
-    candidates = sorted(
-        {s["word"] for s in samples
-         if isinstance(s.get("word"), str) and len(s["word"]) <= _DPDA_MAX_WORD_LEN}
-    )
+    candidate_set = {
+        s["word"] for s in samples
+        if isinstance(s.get("word"), str) and len(s["word"]) <= _DPDA_MAX_WORD_LEN
+    }
+    # Backlog review (major): always add a full enumeration of the task
+    # alphabet (not just the sampler's heuristic picks) so a short but
+    # decisive counterexample the sampler never happens to generate -- e.g.
+    # a bare "b" with no preceding "a" -- is still caught by simulation.
+    alphabet = task_ir.get("alphabet")
+    if isinstance(alphabet, list) and alphabet:
+        max_len = _full_enumeration_max_len(len(alphabet))
+        candidate_set.update(_enumerate_words_up_to_length(
+            alphabet, max_len=max_len, limit=_DPDA_FULL_ENUM_WORD_BUDGET,
+        ))
+    candidates = sorted(candidate_set)
 
     checked = 0
     mismatches: list[str] = []
@@ -356,9 +414,10 @@ def _verify_stack_strategy_dpda(
         expected = oracle(word)
         if expected is None:
             continue
-        try:
-            actual = dpda_accepts(dpda, word)
-        except TimeoutError:
+        actual = dpda_run(dpda, word)
+        if actual is None:
+            # Step budget exceeded (pathological epsilon cycle) -- inconclusive
+            # for this word, not a definite rejection; skip it like a TimeoutError.
             continue
         checked += 1
         if actual != expected:
@@ -563,6 +622,41 @@ def _verify_dcfl_pumping(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
             checks_run, passed, issues,
         )
 
+    # word_instances (docs/VERDICT_POLICY.md §4 dcfl/dcfl_pumping): concrete
+    # word_w = x + y, word_w_prime = x + z instantiated at n = p + 1 for
+    # p in {2, 3}, REQUIRED -- "без word_instances trust не выше
+    # not_verified" (not well_formed!): a structurally-correct proof whose
+    # words are only ever described in prose (like "aⁿbⁿ⁻¹") but never
+    # actually instantiated is not a proof (the live dcfl-21 bug this locks
+    # in: well_formed non_dcfl 0.60 for an actual DCFL language). This is a
+    # REQUIRED check like the others above -- its failure caps `status`
+    # below at "not_verified", same mechanism as every other missing field.
+    word_instances = proof_sketch.get("word_instances")
+    parsed_instances: dict[int, tuple[str, str, int]] = {}
+    _check(
+        "word_instances_present",
+        isinstance(word_instances, dict) and "2" in word_instances and "3" in word_instances,
+        "word_instances must be a closed object {'2': {...}, '3': {...}} giving the "
+        "concrete word_w/word_w_prime instantiated at n = p + 1 for p in {2, 3} "
+        "(docs/VERDICT_POLICY.md §4: without it, trust cannot exceed not_verified)",
+        checks_run, passed, issues,
+    )
+    if isinstance(word_instances, dict):
+        for p in (2, 3):
+            entry = word_instances.get(str(p))
+            x_length = _validate_word_instance_entry(entry, p)
+            _check(
+                f"word_instances_p{p}_valid",
+                x_length is not None,
+                f"word_instances['{p}'] must be {{'w': ..., 'w_prime': ..., "
+                f"'x_length': ...}} with a common prefix x of length > {p} shared by "
+                "w and w_prime, and suffixes y = w[x_length:], z = w_prime[x_length:] "
+                "that are both non-empty and start with the same letter (THEORY.md §1.1)",
+                checks_run, passed, issues,
+            )
+            if x_length is not None:
+                parsed_instances[p] = (entry["w"], entry["w_prime"], x_length)
+
     n_passed = sum(1 for p in passed if p)
     if not checks_run:
         return _make_result("not_verified", checks_run, 0,
@@ -570,14 +664,14 @@ def _verify_dcfl_pumping(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
     status = "well_formed" if n_passed == len(checks_run) else "not_verified"
 
     # Step 2 (VERDICT_POLICY.md §4, dcfl_pumping): if the structure is
-    # well-formed, try to instantiate word_w/word_w_prime at concrete n and
-    # check membership with a real oracle. Only runs when both an oracle and
-    # a clean (pure exponent-notation) instantiation are available; otherwise
-    # trust stays at well_formed, per the fallback in VERDICT_POLICY.md §4.
+    # well-formed (which now requires a valid word_instances for BOTH p=2
+    # and p=3), check w, w' in L with a real oracle and brute-force
+    # conditions (1)/(2) on the proof's own literal x/y/z decomposition.
+    # Only runs when an oracle is available; otherwise trust stays at
+    # well_formed, per the fallback in VERDICT_POLICY.md §4.
     if status == "well_formed":
         semantic_status, semantic_check, semantic_issue = _semantic_check_dcfl_pumping(
-            word_w, word_w_prime, task_ir,
-            common_prefix_x=common_prefix_x, suffix_y=suffix_y, suffix_z=suffix_z,
+            parsed_instances, task_ir,
         )
         if semantic_status is not None:
             status = semantic_status
@@ -588,6 +682,34 @@ def _verify_dcfl_pumping(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
                 n_passed += 1
 
     return _make_result(status, checks_run, n_passed, issues if issues else None)
+
+
+def _validate_word_instance_entry(entry: Any, p: int) -> int | None:
+    """Structural validation of one ``word_instances['<p>']`` entry (no
+    oracle needed): returns the entry's own ``x_length`` when it is a
+    genuinely usable instance of Yu's two-word pumping lemma (THEORY.md
+    §1.1) at this ``p`` -- ``w``/``w_prime`` are non-empty strings sharing a
+    literal common prefix of length ``x_length`` (> ``p``, and strictly
+    shorter than both words, so the suffixes ``y``/``z`` are non-empty), with
+    ``y[0] == z[0]`` (the lemma's own precondition) -- or ``None`` if not.
+    """
+    if not isinstance(entry, dict):
+        return None
+    w = entry.get("w")
+    w_prime = entry.get("w_prime")
+    x_length = entry.get("x_length")
+    if not isinstance(w, str) or not w or not isinstance(w_prime, str) or not w_prime:
+        return None
+    if not isinstance(x_length, int) or isinstance(x_length, bool):
+        return None
+    if not (p < x_length < len(w) and x_length < len(w_prime)):
+        return None
+    if w[:x_length] != w_prime[:x_length]:
+        return None
+    y, z = w[x_length:], w_prime[x_length:]
+    if not y or not z or y[0] != z[0]:
+        return None
+    return x_length
 
 
 def _pump_outcome(
@@ -642,14 +764,19 @@ def _check_condition1(
     one of xy, xz for EVERY such pair (docs/VERDICT_POLICY.md §4).
 
     Returns (status, message): status is one of "closed" (every pair tried
-    failed to survive pumping), "refuted" (some pair survives i=0,2,3 — a
-    genuine counterexample, message describes it), "no_evidence" (x too
-    short to yield any candidate pair), or "limit" (the brute force exceeded
-    its decomposition budget before finishing — coverage incomplete).
+    was decisively resolved -- either found to survive pumping and closed,
+    or refuted -- with NO pair left inconclusive), "refuted" (some pair
+    survives i=0,2,3 — a genuine counterexample, message describes it),
+    "no_evidence" (x too short to yield any candidate pair), or "limit" (the
+    brute force exceeded its decomposition budget before finishing, OR at
+    least one tried pair's oracle calls never decided -- either way,
+    coverage is incomplete and "closed" would overstate what was actually
+    checked; backlog review, major finding).
     """
     n = len(x)
     tested = 0
     any_closed = False
+    any_inconclusive = False
     for start in range(n):
         for length in range(1, p + 1):
             end = start + length
@@ -680,6 +807,10 @@ def _check_condition1(
                         )
                     if outcome == "closed":
                         any_closed = True
+                    elif outcome == "inconclusive":
+                        any_inconclusive = True
+    if any_inconclusive:
+        return "limit", None
     return ("closed" if any_closed else "no_evidence"), None
 
 
@@ -720,6 +851,7 @@ def _check_condition2(
     n = len(x)
     tested = 0
     any_closed = False
+    any_inconclusive = False
     max_tail = min(p, n)
     y_factorizations = _bounded_factorizations(y, max_suffix_factor_len)
     z_factorizations = _bounded_factorizations(z, max_suffix_factor_len)
@@ -751,6 +883,10 @@ def _check_condition2(
                         )
                     if outcome == "closed":
                         any_closed = True
+                    elif outcome == "inconclusive":
+                        any_inconclusive = True
+    if any_inconclusive:
+        return "limit", None
     return ("closed" if any_closed else "no_evidence"), None
 
 
@@ -816,69 +952,64 @@ def _xyz_from_common_prefix(w: str, w_prime: str) -> tuple[str, str, str] | None
 
 
 def _semantic_check_dcfl_pumping(
-    word_w: Any, word_w_prime: Any, task_ir: dict,
-    common_prefix_x: Any = None, suffix_y: Any = None, suffix_z: Any = None,
+    instances: dict[int, tuple[str, str, int]], task_ir: dict,
 ) -> tuple[str | None, str, str]:
     """Step 2 for dcfl_pumping (VERDICT_POLICY.md §4).
 
-    Instantiate ``word_w``/``word_w_prime`` at n = p + 1 for p in {2, 3},
-    check w, w' in L with a real membership oracle, AND brute-force BOTH
+    Check w, w' in L with a real membership oracle, AND brute-force BOTH
     condition (1) (pair (x2, x4) anywhere in x, |x2 x3 x4| <= p) and
     condition (2) (x2 in the last p symbols of x, synchronised with every
     bounded factorization of y and z) of Yu's two-word pumping lemma
     (THEORY.md §1.1) — membership alone is necessary but not sufficient
     evidence for the claim that the lemma's disjunction fails everywhere.
 
-    The x/y/z decomposition tested is the proof's own ``common_prefix_x`` /
-    ``suffix_y`` / ``suffix_z`` when those instantiate cleanly
-    (``_xyz_from_proof_decomposition``), else a constructive fallback
-    (``_xyz_from_common_prefix``) — either way the lemma's own precondition
-    (y, z non-empty, same first letter) is checked, never skipped: a
-    decomposition that doesn't satisfy it is not a valid instance of the
-    lemma, so it is treated the same as "x too short" (skipped for that p),
-    not as evidence either way.
+    ``instances`` maps p (2 and/or 3) to the proof's own ``(w, w_prime,
+    x_length)`` — the CONCRETE literal words from ``proof_sketch``'s
+    mandatory ``word_instances`` field (docs/VERDICT_POLICY.md §4: "без
+    word_instances trust не выше not_verified"), already structurally
+    validated by :func:`_validate_word_instance_entry` (common prefix
+    ``x = w[:x_length]`` genuinely shared by both words, ``y = w[x_length:]``
+    / ``z = w_prime[x_length:]`` non-empty with ``y[0] == z[0]``) by the time
+    this function is called — no further parsing/instantiation of prose is
+    needed or attempted here.
 
     Returns (status_or_None, check_name, issue):
     - ``"refuted"`` — either a word isn't actually in L, or some
       decomposition under condition (1) or (2) survives pumping at
       i = 0, 2 AND 3 (a genuine counterexample to the "no pumping works"
       claim).
-    - ``"bounded_pass"`` — membership holds, and for at least one tested p
-      BOTH conditions were closed for THAT SAME p (every decomposition
-      tried at that p broke membership at some i, within this module's
-      bounded search — see ``_check_condition1``/``_check_condition2`` for
-      the exact decomposition/factorization-length limits), with no
-      decomposition-budget limit hit and no inconclusive/skipped p among
-      the ones tested.
-    - ``"well_formed"`` (with a note) — the brute force hit its size limit
-      before finishing, or some tested p had no valid decomposition to
-      exercise the conditions with, so coverage is incomplete.
-    - ``None`` — neither the pattern nor a membership oracle could be used,
-      or there just wasn't enough to test (no p yielded a valid
-      decomposition at all); trust stays at ``well_formed`` with no note.
+    - ``"well_formed"`` (with a note) — EVERY other outcome, including when
+      conditions (1)/(2) fully closed for a tested p (backlog review,
+      BLOCKER fix): closure at a small, fixed p in {2, 3} is NOT elevated to
+      ``bounded_pass`` any more. Yu's real pumping constant for a given DCFL
+      is generally far larger than 2 or 3, so a decomposition search bounded
+      to |x2 x3 x4| <= p at p = 2 or 3 only ever samples a vanishing sliver
+      of the space the lemma actually quantifies over -- closing every
+      decomposition it happened to try proves nothing about the ones it
+      didn't, and is reproducibly reachable for words of an ACTUALLY-DCFL
+      language (docs/VERDICT_POLICY.md §4 / live dcfl-21 precedent: enumerating
+      members of `task_grammar_aSSb`, a genuine DCFL language, up to length 10
+      found 101 word_instances pairs at p=2 and 42 at p=3 whose conditions (1)
+      and (2) both close under this exact search, i.e. a FALSE `non_dcfl`
+      claim reaching `bounded_pass` -- see
+      ``test_verify_dcfl_pumping_exam04_small_p_closure_does_not_reach_bounded_pass``).
+      Only an actual counterexample (``"refuted"``) is decisive; closure
+      alone, a decomposition-budget limit, or "no candidate decomposition"
+      all leave trust at ``well_formed`` (0.55) -- a necessary-condition
+      check, not sufficient evidence.
+    - ``None`` — no oracle could be used, or ``instances`` was empty; trust
+      stays at ``well_formed`` with no note.
     """
     check_name = "semantic_word_membership[p=2,3]"
-    if not isinstance(word_w, str) or not isinstance(word_w_prime, str):
+    if not instances:
         return None, check_name, ""
 
     oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
         return None, check_name, ""
 
-    alphabet = task_ir.get("alphabet", [])
-
-    alphabet_set = set(alphabet)
-    instances: list[tuple[int, str, str]] = []
-    for p in (2, 3):
-        n = p + 1
-        w = instantiate_exponent_pattern(word_w, n, alphabet_set)
-        w_prime = instantiate_exponent_pattern(word_w_prime, n, alphabet_set)
-        if w is None or w_prime is None:
-            return None, check_name, ""
-        instances.append((p, w, w_prime))
-
     bad: list[str] = []
-    for p, w, w_prime in instances:
+    for p, (w, w_prime, _x_length) in sorted(instances.items()):
         in_w = oracle(w)
         in_w_prime = oracle(w_prime)
         if in_w is None or in_w_prime is None:
@@ -900,20 +1031,8 @@ def _semantic_check_dcfl_pumping(
     any_p_fully_closed = False
     limit_hit = False
     inconclusive_p: list[int] = []
-    for p, w, w_prime in instances:
-        n = p + 1
-        xyz = _xyz_from_proof_decomposition(
-            common_prefix_x, suffix_y, suffix_z, n, alphabet_set, w, w_prime,
-        )
-        if xyz is None:
-            xyz = _xyz_from_common_prefix(w, w_prime)
-        if xyz is None:
-            # No decomposition satisfying the lemma's own precondition
-            # (y, z non-empty, same first letter) — nothing usable to test
-            # at this p.
-            inconclusive_p.append(p)
-            continue
-        x, y, z = xyz
+    for p, (w, w_prime, x_length) in sorted(instances.items()):
+        x, y, z = w[:x_length], w[x_length:], w_prime[x_length:]
 
         status1, msg1 = _check_condition1(x, y, z, p, oracle)
         if status1 == "refuted":
@@ -934,13 +1053,28 @@ def _semantic_check_dcfl_pumping(
             inconclusive_p.append(p)
 
     if any_p_fully_closed and not limit_hit and not inconclusive_p:
-        return "bounded_pass", check_name, ""
+        # Backlog review (BLOCKER): closure of conditions (1)/(2) at a small,
+        # fixed p in {2, 3} is NOT sufficient evidence for Yu's pumping lemma
+        # -- the real constant is generally far larger, so this bounded
+        # search only ever samples a sliver of what the lemma quantifies
+        # over. Confirmed reproducible on an ACTUALLY-DCFL language
+        # (task_grammar_aSSb / exam_04): dozens of word_instances close both
+        # conditions at p=2/p=3 for a FALSE non_dcfl claim. Trust stays at
+        # well_formed (0.55) -- a necessary-condition check, never
+        # bounded_pass -- and only a genuine counterexample (refuted, above)
+        # is decisive (docs/VERDICT_POLICY.md §4).
+        return "well_formed", check_name, (
+            "conditions (1)/(2) closed for the tested p (all decompositions "
+            "tried broke membership at some i), but closure at a small fixed "
+            "p is not exhaustive evidence for Yu's lemma -- trust stays "
+            "well_formed, not bounded_pass (docs/VERDICT_POLICY.md §4)"
+        )
     if limit_hit or inconclusive_p:
         return "well_formed", check_name, (
             "condition (1)/(2) check did not fully close for every tested p "
-            "(decomposition-budget limit hit, and/or no decomposition "
-            "satisfying the lemma's y/z precondition at some p) — coverage "
-            "incomplete, trust stays well_formed (docs/VERDICT_POLICY.md §4)"
+            "(decomposition-budget limit hit, and/or no candidate decomposition "
+            "at some p) — coverage incomplete, trust stays well_formed "
+            "(docs/VERDICT_POLICY.md §4)"
         )
     # Only membership was actually checkable — per VERDICT_POLICY.md §4,
     # that is not enough to earn bounded_pass on its own.
@@ -990,11 +1124,29 @@ def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         # §4 dcfl/shallit): absent/invalid ⇒ this check fails ⇒ not_verified below;
         # "infinite" is a valid VALUE but makes the technique self-admittedly
         # inapplicable, handled by the explicit early-refute right after this loop.
+        #
+        # The contract's live value space is now just {"empty", "infinite"} (D is
+        # closed under right-extension, so "D finite and nonempty" cannot occur --
+        # "D конечен" only ever meant D = ∅). The legacy value "finite" (pre
+        # docs/VERDICT_POLICY.md §4 trim) is still ACCEPTED here for backward
+        # compatibility with already-recorded output (older mocks/live runs), read
+        # as "empty" for every downstream check, with a note in `issues` (not a
+        # failing check -- the value itself was never wrong, just retired).
+        raw_dead_status = proof_sketch.get("dead_class_status")
+        dead_class_status = _normalize_dead_class_status(raw_dead_status)
+        if raw_dead_status == "finite":
+            issues.append(
+                "dead_class_status: устаревшее значение 'finite' прочитано как "
+                "'empty' (обратная совместимость, docs/VERDICT_POLICY.md §4) -- D "
+                "замкнут относительно продолжений справа, поэтому непустой D "
+                "бесконечен, и 'D конечен' всегда означало D = ∅"
+            )
         _check(
             "dead_class_status_valid",
-            proof_sketch.get("dead_class_status") in ("empty", "finite", "infinite"),
-            "dead_class_status must be one of 'empty', 'finite', 'infinite' -- the mёртвый "
-            "класс D (THEORY.md §1.2); nerode_classes is inapplicable when D is infinite",
+            dead_class_status in ("empty", "infinite"),
+            "dead_class_status must be one of 'empty', 'infinite' (legacy 'finite' "
+            "is accepted and read as 'empty') -- the мёртвый класс D (THEORY.md §1.2); "
+            "nerode_classes is inapplicable when D is infinite",
             checks_run, passed, issues,
         )
         for field, ru_hint in (
@@ -1013,7 +1165,7 @@ def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         # == "infinite" but was still returned as a "success" (this verifier is never
         # reached for status == "not_applicable", see verify_agent_results) is
         # self-contradictory: it should have returned not_applicable instead.
-        if proof_sketch.get("dead_class_status") == "infinite":
+        if dead_class_status == "infinite":
             return _make_result(
                 "refuted", checks_run, sum(1 for p in passed if p),
                 issues + [
@@ -1162,12 +1314,25 @@ def _enumerate_words_up_to_length(
     return words[:limit]
 
 
+def _normalize_dead_class_status(raw: Any) -> Any:
+    """Legacy 'finite' (pre docs/VERDICT_POLICY.md §4 trim, when the enum was
+    {"empty", "finite", "infinite"}) is read as 'empty' for every downstream
+    check: D is closed under right-extension (x ∈ D ⇒ xΣ* ⊆ D), so a
+    nonempty D is always infinite -- "D конечен" could only ever have meant
+    D = ∅ in practice, so 'finite' and 'empty' were never actually distinct
+    claims. 'empty', 'infinite', and anything else (missing/invalid) pass
+    through unchanged -- the caller's own validity check handles those.
+    """
+    return "empty" if raw == "finite" else raw
+
+
 def _check_dead_class_finite(
     task_ir: dict, claimed_status: str | None,
 ) -> tuple[str | None, list[str] | None, list[str]]:
     """Step 2, dead-class part (VERDICT_POLICY.md §4 dcfl/shallit): cross-
-    check the proof's own ``dead_class_status`` claim (``"empty"`` /
-    ``"finite"``) against the oracle. Runs ALWAYS whenever a membership
+    check the proof's own ``dead_class_status`` claim (``"empty"``, after
+    :func:`_normalize_dead_class_status` maps the retired legacy value
+    ``"finite"`` onto it) against the oracle. Runs ALWAYS whenever a membership
     oracle exists for this task, independent of the shape of
     ``distinguishing_suffix`` (the caller, ``_semantic_check_shallit_nerode``,
     no longer gates this on a literal suffix).
@@ -1199,29 +1364,27 @@ def _check_dead_class_finite(
     (``_continuable`` returns ``None``; R1: absence of evidence is not
     evidence) — never miscounted as dead.
 
-    - ``claimed_status == "empty"`` or ``"finite"``: ANY single dead word
-      found ⇒ contradicted, for BOTH claims equally. D is closed under
-      right-extension: if x has no continuation into L, then neither does
-      xy for any y (a continuation z of xy would make yz a continuation of
-      x). So a nonempty D is always infinite (xΣ* ⊆ D for any x ∈ D) --
-      "D finite and nonempty" is not a state D can actually be in. One
-      confirmed dead word therefore refutes "empty" (D is not empty) and,
-      by the very same closure argument, refutes "finite" just as
-      decisively (a nonempty D is never finite) -- there is no theoretical
-      basis for demanding dead words at multiple/every length before
-      treating a "finite" claim as contradicted.
-    - any other ``claimed_status`` (``"infinite"``, missing, invalid): this
-      function does nothing (that case is handled structurally by
-      ``_verify_shallit`` itself, or is not a claim this check can test).
+    - ``claimed_status == "empty"``: ANY single dead word found ⇒
+      contradicted. D is closed under right-extension: if x has no
+      continuation into L, then neither does xy for any y (a continuation z
+      of xy would make yz a continuation of x). So a nonempty D is always
+      infinite (xΣ* ⊆ D for any x ∈ D) -- one confirmed dead word is enough,
+      there is no theoretical basis for demanding dead words at
+      multiple/every length first.
+    - any other ``claimed_status`` (``"infinite"``, missing, invalid,
+      including the legacy ``"finite"`` -- callers normalize that to
+      ``"empty"`` via :func:`_normalize_dead_class_status` before calling
+      this function): this function does nothing (those cases are handled
+      structurally by ``_verify_shallit`` itself, or aren't a claim this
+      check can test).
 
     Returns ``(outcome, evidence_words, issues)``:
     - ``(None, None, [])`` — no oracle / no alphabet / no contradiction
       found (genuinely inconclusive or consistent with the claim; the
       caller must NOT treat this as confirming the claim either).
     - ``("empty_contradicted", [word], [msg])`` (``claimed_status == "empty"``)
-    - ``("finite_contradicted", [word], [msg])`` (``claimed_status == "finite"``)
     """
-    if claimed_status not in ("empty", "finite"):
+    if claimed_status != "empty":
         return None, None, []
     alphabet = task_ir.get("alphabet", [])
     if not alphabet:
@@ -1237,21 +1400,11 @@ def _check_dead_class_finite(
         if cont is None or cont:
             continue
         # w is dead (provably no continuation into L within the bound) --
-        # D is not empty, and (D closed under right-extension) therefore
-        # not finite either: this one witness refutes both claims alike.
-        if claimed_status == "empty":
-            return "empty_contradicted", [w], [
-                f"dead_class_status claims 'empty' but {w!r} has NO continuation "
-                "into L within an exhaustive bounded search (up to "
-                f"{max_extra} more symbols) -- the dead class D is not empty"
-            ]
-        return "finite_contradicted", [w], [
-            f"dead_class_status claims 'finite' but {w!r} has NO continuation "
+        # D is not empty.
+        return "empty_contradicted", [w], [
+            f"dead_class_status claims 'empty' but {w!r} has NO continuation "
             "into L within an exhaustive bounded search (up to "
-            f"{max_extra} more symbols) -- D is not empty, and D is closed "
-            "under right-extension (x dead => xy dead for all y), so a "
-            "nonempty D is always infinite: 'finite' is contradicted by the "
-            "same single witness as 'empty' would be"
+            f"{max_extra} more symbols) -- the dead class D is not empty"
         ]
     return None, None, []
 
@@ -1281,15 +1434,15 @@ def _semantic_check_shallit_nerode(
     The dead-class part is the one exception to "only literal suffixes":
     it runs ALWAYS whenever a membership oracle exists for this task,
     independent of the shape of ``distinguishing_suffix`` -- the proof's
-    own ``dead_class_status`` claim (``"empty"`` / ``"finite"``) is checked
-    against the oracle regardless of how the rest of the proof is phrased
-    (VERDICT_POLICY.md §4 fix).
+    own ``dead_class_status`` claim (``"empty"``, or the legacy ``"finite"``
+    normalized onto it) is checked against the oracle regardless of how the
+    rest of the proof is phrased (VERDICT_POLICY.md §4 fix).
     """
     check_name = "semantic_nerode_separation[pairs]"
     alphabet = task_ir.get("alphabet", [])
     alphabet_set = set(alphabet)
 
-    claimed_status = proof_sketch.get("dead_class_status")
+    claimed_status = _normalize_dead_class_status(proof_sketch.get("dead_class_status"))
     dead_outcome, _dead_evidence, dead_issues = _check_dead_class_finite(
         task_ir, claimed_status,
     )

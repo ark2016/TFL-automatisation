@@ -57,7 +57,7 @@ def test_e2e_w1w2w1w3():
 # closure_reduction's intersection_examples/intersection_non_examples are
 # checked against the oracle (docs/VERDICT_POLICY.md §4) and pass, so its
 # trust is `bounded_pass` (not `well_formed`) -> confidence capped at 0.85,
-# not 0.60. No contradiction: cfg_builder/decomposition never reach
+# not 0.55. No contradiction: cfg_builder/decomposition never reach
 # bounded_pass, so there is no competing constructive artifact.
 # ---------------------------------------------------------------------------
 
@@ -68,7 +68,7 @@ def test_e2e_wwvvR():
     assert result["verdict"] == "non_cfl"
     # bounded_pass ceiling (docs/VERDICT_POLICY.md §2): closure_reduction's
     # intersection examples/non-examples were confirmed by the oracle, so
-    # trust is bounded_pass (cap 0.85), not well_formed (cap 0.60).
+    # trust is bounded_pass (cap 0.85), not well_formed (cap 0.55).
     assert result["confidence"] == 0.85
     assert result["verdict_gate"]["basis_trust"] == "bounded_pass"
     assert result["verdict_gate"]["contradiction"] is False

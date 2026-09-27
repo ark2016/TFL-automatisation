@@ -139,7 +139,7 @@ polished, structured Markdown proof). Enable it per run with `--formalize`, or f
   |---|---|---|
   | `verified` | deterministic, complete check (LL(k) table, Lean proof w/o `sorry`, regex/DFA regularity) | 0.98 |
   | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, pumping checked for p ∈ {3,4,5}) | 0.85 |
-  | `well_formed` | structure only — fields present, JSON/words parsed | 0.60 |
+  | `well_formed` | structure only — fields present, JSON/words parsed | 0.55 |
   | `not_verified` | check impossible or fields missing (verdict must be `inconclusive`/`uncertain`) | 0.40 |
   | unresolved `contradiction` (constructive vs. destructive evidence) | — | 0.50 |
 

@@ -671,7 +671,7 @@ def _apply_verdict_gate(
             # docs/VERDICT_POLICY.md R2: a CONSTRUCTIVE verdict ("dcfl") needs
             # an artifact with trust >= bounded_pass -- well_formed is
             # structure-only and must not by itself carry a positive "dcfl"
-            # verdict (only inconclusive, capped by well_formed's own 0.60
+            # verdict (only inconclusive, capped by well_formed's own 0.55
             # ceiling once R1's "constructive_failure_only" gate has already
             # let it through as a verdict at all). A DESTRUCTIVE verdict
             # ("non_dcfl") still only needs trust >= well_formed per R1.

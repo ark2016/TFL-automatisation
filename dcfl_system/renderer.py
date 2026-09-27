@@ -195,6 +195,17 @@ def _render_proof_sketch_md(sketch: dict | None, method: str | None) -> str:
                 parts.append(f"**Суффиксы:** {', '.join(str(s) for s in suffixes)}\n")
             else:
                 parts.append(f"**Суффиксы:** {suffixes}\n")
+        word_instances = sketch.get("word_instances")
+        if isinstance(word_instances, dict) and word_instances:
+            parts.append("**Конкретные инстансы (n = p + 1, docs/VERDICT_POLICY.md §4):**\n")
+            for p_key in ("2", "3"):
+                entry = word_instances.get(p_key)
+                if isinstance(entry, dict):
+                    parts.append(
+                        f"- p={p_key}: w = {entry.get('w', '')}, "
+                        f"w' = {entry.get('w_prime', '')}, |x| = {entry.get('x_length', '')}"
+                    )
+            parts.append("")
 
     elif method == "shallit" or "infinite_set" in sketch or "infinite_set_description" in sketch:
         fields = [
@@ -324,6 +335,22 @@ def _render_proof_sketch_html(sketch: dict | None, method: str | None) -> str:
             else:
                 suf_str = _esc(suffixes)
             parts.append(f'<div class="s-p"><strong>Суффиксы:</strong> {suf_str}</div>')
+        word_instances = sketch.get("word_instances")
+        if isinstance(word_instances, dict) and word_instances:
+            rows = []
+            for p_key in ("2", "3"):
+                entry = word_instances.get(p_key)
+                if isinstance(entry, dict):
+                    rows.append(
+                        f"<li>p={_esc(p_key)}: w = {_esc(entry.get('w', ''))}, "
+                        f"w&prime; = {_esc(entry.get('w_prime', ''))}, "
+                        f"|x| = {_esc(entry.get('x_length', ''))}</li>"
+                    )
+            if rows:
+                parts.append(
+                    '<div class="s-p"><strong>Конкретные инстансы (n = p + 1):</strong>'
+                    f'<ul>{"".join(rows)}</ul></div>'
+                )
 
     elif method == "shallit" or "infinite_set" in sketch or "infinite_set_description" in sketch:
         fields = [
@@ -659,6 +686,22 @@ def _panel_dcfl_pumping(output: dict) -> str:
             ("condition1_argument", "Условие (1): пара (x2, x4) в любом месте x"),
             ("condition2_argument", "Условие (2): x2 в последних p символах x"),
         ], parts)
+        word_instances = sketch.get("word_instances")
+        if isinstance(word_instances, dict) and word_instances:
+            rows = []
+            for p_key in ("2", "3"):
+                entry = word_instances.get(p_key)
+                if isinstance(entry, dict):
+                    rows.append(
+                        f"<li>p={_esc(p_key)}: w = {_esc(entry.get('w', ''))}, "
+                        f"w&prime; = {_esc(entry.get('w_prime', ''))}, "
+                        f"|x| = {_esc(entry.get('x_length', ''))}</li>"
+                    )
+            if rows:
+                parts.append(
+                    '<div class="s-p"><strong>Конкретные инстансы (n = p + 1):</strong>'
+                    f'<ul>{"".join(rows)}</ul></div>'
+                )
     _render_evidence_steps(output, parts)
     _render_errors(output, parts)
     return "\n".join(parts)

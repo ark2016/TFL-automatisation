@@ -78,7 +78,7 @@ def test_trust_at_least_excludes_refuted_even_if_ranked_low():
 def test_confidence_caps_match_policy_table():
     assert confidence_cap_for("verified") == 0.98
     assert confidence_cap_for("bounded_pass") == 0.85
-    assert confidence_cap_for("well_formed") == 0.60
+    assert confidence_cap_for("well_formed") == 0.55
     assert confidence_cap_for("not_verified") == 0.40
     assert confidence_cap_for(None) == 0.40  # unknown/self-assessment only
     assert CONTRADICTION_CONFIDENCE_CAP == 0.50
@@ -88,7 +88,7 @@ def test_confidence_caps_match_policy_table():
 # §4 step 2: dcfl_pumping semantic oracle check
 # ---------------------------------------------------------------------------
 
-def _pumping_proof(word_w: str, word_w_prime: str) -> dict:
+def _pumping_proof(word_w: str, word_w_prime: str, word_instances: dict | None = None) -> dict:
     return {
         "kind": "dcfl_pumping",
         "pumping_length": "p",
@@ -100,7 +100,52 @@ def _pumping_proof(word_w: str, word_w_prime: str) -> dict:
         "first_letters_match": "both 'b'",
         "condition1_argument": "argument 1",
         "condition2_argument": "argument 2",
+        # docs/VERDICT_POLICY.md §4: REQUIRED -- "без word_instances trust не
+        # выше not_verified". Tests that need the semantic oracle check to
+        # actually run (bounded_pass/refuted) supply concrete instances here;
+        # the one test that specifically checks the missing-field behavior
+        # itself calls the contract dict directly instead of this helper.
+        "word_instances": word_instances,
     }
+
+
+def test_dcfl_pumping_missing_word_instances_capped_at_not_verified():
+    # docs/VERDICT_POLICY.md §4: "без word_instances trust не выше
+    # not_verified" (НЕ well_formed) -- a structurally-complete proof whose
+    # words are only ever described in prose is not a proof (the live
+    # dcfl-21 bug this locks in: well_formed non_dcfl 0.60 on an actual DCFL
+    # language). Realistic free-text prose (as in dcfl_system/examples/mock)
+    # with no word_instances at all must stay capped at not_verified, even
+    # though every other field is present and a real oracle IS available.
+    proof = _pumping_proof(
+        "w = xy = W1 = (ab)^n aa (ba)^n ∈ L",
+        "w' = xz = W2 = (ab)^n aab (ab)^n aa (ba)^n baa (ba)^n ∈ L",
+    )
+    agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    result = verify_agent_results(agent_results, ANBN_TASK_IR)
+    entry = result["dcfl_pumping"]
+    assert entry["verification_status"] == "not_verified"
+    assert any("word_instances" in issue for issue in entry.get("issues", []))
+
+
+def _anbn_pumping_instances() -> dict:
+    """word_instances for word_w = 'aⁿbⁿ', word_w_prime = 'aⁿ⁺¹bⁿ⁺¹' -- x
+    backed off by one character from the words' own full common run
+    (THEORY.md §1.1's y/z-non-empty, same-first-letter precondition),
+    matching `_xyz_from_common_prefix`'s convention. That backoff makes
+    ``x_length = n - 1``, so ``n`` is taken a bit past ``p + 1`` (n = p + 2)
+    here -- not the exact n = p + 1 a genuine proof would use -- purely so
+    the resulting x is still long enough to satisfy the lemma's own |x| > p
+    precondition; the point under test is the condition (1)/(2) brute
+    force, not this particular n."""
+    instances = {}
+    for p in (2, 3):
+        n = p + 2
+        w = "a" * n + "b" * n
+        w_prime = "a" * (n + 1) + "b" * (n + 1)
+        x_length = n - 1
+        instances[str(p)] = {"w": w, "w_prime": w_prime, "x_length": x_length}
+    return instances
 
 
 def test_dcfl_pumping_semantic_check_refuted_when_membership_holds_but_both_pumps_survive():
@@ -113,7 +158,7 @@ def test_dcfl_pumping_semantic_check_refuted_when_membership_holds_but_both_pump
     # lemma" proof is simply WRONG for this pair, and the brute-force
     # condition (1)/(2) search (VERDICT_POLICY.md §4) must catch it, not
     # just rubber-stamp membership.
-    proof = _pumping_proof("aⁿbⁿ", "aⁿ⁺¹bⁿ⁺¹")
+    proof = _pumping_proof("aⁿbⁿ", "aⁿ⁺¹bⁿ⁺¹", _anbn_pumping_instances())
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, ANBN_TASK_IR)
     entry = result["dcfl_pumping"]
@@ -134,28 +179,57 @@ def _anbn_union_anb2n_oracle(word: str) -> bool:
     return b_count == a_count or b_count == 2 * a_count
 
 
-def test_dcfl_pumping_semantic_check_bounded_pass_theory_worked_example(monkeypatch):
+def _anbn_union_anb2n_pumping_instances() -> dict:
+    """word_instances for THEORY.md §1.1's worked example: x = a^n b^{n-1},
+    y = b, z = b^{n+1} (xy = a^n b^n, xz = a^n b^2n) at n = p + 1, p in
+    {2, 3} -- matches dcfl_system/prompts/dcfl_pumping.md's own worked
+    example exactly."""
+    instances = {}
+    for p in (2, 3):
+        n = p + 1
+        x = "a" * n + "b" * (n - 1)
+        y = "b"
+        z = "b" * (n + 1)
+        instances[str(p)] = {"w": x + y, "w_prime": x + z, "x_length": len(x)}
+    return instances
+
+
+def test_dcfl_pumping_semantic_check_closed_conditions_stay_well_formed_theory_worked_example(monkeypatch):
     # docs/THEORY.md §1.1 worked example: L = {a^n b^n} u {a^n b^2n}, n>=1.
     # x = a^n b^{n-1}, y = b, z = b^{n+1} (xy = a^n b^n, xz = a^n b^2n): a
     # genuine, hand-verified non-DCFL proof — both condition (1) and (2)
-    # must close for every decomposition the brute force tries.
+    # close for every decomposition the brute force tries at p in {2, 3}.
+    # Backlog review (BLOCKER): closure at a small, fixed p is NOT elevated
+    # to `bounded_pass` any more -- it is reproducibly reachable for an
+    # ACTUALLY-DCFL language too (see
+    # test_verify_dcfl_pumping_exam04_small_p_closure_does_not_reach_bounded_pass
+    # in test_oracle_verifier.py), so trust stays at `well_formed` even for
+    # this genuine proof; only a real counterexample is decisive.
     monkeypatch.setattr(
         ov, "build_membership_oracle_from_ir",
         lambda ir, max_word_len=60: _anbn_union_anb2n_oracle,
     )
-    proof = _pumping_proof("aⁿbⁿ", "aⁿb²ⁿ")
+    proof = _pumping_proof("aⁿbⁿ", "aⁿb²ⁿ", _anbn_union_anb2n_pumping_instances())
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     task_ir = {"input_format": "set_builder", "alphabet": ["a", "b"], "language_spec": {}}
     result = verify_agent_results(agent_results, task_ir)
     entry = result["dcfl_pumping"]
-    assert entry["verification_status"] == "bounded_pass"
-    assert entry["trust"] == "bounded_pass"
-    assert "issues" not in entry
+    assert entry["verification_status"] == "well_formed"
+    assert entry["trust"] == "well_formed"
 
 
 def test_dcfl_pumping_semantic_check_refuted_when_a_word_is_not_a_member():
     # word_w_prime = a^{n+1} b^n is NOT in L (unequal a/b counts) at either p.
-    proof = _pumping_proof("aⁿbⁿ", "aⁿ⁺¹bⁿ")
+    # n taken past p + 1 (see `_anbn_pumping_instances`) so the backed-off x
+    # still satisfies THEORY.md §1.1's |x| > p precondition.
+    instances = {}
+    for p in (2, 3):
+        n = p + 2
+        w = "a" * n + "b" * n
+        w_prime = "a" * (n + 1) + "b" * n
+        x_length = n - 1
+        instances[str(p)] = {"w": w, "w_prime": w_prime, "x_length": x_length}
+    proof = _pumping_proof("aⁿbⁿ", "aⁿ⁺¹bⁿ", instances)
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, ANBN_TASK_IR)
     entry = result["dcfl_pumping"]
@@ -165,26 +239,11 @@ def test_dcfl_pumping_semantic_check_refuted_when_a_word_is_not_a_member():
     assert "word_w_prime" in entry["issues"][0]
 
 
-def test_dcfl_pumping_semantic_check_skipped_for_free_text_proof():
-    # Realistic free-text proof prose (as in dcfl_system/examples/mock) is
-    # NOT pure exponent notation — the step-2 check must not fire, and trust
-    # stays at the structural-only well_formed tier (VERDICT_POLICY.md §4
-    # fallback: "без оракула trust остаётся well_formed").
-    proof = _pumping_proof(
-        "w = xy = W1 = (ab)^n aa (ba)^n ∈ L",
-        "w' = xz = W2 = (ab)^n aab (ab)^n aa (ba)^n baa (ba)^n ∈ L",
-    )
-    agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
-    result = verify_agent_results(agent_results, ANBN_TASK_IR)
-    entry = result["dcfl_pumping"]
-    assert entry["verification_status"] == "well_formed"
-    assert entry["trust"] == "well_formed"
-
-
 def test_dcfl_pumping_semantic_check_skipped_without_set_builder_oracle():
-    # Same clean exponent-notation words, but a grammar-format task_ir has no
-    # set_builder oracle available -> stays well_formed, not upgraded.
-    proof = _pumping_proof("aⁿbⁿ", "aⁿ⁺¹bⁿ⁺¹")
+    # Valid word_instances, but a grammar-format task_ir has no set_builder
+    # oracle available -> stays well_formed, not upgraded (and not capped at
+    # not_verified either, since word_instances IS present and valid here).
+    proof = _pumping_proof("aⁿbⁿ", "aⁿ⁺¹bⁿ⁺¹", _anbn_pumping_instances())
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, {"input_format": "grammar", "alphabet": ["a", "b"]})
     assert result["dcfl_pumping"]["verification_status"] == "well_formed"
@@ -368,10 +427,12 @@ def test_shallit_prefix_continuation_refuted_when_continuation_word_is_wrong(mon
 # dcfl_system/examples/mock/dcfl_exam_0{1,2,3}_*.json (whose prose uses
 # grouped exponent notation like "(ab)^n" that instantiate_exponent_pattern
 # does not parse) as directly oracle-checkable fixtures, so the genuine
-# proofs get bounded_pass and deliberately-wrong variants get refuted.
+# proofs stay well_formed (closure at a small fixed p is not elevated to
+# bounded_pass any more, backlog review BLOCKER fix) and deliberately-wrong
+# variants get refuted.
 # ---------------------------------------------------------------------------
 
-def test_dcfl_pumping_exam01_style_reversal_language_bounded_pass():
+def test_dcfl_pumping_exam01_style_reversal_language_stays_well_formed():
     # exam_01: L = {x aa x^R | x in (a+b)*ab(ab|aa)*} (THEORY.md §1.6-ish
     # palindrome-with-marker language). x = (ab)^n, W1 = xy = x aa x^R.
     # Real DSL oracle: word_pattern "HaaH^R" with H's domain restricted to
@@ -391,12 +452,22 @@ def test_dcfl_pumping_exam01_style_reversal_language_bounded_pass():
     x_part = ("ab" * n) + "aa" + ("ba" * (n - 1)) + "b"
     z_part = "a" + "b" + "aa" + ("ba" * n) + "baa" + ("ba" * n)
     w2 = x_part + z_part
-    proof = _pumping_proof(w1, w2)
+    # word_instances at n = p + 1 for p in {2, 3} (same family, smaller n).
+    instances = {}
+    for p in (2, 3):
+        pn = p + 1
+        ph = "ab" * pn
+        pw1 = ph + "aa" + ph[::-1]
+        px_part = ("ab" * pn) + "aa" + ("ba" * (pn - 1)) + "b"
+        pz_part = "a" + "b" + "aa" + ("ba" * pn) + "baa" + ("ba" * pn)
+        pw2 = px_part + pz_part
+        instances[str(p)] = {"w": pw1, "w_prime": pw2, "x_length": len(px_part)}
+    proof = _pumping_proof(w1, w2, instances)
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, task_ir)
     entry = result["dcfl_pumping"]
-    assert entry["verification_status"] == "bounded_pass"
-    assert entry["trust"] == "bounded_pass"
+    assert entry["verification_status"] == "well_formed"
+    assert entry["trust"] == "well_formed"
 
 
 def _in_exam03_language(word: str) -> bool:
@@ -426,20 +497,27 @@ def _in_exam03_language(word: str) -> bool:
     return False
 
 
-def test_dcfl_pumping_exam03_style_two_branch_language_bounded_pass(monkeypatch):
+def test_dcfl_pumping_exam03_style_two_branch_language_stays_well_formed(monkeypatch):
     # exam_03: word_w = a^n b^n c^n a (branch c^n), word_w_prime = a^n b^n a
     # (branch b^n, m=0) -- the fixed §1.8 proof from dcfl_pumping.md.
     monkeypatch.setattr(
         ov, "build_membership_oracle_from_ir",
         lambda ir, max_word_len=60: _in_exam03_language,
     )
-    proof = _pumping_proof("aⁿbⁿcⁿa", "aⁿbⁿa")
+    instances = {}
+    for p in (2, 3):
+        n = p + 1
+        x = "a" * n + "b" * (n - 1)
+        y = "b" + "c" * n + "a"
+        z = "b" + "a"
+        instances[str(p)] = {"w": x + y, "w_prime": x + z, "x_length": len(x)}
+    proof = _pumping_proof("aⁿbⁿcⁿa", "aⁿbⁿa", instances)
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     task_ir = {"input_format": "set_builder", "alphabet": ["a", "b", "c"], "language_spec": {}}
     result = verify_agent_results(agent_results, task_ir)
     entry = result["dcfl_pumping"]
-    assert entry["verification_status"] == "bounded_pass"
-    assert entry["trust"] == "bounded_pass"
+    assert entry["verification_status"] == "well_formed"
+    assert entry["trust"] == "well_formed"
 
 
 def test_dcfl_pumping_exam03_style_two_branch_language_refuted_for_wrong_pair(monkeypatch):
@@ -453,7 +531,14 @@ def test_dcfl_pumping_exam03_style_two_branch_language_refuted_for_wrong_pair(mo
         ov, "build_membership_oracle_from_ir",
         lambda ir, max_word_len=60: _in_exam03_language,
     )
-    proof = _pumping_proof("aⁿbⁿa", "aⁿbⁿ⁺¹a")
+    instances = {}
+    for p in (2, 3):
+        n = p + 1
+        w = "a" * n + "b" * n + "a"
+        w_prime = "a" * n + "b" * (n + 1) + "a"
+        x_length = 2 * n - 1
+        instances[str(p)] = {"w": w, "w_prime": w_prime, "x_length": x_length}
+    proof = _pumping_proof("aⁿbⁿa", "aⁿbⁿ⁺¹a", instances)
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     task_ir = {"input_format": "set_builder", "alphabet": ["a", "b", "c"], "language_spec": {}}
     result = verify_agent_results(agent_results, task_ir)
@@ -556,11 +641,11 @@ def test_r1_no_successful_artifact_forces_inconclusive():
 
 # ---------------------------------------------------------------------------
 # §3 verdict gate: R2 -- well_formed-only evidence is admissible but capped
-# at 0.60, not stuck at some arbitrary lower number and not silently
+# at 0.55, not stuck at some arbitrary lower number and not silently
 # allowed to keep the LLM's 0.9.
 # ---------------------------------------------------------------------------
 
-def test_r2_well_formed_only_evidence_caps_confidence_at_060():
+def test_r2_well_formed_only_evidence_caps_confidence_at_055():
     reasoning = {"action": "done", "verdict": "non_dcfl", "confidence": 0.9,
                  "primary_evidence": "dcfl_pumping"}
     agent_results = {
@@ -570,7 +655,7 @@ def test_r2_well_formed_only_evidence_caps_confidence_at_060():
     gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
                                  retry_count=0, max_retries=MAX_RETRIES)
     assert gated["verdict"] == "non_dcfl"
-    assert gated["confidence"] == pytest.approx(0.60)
+    assert gated["confidence"] == pytest.approx(0.55)
     assert gated["verdict_gate"]["basis"] == [{"agent": "dcfl_pumping", "trust": "well_formed"}]
     assert gated["verdict_gate"]["contradiction"] is False
 
@@ -580,7 +665,7 @@ def test_r2_constructive_dcfl_verdict_requires_bounded_pass_not_well_formed():
     # direction (well_formed is enough per R1), a CONSTRUCTIVE "dcfl" verdict
     # needs trust >= bounded_pass. stack_strategy at well_formed alone (no
     # competing destructive evidence, so R3 does not rescue it either) must
-    # downgrade to inconclusive <= 0.40, not stand as "dcfl <= 0.60".
+    # downgrade to inconclusive <= 0.40, not stand as "dcfl <= 0.55".
     reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
                  "primary_evidence": "stack_strategy"}
     agent_results = {
@@ -834,7 +919,7 @@ def test_r4prime_destructive_well_formed_rescues_unsupported_constructive_propos
                                  retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
     assert gated["action"] == "done"
     assert gated["verdict"] == "non_dcfl"
-    assert gated["confidence"] <= 0.60
+    assert gated["confidence"] <= 0.55
     assert any("strongest admissible basis" in d for d in gated["verdict_gate"]["downgrades"])
 
 

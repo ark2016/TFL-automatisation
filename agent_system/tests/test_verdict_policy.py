@@ -8,7 +8,7 @@ Covers the §6 policy scenarios that apply to the regularity pipeline:
      contradiction: true, confidence <= 0.50.
   3. Lean verified (status=="valid", sorry_count==0) -> confidence may be 0.98.
   4. destructive proof with well_formed trust only (no oracle) -> verdict
-     stands, confidence <= 0.60.
+     stands, confidence <= 0.55.
   5. test_result.fail on the correct non_regular verdict, but a destructive
      proof with oracle-verified words (bounded_pass) exists -> success
      capped at 0.85, not "failure 0.0" (R6).
@@ -169,12 +169,12 @@ class TestScenario3LeanVerified(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # §6 scenario 4 — destructive proof with well_formed trust only (no oracle)
-# -> verdict stands, confidence <= 0.60
+# -> verdict stands, confidence <= 0.55
 # ---------------------------------------------------------------------------
 
 class TestScenario4WellFormedOnly(unittest.TestCase):
 
-    def test_well_formed_destructive_caps_at_060(self):
+    def test_well_formed_destructive_caps_at_055(self):
         state = _state(
             evidence={
                 "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
@@ -400,7 +400,7 @@ class TestComputeDestructiveTrust(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # docs/VERDICT_POLICY.md R1/R2 fix (reviewer finding, verdict-gate branch):
-# assemble_result_node used to grant success<=0.60 to ANY reasoning verdict
+# assemble_result_node used to grant success<=0.55 to ANY reasoning verdict
 # with no deterministic evidence at all, and separately ignored which
 # DIRECTION the reasoning verdict claimed — a destructive proof supporting
 # non_regular was silently treated as backing whatever verdict reasoning
@@ -411,7 +411,7 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
 
     def test_non_regular_with_refuted_destructive_and_no_dfa_is_partial(self):
         """Probe 1: DFA never built, pumping_verification refuted, reasoning
-        claims non_regular 0.92 -> must NOT be success 0.6 (nor any success)."""
+        claims non_regular 0.92 -> must NOT be success 0.55 (nor any success)."""
         state = _state(
             evidence={
                 "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
@@ -426,7 +426,7 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
 
     def test_no_evidence_at_all_with_reasoning_verdict_is_partial(self):
         """Probe 2: zero evidence anywhere, reasoning still proposes a
-        verdict -> must NOT be an unconditional success 0.6."""
+        verdict -> must NOT be an unconditional success 0.55."""
         state = _state(
             reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.9}},
         )
@@ -438,12 +438,12 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
         """Probe 3 (R2 violation): DFA refuted, reasoning says 'regular',
         pumping well_formed (argues non_regular) -> the 'regular' claim must
         downgrade, not ride along UNCHANGED on the (wrongly-directed)
-        destructive evidence as a 'regular' success 0.6. docs/VERDICT_POLICY.md
+        destructive evidence as a 'regular' success 0.55. docs/VERDICT_POLICY.md
         R4' (this node always runs post-retry, i.e. with the budget already
         exhausted): the gate does not just null the verdict here -- a
         well_formed destructive proof IS the strongest admissible basis
         still standing, so it flips the verdict itself to non_regular
-        (capped at well_formed's own 0.60 ceiling), not 'regular'."""
+        (capped at well_formed's own 0.55 ceiling), not 'regular'."""
         state = _state(
             test_result={
                 "status": "fail",
@@ -477,7 +477,7 @@ class TestR4PrimeStrongestAdmissibleBasis(unittest.TestCase):
     def test_destructive_well_formed_rescues_unsupported_regular_proposal(self):
         """reasoning proposes 'regular' with no passing oracle_test at all
         (test_result never ran); pumping is well_formed and argues
-        non_regular -> non_regular <= 0.60, not inconclusive/`failure`."""
+        non_regular -> non_regular <= 0.55, not inconclusive/`failure`."""
         state = _state(
             test_result=None,
             evidence={

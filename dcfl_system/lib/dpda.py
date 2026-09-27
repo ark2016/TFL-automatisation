@@ -5,20 +5,21 @@ The `dpda` proof_sketch field (prompts/stack_strategy.md, dcfl_system/tz_dcfl_ag
 §5.2) uses its own field names -- `read`/`top` (not cfl_system's `input`/`stack_top`),
 `push` topmost-first (same convention as cfl_system/prompts/cfl_pda_builder.md), and
 `initial_stack` a topmost-first list (usually a single bottom marker) -- so it needs a
-small adapter, not a full re-implementation: dcfl MAY import from cfl_system
-(root CLAUDE.md), and cfl_system/lib/pda_simulator.py already supports epsilon
-transitions and both acceptance modes (`final_state` / `empty_stack`), so this module
-reuses it rather than duplicating a second BFS simulator.
+small adapter, not a full re-implementation of everything: ``to_cfl_pda`` still reuses
+cfl_system.lib.pda_simulator for the (compatibility-only) structural-validity check, but
+the actual DCFL simulation now runs on ``dpda_run``, a dedicated deterministic simulator
+(see below for why a general NPDA/BFS simulator is the wrong tool once acceptance can be
+keyed on a stack-top, not just a state).
 
-Three functions, per docs/VERDICT_POLICY.md R2':
+Four functions, per docs/VERDICT_POLICY.md R2':
 
-- ``normalize_epsilon_accept_sinks`` -- the ONE canonical, language-preserving
-  rewrite the policy allows *before* determinism is checked (see its own
-  docstring for the equivalence argument). Callers (``_verify_stack_strategy_dpda``
-  in ``oracle_verifier.py``) run this FIRST and check/simulate the returned,
-  normalized automaton -- ``check_determinism`` and ``dpda_accepts`` themselves
-  do not call it and do not know about the rewrite; they just take whatever
-  ``dpda`` dict they are handed at face value.
+- ``normalize_epsilon_accept_sinks`` -- the ONE canonical, language-preserving rewrite
+  the policy allows *before* determinism is checked (see its own docstring for the
+  equivalence argument). Callers (``_verify_stack_strategy_dpda`` in ``oracle_verifier.py``)
+  run this FIRST and check/simulate the returned, normalized automaton -- ``check_determinism``
+  and ``dpda_run``/``dpda_accepts`` themselves do not call it and do not know about the
+  rewrite; they just take whatever ``dpda`` dict they are handed at face value (including
+  its optional ``accept_configs`` field, which this rewrite is the one thing that populates).
 - ``check_determinism`` -- a purely SYNTACTIC check (no more than one transition per
   (state, stack_top, letter); an epsilon transition never coexists with a letter
   transition for the same (state, stack_top)). This is a *complete* decision
@@ -27,11 +28,27 @@ Three functions, per docs/VERDICT_POLICY.md R2':
   (``refuted``), never a bounded/sampled judgement. Expects an already-normalized
   ``dpda`` (see above) -- it does not itself distinguish an accept-sink epsilon
   transition from any other kind of non-determinism.
-- ``dpda_accepts`` -- simulates the DPDA on a word via `cfl_system.lib.pda_simulator`,
-  after converting field names/push order/accept mode via ``to_cfl_pda``. Also
-  expects an already-normalized ``dpda``; simulating the un-normalized original
-  gives the same language (the rewrite is language-preserving), so this is only
-  a matter of consistency with ``check_determinism`` seeing the same automaton.
+- ``dpda_run`` -- a dedicated, hand-written DETERMINISTIC simulator (not the general
+  NPDA/BFS explorer in cfl_system.lib.pda_simulator): at every step it takes the letter
+  transition for (state, stack_top, next_char) if one exists, otherwise the epsilon
+  transition for (state, stack_top) if that is the ONLY one defined there. Acceptance
+  (once input is exhausted, after firing any further deterministic epsilon moves) is by
+  ``accept_states`` (state alone) OR by ``accept_configs`` (state, stack_top) for
+  ``accept_mode in (None, "final_state")``, or by an empty stack for
+  ``accept_mode == "empty_stack"`` (unchanged, pre-existing semantics). Returns ``None``
+  (never raises) if a pathological epsilon cycle exceeds the step budget -- a genuinely
+  deterministic DPDA never does this, so this is purely a defensive bound. Expects an
+  already-normalized ``dpda`` for consistency with ``check_determinism``, but does not
+  itself require it -- it is a general deterministic simulator that also happens to
+  understand ``accept_configs``, so it runs correctly on an un-normalized ``dpda`` too
+  (the rewrite is language-preserving; see ``normalize_epsilon_accept_sinks``).
+- ``dpda_accepts`` -- thin ``bool``-returning wrapper over ``dpda_run`` (raises
+  ``TimeoutError`` instead of returning ``None`` on step-budget exhaustion, for callers
+  that want the older exception-based contract). ``to_cfl_pda`` is kept only for the
+  compatibility structural-validity check (unknown states/symbols, missing required
+  fields) -- it does NOT understand ``accept_configs``, so it must never be used to
+  actually simulate a normalized ``dpda``; ``_verify_stack_strategy_dpda`` in
+  ``oracle_verifier.py`` uses it only that way, and uses ``dpda_run`` for simulation.
 """
 from __future__ import annotations
 
@@ -43,6 +60,8 @@ from cfl_system.lib.pda_simulator import pda_accepts, validate_pda
 class DPDAFormatError(ValueError):
     """Raised when a ``dpda`` dict is too malformed to check or simulate."""
 
+
+_MAX_STEPS = 10_000
 
 # Agent-written proof_sketches spell an epsilon transition's ``read`` field a
 # number of different ways ("", "ε", "eps", "epsilon", besides the canonical
@@ -69,139 +88,97 @@ def _normalize_read(read: Any) -> Any:
 # (a) Canonical normalization (docs/VERDICT_POLICY.md R2', normalization paragraph)
 # ---------------------------------------------------------------------------
 
-def _pushes_only_onto(dpda: dict, transitions: list, state: Any, top: Any) -> bool:
-    """True iff, given ``dpda``'s own push/``initial_stack`` semantics (both
-    topmost-first, exactly the ``dpda`` contract -- NOT the converted
-    ``to_cfl_pda`` format), ``state`` can only ever become the current state
-    with ``top`` on top of the stack:
-
-    - if ``state`` is the DPDA's start state, ``initial_stack``'s topmost
-      symbol (``initial_stack[0]``) must be ``top``;
-    - AND every transition that targets ``state`` (``t2["to"] == state``,
-      including a self-loop) must PUSH a non-empty list whose first
-      (topmost) element is ``top``.
-
-    This is a purely local, non-recursive check -- it never needs to reason
-    about what was on the stack *before* such a transition fired, because
-    pushing a non-empty list always makes its first element the new top
-    unconditionally (that is what "push" means), regardless of the rest of
-    the stack. A transition that instead POPS (``push == []``) leaves the new
-    top dependent on whatever is uncovered underneath, which varies from run
-    to run -- such an incoming transition is treated as disqualifying, since
-    nothing here can rule out some OTHER top occurring at ``state`` through
-    it. See ``normalize_epsilon_accept_sinks`` for why this exact property is
-    the one that makes marking ``state`` unconditionally accepting sound.
-    """
-    if dpda.get("start") == state:
-        initial_stack = dpda.get("initial_stack")
-        if not isinstance(initial_stack, list) or not initial_stack or initial_stack[0] != top:
-            return False
-    for t2 in transitions:
-        if not isinstance(t2, dict) or t2.get("to") != state:
-            continue
-        push2 = t2.get("push")
-        if not push2 or push2[0] != top:
-            return False
-    return True
-
-
 def normalize_epsilon_accept_sinks(dpda: dict) -> tuple[dict, list[str]]:
     """Canonical, language-preserving rewrite allowed by docs/VERDICT_POLICY.md
     R2' before determinism is checked: for every epsilon transition
     ``(q, Z) -> q_acc`` where ``q_acc`` is an accept state (``accept_states``)
     that has NO outgoing transitions of its own (neither by letter nor by a
-    further epsilon) AND ``q`` can only ever be the current state with ``Z``
-    on top of the stack (``_pushes_only_onto`` -- see below for why this
-    extra condition is necessary, beyond what the policy text spells out),
-    delete that transition and mark ``q`` itself as accepting instead.
-    Returns ``(normalized_dpda, notes)`` -- ``notes`` is a human-readable
-    list of every rewrite performed (empty if none applied), meant to be
-    recorded verbatim in ``details["normalization"]`` by the caller
-    (``oracle_verifier._verify_stack_strategy_dpda``).
+    further epsilon), delete that transition and add the pair ``(q, Z)`` to
+    the returned dpda's ``accept_configs`` list instead (never ``accept_states``
+    -- see below for why the config-level rewrite, unlike an earlier revision
+    of this function that blanket-marked ``q`` itself as accepting, needs no
+    extra side condition on ``q`` to stay sound). Returns
+    ``(normalized_dpda, notes)`` -- ``notes`` is a human-readable list of every
+    rewrite performed (empty if none applied), meant to be recorded verbatim in
+    ``details["normalization"]`` by the caller (``oracle_verifier._verify_stack_strategy_dpda``).
 
     Applies ONLY when ``accept_mode`` is ``"final_state"`` or absent (the
     contract's default -- see ``to_cfl_pda``); under ``"empty_stack"``
     acceptance has nothing to do with the current state, so an epsilon into a
     dedicated accepting sink is not this pattern at all and is left alone.
     Any other epsilon transition -- into a state that DOES have outgoing
-    transitions, into a non-accepting state, or whose source state ``q`` can
-    ALSO occur with some other stack top -- is never touched; per R2', one
-    coexisting with a letter transition on the same (state, top) remains
+    transitions, or into a non-accepting state -- is never touched; per R2',
+    one coexisting with a letter transition on the same (state, top) remains
     genuine non-determinism (``refuted``), precisely because nothing here
     can vouch for it.
 
-    **Why marking ``q`` accepting needs ``q`` to have a single possible top,
-    not merely ``q_acc`` being a dead end (a real counterexample).**
-    ``final_state`` acceptance checks ONLY the current state, never the
-    stack -- that is the entire mechanism the epsilon transition being
-    removed relies on: it is the ONE thing in the whole automaton that
-    conditions "become accepting" on the stack showing exactly ``Z``. If the
-    very same state ``q`` is ALSO reachable with some OTHER top ``Z' != Z``
-    (typically because ``q`` doubles as a "still counting" state for a pop
-    loop, entered both by the transition that first sets ``top = Z`` and by
-    a self-loop / other transition that pops down to ``top = Z'`` first),
-    deleting the epsilon and blanket-marking ``q`` as accepting would ALSO
-    accept whenever input happens to run out at ``(q, Z')`` -- a
-    configuration the ORIGINAL automaton correctly rejected (it simply had
-    no applicable transition there, letter or epsilon, and finished in a
-    non-accepting state). Concretely: the live dcfl-04 proof_sketch's `dpda`
-    for {aⁿbⁿcᵐ} (docs/VERDICT_POLICY.md R2' precedent) has states `q0`,
-    `q_b`, `q_c`, each with an epsilon `(state, top=Z0) -> q_accept` where
-    `q_accept` has no outgoing transitions. `q0` and `q_c` satisfy
-    `_pushes_only_onto(..., top="Z0")` (every transition landing on them
-    pushes `"Z0"` as the new top, including `q0` being the start state
-    with `initial_stack == ["Z0"]`), so normalizing them is sound. `q_b`
-    does NOT: it is entered both by `q0` reading the FIRST `"b"`
-    (`top=Z0`, a real state, e.g. n=0) and by its OWN self-loop popping an
-    `"A"` (`top=A`, `push=[]`) once per extra `"b"` while counting down a
-    block of more than one `a`. Blanket-marking `q_b` accepting would then
-    (wrongly) accept `"aab"` (2 a's, 1 b -- input ends at `(q_b, top="A")`,
-    mid pop, one `"A"` still unmatched) purely because the automaton halts
-    IN `q_b`, even though the original, un-normalized automaton correctly
-    rejects it (`dpda_accepts` on the un-normalized dict returns `False` for
-    `"aab"`, verified in tests) -- this is exactly the counterexample
-    ``_pushes_only_onto`` is designed to catch and rule out (see
-    ``test_dpda.py``'s ``TestNormalizeEpsilonAcceptSinks`` for the concrete
-    regression test using this precise automaton). `q_b`'s epsilon therefore
-    stays untouched by this function and remains genuine non-determinism at
-    ``check_determinism`` (an epsilon coexisting with a letter transition on
-    `(q_b, "Z0")`) -- a real defect in that particular submitted `dpda` that
-    only a genuine redesign (e.g. a dedicated "bottom of this counting
-    block" stack symbol so the LAST pop is a distinct, letter-triggered
-    transition into its own accepting state -- see
-    `dcfl_system/prompts/stack_strategy.md`'s rewritten example) can fix, not
-    this mechanical rewrite.
+    **Why this needs no "does `q` occur with some other stack top" guard,
+    unlike an earlier revision.** The earlier revision of this function
+    deleted the transition and unconditionally added `q` itself to
+    `accept_states` -- sound ONLY when `q` could be proven to never occur
+    with any stack top other than `Z` (an extra, non-local side condition,
+    `_pushes_only_onto`, since `final_state` acceptance checks only the
+    current state, never the stack). The CURRENT rewrite instead adds the
+    exact pair `(q, Z)` to `accept_configs`, and acceptance under `final_state`
+    mode is checked against `accept_states` OR `accept_configs` (see
+    `dpda_run`) -- i.e. the stack top IS now part of what is checked. `q`
+    occurring with some OTHER top `Z' != Z` is therefore harmless: that
+    configuration `(q, Z')` is simply not in `accept_configs` (nor, presumably,
+    is `q` in `accept_states`), so it is correctly NOT accepting, exactly as
+    the original, un-normalized automaton had no applicable transition there
+    and rejected. This is why the guard the earlier revision needed
+    (`_pushes_only_onto`) is gone entirely: the rewrite is sound for every
+    qualifying epsilon transition unconditionally, regardless of what else `q`
+    is reachable with.
 
-    **Proof of equivalence (for a qualifying ``q``).** Fix an epsilon
-    transition ``t = (q, Z) -> q_acc`` where ``q_acc`` has no outgoing
-    transitions, and ``_pushes_only_onto(dpda, transitions, q, Z)`` holds --
-    i.e. every configuration the automaton is EVER in with current state
-    ``q`` has stack-top exactly ``Z`` (by construction: ``q`` becomes current
-    only by firing some transition targeting it, and any such transition
-    either is the start-state initialization with ``initial_stack[0] == Z``,
-    or pushes a non-empty list whose first element is ``Z`` -- pushing a
-    non-empty list always makes its first element the new top, regardless of
-    what was underneath, so this holds independent of run history). So every
-    configuration ``(q, Z·rest)`` reached with input exhausted is, in the
-    ORIGINAL automaton, resolved purely by whether ``t`` fires: (i) if it
-    doesn't (or there is no more choice because input is exhausted and ``t``
-    is an epsilon move that -- being a genuine DPDA transition -- the
-    automaton takes deterministically whenever no letter move competes),
-    acceptance is decided by whether ``q`` itself is accepting, exactly what
-    the rewrite produces directly by adding ``q`` to ``accept_states``; (ii)
-    if it does fire, the run halts in ``q_acc`` (no further transition is
-    possible, whatever ``t`` pushes, since ``q_acc`` has none), which is
-    accepting -- again matching "accept because input ran out in ``q``".
-    Since ``q`` is NEVER associated with any stack top other than ``Z``
-    (that is exactly what ``_pushes_only_onto`` establishes), there is no
-    OTHER configuration -- reached with input exhausted or not -- whose
-    acceptance status the rewrite could disturb: every occurrence of ``q``
-    behaves identically to how it behaved via ``t``, so deleting ``t`` and
-    marking ``q`` accepting changes nothing else. Applying this argument
-    independently to every qualifying epsilon transition (each rewrite only
-    ever adds a state to ``accept_states`` and removes one transition whose
-    target becomes unreachable once removed) preserves the language of the
-    whole automaton.
+    **Consequence, precedent (live dcfl-04, docs/VERDICT_POLICY.md R2'):** the
+    live dcfl-04 proof_sketch's `dpda` for {aⁿbⁿcᵐ} has states `q0`, `q_b`,
+    `q_c`, each with an epsilon `(state, top=Z0) -> q_accept` where `q_accept`
+    has no outgoing transitions. Under the CURRENT rewrite all three
+    normalize (unlike the earlier revision, which left `q_b` alone because it
+    is ALSO reached with `top="A"` via its own pop self-loop) -- each becomes
+    an `accept_configs` entry `(q0, "Z0")` / `(q_b, "Z0")` / `(q_c, "Z0")`, and
+    the result IS syntactically deterministic (`check_determinism` reports no
+    conflicts: the epsilon that used to coexist with `q_b`'s letter transition
+    on `(q_b, "Z0")` is gone). But the resulting deterministic DPDA is simply
+    WRONG for this language: it has a transition `q0 --b--> q_b` with no
+    preceding `a`, so on input `"b"` it reaches `(q_b, top="Z0")` with input
+    exhausted -- an accept_configs hit -- and wrongly ACCEPTS `"b"` (0 a's, 1
+    b -- not in {aⁿbⁿcᵐ}). This is exactly the kind of defect
+    ``check_determinism`` cannot see (the automaton IS deterministic) and only
+    simulation against the task's own language oracle catches (`dpda_run`
+    disagreeing with the oracle on `"b"` -> `refuted`); see
+    ``test_dpda.py::TestNormalizeEpsilonAcceptSinksLiveDcfl04`` for the
+    regression test using this precise automaton, and its "fixed" sibling
+    (the same automaton minus the stray `q0 --b--> q_b` transition, so `n=0`
+    is only reachable via `(q0, "Z0")` itself) for the case where normalization
+    AND simulation both succeed.
+
+    **Proof of equivalence (for a qualifying epsilon transition).** Fix an
+    epsilon transition ``t = (q, Z) -> q_acc`` where ``q_acc`` has no outgoing
+    transitions. In the ORIGINAL automaton, a run that reaches configuration
+    ``(q, Z·rest)`` with input exhausted is, from that point on, resolved
+    purely by whether ``t`` fires: (i) if it doesn't (there is no more input
+    and ``t`` -- being a genuine DPDA transition -- fires deterministically
+    whenever nothing else does, so "doesn't fire" only happens if some OTHER
+    move preempts it, which cannot happen here since ``t`` is the unique
+    epsilon at this configuration by construction of ``check_determinism``\'s
+    contract), the run is simply already halted at ``(q, Z·rest)``, and
+    whether it is accepting is exactly "is `q` accepting", which after the
+    rewrite is answered by ``(q, Z) in accept_configs`` directly -- the SAME
+    answer, since the rewrite added precisely this pair; (ii) if it does fire,
+    the run moves to ``q_acc`` with the same stack (pushing `Z` back, per the
+    transition's own `push`) and halts there with nothing further possible
+    (`q_acc` has no outgoing transitions) -- accepting, because `q_acc` is an
+    accept state, and this too matches "accept because input ran out at
+    `(q, Z)`". No OTHER configuration is affected: the rewrite deletes exactly
+    one transition (which becomes unreachable dead code once removed, since
+    `q_acc` had no other incoming or outgoing edges tied to this argument) and
+    adds exactly one `(q, Z)` pair to `accept_configs`, which only changes the
+    acceptance verdict for runs that reach EXACTLY `(q, Z)` with input
+    exhausted -- precisely the runs this argument covers. Applying this
+    independently to every qualifying epsilon transition preserves the
+    language of the whole automaton.
     """
     accept_mode = dpda.get("accept_mode")
     if accept_mode not in (None, "final_state"):
@@ -226,25 +203,26 @@ def normalize_epsilon_accept_sinks(dpda: dict) -> tuple[dict, list[str]]:
 
     kept: list[dict] = []
     notes: list[str] = []
-    new_accept_states = list(accept_states)
-    already_accepting = set(accept_states)
+    existing_configs = {
+        (c[0], c[1])
+        for c in (dpda.get("accept_configs") or [])
+        if isinstance(c, (list, tuple)) and len(c) == 2
+    }
+    new_accept_configs = set(existing_configs)
     for t in transitions:
         if (
             isinstance(t, dict)
             and _normalize_read(t.get("read")) is None
             and t.get("to") in sink_accepts
-            and _pushes_only_onto(dpda, transitions, t.get("from"), t.get("top"))
         ):
-            q = t.get("from")
+            q, z = t.get("from"), t.get("top")
             notes.append(
-                f"removed epsilon transition (q={q!r}, top={t.get('top')!r}) -> "
-                f"{t.get('to')!r} (accepting sink with no outgoing transitions, and "
-                f"{q!r} only ever occurs with top={t.get('top')!r}); marked {q!r} as "
-                f"accepting directly instead"
+                f"removed epsilon transition (q={q!r}, top={z!r}) -> "
+                f"{t.get('to')!r} (accepting sink with no outgoing transitions); "
+                f"added accepting configuration (q={q!r}, top={z!r}) to "
+                f"accept_configs instead"
             )
-            if q not in already_accepting:
-                new_accept_states.append(q)
-                already_accepting.add(q)
+            new_accept_configs.add((q, z))
         else:
             kept.append(t)
 
@@ -253,7 +231,10 @@ def normalize_epsilon_accept_sinks(dpda: dict) -> tuple[dict, list[str]]:
 
     normalized = dict(dpda)
     normalized["transitions"] = kept
-    normalized["accept_states"] = new_accept_states
+    normalized["accept_configs"] = sorted(
+        ([q, z] for q, z in new_accept_configs),
+        key=lambda c: (str(c[0]), str(c[1])),
+    )
     return normalized, notes
 
 
@@ -271,7 +252,12 @@ def check_determinism(dpda: dict) -> list[str]:
     Returns a list of human-readable conflict descriptions (empty list means
     deterministic). This is independent of structural well-formedness
     (unknown states/symbols, missing fields) -- see ``to_cfl_pda``, which
-    checks that separately and raises ``DPDAFormatError``.
+    checks that separately and raises ``DPDAFormatError``. Expects an
+    already-normalized ``dpda`` (see ``normalize_epsilon_accept_sinks``) --
+    it does not itself distinguish an accept-sink epsilon transition from any
+    other kind of non-determinism; a caller that skips normalization first
+    will see a normalizable epsilon-into-accept-sink reported as a plain
+    conflict, same as any other.
     """
     transitions = dpda.get("transitions") or []
     by_pair: dict[tuple[Any, Any], dict[Any, list[dict]]] = {}
@@ -302,7 +288,162 @@ def check_determinism(dpda: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# (c) Conversion + simulation
+# (c) Deterministic simulation
+# ---------------------------------------------------------------------------
+
+def _accept_configs_set(dpda: dict) -> set[tuple[Any, Any]]:
+    result: set[tuple[Any, Any]] = set()
+    for c in dpda.get("accept_configs") or []:
+        if isinstance(c, dict):
+            result.add((c.get("q"), c.get("top")))
+        elif isinstance(c, (list, tuple)) and len(c) == 2:
+            result.add((c[0], c[1]))
+    return result
+
+
+def dpda_run(dpda: dict, word: str) -> bool | None:
+    """Dedicated DETERMINISTIC simulator for the ``dpda`` proof_sketch contract
+    (docs/VERDICT_POLICY.md R2') -- NOT the general NPDA/BFS explorer in
+    ``cfl_system.lib.pda_simulator`` (``to_cfl_pda`` + ``pda_accepts`` still
+    exists for compatibility, but does not understand ``accept_configs`` and
+    must not be used to simulate a normalized ``dpda``).
+
+    At every step: take the letter transition for ``(state, stack_top,
+    next_char)`` if input remains and one is defined; otherwise take the
+    epsilon transition for ``(state, stack_top)`` if that is the ONLY one
+    defined there (zero or more-than-one -> no epsilon move is taken here).
+    Once input is exhausted, the configuration is accepting if:
+
+    - ``accept_mode == "empty_stack"``: the stack is empty (unchanged,
+      pre-existing semantics -- ``accept_states``/``accept_configs`` are
+      ignored in this mode);
+    - otherwise (``"final_state"`` or absent, the default): the current state
+      is in ``accept_states``, OR the pair ``(state, stack_top)`` is in
+      ``accept_configs`` (populated by ``normalize_epsilon_accept_sinks`` --
+      see its docstring for why config-level acceptance, not a blanket state
+      marking, is what makes the rewrite sound without any extra guard).
+
+    If not yet accepting and input is exhausted, a further deterministic
+    epsilon move (same "only one defined" rule) is taken and acceptance is
+    re-checked, repeating until accepting, stuck (no further move -> reject),
+    or a step budget is exceeded -- the last case returns ``None`` (not an
+    exception; a genuinely deterministic DPDA never hits this, so it is
+    purely a defensive bound against a pathological epsilon cycle a caller
+    handed in). Raises ``DPDAFormatError`` only for a structurally
+    unusable ``dpda`` (missing ``start``, missing/empty ``initial_stack``, or
+    an unrecognized ``accept_mode``) -- anything else (unknown state/symbol
+    names, `push`ing an out-of-alphabet symbol) is simply followed literally;
+    such names never match any transition key and the run gets stuck and
+    rejects, it does not crash.
+    """
+    if not isinstance(dpda, dict):
+        raise DPDAFormatError("dpda must be an object")
+
+    start = dpda.get("start")
+    initial_stack = dpda.get("initial_stack")
+    if start is None:
+        raise DPDAFormatError("dpda must have a 'start' state")
+    if not isinstance(initial_stack, list) or not initial_stack:
+        raise DPDAFormatError("dpda.initial_stack must be a non-empty list (topmost-first)")
+    transitions = dpda.get("transitions") or []
+    if not isinstance(transitions, list):
+        raise DPDAFormatError("dpda.transitions must be a list")
+
+    accept_mode = dpda.get("accept_mode")
+    if accept_mode not in (None, "final_state", "empty_stack"):
+        raise DPDAFormatError(f"unknown accept_mode {accept_mode!r}")
+    empty_stack_mode = accept_mode == "empty_stack"
+
+    accept_states = set(dpda.get("accept_states") or [])
+    accept_configs = _accept_configs_set(dpda)
+    if not empty_stack_mode and not accept_states and not accept_configs:
+        raise DPDAFormatError(
+            "dpda must specify non-empty 'accept_states' or 'accept_configs' "
+            "(or accept_mode 'empty_stack')"
+        )
+
+    by_pair: dict[tuple[Any, Any], dict[Any, list[dict]]] = {}
+    for t in transitions:
+        if not isinstance(t, dict):
+            continue
+        key = (t.get("from"), t.get("top"))
+        by_pair.setdefault(key, {}).setdefault(_normalize_read(t.get("read")), []).append(t)
+
+    def accepting(state: Any, stack: list) -> bool:
+        if empty_stack_mode:
+            return not stack
+        top = stack[0] if stack else None
+        return state in accept_states or (state, top) in accept_configs
+
+    def eps_step(state: Any, stack: list) -> tuple[Any, list] | None:
+        if not stack:
+            return None
+        top = stack[0]
+        eps_ts = by_pair.get((state, top), {}).get(None, [])
+        if len(eps_ts) != 1:
+            return None
+        t = eps_ts[0]
+        push = list(t.get("push") or [])
+        return t.get("to"), push + stack[1:]
+
+    state = start
+    stack = list(initial_stack)
+    pos = 0
+    n = len(word)
+    steps = 0
+
+    while True:
+        steps += 1
+        if steps > _MAX_STEPS:
+            return None
+
+        if pos < n and stack:
+            top = stack[0]
+            letter_ts = by_pair.get((state, top), {}).get(word[pos], [])
+            if len(letter_ts) == 1:
+                t = letter_ts[0]
+                push = list(t.get("push") or [])
+                stack = push + stack[1:]
+                state = t.get("to")
+                pos += 1
+                continue
+
+        if pos == n:
+            if accepting(state, stack):
+                return True
+            step = eps_step(state, stack)
+            if step is None:
+                return False
+            state, stack = step
+            continue
+
+        # Input remains but no letter transition matched -- only a
+        # deterministic epsilon move can still make progress.
+        step = eps_step(state, stack)
+        if step is None:
+            return False
+        state, stack = step
+
+
+def dpda_accepts(dpda: dict, word: str) -> bool:
+    """``bool``-returning wrapper over ``dpda_run`` (docs/VERDICT_POLICY.md
+    R2') for callers that want the older exception-based contract.
+
+    Raises ``DPDAFormatError`` for a structurally invalid ``dpda`` (see
+    ``dpda_run``), or ``TimeoutError`` if the step budget (10_000) is
+    exceeded (e.g. a pathological epsilon cycle) -- callers should treat that
+    as inconclusive, not as a definite rejection.
+    """
+    result = dpda_run(dpda, word)
+    if result is None:
+        raise TimeoutError(
+            f"dpda_run exceeded the {_MAX_STEPS}-step budget while simulating {word!r}"
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# (d) Conversion (compatibility-only structural-validity check)
 # ---------------------------------------------------------------------------
 
 def to_cfl_pda(dpda: dict) -> dict:
@@ -317,6 +458,17 @@ def to_cfl_pda(dpda: dict) -> dict:
     - a multi-symbol ``initial_stack`` (topmost-first) is unrolled via one
       synthetic epsilon transition from a fresh start state, since the
       simulator only takes a single ``start_stack`` symbol
+
+    **Compatibility only.** This conversion (and the general NPDA/BFS
+    simulator it feeds into, via ``pda_accepts``) does NOT understand
+    ``accept_configs`` -- it has no notion of a stack-top-conditioned accept
+    condition, only whole-state ``accept_states``. It exists purely as a
+    structural-validity check (unknown states/symbols, missing required
+    fields) that ``_verify_stack_strategy_dpda`` in ``oracle_verifier.py``
+    still runs before simulating; the actual simulation against the task's
+    language oracle uses ``dpda_run``, never this conversion, precisely
+    because a normalized ``dpda``'s ``accept_configs`` entries would be
+    silently dropped here.
 
     Raises ``DPDAFormatError`` for structurally invalid input (missing
     states/start/stack_alphabet, malformed ``initial_stack``, an
@@ -417,15 +569,3 @@ def to_cfl_pda(dpda: dict) -> dict:
     if errors:
         raise DPDAFormatError("invalid PDA after conversion: " + "; ".join(errors))
     return pda
-
-
-def dpda_accepts(dpda: dict, word: str) -> bool:
-    """Simulate ``dpda`` on ``word`` via cfl_system.lib.pda_simulator.
-
-    Raises ``DPDAFormatError`` for a structurally invalid ``dpda``, or
-    ``TimeoutError`` if the simulator's step budget (10_000) is exceeded
-    (e.g. a pathological epsilon cycle) -- callers should treat that as
-    inconclusive, not as a definite rejection.
-    """
-    pda = to_cfl_pda(dpda)
-    return pda_accepts(pda, word)

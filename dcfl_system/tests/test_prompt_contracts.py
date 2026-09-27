@@ -139,13 +139,17 @@ def test_specialist_worked_examples_have_required_keys(agent_name):
 
 def test_shallit_schema_requires_dead_class_status_enum():
     """docs/VERDICT_POLICY.md §4 dcfl/shallit: ``dead_class_status`` is a
-    closed enum {"empty", "finite", "infinite"} in the structured-output
-    schema (nullable only because ``prefix_continuation`` proofs leave the
-    whole field null) -- no longer a free-text ``dead_class_finite`` field.
-    The prompt's own schema-sketch block must document the same field."""
+    closed enum {"empty", "infinite"} in the structured-output schema
+    (nullable only because ``prefix_continuation`` proofs leave the whole
+    field null) -- no longer a free-text ``dead_class_finite`` field, and the
+    old three-way enum's "finite" value is retired from the schema (new live
+    generations only ever emit "empty"/"infinite"; oracle_verifier.py still
+    reads a legacy "finite" value in already-recorded output as "empty" for
+    backward compatibility, but the schema no longer offers it). The
+    prompt's own schema-sketch block must document the same field."""
     field_schema = _PROOF_SKETCH_BY_AGENT["shallit"]["properties"]["dead_class_status"]
     string_alt = next(s for s in field_schema["anyOf"] if s.get("type") == "string")
-    assert set(string_alt["enum"]) == {"empty", "finite", "infinite"}
+    assert set(string_alt["enum"]) == {"empty", "infinite"}
     assert "dead_class_finite" not in _PROOF_SKETCH_BY_AGENT["shallit"]["properties"]
 
     text = (PROMPTS_DIR / "shallit.md").read_text(encoding="utf-8")
