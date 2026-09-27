@@ -1,19 +1,12 @@
 {
-  "agent_name": "reasoning",
-  "status": "success",
+  "action": "done",
   "verdict": "dcfl",
-  "proof_sketch": {
-    "action": "done",
-    "primary_evidence": "stack_strategy",
-    "supporting_agents": ["stack_strategy"],
-    "conflicting_agents": []
-  },
-  "evidence": [
-    "stack_strategy agent returned verdict=dcfl with confidence=0.55",
-    "No strong conflicting evidence from other agents",
-    "dcfl_pumping agent failed (no counter-evidence)",
-    "Final verdict: dcfl with low confidence (action=done)"
-  ],
   "confidence": 0.55,
+  "primary_evidence": "stack_strategy",
+  "summary": "stack_strategy agent returned verdict=dcfl with confidence=0.55; no strong conflicting evidence from other agents (dcfl_pumping failed, no counter-evidence). Final verdict: dcfl with low confidence (action=done).",
+  "retry_plan": null,
+  "hints_for_human": [
+    "Only stack_strategy succeeded, with no proof_sketch to verify — the verdict gate is expected to cap this at trust=not_verified"
+  ],
   "errors": []
 }

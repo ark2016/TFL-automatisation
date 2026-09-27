@@ -37,6 +37,8 @@ from cfl_system.orchestrator import (
     assemble_result_node,
     assemble_early_failure,
     _fallback_reasoning,
+    _collect_failed_agents,
+    _run_agent,
 )
 
 
@@ -131,21 +133,21 @@ class TestMockRunner:
 
 
 class TestLiveRunner:
-    def test_requires_api_key(self):
-        """LiveRunner raises ValueError without API key (when .env also absent)."""
-        import os
-        old = os.environ.get("ANTHROPIC_API_KEY")
-        try:
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            # This may succeed if .env is loadable from project root
-            # Just verify it doesn't crash unexpectedly
-            try:
-                LiveRunner(api_key="")
-            except (ValueError, Exception):
-                pass  # expected when no key available
-        finally:
-            if old is not None:
-                os.environ["ANTHROPIC_API_KEY"] = old
+    def test_requires_api_key(self, monkeypatch):
+        """LiveRunner raises ValueError without an API key anywhere.
+
+        Blocks all three sources LiveRunner.__init__ can pull a key from —
+        the explicit os.environ var, the config-module constant, and the
+        project .env file — so the test is deterministic regardless of
+        whether the machine running it has a real key configured, and so
+        that key never leaks into os.environ as a side effect of the test
+        (docs/TODO.md §5).
+        """
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr("cfl_system.config.ANTHROPIC_API_KEY", "")
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+            LiveRunner(api_key="")
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +408,11 @@ class TestRetryPlannerNode:
         assert result["agents_to_retry"] is None  # retry all
 
 
-class TestFormalizeNode:
+class TestFormalizeNodeBaseState:
+    # Renamed from the duplicate `TestFormalizeNode` (there is another one
+    # below, further down the file) — same class name twice meant this one
+    # silently overwrote the other in the module namespace and pytest never
+    # collected it.
     def test_noop(self, base_state):
         result = formalize_node(base_state)
         assert result == {}
@@ -632,19 +638,18 @@ class TestExtractJson:
 class TestLiveRunnerUnit:
     """Test LiveRunner components without making real API calls."""
 
-    def test_no_api_key_raises(self):
-        """LiveRunner raises ValueError if no API key (when .env also absent)."""
-        import os
-        old = os.environ.get("ANTHROPIC_API_KEY")
-        try:
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            try:
-                LiveRunner(api_key="")
-            except (ValueError, Exception):
-                pass  # expected when no key available
-        finally:
-            if old is not None:
-                os.environ["ANTHROPIC_API_KEY"] = old
+    def test_no_api_key_raises(self, monkeypatch):
+        """LiveRunner raises ValueError if no API key is available anywhere.
+
+        Same rationale as TestLiveRunner.test_requires_api_key: block the
+        env var, the config constant, and .env loading so the assertion is
+        deterministic and no real key is ever written into os.environ.
+        """
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr("cfl_system.config.ANTHROPIC_API_KEY", "")
+        monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+        with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+            LiveRunner(api_key="")
 
     def test_load_prompt(self):
         """Verify prompt loading from prompts/ directory."""
@@ -754,3 +759,179 @@ class TestFormalizeNode:
             assert "evidence" in result
             assert "formalizer" in result["evidence"]
             assert "formatted_proof" in result["evidence"]
+
+
+# ---------------------------------------------------------------------------
+# docs/TODO.md §2 — retry-round error bookkeeping (_collect_failed_agents,
+# _run_agent) and Haiku-repair-of-a-truncated-response flagging.
+# ---------------------------------------------------------------------------
+
+class TestCollectFailedAgentsAcrossRounds:
+    """An agent that failed in round 1 but succeeded on retry must not stay
+    in agents_failed forever — state["errors"] is append-only across the
+    whole run (Annotated with operator.add), so naively scanning it used to
+    keep the round-1 failure message alive even after the retry recovered.
+    """
+
+    def test_agent_dropped_after_successful_retry(self, base_state):
+        base_state["errors"] = ["pumping_cfl: JSON parse failed (round 1)"]
+        base_state["agent_results"] = {
+            # pumping_cfl now has a real, current result (the retry
+            # succeeded) — it must not appear in agents_failed any more.
+            "pumping_cfl": {"agent": "pumping_cfl", "status": "success"},
+        }
+        failed = _collect_failed_agents(base_state)
+        assert failed == []
+
+    def test_agent_kept_if_still_absent(self, base_state):
+        base_state["errors"] = ["pumping_cfl: JSON parse failed (round 1)"]
+        base_state["agent_results"] = {}  # never recovered
+        failed = _collect_failed_agents(base_state)
+        assert failed == [{"agent": "pumping_cfl", "error": "JSON parse failed (round 1)"}]
+
+    def test_uses_latest_error_message_not_first(self, base_state):
+        base_state["errors"] = [
+            "pumping_cfl: first failure (round 1)",
+            "pumping_cfl: second failure (round 2)",
+        ]
+        base_state["agent_results"] = {}
+        failed = _collect_failed_agents(base_state)
+        assert failed == [{"agent": "pumping_cfl", "error": "second failure (round 2)"}]
+
+    def test_proof_checker_and_formalizer_use_their_own_slots(self, base_state):
+        base_state["errors"] = [
+            "proof_checker: agent_error (round 1)",
+            "formalizer: agent_error (round 1)",
+        ]
+        # proof_checker recovered on retry (fresh per-round slot, not additive)
+        base_state["proof_checker_output"] = {"status": "verified"}
+        # formalizer never recovered
+        base_state["evidence"] = {}
+        failed = _collect_failed_agents(base_state)
+        assert failed == [{"agent": "formalizer", "error": "agent_error (round 1)"}]
+
+
+class TestRunAgentRunnerException:
+    """A runner exception must surface as agent_error, not vanish as None
+    (docs/TODO.md §2: "исключения раннера возвращаются как None без записи —
+    упавший агент выглядит пропущенным").
+    """
+
+    class _ExplodingRunner:
+        def run_agent(self, agent_name, input_data=None):
+            raise RuntimeError("boom: simulated network failure")
+
+    def test_run_agent_returns_agent_error_dict(self, base_state):
+        base_state["mock_runner"] = self._ExplodingRunner()
+        out = _run_agent(base_state, "pumping_cfl", {})
+        assert out is not None
+        assert out["status"] == "agent_error"
+        assert "boom" in out["errors"][0]
+
+    def test_run_specialist_node_records_the_error(self, base_state):
+        base_state["mock_runner"] = self._ExplodingRunner()
+        base_state["dispatch"] = {"pumping_cfl": True}
+        base_state["_specialist_name"] = "pumping_cfl"
+        result = run_specialist_node(base_state)
+        assert result["specialist_outputs"] == [("pumping_cfl", None)]
+        assert any("pumping_cfl" in e and "boom" in e for e in result["errors"])
+
+
+class TestHaikuRepairTruncatedFlag:
+    """A response that hit max_tokens and had to be Haiku-repaired is not a
+    full agent output: flag it (_truncated/_repaired), downgrade its status
+    to inconclusive, and cap its confidence at 0.40 so it is never treated
+    as a fully successful result (docs/TODO.md §2, docs/VERDICT_POLICY.md §2).
+    """
+
+    class _FakeFinalMessage:
+        def __init__(self, model, stop_reason, tokens_in, tokens_out):
+            self.model = model
+            self.stop_reason = stop_reason
+            self.usage = type("Usage", (), {
+                "input_tokens": tokens_in, "output_tokens": tokens_out,
+            })()
+
+    class _FakeStream:
+        def __init__(self, text, final_message):
+            self._text = text
+            self._final_message = final_message
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        @property
+        def text_stream(self):
+            return iter([self._text])
+
+        def get_final_message(self):
+            return self._final_message
+
+    class _FakeMessages:
+        def __init__(self, stream_text, stop_reason, repaired_json):
+            self._stream_text = stream_text
+            self._stop_reason = stop_reason
+            self._repaired_json = repaired_json
+
+        def stream(self, **kwargs):
+            final = TestHaikuRepairTruncatedFlag._FakeFinalMessage(
+                model=kwargs["model"], stop_reason=self._stop_reason,
+                tokens_in=100, tokens_out=8000,
+            )
+            return TestHaikuRepairTruncatedFlag._FakeStream(self._stream_text, final)
+
+        def create(self, **kwargs):
+            block = type("Block", (), {"text": self._repaired_json})()
+            return type("Response", (), {
+                "content": [block],
+                "usage": type("Usage", (), {"input_tokens": 10, "output_tokens": 20})(),
+            })()
+
+    class _FakeClient:
+        def __init__(self, stream_text, stop_reason, repaired_json):
+            self.messages = TestHaikuRepairTruncatedFlag._FakeMessages(
+                stream_text, stop_reason, repaired_json,
+            )
+
+    def _make_runner(self, stream_text, stop_reason, repaired_json):
+        runner = LiveRunner(api_key="fake-key-for-unit-test")
+        runner.client = self._FakeClient(stream_text, stop_reason, repaired_json)
+        return runner
+
+    def test_truncated_repair_is_flagged_and_capped(self):
+        runner = self._make_runner(
+            stream_text='{"agent": "pumping_cfl", "status": "success", "confidence": 0.95, "evi',
+            stop_reason="max_tokens",
+            repaired_json=(
+                '{"agent": "pumping_cfl", "status": "success", "confidence": 0.95, '
+                '"evidence": {}, "errors": []}'
+            ),
+        )
+        out = runner.run_agent("pumping_cfl", {})
+        assert out["_truncated"] is True
+        assert out["_repaired"] is True
+        assert out["status"] == "inconclusive"
+        assert out["confidence"] <= 0.40
+
+    def test_non_truncated_repair_is_marked_but_not_downgraded(self):
+        # A trailing comma (not truncation — stop_reason="end_turn") is a
+        # syntax slip none of the three extraction strategies can parse, so
+        # Haiku has to repair it, but the underlying agent did finish
+        # reasoning: only `_repaired` is set, no truncation, no downgrade.
+        runner = self._make_runner(
+            stream_text='{"agent": "pumping_cfl", "status": "success", '
+                        '"confidence": 0.9, "evidence": {}, "errors": [],}',
+            stop_reason="end_turn",
+            repaired_json=(
+                '{"agent": "pumping_cfl", "status": "success", "confidence": 0.9, '
+                '"evidence": {}, "errors": []}'
+            ),
+        )
+        out = runner.run_agent("pumping_cfl", {})
+        assert out["_repaired"] is True
+        assert "_truncated" not in out
+        assert out["status"] == "success"
+        assert out["confidence"] == 0.9

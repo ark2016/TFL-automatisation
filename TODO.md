@@ -1,7 +1,8 @@
 # TODO — находки аудита проекта (2026-09-26)
 
 Источник — автоматический аудит (8 областей, каждая находка перепроверена отдельным агентом).
-Номера строк соответствуют состоянию на коммит `cb2c314` и со временем могут сдвинуться.
+Номера строк соответствуют состоянию на коммит `cb2c314`; после раунда правок (2026-09-27, ветка `backlog`)
+многие сдвинулись или устарели — там, где это очевидно, номера убраны, файл называется без строки.
 
 **Уже исправлено** (не повторять):
 
@@ -44,7 +45,27 @@
 - `agent_system/graph.py:1094`: `lean_verified=True` только при `status == "valid" and sorry_count == 0`;
 - рендереры (`dcfl_system/renderer.py`, `cfl_system`/`ll_system`) показывают поля контрактов раунда 2
   (`dead_class_finite`, `technique`, `common_prefix`, `branch_words` и т.п.) и метки доверия словами вместо
-  зелёного баннера «verified» (`docs/VERDICT_POLICY.md` §5).
+  зелёного баннера «verified» (`docs/VERDICT_POLICY.md` §5);
+- §2 (устойчивость ретраев): API-ошибка/refusal больше не пропадает как `None` — `agent_system/lib/llm_client.py`
+  (`_AgentAPIError`/`_AgentRefusal`) + `graph.py` возвращают/пробрасывают `agent_error` дальше по цепочке узлов;
+  `dcfl_system/lib/retry_logic.py` (`_clamp_confidence`) — `confidence: null` не роняет пайплайн; пустой retry-план
+  в `dcfl_system/orchestrator.py` (`decide_after_retry_planner`) терминален и не передиспатчит всех специалистов;
+  ретрай на исчерпанном бюджете идёт через `renderer_node` (форсированный гейт), не через `early_failure_node`;
+  `issues_found`/`error` учитываются через таксономию доверия (`trust`), не отдельной веткой; `cfl_system/orchestrator.py`
+  ведёт карту отказов по раундам вместо append-only `state['errors']`; Haiku-repair помечает результат
+  `_truncated`/`_repaired` (cfl/dcfl/ll `orchestrator.py`), не выдаёт обрезанный вывод как полноценный;
+- §5: голый `pytest` из корня безопасен — корневой `conftest.py` (autouse-фикстура убирает `ANTHROPIC_API_KEY` и
+  подменяет `anthropic.Anthropic`) + `pyproject.toml` `[tool.pytest.ini_options] testpaths`;
+- §4: `pumping_len.py` — точный поиск `p_min` (не эвристика «первое повторение состояния»), `ε`/`∅` как
+  языковые литералы, конечные языки без исключений, CLI (`--witness`, `--json`) и собственные тесты (`tests/`);
+  `ui_server/static/index.html` — `marked`-вывод санитизирован (DOMPurify), CDN на cdnjs с SRI, CSP через `<meta>`,
+  iframe `sandbox`; `ui_server/server.py` — `MAX_CONCURRENT_RUNS`, `RUN_TIMEOUT_SECONDS`, `POST .../cancel`;
+  корень репозитория очищен (`tmp*/`, `.codex_tmp/`, лишние `.env`, `gen_pass.py`) и `tmp*/` в `.gitignore`;
+- §6: дублирующее поле `markdown` убрано из контракта `cfl_formalizer`; строки `**Model:** ...` убраны из промптов;
+  `advisory_only` больше не пишется агентами (остаётся только в старых example-фикстурах);
+- §5/упаковка: `pyproject.toml` — console scripts `tfl-reg`/`tfl-cfl`/`tfl-dcfl`/`tfl-ll`/`tfl-lab`,
+  `package-data` для `prompts/*.md`/`examples/`/`templates/`/`static/`, тесты исключены из wheel;
+  `.github/workflows/tests.yml` обновлён (см. дифф).
 
 Легенда: 🔴 high · 🟠 medium · ⚪ low; объём: S ≤ 30 мин · M ≤ день · L > дня.
 
@@ -89,31 +110,19 @@
 
 ## 2. Устойчивость ретраев и ошибок
 
-- [ ] 🟠 **S** `agent_system/lib/llm_client.py` + `graph.py:121-144`: ошибка API → `None`, в `state['errors']` не попадает;
-  при мёртвом ключе итог `partial 0.85, errors=[]`; JSON-ретрай повторяет auth/refusal.
-  → возвращать dict `agent_error`; на `AuthenticationError/PermissionDeniedError/NotFoundError` падать сразу.
-- [ ] 🟠 **S** `dcfl_system/lib/retry_logic.py:51`: `float(None)` при `confidence: null` роняет пайплайн → `_clamp_confidence` (`orchestrator.py:403`).
-- [ ] 🟠 **S** `dcfl_system/orchestrator.py:509-511`: пустой retry-план перезапускает всех 5 Opus-специалистов (в пробе 15 лишних вызовов)
-  → сделать пустой план терминальным.
-- [ ] 🟠 **S** `dcfl_system/orchestrator.py:736-746`: `retry` на лимите уходит в `early_failure`, вердикт 0.95 теряется → направлять в `_fallback_reasoning`.
-- [ ] 🟠 **S** `dcfl_system/orchestrator.py:669`: считать `issues_found`/`error` провалом наравне с `refuted`.
-- [ ] 🟠 **S** `cfl_system/orchestrator.py:98, 650-668`: ошибки раундов не очищаются, агент, успешный при ретрае, остаётся в `agents_failed`
-  → вести карту отказов по раундам.
-- [ ] 🟠 **S** Haiku-repair после `max_tokens` возвращает обрезанный вывод как полноценный
-  (`cfl_system/orchestrator.py` ~430, `dcfl` ~346, `ll` ~406) → флаг `_truncated/_repaired`, статус `inconclusive`, ограничить confidence.
-  Лимит repair 8000 токенов не позволяет починить большие ответы.
-- [ ] 🟠 **M** `agent_system/graph.py:163-187, 726-739`: ретраи без состояния — агенту говорят «твой DFA/regex неверен», но не показывают его;
-  planner (`:885-900`) видит только status/verdict → передавать `previous_output`.
-- [ ] 🟠 **M** `agent_system/graph.py:741-769`: Level-1 retry перезапускает `re_builder`, но новый regex не перетестируется; 1 попытка вместо 2 (§5.2).
-- [ ] 🟠 **M** `agent_system/graph.py:916, 490-494`: planner не может добавить агента; пустой `agents_to_retry` → полный re-dispatch;
+- [ ] 🟠 **S** Лимит Haiku-repair 8000 токенов не позволяет починить большие обрезанные ответы (`_truncated`-флаг
+  уже проставляется, см. «Уже исправлено»; сам лимит не увеличен).
+- [ ] 🟠 **M** `agent_system/graph.py`: ретраи без состояния — агенту говорят «твой DFA/regex неверен», но не показывают его;
+  planner видит только status/verdict → передавать `previous_output` (номера строк устарели, сверить с текущим файлом).
+- [ ] 🟠 **M** `agent_system/graph.py`: Level-1 retry перезапускает `re_builder`, но новый regex не перетестируется; 1 попытка вместо 2 (§5.2).
+- [ ] 🟠 **M** `agent_system/graph.py`: planner не может добавить агента; пустой `agents_to_retry` → полный re-dispatch;
   `should_invert_hypothesis` никто не читает.
-- [ ] 🟠 **M** `agent_system/graph.py:256-322`: опровержение closure-claim подогнано под aⁿbⁿ (считает литералы `a`/`b`);
-  по таймауту 120 с остаётся брошенный поток (`:206-253`); проверка повторяется каждый раунд.
+- [ ] 🟠 **M** `agent_system/graph.py`: опровержение closure-claim подогнано под aⁿbⁿ (считает литералы `a`/`b`);
+  по таймауту 120 с остаётся брошенный поток; проверка повторяется каждый раунд.
 - [ ] 🟠 **M** Нет разделения ошибок API на фатальные (400/401/403/404) и повторяемые (429/529/overloaded, обрыв стрима);
-  ошибки посреди стрима не ретраятся; fan-out без ограничения конкурентности (`dcfl_system/orchestrator.py:324` и копии).
-- [ ] ⚪ **S** `dcfl_system/orchestrator.py:492-494`: `agent_error` при ретрае затирает валидный результат прошлого раунда.
-- [ ] ⚪ **S** `cfl_system/orchestrator.py:533`: исключения раннера возвращаются как `None` без записи — упавший агент выглядит пропущенным.
-- [ ] ⚪ **S** `dcfl_system/lib/closure_table.py:36` / `oracle_verifier.py:199-203`: словари направлений не согласованы
+  ошибки посреди стрима не ретраятся; fan-out без ограничения конкурентности (`dcfl_system/orchestrator.py` и копии).
+- [ ] ⚪ **S** `dcfl_system/orchestrator.py`: `agent_error` при ретрае затирает валидный результат прошлого раунда.
+- [ ] ⚪ **S** `dcfl_system/lib/closure_table.py` / `oracle_verifier.py`: словари направлений не согласованы
   (`both` против `constructive/destructive`).
 
 ## 3. LLM-интеграция (архитектура)
@@ -137,20 +146,11 @@
 
 - [ ] 🟠 **M** `pumping_len.py:335-404, 91`: неверное определение p_min (для `a*|bbbb` выдаёт 2 вместо 5), `ε` разбирается как литерал,
   конечные языки бросают исключение, CLI нет, тестов нет. README рекламирует файл как готовый инструмент.
-- [ ] ⚪ **S** `ui_server/static/index.html:1311-1320, 924, 1216-1219`: вывод `marked` без санитизации в `innerHTML`,
-  iframe без `sandbox`, CDN без SRI, нет CSP.
-- [ ] ⚪ **S** `ui_server/server.py`: нет лимита параллельных прогонов, таймаута `proc.wait()`, отмены и вытеснения старых запусков.
-- [ ] ⚪ **S** Мусор в корне: `tmp9llpogor/`, `.codex_tmp/` (≈800 файлов), `pumping lemma/` (с пробелом), `gen_pass.py`, пустой `examples/`,
-  два `.env` → удалить, добавить `tmp*/` в `.gitignore`.
-- [ ] ⚪ **S** `agent_system/orchestrator.py:284-432, 514-630`: мёртвые копии `_run_formalizer`, `_verify_closure_claim`.
-- [ ] ⚪ **S** `agent_system/graph.py:46`: `FORMALIZATION_ENABLED` захардкожен.
+- [ ] ⚪ **S** `agent_system/orchestrator.py`: мёртвые копии `_run_formalizer`, `_verify_closure_claim` (сверить с
+  текущим файлом — номера строк устарели).
 
 ## 5. Тесты, CI, упаковка
 
-- [ ] 🟠 **S** **Голый `pytest` из корня делает реальные платные вызовы API.** `pumping_lemma/orchestrator/graph.py:26`:
-  `llm_client=None` → `LLMClient()` + `load_dotenv()`; `test_unknown_language` падает (`nl_parser.py:137`).
-  → `[tool.pytest.ini_options] testpaths = [...]` в `pyproject.toml` + корневой `conftest.py` с autouse-фикстурой,
-  которая убирает `ANTHROPIC_API_KEY` и подменяет `anthropic.Anthropic`.
 - [ ] 🟠 **M** Ветки `run_agent` (retry, Haiku-repair, `max_tokens`, исключения API) не покрыты ни в одной системе →
   общий `FakeAnthropic` (thinking-блок перед текстом, `max_tokens`, `refusal`, обрыв стрима) и `ScriptedRunner`
   (список ответов на агента, запись входов) для тестов retry/invert/Level-1.
@@ -158,34 +158,25 @@
   LLM-путь reasoning, collect/fan-in и `_verify_*` не тестируются.
 - [ ] 🟠 **M** `agent_system/tests`: нет тестов retry/invert/Level-1, `claim_verifier`, `grammar_preprocessor`, `_extract_json`;
   `MockRunner` игнорирует вход.
-- [ ] 🟠 **S** `ll_system/tests/test_first_follow.py`: нет случаев SLL≠LL, большого k на левой рекурсии, кривых грамматик.
-- [ ] ⚪ **S** Пустые тесты: `cfl_system/tests/test_orchestrator.py:133-145, 635-647` (`except (ValueError, Exception): pass`, оставляют ключ
-  из `.env` в `os.environ`) → `pytest.raises` + monkeypatch; `ll_system/tests/test_orchestrator.py:434-456` — убрать `try/except`.
 - [ ] ⚪ **S** Contract-тесты промптов: каждый ```json-блок парсится и содержит обязательные ключи; все ключи, которые формирует
   builder входа, упомянуты в промпте (по образцу `cfl_system/tests/test_pda_contract.py`).
-- [ ] ⚪ **S** `pyproject.toml`: `prompts/*.md`, `examples`, `static`, шаблоны Lean не попадают в wheel, а `*/tests` попадают;
-  сломан скрипт `inverse-homomorphism`; extra `ui=streamlit` вводит в заблуждение, extra `langgraph` дублирует основные зависимости;
-  нет entry points для четырёх систем; описание устарело.
-- [ ] ⚪ **S** `.github/workflows/tests.yml`: добавить `timeout-minutes`, `concurrency`;
-  lint (`ruff`), coverage с порогом, сборку wheel со smoke-установкой; неблокирующую Lean-задачу; тесты `pumping_len.py`.
-- [ ] ⚪ **S** `agent_system/tests/test_phase3.py:49`: шаблоны Lean никогда не компилируются в CI.
+- [ ] ⚪ **S** `agent_system/tests/test_phase3.py`: шаблоны Lean никогда не компилируются в CI (Lean-задача в CI неблокирующая, а не
+  выполняющая реальную компиляцию — см. `.github/workflows/tests.yml`).
 
 ## 6. Документация и промпты
 
-- [ ] 🟠 **S** `cfl_system/prompts/cfl_formalizer.md:40, 194`: доказательство генерируется дважды, поле `markdown` почти не используется
-  (`orchestrator.py:1514, 1563-1566`) → убрать из контракта (лишние Opus-токены).
 - [ ] ⚪ **S** 14 промптов: блоки «Reasoning (Chain-of-Thought)» перед JSON и черновые реплики «Wait — ...»
-  (`cfl_pumping.md:195-198`, `cfl_decomposition.md:122,178`). С adaptive thinking рассуждения в выводе не нужны — почистить.
-- [ ] ⚪ **S** `agent_system/prompts/reasoning_agent.md:91`, `pumping_agent.md:55-100`: инструкция требует русский текст, а примеры на английском.
-- [ ] ⚪ **S** Ключи входа (`grammar_facts`, `retry_context`, `ir`/`classifier_hint` — `agent_system/graph.py:163`,
-  `dcfl_system/orchestrator.py:388-400`) не совпадают с разделом Input Format в промптах.
+  (`cfl_pumping.md`, `cfl_decomposition.md` и др., сверить с текущим текстом). С adaptive thinking рассуждения в
+  выводе не нужны — почистить.
+- [ ] ⚪ **S** `agent_system/prompts/reasoning_agent.md`, `pumping_agent.md`: инструкция требует русский текст, а примеры на английском.
+- [ ] ⚪ **S** Ключи входа (`grammar_facts`, `retry_context`, `ir`/`classifier_hint`) не совпадают с разделом Input Format в промптах
+  (`agent_system/graph.py`, `dcfl_system/orchestrator.py`).
 - [ ] ⚪ **M** Контракты вывода — pseudo-JSON, различаются по системам (`module`/`agent`/`agent_name`, разные наборы status);
   парсеры латают расхождения алиасами (решается structured outputs, см. раздел 3).
-- [ ] ⚪ **S** Строки `**Model:** ...` в промптах дублируют `config.py` и требуют правки при каждой миграции → удалить;
-  `advisory_only` никто не читает; количество агентов захардкожено (`cfl_classifier.md:84`).
-- [ ] ⚪ **S** `agent_system/orchestrator.py:681` / `ll_system/config.py:103`: `input_parser` настроен, но нигде не вызывается
-  (шаг parse из спецификации отсутствует) → реализовать `--text` или пометить как deferred.
-- [ ] ⚪ **S** `agent_system/lib/claim_verifier.py:129,157`: алфавит `[ab]` захардкожен, нет левой границы слова, `in\s+L` матчит «in length».
+- [ ] ⚪ **S** `agent_system/orchestrator.py`: `input_parser` настроен, но нигде не вызывается (шаг parse из спецификации
+  отсутствует) → реализовать `--text` или пометить как deferred. (`ll_system` уже реализовал `--text`
+  через `input_parser` — см. «Уже исправлено»; остаётся только `agent_system`.)
+- [ ] ⚪ **S** `agent_system/lib/claim_verifier.py`: алфавит `[ab]` захардкожен, нет левой границы слова, `in\s+L` матчит «in length».
 - [ ] ⚪ **S** `ll_system/lib/ll_ir_schema.py:88`: `$`/`ε` не зарезервированы и конфликтуют с маркером конца ввода.
 
 ## 7. Стратегия
@@ -196,7 +187,4 @@
   Без этого нельзя измерить эффект миграции на Opus 5.5 и правок промптов.
 - [ ] **L** Общая библиотека оракулов (CYK/Earley, PDA-симулятор, валидатор грамматик, `is_grammar_equivalent_sample`),
   чтобы dcfl и ll проверяли членство слов так же, как cfl.
-- [ ] **M** Единая таксономия доверия во всех системах (`verified` / `bounded_pass` / `well_formed` / `llm_checked` / `refuted`)
-  и `proof_verified` только из детерминированных сигналов.
-- [ ] **M** Единый CLI и формат результата (`--save` уже есть) + console scripts `tfl-lab`, `tfl-reg`, `tfl-cfl`, `tfl-dcfl`, `tfl-ll`.
 - [ ] **M** Один источник правды для документации: таблица возможностей пайплайнов генерируется или проверяется тестом.

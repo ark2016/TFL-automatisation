@@ -115,6 +115,19 @@ def verify_claims(
     }
 
 
+def _alphabet_charclass(alphabet: list[str] | None) -> str:
+    """Build a `[...]` regex character class from the IR's terminal
+    alphabet, instead of a hardcoded ``[ab]`` -- a proof over any other
+    terminal set (e.g. {a,b,c}) is then scanned too. Falls back to 'ab'
+    when the alphabet is missing or every symbol is multi-character (a
+    `[...]` class can only hold single characters; REG/CFL alphabets here
+    are single lowercase letters in practice)."""
+    chars = sorted({s for s in (alphabet or []) if isinstance(s, str) and len(s) == 1})
+    if not chars:
+        chars = ["a", "b"]
+    return "".join(re.escape(c) for c in chars)
+
+
 def _extract_text(agent_output: dict) -> str:
     """Recursively extract all text from an agent output dict."""
     parts: list[str] = []
@@ -154,18 +167,28 @@ _NEGATIVE_MARKERS = {"∉", "\\notin", "not in", "NOT IN", "∉ l", "∉ L",
 
 
 def _extract_claims(text: str, alphabet: list[str]) -> list[dict]:
-    """Extract concrete word membership claims from text."""
-    alpha_set = set("".join(alphabet))
+    """Extract concrete word membership claims from text.
+
+    The word charclass and the ``alpha_set`` filter are both derived from
+    *alphabet* (the IR's actual terminal set) instead of a hardcoded
+    ``[ab]``, and every marker is word-bounded (``\\b``) on both sides so
+    e.g. "in L" doesn't fire inside "in length", and "in L" doesn't fire
+    on the tail of "within L" either.
+    """
+    charclass = _alphabet_charclass(alphabet)
+    alpha_set = set(alphabet) if alphabet else {"a", "b"}
     claims: list[dict] = []
     seen: set[tuple[str, bool]] = set()
 
+    word_group = rf"[{charclass}]{{2,12}}"
+
     # Pattern 1: concrete words like "aabb ∈ L" or "aaaabb не порождается"
     for match in re.finditer(
-        r'["\']?([ab]{2,12})["\']?\s*'
+        rf'["\']?({word_group})["\']?\s*'
         r'(∈|∉|\\in|\\notin|'
-        r'NOT\s+IN\s+L|not\s+in\s+L|IN\s+L|in\s+L|'
-        r'не\s+порождается|не\s+принадлежит|принадлежит|'
-        r'НЕ\s+порождается|НЕ\s+принадлежит)',
+        r'\bNOT\s+IN\s+L\b|\bnot\s+in\s+L\b|\bIN\s+L\b|\bin\s+L\b|'
+        r'\bне\s+порождается\b|\bне\s+принадлежит\b|\bпринадлежит\b|'
+        r'\bНЕ\s+порождается\b|\bНЕ\s+принадлежит\b)',
         text,
         re.IGNORECASE,
     ):
@@ -189,9 +212,9 @@ def _extract_claims(text: str, alphabet: list[str]) -> list[dict]:
 
     # Pattern 2: "слово a⁴b² = aaaabb НЕ порождается"
     for match in re.finditer(
-        r'(?:слово|word)\s+[^=]*?=\s*([ab]{2,12})\s+'
+        rf'(?:слово|word)\s+[^=]*?=\s*({word_group})\s+'
         r'(НЕ\s+порождается|не\s+порождается|порождается|'
-        r'NOT\s+in\s+L|in\s+L)',
+        r'NOT\s+in\s+L\b|in\s+L\b)',
         text,
         re.IGNORECASE,
     ):

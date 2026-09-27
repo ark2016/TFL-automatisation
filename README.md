@@ -34,6 +34,10 @@ pip install -e .                  # anthropic, langgraph, python-dotenv, ...
 pip install pytest                # for the test suite
 echo "ANTHROPIC_API_KEY=sk-..." > .env
 
+# `pip install -e .` also registers console scripts, so any of these work
+# from anywhere in the venv instead of `python -m ...`:
+#   tfl-lab   tfl-reg   tfl-cfl   tfl-dcfl   tfl-ll
+
 # Install Graphviz (for PDA state diagrams in HTML reports)
 #   Windows: https://graphviz.org/download/ (add bin/ to PATH)
 #   macOS:   brew install graphviz
@@ -110,6 +114,10 @@ flowchart TD
     style R fill:#2d4a1e,stroke:#7acb9d,color:#e6e8ec
     style F fill:#4a3a1e,stroke:#d4a86a,color:#e6e8ec
 ```
+
+`formalizer` is disabled by default (it's an extra Opus call to turn the reasoning agent's proof sketch into a
+polished, structured Markdown proof). Enable it per run with `--formalize`, or for every run with
+`TFL_FORMALIZATION=1` (also `true`/`yes`/`on`).
 
 ### Key properties
 
@@ -295,13 +303,16 @@ All four pipelines use the same three-tier model stack:
 - **Run bar:** `Mock Run` (free, no LLM) and `Live Run` (gated by an explicit "I confirm API spend" checkbox with red border). Start the server with `TFL_MODEL_OVERRIDE=claude-haiku-4-5` to make live runs cheap.
 - **Result pane:** four tabs — HTML (iframe of the rendered report with KaTeX + inline Graphviz SVG), JSON (formatted), Markdown (Preview ↔ Raw GitHub-style toggle), Log (streamed stderr, color-coded)
 
-Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/). No framework, no build step.
+Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS (`static/app.js`, no inline `<script>`) + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/) (served from cdnjs, not jsdelivr, so a strict `script-src` can allow-list a single host) + [DOMPurify](https://github.com/cure53/DOMPurify) to sanitize the rendered Markdown before it goes into `innerHTML`. No framework, no build step.
 
-Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a loopback `Host` header (DNS-rebinding guard), `POST /api/run` requires a same-origin `application/json` request (no cross-site "no-cors" posts starting paid runs), and files are served only by lookup in an index of the served directory.
+**Runs are bounded, not fire-and-forget:** at most `MAX_CONCURRENT_RUNS` (default 2, `TFL_LAB_MAX_CONCURRENT_RUNS` env var) pipeline subprocesses run at once — further runs queue; each run is killed if it exceeds `RUN_TIMEOUT_SECONDS` (`--run-timeout`, default 1800 s); `POST /api/runs/<run_id>/cancel` cancels a queued or running run on demand from the UI.
+
+Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a loopback `Host` header (DNS-rebinding guard), `POST /api/run` requires a same-origin `application/json` request (no cross-site "no-cors" posts starting paid runs), files are served only by lookup in an index of the served directory, and a `Content-Security-Policy` header (script/style/connect restricted to `'self'` + cdnjs, no inline scripts, iframe results rendered with `sandbox`) limits the blast radius of a compromised or malicious IR/report.
 
 ```bash
 .venv/Scripts/python -m ui_server.server --port 8765
 # → http://127.0.0.1:8765/
+.venv/Scripts/python -m ui_server.server --port 8765 --run-timeout 900
 ```
 
 ---
@@ -328,13 +339,21 @@ Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a 
 │   └── tests/              # guards, path confinement, CLI contract
 ├── pumping_lemma/          # Legacy pumping-lemma checker (reference, not maintained)
 ├── reverse_morfism/        # Legacy inverse-homomorphism solver
-├── pumping_len.py          # Min pumping-length finder for regex (experimental, see TODO.md)
+├── pumping_len.py          # Min pumping-length finder for regex (standalone, see below)
 ├── TODO.md                 # backlog: open audit findings
 ├── .env                    # ANTHROPIC_API_KEY (git-ignored)
 └── README.md               # you are here
 ```
 
 Each pipeline follows the same module split — `config.py` (models, effort), `prompts/`, `lib/` (pure functions, no LLM), orchestrator — so reading one makes the others easy to follow.
+
+`pumping_len.py` is a standalone script, unrelated to the four LLM pipelines above (no agents, no API calls): given a regex, it builds the minimal DFA (Thompson NFA → subset construction → Hopcroft minimization) and computes the *exact* minimum pumping length `p_min` per the Sipser definition — the smallest `p` such that every `w ∈ L` with `|w| ≥ p` has *some* split `w = xyz`, `|xy| ≤ p`, `|y| ≥ 1`, with `xyⁱz ∈ L` for all `i ≥ 0`. This is computed by an exact search (not the "shortest word with a repeated state" heuristic, which is only a sufficient, not necessary, condition and under-counts `p_min` on languages like `a*|bbbb`), so it also handles the empty and finite-language edge cases without special-casing. Regex syntax: `a-z`/`0-9` symbols, `|`, `*`, parentheses, `ε` or `()` for the empty-string language, `∅` for the empty language.
+
+```bash
+.venv/Scripts/python pumping_len.py "a*|bbbb" --witness   # p_min('a*|bbbb') = 5, plus a counterexample at p=4
+.venv/Scripts/python pumping_len.py "a*|bbbb" --json       # machine-readable output
+.venv/Scripts/python -m pytest tests -q                    # its own test suite (incl. brute-force cross-checks)
+```
 
 ---
 

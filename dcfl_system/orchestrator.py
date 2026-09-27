@@ -355,6 +355,17 @@ class LiveRunner:
             was_truncated = stop_reason == "max_tokens"
             repaired = self._repair_json_with_haiku(agent_name, raw_text, was_truncated)
             if repaired is not None:
+                if was_truncated:
+                    # The specialist hit max_tokens and Haiku patched the
+                    # JSON shape back together, but it never saw (and could
+                    # not reconstruct) the reasoning that was cut off — the
+                    # content is not trustworthy enough for a normal verdict.
+                    repaired["_truncated"] = True
+                    repaired["_repaired"] = True
+                    repaired["status"] = "inconclusive"
+                    repaired["confidence"] = min(
+                        _clamp_confidence(repaired.get("confidence", 0.0)), 0.40,
+                    )
                 return repaired
 
             if was_truncated:
@@ -749,9 +760,11 @@ def collect_specialists_node(state: DCFLState) -> dict:
 
     for name, out in latest_this_round.items():
         if out is None:
-            agent_results.pop(name, None)
-        else:
-            agent_results[name] = out
+            # agent_error on a retry round must not erase a valid result
+            # from an earlier round (root TODO.md §2) — keep the best
+            # (most recent non-error) result we have for this agent.
+            continue
+        agent_results[name] = out
 
     evidence = dict(state.get("evidence", {}))
     for name in DCFL_SPECIALIST_NAMES:
@@ -1321,7 +1334,8 @@ def run_pipeline(
 # CLI
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Run the DCFL analysis pipeline")
@@ -1412,3 +1426,7 @@ if __name__ == "__main__":
         sys.exit(2)
     else:  # failure / None / etc.
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

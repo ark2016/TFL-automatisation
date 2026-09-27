@@ -224,6 +224,22 @@ class TestFormat3LLCheckGrammar:
         assert len(errors) == 1
         assert "grammar must be an object" in errors[0]
 
+    def test_grammar_terminal_dollar_rejected(self) -> None:
+        ir = _deep(FORMAT3_IR)
+        ir["grammar"]["terminals"].append("$")
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "$" in errors[0]
+        assert "reserved" in errors[0]
+
+    def test_grammar_nonterminal_epsilon_rejected(self) -> None:
+        ir = _deep(FORMAT3_IR)
+        ir["grammar"]["nonterminals"].append("ε")
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "ε" in errors[0]
+        assert "reserved" in errors[0]
+
 
 # ---------------------------------------------------------------------------
 # Format 1: ll_check_language
@@ -306,6 +322,22 @@ class TestFormat2LLCheckGrammarLang:
         errors = validate_ll_ir(ir)
         assert len(errors) == 1
         assert "rules" in errors[0]
+
+    def test_grammar_kind_terminal_dollar_rejected(self) -> None:
+        ir = _deep(FORMAT2_IR)
+        ir["language_spec"]["terminals"].append("$")
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "$" in errors[0]
+        assert "reserved" in errors[0]
+
+    def test_grammar_kind_nonterminal_epsilon_rejected(self) -> None:
+        ir = _deep(FORMAT2_IR)
+        ir["language_spec"]["nonterminals"].append("ε")
+        errors = validate_ll_ir(ir)
+        assert len(errors) == 1
+        assert "ε" in errors[0]
+        assert "reserved" in errors[0]
 
     def test_natural_kind_valid(self) -> None:
         ir = {
@@ -523,6 +555,30 @@ class TestValidateGrammarSymbols:
         errors = validate_grammar_symbols(grammar)
         assert len(errors) == 1
         assert "both" in errors[0]
+
+    def test_reserved_end_marker_as_terminal(self) -> None:
+        grammar = {
+            "nonterminals": ["S"],
+            "terminals": ["a", "$"],
+            "start": "S",
+            "rules": [],
+        }
+        errors = validate_grammar_symbols(grammar)
+        assert len(errors) == 1
+        assert "$" in errors[0]
+        assert "reserved" in errors[0]
+
+    def test_reserved_epsilon_as_nonterminal(self) -> None:
+        grammar = {
+            "nonterminals": ["S", "ε"],
+            "terminals": ["a"],
+            "start": "S",
+            "rules": [],
+        }
+        errors = validate_grammar_symbols(grammar)
+        assert len(errors) == 1
+        assert "ε" in errors[0]
+        assert "reserved" in errors[0]
 
 
 # ---------------------------------------------------------------------------

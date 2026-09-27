@@ -98,3 +98,53 @@ def test_verification_result_structure():
     assert isinstance(entry["checks_run"], list)
     assert entry["checks_passed"] == 0
     assert entry["checks_total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# closure_reduction direction vocabulary matches closure_table.py (root
+# TODO.md §2: "both" vs "constructive"/"destructive" словари направлений)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("direction", ["constructive", "destructive", "both"])
+def test_closure_reduction_direction_accepts_closure_table_vocabulary(direction):
+    """closure_table.py's own proof_direction for the symmetric 'complement'
+    operation is 'both' (see get_proof_direction('complement')); the oracle's
+    direction_valid check must accept the same value, not just the two the
+    reasoning agent ultimately commits to."""
+    agent_results = {
+        "closure_reduction": {
+            "status": "success",
+            "verdict": "dcfl",
+            "confidence": 0.6,
+            "proof_sketch": {
+                "operation": "complement",
+                "source_language": "a*b*",
+                "transformation": "L = complement(a*b*)",
+                "direction": direction,
+            },
+        },
+    }
+    result = verify_agent_results(agent_results, {})
+    entry = result["closure_reduction"]
+    assert "direction_valid" in entry["checks_run"]
+    assert entry["checks_passed"] == entry["checks_total"], entry.get("issues")
+
+
+def test_closure_reduction_direction_still_rejects_garbage():
+    agent_results = {
+        "closure_reduction": {
+            "status": "success",
+            "verdict": "dcfl",
+            "confidence": 0.6,
+            "proof_sketch": {
+                "operation": "complement",
+                "source_language": "a*b*",
+                "transformation": "L = complement(a*b*)",
+                "direction": "sideways",
+            },
+        },
+    }
+    result = verify_agent_results(agent_results, {})
+    entry = result["closure_reduction"]
+    assert entry["checks_passed"] < entry["checks_total"]
+    assert any("direction" in issue for issue in entry.get("issues", []))

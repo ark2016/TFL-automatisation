@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import operator
+import os
 import sys
 import time as _time
 from pathlib import Path
@@ -41,9 +42,20 @@ from .lib.type_check import check_lean
 MAX_SPECIALIST_RETRIES = 2
 MAX_INVERSIONS = 1
 
-# Set to True to enable Lean 4 formalization + type checking.
-# Disabled while Lean templates are under active development.
-FORMALIZATION_ENABLED = False
+def _formalization_enabled_default() -> bool:
+    """Default for FORMALIZATION_ENABLED: TFL_FORMALIZATION=1/true/yes/on
+    enables it; unset or anything else keeps it disabled (the current
+    value) while Lean templates are under active development. A run can
+    also enable/disable it per-call via ``run_pipeline(..., formalize=...)``
+    / the CLI's ``--formalize`` flag, which takes priority over this
+    default (see `formalize_node`)."""
+    return os.environ.get("TFL_FORMALIZATION", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Whether Lean 4 formalization + type checking runs by default. Tests patch
+# this module attribute directly; `run_pipeline`'s `formalize` argument (and
+# the CLI's `--formalize`) override it per-call via state["formalize"].
+FORMALIZATION_ENABLED = _formalization_enabled_default()
 
 SPECIALIST_NAMES = (
     "re_builder", "dfa_builder", "pumping",
@@ -63,6 +75,7 @@ class PipelineState(TypedDict):
     mock_runner: Any
     agent_runner: Any
     verbose: bool
+    formalize: bool | None                               # None = use FORMALIZATION_ENABLED
 
     # -- Pipeline data --
     hypothesis: dict
@@ -135,13 +148,25 @@ def run_agent(state: PipelineState, agent_name: str,
         t0 = _time.monotonic()
         out = agent_runner.run_agent(agent_name, input_data)
         elapsed = _time.monotonic() - t0
-        if out is not None:
+        if out is not None and out.get("status") == "agent_error":
+            log_msg(state, f"{agent_name}: agent_error ({elapsed:.1f}s): {out.get('errors')}")
+        elif out is not None:
             log_msg(state, f"{agent_name}: done ({elapsed:.1f}s)")
         else:
             log_msg(state, f"{agent_name}: FAILED ({elapsed:.1f}s)")
         return out
 
     return None
+
+
+def _agent_error_messages(agent_name: str, out: dict | None) -> list[str] | None:
+    """When *out* is an ``agent_error`` dict (llm_client.py / TODO.md §2),
+    return its errors prefixed with the agent name for state["errors"];
+    ``None`` otherwise (out is a real result, or the agent was skipped)."""
+    if out is None or out.get("status") != "agent_error":
+        return None
+    err_msgs = out.get("errors") or [f"{agent_name} returned agent_error"]
+    return [f"{agent_name}: {m}" for m in err_msgs]
 
 
 def get_alphabet(ir: dict) -> list[str]:
@@ -424,20 +449,26 @@ def run_classifier_node(state: PipelineState) -> dict:
         classifier_input["student_notes"] = ir["student_notes"]
 
     classifier_output = run_agent(state, "classifier", classifier_input)
+    err_msgs = _agent_error_messages("classifier", classifier_output)
 
     evidence = dict(state.get("evidence", {}))
-    if classifier_output is not None:
+    if err_msgs:
+        log_msg(state, f"  classifier agent_error: {err_msgs}")
+    elif classifier_output is not None:
         evidence["classifier"] = classifier_output
         verdict = classifier_output.get("evidence", {}).get("verdict", "?")
         log_msg(state, f"  classifier verdict: {verdict}")
 
     classifier_evidence = (classifier_output or {}).get("evidence", {})
 
-    return {
+    result: dict[str, Any] = {
         "classifier_output": classifier_output or {},
         "classifier_evidence": classifier_evidence,
         "evidence": evidence,
     }
+    if err_msgs:
+        result["errors"] = err_msgs
+    return result
 
 
 def grammar_preprocess_node(state: PipelineState) -> dict:
@@ -536,6 +567,10 @@ def run_specialist_node(state: PipelineState) -> dict:
     agent_name = state["_specialist_name"]
     inp = build_specialist_input(state, agent_name)
     out = run_agent(state, agent_name, inp)
+    err_msgs = _agent_error_messages(agent_name, out)
+    if err_msgs:
+        log_msg(state, f"  {agent_name} agent_error: {err_msgs}")
+        return {"specialist_outputs": [], "errors": err_msgs}
     if out is not None:
         return {"specialist_outputs": [(agent_name, out)]}
     return {"specialist_outputs": []}
@@ -760,12 +795,20 @@ def oracle_test_node(state: PipelineState) -> dict:
 
         if dispatch.get("re_builder"):
             re_out = run_agent(state, "re_builder", enriched_input)
-            if re_out is not None:
+            re_err = _agent_error_messages("re_builder", re_out)
+            if re_err:
+                log_msg(state, f"  re_builder agent_error: {re_err}")
+                errors.extend(re_err)
+            elif re_out is not None:
                 evidence["re_builder"] = re_out
 
         if dispatch.get("dfa_builder"):
             new_dfa_out = run_agent(state, "dfa_builder", enriched_input)
-            if new_dfa_out is not None:
+            dfa_err = _agent_error_messages("dfa_builder", new_dfa_out)
+            if dfa_err:
+                log_msg(state, f"  dfa_builder agent_error: {dfa_err}")
+                errors.extend(dfa_err)
+            elif new_dfa_out is not None:
                 dfa_builder_output = new_dfa_out
                 evidence["dfa_builder"] = new_dfa_out
                 dfa2 = extract_dfa(new_dfa_out)
@@ -824,6 +867,10 @@ def run_proof_checker_node(state: PipelineState) -> dict:
         checker_input["student_notes"] = student_notes
 
     checker_output = run_agent(state, "proof_checker", checker_input)
+    err_msgs = _agent_error_messages("proof_checker", checker_output)
+    if err_msgs:
+        log_msg(state, f"  proof_checker agent_error: {err_msgs}")
+        return {"errors": err_msgs}
 
     if checker_output is not None:
         new_evidence = dict(evidence)
@@ -862,15 +909,21 @@ def run_reasoning_node(state: PipelineState) -> dict:
         reasoning_input["previous_issues"] = state.get("retry_context")
 
     reasoning_output = run_agent(state, "reasoning", reasoning_input)
+    err_msgs = _agent_error_messages("reasoning", reasoning_output)
+    if err_msgs:
+        log_msg(state, f"  reasoning agent_error: {err_msgs}")
 
     new_evidence = dict(evidence)
-    if reasoning_output is not None:
+    if reasoning_output is not None and not err_msgs:
         new_evidence["reasoning"] = reasoning_output
 
-    return {
+    result: dict[str, Any] = {
         "reasoning_output": reasoning_output,
         "evidence": new_evidence,
     }
+    if err_msgs:
+        result["errors"] = err_msgs
+    return result
 
 
 def decide_retry(state: PipelineState) -> str:
@@ -1003,6 +1056,9 @@ def run_retry_planner_node(state: PipelineState) -> dict:
     }
 
     planner_output = run_agent(state, "retry_planner", planner_input)
+    err_msgs = _agent_error_messages("retry_planner", planner_output)
+    if err_msgs:
+        log_msg(state, f"  retry_planner agent_error: {err_msgs}")
     p_ev = (planner_output or {}).get("evidence", planner_output or {})
 
     agents_to_retry = p_ev.get("agents_to_retry", dispatched)
@@ -1028,11 +1084,14 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         ),
     }
 
-    return {
+    result: dict[str, Any] = {
         "dispatch": new_dispatch,
         "retry_round": retry_round,
         "retry_context": retry_context,
     }
+    if err_msgs:
+        result["errors"] = err_msgs
+    return result
 
 
 def invert_hypothesis_node(state: PipelineState) -> dict:
@@ -1094,12 +1153,17 @@ def formalize_node(state: PipelineState) -> dict:
     and an agent/mock runner is available.  Type-checks the resulting
     Lean 4 code via Docker.
 
-    Disabled by default (``FORMALIZATION_ENABLED = False``).  Set the flag
-    to ``True`` once Lean templates are stable.
+    Disabled by default (``FORMALIZATION_ENABLED``, itself defaulted from
+    the ``TFL_FORMALIZATION`` env var).  A per-call override --
+    ``run_pipeline(..., formalize=...)`` / the CLI's ``--formalize`` --
+    takes priority via ``state["formalize"]``.  Set it once Lean templates
+    are stable.
     """
     log_msg(state, "Step 8/9: formalization...")
 
-    if not FORMALIZATION_ENABLED:
+    formalize_override = state.get("formalize")
+    enabled = FORMALIZATION_ENABLED if formalize_override is None else formalize_override
+    if not enabled:
         log_msg(state, "  formalization: disabled")
         return {}
 
@@ -1166,6 +1230,10 @@ def formalize_node(state: PipelineState) -> dict:
 
     log_msg(state, f"  formalizer: template={template_name}")
     formalizer_output = run_agent(state, "formalizer", formalizer_input)
+    err_msgs = _agent_error_messages("formalizer", formalizer_output)
+    if err_msgs:
+        log_msg(state, f"  formalizer agent_error: {err_msgs}")
+        return {"errors": err_msgs}
     if formalizer_output is None:
         log_msg(state, "  formalizer: no output")
         return {}
@@ -1575,6 +1643,7 @@ def run_pipeline(
     mock_runner: Any = None,
     agent_runner: Any = None,
     verbose: bool | None = None,
+    formalize: bool | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline and return the result dict.
 
@@ -1587,6 +1656,10 @@ def run_pipeline(
         agent_runner: Optional LLMRunner for production.
         verbose: Override verbose mode.  Defaults to True when
                  agent_runner is provided.
+        formalize: Override for Lean 4 formalization (`formalize_node`).
+                   ``None`` (default) uses ``FORMALIZATION_ENABLED``
+                   (itself defaulted from the ``TFL_FORMALIZATION`` env
+                   var); ``True``/``False`` force it on/off for this run.
 
     Returns:
         Structured result per section 5.3 output contract.
@@ -1601,6 +1674,7 @@ def run_pipeline(
         "mock_runner": mock_runner,
         "agent_runner": agent_runner,
         "verbose": verbose,
+        "formalize": formalize,
         # Initialise accumulator fields
         "hypothesis": {},
         "classifier_output": {},

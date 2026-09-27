@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from dcfl_system.orchestrator import run_pipeline, MockRunner, DCFL_SPECIALIST_NAMES
+from dcfl_system.orchestrator import (
+    run_pipeline, MockRunner, DCFL_SPECIALIST_NAMES, collect_specialists_node,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -144,6 +146,68 @@ def test_all_specialists_present(task_filename, expected_verdict, expected_confi
         assert name in agents_used, f"Missing specialist {name} in agents_used"
 
 
+# ---------------------------------------------------------------------------
+# LLM-path (mock with top-level `action`) vs fallback-path (no reasoning mock)
+#
+# root TODO.md §5: every `*_reasoning.json` mock now carries a top-level
+# `action` (done/retry/invert per reasoning_agent.md's contract), so
+# `reasoning_agent_node` takes the actual LLM-response branch (parses the
+# mock's own verdict/confidence/summary) instead of always falling through to
+# `_fallback_reasoning`. These tests pin down that collect_specialists_node
+# (fan-in) and the verdict gate both run correctly on *each* of the two
+# branches, and that the two branches are observably different paths (not
+# just coincidentally equal outputs).
+# ---------------------------------------------------------------------------
+
+_FALLBACK_MARKER = ["Fallback reasoning (no LLM available)"]
+
+
+@pytest.mark.parametrize("task_filename,expected_verdict,expected_confidence", TASKS[:3])
+def test_llm_path_reasoning_mock_is_used_directly(
+    task_filename, expected_verdict, expected_confidence
+):
+    """With a normal MockRunner, the reasoning mock (action="done") is
+    consumed directly by reasoning_agent_node — the result must carry that
+    mock's own summary/primary_evidence, not the generic fallback text, and
+    fan-in (agent_results/specialist_outputs) plus the verdict gate must
+    still have produced the expected gated verdict/confidence."""
+    result = _run_task(task_filename)
+    task_id = _load_ir(task_filename)["task_id"]
+    reasoning_mock = json.loads(
+        (MOCK_DIR / f"{task_id}_reasoning.json").read_text(encoding="utf-8")
+    )
+    assert reasoning_mock["action"] == "done"
+    assert result["hints_for_human"] != _FALLBACK_MARKER
+    assert result["reasoning_summary"] == reasoning_mock["summary"]
+    assert result["primary_evidence"] == reasoning_mock["primary_evidence"]
+    # collect_specialists_node's fan-in populated all 5 specialists for the
+    # verdict gate to reason over.
+    assert set(result["specialist_outputs"]) == set(DCFL_SPECIALIST_NAMES)
+    # The verdict gate (docs/VERDICT_POLICY.md) ran and, per the module
+    # docstring above, capped confidence below the mock's own 0.9 down to
+    # the structural-only trust ceiling — it did not just copy the mock.
+    assert result["verdict"] == expected_verdict
+    assert result["confidence"] == pytest.approx(expected_confidence, abs=0.01)
+    assert result["confidence"] != pytest.approx(reasoning_mock["confidence"], abs=0.01)
+
+
+@pytest.mark.parametrize("task_filename,expected_verdict,expected_confidence", TASKS[:3])
+def test_fallback_path_is_actually_taken_without_reasoning_mock(
+    task_filename, expected_verdict, expected_confidence
+):
+    """With the reasoning mock unavailable (`_NoReasoningMockRunner`),
+    `_fallback_reasoning` runs instead — confirmed by its distinctive
+    `hints_for_human` marker — and still reaches the same gated
+    verdict/confidence as the LLM path via fan-in over the specialist mocks."""
+    ir = _load_ir(task_filename)
+    mock = _NoReasoningMockRunner(str(MOCK_DIR), ir["task_id"])
+    result = run_pipeline(ir, mock_runner=mock)
+    assert result["hints_for_human"] == _FALLBACK_MARKER
+    assert set(result["specialist_outputs"]) == set(DCFL_SPECIALIST_NAMES)
+    assert result["verdict"] == expected_verdict
+    assert result["confidence"] == pytest.approx(expected_confidence, abs=0.01)
+
+
 @pytest.mark.parametrize("task_filename,expected_verdict,expected_confidence", TASKS)
 def test_result_has_required_keys(task_filename, expected_verdict, expected_confidence):
     result = _run_task(task_filename)
@@ -181,6 +245,41 @@ def test_hypothesis_populated(task_filename, expected_verdict, expected_confiden
 # ---------------------------------------------------------------------------
 # Invalid IR
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# collect_specialists_node: agent_error on retry must not erase a valid
+# result from an earlier round (root TODO.md §2)
+# ---------------------------------------------------------------------------
+
+def test_collect_specialists_keeps_previous_round_result_on_agent_error():
+    """A retry round where `stack_strategy` comes back as `agent_error`
+    (specialist_outputs entry `None`) must keep the round-0 valid result
+    already in `agent_results`, not pop it."""
+    prior_result = {"status": "success", "verdict": "dcfl", "confidence": 0.8}
+    state = {
+        "agent_results": {"stack_strategy": prior_result, "shallit": {"status": "fail"}},
+        "evidence": {},
+        "dispatch": {"stack_strategy": True},
+        "specialist_outputs": [("stack_strategy", None)],
+    }
+    out = collect_specialists_node(state)
+    assert out["agent_results"]["stack_strategy"] == prior_result
+    assert out["evidence"]["stack_strategy"] == prior_result
+
+
+def test_collect_specialists_still_drops_agent_never_seen_before():
+    """If an agent has never produced a result and errors again, there is
+    nothing to keep — it stays absent (not a regression from the fix)."""
+    state = {
+        "agent_results": {},
+        "evidence": {},
+        "dispatch": {"stack_strategy": True},
+        "specialist_outputs": [("stack_strategy", None)],
+    }
+    out = collect_specialists_node(state)
+    assert "stack_strategy" not in out["agent_results"]
+    assert "stack_strategy" not in out["evidence"]
+
 
 def test_invalid_ir_early_failure():
     """Pipeline with invalid IR should fail early with errors."""

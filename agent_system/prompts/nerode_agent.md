@@ -36,21 +36,24 @@ To prove L is **not** regular: find an infinite sequence of words w_0, w_1, w_2,
   "hypothesis": {
     "hypothesis": "non_regular",
     "confidence": 0.85
+  },
+  "classifier": {
+    "verdict": "non_regular",
+    "confidence": 0.85,
+    "dispatch": { ... }
   }
 }
 ```
 
-## Solved Example (Few-Shot CoT)
+Sent only when applicable:
+
+- `grammar_facts`: for grammar-kind tasks, facts precomputed by the grammar preprocessor (`is_linear`, `has_nested_recursion`, generated words, `summary`, ...).
+- `student_notes`: the student's own comments/hypotheses, when the task provides them.
+- `retry_context`: on a retry round, the previous round's issues/counterexamples, plus an `agent_feedback` entry targeted at this agent.
+
+## Solved Example
 
 **Task:** Prove that L = {a^n b^n | n ≥ 0} is not regular using Myhill-Nerode.
-
-**Reasoning (Chain-of-Thought):**
-1. I need an infinite family of pairwise distinguishable words.
-2. Consider the family w_i = a^i for i = 0, 1, 2, ...
-3. For any i ≠ j, I need a distinguishing context z such that exactly one of w_i·z and w_j·z is in L.
-4. Choose z = b^i. Then w_i·z = a^i b^i ∈ L (equal counts), but w_j·z = a^j b^i ∉ L (since j ≠ i).
-5. So the family {a^i | i ≥ 0} is pairwise distinguishable. The Nerode equivalence ≡_L has infinite index.
-6. By the Myhill-Nerode theorem, L is not regular.
 
 **Output:**
 {

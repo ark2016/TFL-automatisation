@@ -51,6 +51,8 @@ You receive specialist agent outputs (pumping lemma proof, Nerode proof, closure
 }
 ```
 
+`student_notes` (the student's own comments/hypotheses) is added when the task provides them.
+
 ## Output Format
 
 Return **only** valid JSON:

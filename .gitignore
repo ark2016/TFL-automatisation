@@ -2,11 +2,14 @@ __pycache__/
 .claude/
 .venv/
 .env
+.env.*
+!.env.example
 *.egg-info/
 dist/
 build/
 nul
-.codex_tmp
+tmp*/
+.codex_tmp/
 .tfl_lab_runs/
 .playwright-mcp/
 

@@ -4,8 +4,6 @@ You are an expert in applying the Bar-Hillel (CFL) pumping lemma to prove that l
 
 **IMPORTANT: Write all proof text, arguments, and conclusions in Russian.** Use standard terminology: лемма о накачке для КС-языков, лемма Бар-Хиллеля, длина накачки, магазинный автомат, контекстно-свободная грамматика, дерево вывода. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 ## The Bar-Hillel Pumping Lemma (contrapositive form)
 
 To prove L is NOT context-free, show:
@@ -137,17 +135,6 @@ when `all_cases_covered` is true.
 
 ### Example 1: {a^n b^n c^n | n >= 0} — Classic non-CFL
 
-**Reasoning (Chain-of-Thought):**
-1. Choose z = a^p b^p c^p. This is in L with n = p. |z| = 3p >= p.
-2. Since |vwx| <= p, the substring vwx spans at most p consecutive characters. In z = a^p b^p c^p, this means vwx cannot cover all three blocks.
-3. Cases:
-   - vwx is entirely in a-block: v and x are both a's. Pumping changes only #a. i=2: #a > #b = #c.
-   - vwx spans a-block and b-block: v has some a's, x has some b's (or both in boundary). Pumping changes #a + #b but not #c. i=2: counts unequal.
-   - vwx is entirely in b-block: similar to a-block case.
-   - vwx spans b-block and c-block: pumping changes #b + #c but not #a. i=2: counts unequal.
-   - vwx is entirely in c-block: v and x are c's. i=2: #c > #a = #b.
-4. In all cases, pumping with i=2 breaks the equality #a = #b = #c.
-
 **Output:**
 ```json
 {
@@ -208,29 +195,6 @@ when `all_cases_covered` is true.
 ### Example 2: {w1w2w1w3} — direct pumping is unreliable, recommend closure_reduction
 
 **Task:** L = {w1w2w1w3 | w2 in {b,c}*, w1 in {a,b}*, w3 in {a,c}*, |wi| > 0}
-
-**Reasoning (Chain-of-Thought):**
-1. A tempting witness is z = a^p · b · a^p · c (w1=a^p, w2=b, w3=c), p >= 3. But this word is NOT a
-   valid pumping witness for this L: take v = a (the LAST symbol of the first a-block), w = b,
-   x = a (the FIRST symbol of the second a-block) — a legal split (|vwx| = 3 <= p, |vx| = 2 >= 1).
-   Pumping this split gives u v^i w x^i y = a^{p-1+i} b a^{p-1+i} c for EVERY i >= 0, which stays in
-   L for every i (w1 = a^{p-1+i}, w2 = b, w3 = c). So no i disqualifies this particular
-   decomposition — the pumping lemma needs EVERY valid vwx-split to have SOME disqualifying i, and
-   this split has none. That alone rules z out as a witness, independent of anything else.
-2. As an additional reason for caution (not the primary one): z also misbehaves on a different
-   split. Since w3 in {a,c}+ can absorb extra a's, pumping the SECOND a-block UP can re-decompose
-   the word and it stays in L too — z pumped to a^p b a^{p+1} c is still in L via w1=a^p, w2=b,
-   w3=a·c (the extra a moved into w3). This reinforces (but does not by itself establish) that z is
-   unreliable.
-3. Conclusion: direct application of the Bar-Hillel pumping lemma to L (without first restricting it
-   to a regular language) is unreliable for this task. It cannot certify non_cfl here.
-4. Recommendation: intersect L with R = a+ · b+ · ac · a+ · b+ · ac (regex a+b+aca+b+ac) via the
-   closure_reduction agent. Fixing w1's LAST symbol against an explicit "ac" marker removes the
-   re-decomposition freedom (see closure_reduction's worked example), giving
-   L ∩ R = {a^n b^m ac · a^n b^m ac | n,m >= 1}, which pumps cleanly DOWN (i=0) on
-   z = a^p b^p ac · a^p b^p ac.
-5. Report status=inconclusive, verdict=null, with the recommendation surfaced in `errors` (this
-   agent's contract has no dedicated recommendation field).
 
 **Output:**
 ```json

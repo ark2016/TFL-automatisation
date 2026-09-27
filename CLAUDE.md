@@ -26,11 +26,16 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 - Request building: `_build_request_kwargs` in each `LiveRunner` / `agent_system/lib/llm_client.py`
   (adaptive thinking + effort; `temperature` only for legacy models).
 - Live test runs use Haiku only: `TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`. Opus runs cost real money — only on request.
+- `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables `agent_system`'s `formalizer` agent by default for every
+  run, without passing `--formalize` each time; unset/other values keep it opt-in per `--formalize`.
 
 ## Commands
 ```bash
-# Tests (explicit paths — a bare `pytest` also collects pumping_lemma/tests and hits the API)
-.venv/Scripts/python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests ui_server/tests -q
+# Tests: the root conftest.py + pyproject.toml testpaths make a bare `pytest` safe now
+# (it strips ANTHROPIC_API_KEY and stubs anthropic.Anthropic), but prefer explicit paths for speed:
+.venv/Scripts/python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests ui_server/tests tests -q
+# or simply:
+.venv/Scripts/python -m pytest -q
 
 # Any pipeline, shared CLI contract (writes <stem>_result.{json,md,html})
 .venv/Scripts/python -m cfl_system.orchestrator <ir.json> --save DIR [--live] [--verbose]

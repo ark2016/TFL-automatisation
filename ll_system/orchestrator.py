@@ -441,6 +441,25 @@ class LiveRunner:
             was_truncated = stop_reason == "max_tokens"
             repaired = self._repair_json_with_haiku(agent_name, raw_text, was_truncated)
             if repaired is not None:
+                if was_truncated:
+                    # The agent's real reasoning was cut off mid-output — Haiku
+                    # only patched the JSON *syntax* of a partial answer, so
+                    # its semantic content cannot be trusted as a full result.
+                    # Mark it and cap confidence rather than passing it on as
+                    # if the agent had actually finished.
+                    repaired["_truncated"] = True
+                    repaired["_repaired"] = True
+                    repaired["status"] = "inconclusive"
+                    try:
+                        capped = min(float(repaired.get("confidence", 0.0) or 0.0), 0.40)
+                    except (TypeError, ValueError):
+                        capped = 0.40
+                    repaired["confidence"] = capped
+                    logger.warning(
+                        "[%s] response truncated at max_tokens; Haiku-repaired "
+                        "JSON accepted as inconclusive (confidence<=0.40)",
+                        agent_name,
+                    )
                 return repaired
 
             if was_truncated:
@@ -2105,11 +2124,42 @@ def run_pipeline(
 # CLI
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def _parse_text_to_ir(text: str, verbose: bool) -> dict:
+    """Run the input_parser agent to turn a raw problem statement into an IR.
+
+    Requires a live LLM runner — the agent is an LLM call, there is no
+    offline fallback. Raises RuntimeError with a clear message on any
+    failure (agent error, unparsable JSON, or an IR that fails validation).
+    """
+    runner = LiveRunner(verbose=verbose)
+    output = runner.run_agent("input_parser", {"source_text": text})
+    if output is None or output.get("status") == "agent_error":
+        errs = (output or {}).get("errors") or ["input_parser produced no output"]
+        raise RuntimeError(f"--text parsing failed: {'; '.join(errs)}")
+    ir = output.get("ir")
+    if not isinstance(ir, dict):
+        raise RuntimeError("--text parsing failed: input_parser returned no 'ir' object")
+    parse_errors = output.get("parse_errors") or []
+    if parse_errors:
+        raise RuntimeError(f"--text parsing failed: {'; '.join(parse_errors)}")
+    ir_errors = validate_ll_ir(ir)
+    if ir_errors:
+        raise RuntimeError(f"--text produced an invalid IR: {'; '.join(ir_errors)}")
+    return ir
+
+
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Run the LL(k) analysis pipeline")
-    parser.add_argument("input", help="IR JSON file")
+    parser.add_argument("input", nargs="?", help="IR JSON file (omit when using --text)")
+    parser.add_argument(
+        "--text", metavar="TEXT",
+        help="Problem statement in natural language; builds the IR via the "
+             "input_parser agent instead of reading an IR JSON file. "
+             "Requires --live (the parser is itself an LLM call).",
+    )
     parser.add_argument("--mock", metavar="DIR", help="Mock responses directory")
     parser.add_argument("--live", action="store_true", help="Use live LLM (requires API key)")
     parser.add_argument("--out", metavar="DIR", help="Output directory")
@@ -2142,10 +2192,28 @@ if __name__ == "__main__":
         print("Error: --mock and --live are mutually exclusive", file=sys.stderr)
         sys.exit(1)
 
-    with open(args.input, encoding="utf-8") as f:
-        ir = json.load(f)
+    if args.text and not args.input:
+        if not args.live:
+            print(
+                "Error: --text requires --live (it runs the input_parser agent; "
+                "there is no offline/--mock path for free-text input)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            ir = _parse_text_to_ir(args.text, verbose=args.verbose)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        task_name = args.task or "text_input"
+    elif args.input:
+        with open(args.input, encoding="utf-8") as f:
+            ir = json.load(f)
+        task_name = args.task or Path(args.input).stem
+    else:
+        print("Error: provide an IR JSON file, or --text \"<problem statement>\"", file=sys.stderr)
+        sys.exit(1)
 
-    task_name = args.task or Path(args.input).stem
     mock_runner = MockRunner(args.mock, task_name) if args.mock else None
     agent_runner = LiveRunner(verbose=args.verbose) if args.live else None
 
@@ -2184,3 +2252,7 @@ if __name__ == "__main__":
         sys.exit(2)
     else:
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

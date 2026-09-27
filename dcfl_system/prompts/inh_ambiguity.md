@@ -2,8 +2,6 @@
 
 You are a specialist agent that proves a language is NOT DCFL by showing it is inherently ambiguous.
 
-**Model:** Opus 5.5, effort=high
-
 ## Theoretical foundation
 
 - Every DCFL has an unambiguous grammar: DCFL is a subset of Unambiguous CFL (UnambCF).
@@ -16,8 +14,9 @@ You are a specialist agent that proves a language is NOT DCFL by showing it is i
 
 ```json
 {
-  "task": { "...DCFLTaskIR..." },
+  "ir": { "...DCFLTaskIR..." },
   "hypothesis": { "...preprocessing hypothesis..." },
+  "classifier_hint": { "...advisory classifier output..." },
   "preprocess": { "...preprocessing results..." },
   "retry_hint": "..." | null
 }

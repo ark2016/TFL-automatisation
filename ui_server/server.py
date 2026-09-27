@@ -12,16 +12,26 @@ exposes a small API:
                                      (runs the pipeline in a thread,
                                       streams stderr to a log buffer)
   GET  /api/log/<run_id>          → {"status", "lines", "elapsed", ...}
+  POST /api/runs/<run_id>/cancel  → {"run_id", "status"}
+                                     (kills the run's subprocess, if any)
   GET  /runs/<run_id>/<file>      → rendered result artifact
 
 Usage:
     .venv/Scripts/python -m ui_server.server [--port 8000]
+                                              [--max-concurrent-runs 2]
+                                              [--run-timeout 1800]
 
 Security note: binds to 127.0.0.1 only. No auth. Do not expose externally.
 Requests are only served for a loopback Host header (blocks DNS rebinding),
 POST /api/run additionally requires a same-origin JSON request (blocks
 cross-site "no-cors" form posts from other pages starting paid live runs),
 and every file route is confined to its directory.
+
+Run lifecycle: a run is "queued" until it gets one of at most
+MAX_CONCURRENT_RUNS concurrency slots, then "running" until its subprocess
+exits, is cancelled (POST .../cancel), or is killed after RUN_TIMEOUT_SECONDS
+("timeout") — a stuck orchestrator process cannot pin a slot forever, so
+queued runs behind it always eventually get to run.
 """
 
 from __future__ import annotations
@@ -66,6 +76,18 @@ RUN_ID_RE = re.compile(r"[0-9a-f]{12}")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 MAX_BODY_BYTES = 1_000_000
 
+# Concurrency / timeout — module globals so `main()` (CLI flags) and tests
+# (monkeypatch) can both override them; read fresh on every acquire/wait
+# rather than baked into a fixed-size object at import time.
+DEFAULT_MAX_CONCURRENT_RUNS = 2
+DEFAULT_RUN_TIMEOUT_SECONDS = 30 * 60  # 30 minutes
+
+MAX_CONCURRENT_RUNS = int(os.environ.get("TFL_LAB_MAX_CONCURRENT_RUNS", DEFAULT_MAX_CONCURRENT_RUNS))
+RUN_TIMEOUT_SECONDS = float(os.environ.get("TFL_LAB_RUN_TIMEOUT_SECONDS", DEFAULT_RUN_TIMEOUT_SECONDS))
+
+_SLOT_POLL_SECONDS = 0.2   # how often a queued run rechecks for a free slot
+_WAIT_POLL_SECONDS = 0.5   # how often a running run rechecks timeout/cancel
+
 
 def _files_in(directory: Path, pattern: str = "*", recursive: bool = False) -> dict[str, Path]:
     """Index of the regular files under `directory`, keyed by their POSIX path
@@ -88,11 +110,76 @@ def _run_dirs() -> dict[str, Path]:
     return {d.name: d for d in RUNS_DIR.iterdir() if d.is_dir() and RUN_ID_RE.fullmatch(d.name)}
 
 # In-memory run registry. Threading lock protects concurrent access.
-# {run_id: {"status", "lines" (list[str]), "started", "elapsed",
+# {run_id: {"status" ("queued"/"running"/"completed"/"error"/"timeout"/
+#            "cancelled"), "lines" (list[str]), "started", "elapsed",
 #           "result_html_url", "result_json_url", "result_md_url",
-#           "verdict", "error"}}
+#           "verdict", "error", "proc" (Popen | None), "cancel_requested"}}
 _runs: dict[str, dict] = {}
 _runs_lock = threading.Lock()
+
+# Concurrency gate: at most MAX_CONCURRENT_RUNS pipeline subprocesses run at
+# once. Extra runs block in `_acquire_run_slot` (status "queued") instead of
+# being rejected, so they still start automatically once a slot frees up —
+# including a slot freed by a hung run's own timeout kill.
+_concurrency_lock = threading.Condition()
+_active_runs = 0
+
+
+def _acquire_run_slot(run_id: str) -> bool:
+    """Block until a concurrency slot is free, or the run is cancelled while
+    queued. Returns False if the run was cancelled before it got a slot."""
+    global _active_runs
+    with _concurrency_lock:
+        while _active_runs >= MAX_CONCURRENT_RUNS:
+            with _runs_lock:
+                run = _runs.get(run_id)
+                if run is not None and run.get("cancel_requested"):
+                    return False
+            _concurrency_lock.wait(timeout=_SLOT_POLL_SECONDS)
+        _active_runs += 1
+        return True
+
+
+def _release_run_slot() -> None:
+    global _active_runs
+    with _concurrency_lock:
+        _active_runs = max(0, _active_runs - 1)
+        _concurrency_lock.notify_all()
+
+
+def _terminate_process(proc: subprocess.Popen) -> None:
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def _wait_for_process(run_id: str, proc: subprocess.Popen, deadline: float):
+    """Poll proc.wait() in short slices so a run can be killed on timeout or
+    on-demand cancellation instead of blocking forever. Returns
+    (returncode, outcome) where outcome is None, "timeout" or "cancelled"."""
+    while True:
+        try:
+            rc = proc.wait(timeout=_WAIT_POLL_SECONDS)
+        except subprocess.TimeoutExpired:
+            with _runs_lock:
+                run = _runs.get(run_id)
+                cancel_requested = bool(run and run.get("cancel_requested"))
+            if cancel_requested:
+                _terminate_process(proc)
+                return proc.wait(), "cancelled"
+            if time.time() >= deadline:
+                _terminate_process(proc)
+                return proc.wait(), "timeout"
+            continue
+        # The process exited within this poll slice — but that may be
+        # because api_cancel (on another thread) just killed it directly for
+        # promptness, racing this loop. Re-check so that case still reports
+        # "cancelled" instead of being read as a normal exit.
+        with _runs_lock:
+            run = _runs.get(run_id)
+            cancel_requested = bool(run and run.get("cancel_requested"))
+        return rc, ("cancelled" if cancel_requested else None)
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +247,7 @@ def api_run(payload: dict) -> dict:
 
     with _runs_lock:
         _runs[run_id] = {
-            "status": "running",
+            "status": "queued",
             "project": project,
             "lines": [],
             "started": time.time(),
@@ -171,6 +258,8 @@ def api_run(payload: dict) -> dict:
             "result_md_url": None,
             "verdict": None,
             "error": None,
+            "proc": None,
+            "cancel_requested": False,
         }
 
     thread = threading.Thread(
@@ -185,6 +274,33 @@ def api_run(payload: dict) -> dict:
         "status": "running",
         "log_url": f"/api/log/{run_id}",
     }
+
+
+_TERMINAL_STATUSES = {"completed", "error", "timeout", "cancelled"}
+
+
+def api_cancel(run_id: str) -> dict:
+    """Request cancellation of a queued or running pipeline. Idempotent:
+    cancelling an already-terminal or unknown run is a no-op, not an error,
+    since the client may race the run's own completion."""
+    with _runs_lock:
+        run = _runs.get(run_id)
+        if run is None:
+            raise FileNotFoundError(f"run not found: {run_id}")
+        if run["status"] in _TERMINAL_STATUSES:
+            return {"run_id": run_id, "status": run["status"]}
+        run["cancel_requested"] = True
+        proc = run.get("proc")
+    # Wake any thread blocked waiting for a concurrency slot (a queued run
+    # notices cancel_requested there and never launches a subprocess).
+    with _concurrency_lock:
+        _concurrency_lock.notify_all()
+    # Kill an already-running subprocess right away; the worker's own
+    # `_wait_for_process` poll also checks cancel_requested and would reach
+    # the same kill within _WAIT_POLL_SECONDS, this just avoids that wait.
+    if proc is not None:
+        _terminate_process(proc)
+    return {"run_id": run_id, "status": "cancelling"}
 
 
 def build_command(project: str, ir_path: Path, run_dir: Path,
@@ -210,88 +326,135 @@ def build_command(project: str, ir_path: Path, run_dir: Path,
 def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
                          run_dir: Path, live: bool, verbose: bool) -> None:
     """Run the project's orchestrator (see build_command), stream stderr
-    into the run's log buffer."""
+    into the run's log buffer.
+
+    Blocks in "queued" status for a concurrency slot (at most
+    MAX_CONCURRENT_RUNS subprocesses at once), then runs with a
+    RUN_TIMEOUT_SECONDS watchdog and cancellation support (see
+    `_wait_for_process`); the slot is always released, so a killed/cancelled
+    run frees it up for the next queued one.
+    """
     cmd = build_command(project, ir_path, run_dir, live, verbose)
 
-    started = time.time()
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,  # line-buffered
-        )
-    except Exception as exc:
-        _mark_error(run_id, f"failed to launch: {exc}")
+    if not _acquire_run_slot(run_id):
+        with _runs_lock:
+            run = _runs.get(run_id)
+            if run is not None:
+                run["status"] = "cancelled"
+                run["error"] = "cancelled while queued"
+                run["elapsed"] = 0.0
         return
 
-    # Stream both stdout (result JSON) and stderr (log) in parallel.
-    stdout_buf: list[str] = []
+    try:
+        with _runs_lock:
+            run = _runs.get(run_id)
+            if run is None:
+                return
+            if run.get("cancel_requested"):
+                run["status"] = "cancelled"
+                run["error"] = "cancelled while queued"
+                run["elapsed"] = 0.0
+                return
+            run["status"] = "running"
+            started = time.time()
+            run["started"] = started
 
-    stderr_tail: list[str] = []
-
-    def pump_stderr() -> None:
-        for line in proc.stderr:
-            line = line.rstrip("\n")
-            _append_log(run_id, line)
-            stderr_tail.append(line)
-            del stderr_tail[:-20]
-
-    def pump_stdout() -> None:
-        for line in proc.stdout:
-            stdout_buf.append(line)
-
-    t_err = threading.Thread(target=pump_stderr, daemon=True)
-    t_out = threading.Thread(target=pump_stdout, daemon=True)
-    t_err.start(); t_out.start()
-
-    rc = proc.wait()
-    t_err.join(timeout=2.0)
-    t_out.join(timeout=2.0)
-    elapsed = time.time() - started
-
-    # Figure out which artifacts were produced.
-    # Orchestrators --save writes <task_stem>_result.{json,md,html}
-    stem = ir_path.stem  # always "input"
-    # But some orchestrators derive task_name from the input filename; ours is "input"
-    result_json = run_dir / f"{stem}_result.json"
-    result_html = run_dir / f"{stem}_result.html"
-    result_md   = run_dir / f"{stem}_result.md"
-
-    verdict = None
-    if result_json.exists():
         try:
-            data = json.loads(result_json.read_text(encoding="utf-8"))
-            verdict = data.get("verdict")
-        except Exception:
-            pass
-
-    with _runs_lock:
-        run = _runs.get(run_id)
-        if run is None:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,  # line-buffered
+            )
+        except Exception as exc:
+            _mark_error(run_id, f"failed to launch: {exc}")
             return
-        run["elapsed"] = elapsed
-        run["verdict"] = verdict
-        if result_html.exists():
-            run["result_html_url"] = f"/runs/{run_id}/{result_html.name}"
+
+        with _runs_lock:
+            run = _runs.get(run_id)
+            cancel_now = bool(run and run.get("cancel_requested"))
+            if run is not None:
+                run["proc"] = proc
+        if cancel_now:
+            _terminate_process(proc)
+
+        # Stream both stdout (result JSON) and stderr (log) in parallel.
+        stdout_buf: list[str] = []
+
+        stderr_tail: list[str] = []
+
+        def pump_stderr() -> None:
+            for line in proc.stderr:
+                line = line.rstrip("\n")
+                _append_log(run_id, line)
+                stderr_tail.append(line)
+                del stderr_tail[:-20]
+
+        def pump_stdout() -> None:
+            for line in proc.stdout:
+                stdout_buf.append(line)
+
+        t_err = threading.Thread(target=pump_stderr, daemon=True)
+        t_out = threading.Thread(target=pump_stdout, daemon=True)
+        t_err.start(); t_out.start()
+
+        rc, outcome = _wait_for_process(run_id, proc, deadline=started + RUN_TIMEOUT_SECONDS)
+        t_err.join(timeout=2.0)
+        t_out.join(timeout=2.0)
+        elapsed = time.time() - started
+
+        # Figure out which artifacts were produced.
+        # Orchestrators --save writes <task_stem>_result.{json,md,html}
+        stem = ir_path.stem  # always "input"
+        # But some orchestrators derive task_name from the input filename; ours is "input"
+        result_json = run_dir / f"{stem}_result.json"
+        result_html = run_dir / f"{stem}_result.html"
+        result_md   = run_dir / f"{stem}_result.md"
+
+        verdict = None
         if result_json.exists():
-            run["result_json_url"] = f"/runs/{run_id}/{result_json.name}"
-        if result_md.exists():
-            run["result_md_url"] = f"/runs/{run_id}/{result_md.name}"
-        if rc == 0 and result_json.exists():
-            run["status"] = "completed"
-        else:
-            # Exit codes: 0=ok, 1=failure, 2=inconclusive (per orchestrator CLI)
-            run["status"] = "completed" if rc in (0, 2) and result_json.exists() else "error"
-            if not result_json.exists():
-                tail = "\n".join(stderr_tail[-10:])
-                run["error"] = f"exit code {rc}, no result JSON produced" + (
-                    f"\n{tail}" if tail else ""
-                )
+            try:
+                data = json.loads(result_json.read_text(encoding="utf-8"))
+                verdict = data.get("verdict")
+            except Exception:
+                pass
+
+        with _runs_lock:
+            run = _runs.get(run_id)
+            if run is None:
+                return
+            run["elapsed"] = elapsed
+            run["verdict"] = verdict
+            run["proc"] = None
+            if result_html.exists():
+                run["result_html_url"] = f"/runs/{run_id}/{result_html.name}"
+            if result_json.exists():
+                run["result_json_url"] = f"/runs/{run_id}/{result_json.name}"
+            if result_md.exists():
+                run["result_md_url"] = f"/runs/{run_id}/{result_md.name}"
+
+            if outcome == "timeout":
+                run["status"] = "timeout"
+                run["error"] = f"killed: exceeded {RUN_TIMEOUT_SECONDS:.0f}s timeout"
+            elif outcome == "cancelled":
+                run["status"] = "cancelled"
+                run["error"] = "cancelled by user"
+            elif rc == 0 and result_json.exists():
+                run["status"] = "completed"
+            else:
+                # Exit codes: 0=ok, 1=failure, 2=inconclusive (per orchestrator CLI)
+                run["status"] = "completed" if rc in (0, 2) and result_json.exists() else "error"
+                if not result_json.exists():
+                    tail = "\n".join(stderr_tail[-10:])
+                    run["error"] = f"exit code {rc}, no result JSON produced" + (
+                        f"\n{tail}" if tail else ""
+                    )
+    finally:
+        _release_run_slot()
 
 
 def _append_log(run_id: str, line: str) -> None:
@@ -465,8 +628,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(api_run(payload))
                 return
 
+            if path.startswith("/api/runs/") and path.endswith("/cancel"):
+                run_id = path[len("/api/runs/"):-len("/cancel")]
+                self._send_json(api_cancel(run_id))
+                return
+
             self._send_error_json(404, f"no route for POST {path}")
 
+        except FileNotFoundError as exc:
+            self._send_error_json(404, str(exc))
         except ValueError as exc:
             self._send_error_json(400, str(exc))
         except Exception as exc:
@@ -479,11 +649,21 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    global MAX_CONCURRENT_RUNS, RUN_TIMEOUT_SECONDS
+
     parser = argparse.ArgumentParser(description="TFL Lab local UI server")
     parser.add_argument("--host", default="127.0.0.1",
                         help="bind address (default: 127.0.0.1, localhost only)")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--max-concurrent-runs", type=int, default=MAX_CONCURRENT_RUNS,
+                        help=f"max pipeline subprocesses running at once (default: {MAX_CONCURRENT_RUNS}; "
+                             "env TFL_LAB_MAX_CONCURRENT_RUNS)")
+    parser.add_argument("--run-timeout", type=float, default=RUN_TIMEOUT_SECONDS,
+                        help=f"seconds before a run is killed as timed out (default: {RUN_TIMEOUT_SECONDS:.0f}; "
+                             "env TFL_LAB_RUN_TIMEOUT_SECONDS)")
     args = parser.parse_args()
+    MAX_CONCURRENT_RUNS = args.max_concurrent_runs
+    RUN_TIMEOUT_SECONDS = args.run_timeout
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.host not in ("127.0.0.1", "localhost", "::1"):
@@ -497,6 +677,7 @@ def main() -> None:
     sys.stderr.write(f"  static:  {STATIC_DIR}\n")
     sys.stderr.write(f"  runs:    {RUNS_DIR}\n")
     sys.stderr.write(f"  projects: {', '.join(p['id'] for p in PROJECTS)}\n")
+    sys.stderr.write(f"  max concurrent runs: {MAX_CONCURRENT_RUNS}, run timeout: {RUN_TIMEOUT_SECONDS:.0f}s\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

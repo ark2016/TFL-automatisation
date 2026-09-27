@@ -337,6 +337,12 @@ class LiveRunner:
         if not path.exists():
             raise FileNotFoundError(f"Prompt file not found: {path}")
         text = path.read_text(encoding="utf-8")
+        # cfl_classifier.md states how many specialists are always dispatched
+        # regardless of its (advisory) verdict — substitute the count instead
+        # of hardcoding it in the prompt text, so adding/removing a
+        # specialist can't silently make the prompt lie (docs/TODO.md §6).
+        if "{{N_SPECIALISTS}}" in text:
+            text = text.replace("{{N_SPECIALISTS}}", str(len(CFL_SPECIALIST_NAMES)))
         self._prompt_cache[agent_name] = text
         return text
 
@@ -458,6 +464,23 @@ class LiveRunner:
             was_truncated = stop_reason == "max_tokens"
             repaired = self._repair_json_with_haiku(agent_name, raw_text, was_truncated)
             if repaired is not None:
+                repaired["_repaired"] = True
+                if was_truncated:
+                    # A response that hit max_tokens and had to be patched
+                    # back into shape by Haiku is not a full agent output —
+                    # the model never finished its reasoning/proof. Flag it
+                    # and cap its trustworthiness (docs/TODO.md §2,
+                    # docs/VERDICT_POLICY.md §2 "not_verified" ceiling)
+                    # instead of letting it pass downstream as a normal
+                    # "success"/"verified" result.
+                    repaired["_truncated"] = True
+                    repaired["status"] = "inconclusive"
+                    conf = repaired.get("confidence")
+                    try:
+                        conf = float(conf)
+                    except (TypeError, ValueError):
+                        conf = 0.40
+                    repaired["confidence"] = min(conf, 0.40)
                 return repaired
 
             # Distinguish truncation (max_tokens) from other parse failures.
@@ -593,8 +616,19 @@ def _run_agent(state: PipelineState, agent_name: str, input_data: dict | None = 
     except NotImplementedError:
         return None
     except Exception as exc:
+        # Do not swallow this silently: a runner exception (network error,
+        # bad mock file, etc.) must surface the same way an `agent_error`
+        # status does, so the caller records it in state["errors"] instead
+        # of the agent looking merely "not dispatched" (TODO.md §2).
         logger.warning("Agent '%s' failed: %s", agent_name, exc)
-        return None
+        return {
+            "agent": agent_name,
+            "status": "agent_error",
+            "verdict": None,
+            "confidence": 0.0,
+            "evidence": {},
+            "errors": [f"runner exception: {exc}"],
+        }
 
 
 def log_msg(state: PipelineState, msg: str) -> None:
@@ -676,23 +710,46 @@ def _build_reasoning_input(state: PipelineState) -> dict:
 
 
 def _collect_failed_agents(state: PipelineState) -> list[dict]:
-    """Return list of {agent, error} for agents that were dispatched but failed.
+    """Return list of {agent, error} for agents that are *currently* failed.
 
-    Used to tell the reasoning agent explicitly which specialists did not
-    contribute, so it doesn't silently assume coverage it doesn't have.
+    `state["errors"]` is append-only across the whole run (Annotated with
+    `operator.add`), so it still holds a round-1 failure message for an
+    agent that succeeded on a later retry. Scanning it naively (as this
+    function used to) would keep such an agent in `agents_failed` forever
+    (docs/TODO.md §2: "агент, успешный при ретрае, не остаётся в
+    agents_failed"). Instead: derive the *last* error message per agent
+    from the log (latest round wins), then only report agents that have
+    no successful result in the current state — i.e. specialists missing
+    from `agent_results`, and `proof_checker`/`formalizer` missing from
+    their own per-round output slots.
     """
-    failed: list[dict] = []
-    seen: set[str] = set()
+    last_error_by_agent: dict[str, str] = {}
     for err in state.get("errors", []):
         if not isinstance(err, str) or ":" not in err:
             continue
         name, _, msg = err.partition(":")
         name = name.strip()
-        if name in seen:
-            continue
         if name in CFL_SPECIALIST_NAMES or name in ("proof_checker", "formalizer"):
-            failed.append({"agent": name, "error": msg.strip()})
-            seen.add(name)
+            # Overwrite on each occurrence so the *latest* round's message
+            # (not the first) is what ends up attached to the agent.
+            last_error_by_agent[name] = msg.strip()
+
+    agent_results = state.get("agent_results", {})
+    proof_checker_ok = bool(state.get("proof_checker_output"))
+    formalizer_ok = bool(state.get("evidence", {}).get("formalizer"))
+
+    failed: list[dict] = []
+    for name, msg in last_error_by_agent.items():
+        if name in CFL_SPECIALIST_NAMES:
+            currently_ok = name in agent_results
+        elif name == "proof_checker":
+            currently_ok = proof_checker_ok
+        elif name == "formalizer":
+            currently_ok = formalizer_ok
+        else:
+            currently_ok = False
+        if not currently_ok:
+            failed.append({"agent": name, "error": msg})
     return failed
 
 
@@ -1851,6 +1908,10 @@ def formalize_node(state: PipelineState) -> dict:
 
     evidence = dict(state.get("evidence", {}))
     evidence["formalizer"] = output
+    # "markdown" is no longer part of the contract (docs/TODO.md §6: the
+    # proof was being generated twice — structured proof_document plus a
+    # near-duplicate free-form render); kept here only as a fallback for
+    # older mocks/live outputs that still include it.
     proof = output.get("proof_document") or output.get("markdown")
     if proof:
         evidence["formatted_proof"] = proof
@@ -2166,7 +2227,8 @@ def run_pipeline(
 # CLI
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Run the CFL analysis pipeline")
@@ -2235,3 +2297,7 @@ if __name__ == "__main__":
         sys.exit(2)
     else:  # failure / None / etc.
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

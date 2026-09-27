@@ -82,6 +82,32 @@ def _load_env() -> None:
             os.environ[key] = value
 
 
+class _AgentAPIError(Exception):
+    """Non-fatal Anthropic API error (network hiccup, overloaded, 5xx, ...).
+
+    Wrapped into an ``agent_error`` dict by ``run_agent``. Never retried
+    with the "your JSON was invalid" prompt -- the problem isn't the JSON,
+    a second call would just hit the same error again.
+    """
+
+
+class _AgentRefusal(Exception):
+    """The model declined the request (``stop_reason == "refusal"``).
+
+    Wrapped into an ``agent_error`` dict. ``run_agent`` does not attempt a
+    second call after this -- a "please output only JSON" retry cannot
+    un-refuse a safety decline.
+    """
+
+    def __init__(self, category: str | None, explanation: str | None = None) -> None:
+        self.category = category
+        self.explanation = explanation
+        msg = f"model refused the request (category={category})"
+        if explanation:
+            msg += f": {explanation}"
+        super().__init__(msg)
+
+
 def _extract_json(text: str) -> dict | None:
     """Extract first JSON object from LLM response text.
 
@@ -169,6 +195,15 @@ class LLMRunner:
             )
 
         self._client = anthropic.Anthropic(api_key=resolved_key)
+        # Fatal: a dead/invalid key, no access to the model, or an unknown
+        # model ID -- retrying or JSON-repairing the (nonexistent) response
+        # cannot help, so run_agent lets these propagate instead of
+        # degrading to a per-agent agent_error dict (TODO.md §2).
+        self._fatal_exceptions: tuple[type[Exception], ...] = (
+            anthropic.AuthenticationError,
+            anthropic.PermissionDeniedError,
+            anthropic.NotFoundError,
+        )
 
     # ---- prompt resolution ------------------------------------------------
 
@@ -242,24 +277,34 @@ class LLMRunner:
             kwargs["temperature"] = self.temperature if temperature is None else temperature
         return kwargs
 
-    def _stream_text(self, model: str, system: str, user: str, effort: str) -> str | None:
+    def _stream_text(self, model: str, system: str, user: str, effort: str) -> str:
         """Make one streamed API call and return the answer text.
 
         Streaming keeps a large max_tokens (thinking + answer) clear of the
-        SDK's non-streaming timeout. Returns None on API errors and refusals.
+        SDK's non-streaming timeout.
+
+        Raises:
+            _AgentAPIError: a non-fatal API error (network, overloaded, ...).
+            _AgentRefusal: the model declined the request.
+            anthropic.AuthenticationError / PermissionDeniedError /
+                NotFoundError: propagated as-is (not wrapped) so the caller
+                fails fast instead of retrying a dead key / missing access.
         """
         try:
             kwargs = self._build_request_kwargs(model, self.max_tokens, system, user, effort)
             with self._client.messages.stream(**kwargs) as stream:
                 message = stream.get_final_message()
+        except self._fatal_exceptions:
+            raise
         except Exception as exc:
             print(f"[LLM] API error: {exc}", file=sys.stderr)
-            return None
+            raise _AgentAPIError(str(exc)) from exc
         if message.stop_reason == "refusal":
             details = getattr(message, "stop_details", None)
             category = getattr(details, "category", None) if details else None
+            explanation = getattr(details, "explanation", None) if details else None
             print(f"[LLM] {model} refused the request (category={category})", file=sys.stderr)
-            return None
+            raise _AgentRefusal(category, explanation)
         if message.stop_reason == "max_tokens":
             print(f"[LLM] {model} hit max_tokens={self.max_tokens}; output truncated", file=sys.stderr)
         return _response_text(message)
@@ -269,15 +314,36 @@ class LLMRunner:
     # Agents that return plain text (not JSON)
     _RAW_TEXT_AGENTS = frozenset({"formalizer"})
 
-    def run_agent(self, agent_name: str, input_data: Any = None) -> dict | None:
+    def run_agent(self, agent_name: str, input_data: Any = None) -> dict:
         """Call an LLM agent and return parsed output.
 
         For most agents: parses JSON from the response.
         For formalizer: returns raw text (Lean 4 code) wrapped in evidence.
+
+        Never returns ``None``: an API error, a refusal, or a response that
+        is still not valid JSON after one retry all come back as an
+        ``agent_error`` dict (§5.3 contract) instead of silently vanishing
+        (TODO.md §2) -- an ``anthropic.AuthenticationError`` /
+        ``PermissionDeniedError`` / ``NotFoundError`` is the one exception:
+        those propagate so the caller fails fast rather than retrying a
+        dead key.
         """
         system_prompt = self._load_prompt(agent_name)
         model = self._get_model(agent_name)
         effort = self._get_effort(agent_name)
+
+        # Student notes are kept in exactly ONE place: appended to the
+        # system prompt as a clearly-labelled "## Student Notes" section,
+        # then stripped from input_data before it is serialized into the
+        # user JSON. Leaving them in both places would show the agent the
+        # same free-form (untrusted) text twice -- once flagged as student
+        # commentary, once folded into the "objective" evidence blob --
+        # which doubles its apparent weight and blurs which copy the agent
+        # should treat as authoritative.
+        student_notes = ""
+        if isinstance(input_data, dict) and input_data.get("student_notes"):
+            student_notes = input_data["student_notes"]
+            input_data = {k: v for k, v in input_data.items() if k != "student_notes"}
 
         if isinstance(input_data, (dict, list)):
             user_msg = json.dumps(input_data, indent=2, ensure_ascii=False)
@@ -286,10 +352,6 @@ class LLMRunner:
         else:
             user_msg = "{}"
 
-        # Inject student notes into the prompt if present
-        student_notes = ""
-        if isinstance(input_data, dict):
-            student_notes = input_data.get("student_notes", "")
         if student_notes:
             system_prompt += (
                 "\n\n## Student Notes\n\n"
@@ -301,45 +363,62 @@ class LLMRunner:
 
         # Formalizer: return raw text, not JSON
         if agent_name in self._RAW_TEXT_AGENTS:
-            raw = self._call_raw(system_prompt, user_msg, model, effort)
-            if raw is not None:
-                # Strip markdown fences if present
-                code = raw.strip()
-                if code.startswith("```"):
-                    lines = code.split("\n")
-                    lines = lines[1:]  # remove opening fence
-                    if lines and lines[-1].strip() == "```":
-                        lines = lines[:-1]
-                    code = "\n".join(lines)
-                return {
-                    "module": agent_name,
-                    "status": "success",
-                    "evidence": {"lean_code": code, "output": code},
-                    "confidence": 0.8,
-                    "errors": [],
-                }
-            return None
+            try:
+                raw = self._call_raw(system_prompt, user_msg, model, effort)
+            except (_AgentAPIError, _AgentRefusal) as exc:
+                return self._error_output(agent_name, str(exc))
+            # Strip markdown fences if present
+            code = raw.strip()
+            if code.startswith("```"):
+                lines = code.split("\n")
+                lines = lines[1:]  # remove opening fence
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                code = "\n".join(lines)
+            return {
+                "module": agent_name,
+                "status": "success",
+                "evidence": {"lean_code": code, "output": code},
+                "confidence": 0.8,
+                "errors": [],
+            }
 
         # Standard JSON agents
-        parsed = self._call_and_parse(system_prompt, user_msg, model, effort)
+        try:
+            parsed = self._call_and_parse(system_prompt, user_msg, model, effort)
+        except _AgentRefusal as exc:
+            # A safety-classifier decline is not a parse problem -- a
+            # second call asking for "valid JSON only" cannot un-refuse it.
+            return self._error_output(agent_name, str(exc))
+        except _AgentAPIError as exc:
+            return self._error_output(agent_name, str(exc))
+
         if parsed is not None:
             return self._wrap_output(agent_name, parsed)
 
-        # Retry once with explicit JSON instruction
+        # Retry once with explicit JSON instruction. Only reached for an
+        # actual parse failure (no exception raised above) -- a refusal or
+        # an API error already returned above without this second call.
         retry_msg = (
             f"{user_msg}\n\n"
             "IMPORTANT: Your previous response was not valid JSON. "
             "Please respond with ONLY a valid JSON object, no other text."
         )
-        parsed = self._call_and_parse(system_prompt, retry_msg, model, effort)
+        try:
+            parsed = self._call_and_parse(system_prompt, retry_msg, model, effort)
+        except _AgentRefusal as exc:
+            return self._error_output(agent_name, str(exc))
+        except _AgentAPIError as exc:
+            return self._error_output(agent_name, str(exc))
+
         if parsed is not None:
             return self._wrap_output(agent_name, parsed)
 
-        return None
+        return self._error_output(agent_name, "response was not valid JSON after one retry")
 
     def _call_raw(
         self, system: str, user: str, model: str, effort: str | None = None
-    ) -> str | None:
+    ) -> str:
         """Make one API call and return raw response text."""
         return self._stream_text(model, system, user, effort or self.default_effort)
 
@@ -348,7 +427,7 @@ class LLMRunner:
     ) -> dict | None:
         """Make one API call and try to parse JSON from response."""
         text = self._stream_text(model, system, user, effort or self.default_effort)
-        return _extract_json(text) if text is not None else None
+        return _extract_json(text)
 
     def quick_validate(self, question: str, data: Any) -> str:
         """Fast validation / sanity check via Haiku.
@@ -374,6 +453,18 @@ class LLMRunner:
             return _response_text(response).strip()
         except Exception as exc:
             return f"(validation error: {exc})"
+
+    @staticmethod
+    def _error_output(agent_name: str, detail: str) -> dict:
+        """``agent_error`` dict (§5.3 contract) for an API error, a
+        refusal, or an unparseable response -- never a silent ``None``."""
+        return {
+            "module": agent_name,
+            "status": "agent_error",
+            "evidence": {},
+            "confidence": 0.0,
+            "errors": [detail],
+        }
 
     @staticmethod
     def _wrap_output(agent_name: str, parsed: dict) -> dict:

@@ -261,13 +261,20 @@ def _verify_closure_reduction(proof_sketch: dict, _task_ir: dict) -> dict[str, A
             checks_run, passed, issues,
         )
 
-    # direction check (applies regardless of operation)
+    # direction check (applies regardless of operation).
+    # "both" is included alongside "constructive"/"destructive" to match
+    # closure_table.py's proof_direction vocabulary (e.g. "complement" is
+    # symmetric — closed under it proves DCFL in either direction); the
+    # verdict gate (orchestrator._agent_direction) still only treats an
+    # explicit "constructive"/"destructive" as directed evidence, so a
+    # "both" proof_sketch is well-formed here but counts toward neither
+    # verdict direction there.
     direction = proof_sketch.get("direction", "")
     if direction:
         _check(
             "direction_valid",
-            direction in ("constructive", "destructive"),
-            f"direction must be 'constructive' or 'destructive', got '{direction}'",
+            direction in ("constructive", "destructive", "both"),
+            f"direction must be one of 'constructive', 'destructive', 'both', got '{direction}'",
             checks_run, passed, issues,
         )
 

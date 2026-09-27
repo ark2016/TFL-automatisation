@@ -9,7 +9,8 @@ Your goal: minimize wasted computation by only re-running agents that produced i
 You receive:
 - `issues_found`: list of problems detected by the reasoning agent
 - `oracle_counterexample`: a word where the DFA/regex disagrees with the oracle (if any)
-- `specialist_results`: summary of each agent's status and verdict
+- `specialist_results`: summary of each agent's status, verdict, and deterministic `trust` label (per `docs/VERDICT_POLICY.md`)
+- `counterexamples`: per-agent counterexamples for any *refuted* pumping/nerode proof (concrete words/context plus a `hint`), and the oracle's own counterexample under `"oracle_test"` when the DFA/regex failed
 - `current_hypothesis`: regular or non_regular
 
 ## Decision Logic

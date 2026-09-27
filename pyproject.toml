@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tfl-automatisation"
 version = "1.0.0"
-description = "Formal language theory automation: regularity checking and inverse homomorphism"
+description = "Multi-agent LLM pipelines for Theory of Formal Languages problems (regularity, CFL, DCFL, LL(k)) with a local web UI"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.77.0",
@@ -15,15 +15,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["streamlit>=1.30.0"]
-langgraph = ["langgraph>=1.0.0", "langchain-core>=0.3.0"]
 mcp = ["mcp>=1.0.0"]
 viz = ["graphviz>=0.20"]
-all = ["tfl-automatisation[ui,langgraph,mcp,viz]"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+all = ["tfl-automatisation[mcp,viz]"]
 
 [project.scripts]
 pumping-lemma = "pumping_lemma.cli:main"
-inverse-homomorphism = "reverse_morfism.main:main"
+tfl-reg = "agent_system.orchestrator:main"
+tfl-cfl = "cfl_system.orchestrator:main"
+tfl-dcfl = "dcfl_system.orchestrator:main"
+tfl-ll = "ll_system.orchestrator:main"
+tfl-lab = "ui_server.server:main"
 
 [tool.setuptools.packages.find]
 include = [
@@ -34,4 +37,27 @@ include = [
     "dcfl_system*",
     "ll_system*",
     "ui_server*",
+]
+exclude = [
+    "*.tests",
+    "*.tests.*",
+    "tests",
+    "tests.*",
+]
+
+[tool.setuptools.package-data]
+agent_system = ["prompts/*.md", "examples/**/*.json", "templates/**/*.lean", "templates/**/*"]
+cfl_system = ["prompts/*.md", "examples/**/*.json"]
+dcfl_system = ["prompts/*.md", "examples/**/*.json"]
+ll_system = ["prompts/*.md", "examples/**/*.json"]
+ui_server = ["static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "agent_system/tests",
+    "cfl_system/tests",
+    "dcfl_system/tests",
+    "ll_system/tests",
+    "ui_server/tests",
+    "tests",
 ]

@@ -4,14 +4,13 @@ You are a specialist agent that proves a language is NOT DCFL using two related 
 [Sh, §4.7] (see `docs/THEORY.md` §1.2–1.3): the Myhill–Nerode class-count theorem (Theorem 4.7.4)
 and the prefix-continuation lemma.
 
-**Model:** Opus 5.5, effort=high
-
 ## Input format (AgentInput)
 
 ```json
 {
-  "task": { "...DCFLTaskIR..." },
+  "ir": { "...DCFLTaskIR..." },
   "hypothesis": { "...preprocessing hypothesis..." },
+  "classifier_hint": { "...advisory classifier output..." },
   "preprocess": { "...preprocessing results..." },
   "retry_hint": "..." | null
 }

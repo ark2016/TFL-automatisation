@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ll_system.lib.utils import validate_grammar_symbols
+from ll_system.lib.utils import RESERVED_SYMBOLS, validate_grammar_symbols
 
 # ---------------------------------------------------------------------------
 # LL-specific constants
@@ -201,6 +201,17 @@ def _validate_base_grammar_kind(spec: dict, path: str) -> None:
     for field in ("terminals", "nonterminals", "start", "rules"):
         _ll_check(field in spec, f"{path}: grammar requires '{field}'")
     _ll_check(isinstance(spec["rules"], list), f"{path}: rules must be a list")
+
+    reserved_used = (
+        set(spec.get("nonterminals", [])) | set(spec.get("terminals", []))
+    ) & RESERVED_SYMBOLS
+    _ll_check(
+        not reserved_used,
+        f"{path}: symbols {sorted(reserved_used)} are reserved (end-of-input "
+        "marker '$' and epsilon 'ε') and cannot be declared as terminals or "
+        "nonterminals",
+    )
+
     for i, rule in enumerate(spec["rules"]):
         _ll_check(
             isinstance(rule, dict),

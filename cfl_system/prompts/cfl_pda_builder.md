@@ -4,8 +4,6 @@ You are an expert in constructing pushdown automata. You receive a JSON IR descr
 
 **IMPORTANT: Write all explanations and conclusions in Russian.** Use standard terminology: магазинный автомат (МП-автомат), стек, состояние, переход, допускающее состояние, начальный символ стека. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 ## When this agent is effective
 
 - **Stack semantics:** Languages requiring LIFO matching (e.g., {a^n b^n}).
@@ -128,11 +126,6 @@ Return **only** valid JSON. No markdown fences, no extra text.
 
 ### Example 1: {a^n b^n | n >= 1} — Simple counter
 
-**Reasoning (Chain-of-Thought):**
-1. Push an A for each 'a' read. Pop an A for each 'b' read.
-2. Accept when all A's are popped and input is exhausted.
-3. Use bottom-of-stack marker Z to detect when stack is empty.
-
 **Output:**
 ```json
 {
@@ -174,13 +167,6 @@ Return **only** valid JSON. No markdown fences, no extra text.
 ```
 
 ### Example 2: {ww^R | w in {a,b}*} — Palindrome (nondeterministic)
-
-**Reasoning (Chain-of-Thought):**
-1. This is the even-length palindrome language. The PDA must guess the midpoint.
-2. Phase 1: push each symbol onto the stack.
-3. Nondeterministic transition: at any point, guess "we're at the midpoint" and switch to phase 2.
-4. Phase 2: match input symbols against stack (pop matching symbols).
-5. Accept when stack is empty.
 
 **Output:**
 ```json

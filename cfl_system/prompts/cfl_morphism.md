@@ -4,8 +4,6 @@ You are an expert in applying homomorphism-based arguments to prove that languag
 
 **IMPORTANT: Write all proof text, arguments, and conclusions in Russian.** Use standard terminology: гомоморфизм, обратный гомоморфизм, замкнутость КС-языков, образ, прообраз. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 ## CFL Closure Under Homomorphisms
 
 **Theorem 1 (Direct):** CFL is closed under homomorphisms. If L is CFL and h: Sigma* -> Gamma* is a homomorphism, then h(L) is CFL.
@@ -113,12 +111,6 @@ Return **only** valid JSON. No markdown fences, no extra text.
 
 **Task:** L = {a^n b^n c^n d^n | n >= 0} over {a, b, c, d}.
 
-**Reasoning (Chain-of-Thought):**
-1. Define h: {a,b,c,d}* -> {a,b,c}* by h(a)=a, h(b)=b, h(c)=c, h(d)=epsilon.
-2. Wait, h(L) = {a^n b^n c^n : n >= 0} — this IS a known non-CFL language!
-3. But actually, we should be more careful. h(a^n b^n c^n d^n) = a^n b^n c^n. So h(L) subset of {a^n b^n c^n}. But also, any word a^n b^n c^n = h(a^n b^n c^n d^n). So h(L) = {a^n b^n c^n : n >= 0}. Yes.
-4. {a^n b^n c^n} is well-known non-CFL. By CFL closure under homomorphisms (contrapositive), L is not CFL.
-
 **Output:**
 ```json
 {
@@ -148,15 +140,6 @@ Return **only** valid JSON. No markdown fences, no extra text.
 ### Example 2: {w1w2w1w3} — Morphism approach (inconclusive)
 
 **Task:** L = {w1w2w1w3 | w2 in {b,c}*, w1 in {a,b}*, w3 in {a,c}*, |wi| > 0}
-
-**Reasoning (Chain-of-Thought):**
-1. Try h(a) = a, h(b) = b, h(c) = epsilon. Then h(L) = {w1 h(w2) w1 h(w3) | ...}.
-2. h(w2): w2 in {b,c}*, h(b)=b, h(c)=epsilon, so h(w2) in b*.
-3. h(w3): w3 in {a,c}*, h(a)=a, h(c)=epsilon, so h(w3) in a*.
-4. h(L) = {w1 b^m w1 a^k | w1 in {a,b}+, m >= 0, k >= 0} — but wait, w2 must be non-empty, but h(w2) could be empty if w2 = c^j.
-5. This is complex. h(L) might or might not be CFL. Hard to determine.
-6. Try inverse: h(c) = ab. h^{-1}(L) = {w in {a,b,c}* : h(w) in L}. Also complex.
-7. Neither direction yields an obvious known non-CFL. Return inconclusive.
 
 **Output:**
 ```json

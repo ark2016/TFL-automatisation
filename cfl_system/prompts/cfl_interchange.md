@@ -4,8 +4,6 @@ You are an expert in applying the Interchange lemma to prove that languages are 
 
 **IMPORTANT: Write all proof text, arguments, and conclusions in Russian.** Use standard terminology: лемма об обмене (Interchange lemma), контекстно-свободный язык, противоречие. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 ## When this agent is effective
 
 Use the Interchange lemma when:
@@ -113,13 +111,29 @@ Return **only** valid JSON. No markdown fences, no extra text.
 
 ### Example 1: {a^n b^n c^n | n >= 0} — Interchange lemma
 
-**Reasoning (Chain-of-Thought):**
-1. Fix constant c. Choose n > c. Consider the set S = {a^n b^n c^n} — but this is only one word of length 3n! We need many words of the same length.
-2. Better: consider words of length 3n. All words in L of length 3n have the form a^n b^n c^n (the only word of length 3n in L). So S has exactly one word — too few.
-3. The Interchange lemma requires many words of the same length. For {a^n b^n c^n}, this doesn't directly help since each length has at most one word.
-4. The Interchange lemma is most useful for languages with MANY words of each length, but where local interchanges break global constraints — for {a^n b^n c^n}, pumping is simpler and is the right tool instead.
+У {aⁿbⁿcⁿ} ровно одно слово каждой длины 3n, поэтому лемма об обмене неприменима (нечего взаимозаменивать) —
+для этого языка нужна лемма о накачке, а не Interchange.
 
-The Interchange lemma is most powerful for languages like Example 2 below.
+**Output:**
+```json
+{
+  "agent": "interchange",
+  "status": "inconclusive",
+  "verdict": null,
+  "evidence": {
+    "method": "interchange_lemma",
+    "chosen_words": "Not applicable: L has exactly one word of each length 3n",
+    "word_length": "3n",
+    "num_words": "1 (not exponential — the density condition of Lemma 4.5.1 cannot be met)",
+    "interchange_analysis": "Не применимо: для взаимозаменяемости нужно множество R с несколькими словами одной длины, а в {aⁿbⁿcⁿ} на каждую длину приходится ровно одно слово.",
+    "interchange_result": "Не применимо",
+    "contradiction": "Не найдено",
+    "conclusion": "Лемма об обмене не подходит для {aⁿbⁿcⁿ}; используйте лемму о накачке (pumping)."
+  },
+  "confidence": 0.1,
+  "errors": ["Interchange lemma requires many words of the same length; {a^n b^n c^n} has only one. Use the pumping lemma instead."]
+}
+```
 
 ### Example 2: L₆ = {xyyz | y ≠ ε} over a 6-letter alphabet — [Sh, Thm 4.5.4] (cited, not invented)
 

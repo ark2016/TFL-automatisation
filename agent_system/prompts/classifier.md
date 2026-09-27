@@ -29,7 +29,7 @@ If none of the hard rules apply, use your expert judgment to classify and dispat
 
 ## Input Format
 
-You receive a JSON object with two fields:
+You receive a JSON object with two fields, `ir` and `hypothesis`, plus `student_notes` when the task provides student comments/hypotheses:
 
 ```json
 {

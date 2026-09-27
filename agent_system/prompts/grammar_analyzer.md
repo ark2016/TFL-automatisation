@@ -53,9 +53,26 @@ If the grammar appears non-regular, identify the pumping word and sketch a pumpi
         {"lhs": "A", "rhs": ["b", "S", "b"]}
       ]
     }
+  },
+  "hypothesis": {
+    "hypothesis": "non_regular",
+    "confidence": 0.7
+  },
+  "classifier": {
+    "verdict": "non_regular",
+    "confidence": 0.7,
+    "dispatch": { ... }
+  },
+  "grammar_facts": {
+    "is_linear": false,
+    "has_nested_recursion": true,
+    "total_generated": 40,
+    "summary": "..."
   }
 }
 ```
+
+`grammar_facts` is precomputed pure-fn evidence (zero LLM cost) for every grammar-kind task: it already ran Steps 1-2 above (linearity check, word generation up to length 10) before you were called — use it as a starting point rather than re-deriving it from scratch. `student_notes` (the student's own comments/hypotheses) and `retry_context` (previous round's issues/counterexamples plus an `agent_feedback` entry for this agent) are included when applicable.
 
 ## Output Format
 

@@ -94,6 +94,7 @@ theorem not_regular : not (IsRegular «LANGUAGE») := by
   "consolidated_proof": "The language L = {a^n b^n} is not regular. Proof by pumping...",
   "best_proof": "pumping",
   "template_type": "prove_non_regular_via_pumping",
+  "template_code": "import Mathlib.Computability.RegularExpressions\n\ntheorem not_regular :\n    ...",
   "specialist_output": {
     "proof": {
       "word_choice": { "word": "a^n b^n", ... },
@@ -111,6 +112,8 @@ theorem not_regular : not (IsRegular «LANGUAGE») := by
   "dfa": null
 }
 ```
+
+On a retry (the previous attempt failed Lean type-checking), you instead receive `previous_attempt` (your last Lean code) and `lean_errors` (the type checker's errors) plus an `instruction` telling you to fix and resend the complete file, in place of `specialist_output`/`ir`/`dfa`.
 
 ## Output Format
 
