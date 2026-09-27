@@ -455,3 +455,15 @@ T → c | aSab | bTb (FIRST попарно дизъюнктны).
 | `cfl_system/prompts/cfl_classifier.md`, `cfl_cfg_builder.md`, `cfl_reasoning.md`, `cfl_interchange.md`, `cfl_retry_planner.md`, `tz_cfl_agent_system.md`, моки `task_grammar_filter_49_*`, `tests/test_e2e.py`, `tests/test_prompt_examples.py` (+ тест Огдена по §2.3) | §2.3–2.4 |
 | `ll_system/prompts/ll_classifier.md`, `ll_marker_analyzer.md`, `ll_grammar_builder.md`, `ll_reasoning_agent.md`, `ll_grammar_transformer.md`, `ll_ambiguity_detector.md`, `ll_substitution_agent.md` (второй пример {aⁱbʲ \| i ≥ j} и лемма), моки `wbcwR_*`, `tests/test_orchestrator.py` | §3.4–3.5 |
 | `README.md`, `TODO.md` | эталоны E2E исправлены; запись про grammar_filter_49 переписана |
+
+## 1.10. Live-прогон 2026-09-27
+
+Прогон `TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live` на всех 5 exam-задач раунда 2 (`dcfl_exam_01`,
+`dcfl_exam_02`, `dcfl_exam_03`, `task_grammar_filter_49`, `wbcwR`/`{w b c wᴿ}`): все пять сошлись к эталонам
+этого раунда (`non_dcfl`, `non_dcfl`, `non_dcfl`, `non_cfl`, `ll` соответственно), без ручных подсказок. Агенты
+следуют новым полям контрактов (`dead_class_finite`, `technique`, `common_prefix`, `branch_words`,
+`intersection_examples`) вместо старых few-shot-схем; полный прогон занял в пределах бюджета ретраев/инверсий
+на Haiku. Две находки прогона потребовали правок (см. `TODO.md` §1): `closure_reduction` иногда неверно описывал
+пересечение языков (закрыто оракульной проверкой `intersection_examples`), `pumping_cfl` иногда портил JSON
+мета-репликой на ретрае (промпт ужесточён). Правила гейта R1–R7 и таксономия доверия (`docs/VERDICT_POLICY.md`)
+применены поверх этих прогонов; итоговые вердикты не изменились, изменились только confidence и trust-метки.

@@ -24,6 +24,22 @@ from cfl_system.lib.cfl_word_generator import generate_test_words
 # the test is reported as not_applicable (coverage too low to conclude).
 _MIN_COVERAGE = 3
 
+# docs/VERDICT_POLICY.md §1: oracle_test status -> trust taxonomy.
+# "pass" is a bounded (finite word-list) check, never a full proof, so it
+# maps to bounded_pass, not verified. "grammar_incorrect" is a deterministic
+# counterexample -> refuted. Everything else (not_applicable, error) means
+# the check could not run -> not_verified.
+_STATUS_TO_TRUST = {
+    "pass": "bounded_pass",
+    "grammar_incorrect": "refuted",
+}
+
+
+def _with_trust(result: dict) -> dict:
+    """Add/refresh the 'trust' field from `result["status"]` (additive)."""
+    result["trust"] = _STATUS_TO_TRUST.get(result.get("status"), "not_verified")
+    return result
+
 
 def _safe_call(oracle, word: str) -> bool | None:
     """Call oracle(word) catching exceptions; returns None on failure."""
@@ -200,12 +216,12 @@ def oracle_test_grammar(
         result = _empty_result()
         result["status"] = "not_applicable"
         result["details"] = f"no automated oracle: {e}"
-        return result
+        return _with_trust(result)
     except Exception as e:
         result = _empty_result()
         result["status"] = "error"
         result["details"] = str(e)
-        return result
+        return _with_trust(result)
 
     try:
         gram_oracle = grammar_oracle(grammar)
@@ -213,7 +229,7 @@ def oracle_test_grammar(
         result = _empty_result()
         result["status"] = "error"
         result["details"] = f"grammar construction failed: {e}"
-        return result
+        return _with_trust(result)
 
     # If the language oracle is approximate (e.g. natural_language_filter),
     # running membership comparisons would produce misleading passes.
@@ -222,9 +238,9 @@ def oracle_test_grammar(
         result = _empty_result()
         result["status"] = "not_applicable"
         result["details"] = f"language oracle is approximate: {reason}"
-        return result
+        return _with_trust(result)
 
-    return _run_test(gram_oracle, lang_oracle, ir, max_words, max_length, "G")
+    return _with_trust(_run_test(gram_oracle, lang_oracle, ir, max_words, max_length, "G"))
 
 
 def normalize_agent_pda(pda: dict, acceptance_mode: str | None = None) -> dict:
@@ -269,12 +285,12 @@ def oracle_test_pda(
         result = _empty_result()
         result["status"] = "not_applicable"
         result["details"] = f"no automated oracle: {e}"
-        return result
+        return _with_trust(result)
     except Exception as e:
         result = _empty_result()
         result["status"] = "error"
         result["details"] = str(e)
-        return result
+        return _with_trust(result)
 
     # Validate PDA structure upfront (pda_oracle is lazy).
     try:
@@ -284,12 +300,12 @@ def oracle_test_pda(
         result = _empty_result()
         result["status"] = "error"
         result["details"] = f"PDA validation failed: {e}"
-        return result
+        return _with_trust(result)
     if pda_errors:
         result = _empty_result()
         result["status"] = "error"
         result["details"] = f"PDA invalid: {'; '.join(pda_errors)}"
-        return result
+        return _with_trust(result)
 
     try:
         p_oracle = pda_oracle(pda)
@@ -297,16 +313,16 @@ def oracle_test_pda(
         result = _empty_result()
         result["status"] = "error"
         result["details"] = f"PDA construction failed: {e}"
-        return result
+        return _with_trust(result)
 
     if getattr(lang_oracle, "is_approximate", False):
         reason = getattr(lang_oracle, "approximation_reason", "approximate oracle")
         result = _empty_result()
         result["status"] = "not_applicable"
         result["details"] = f"language oracle is approximate: {reason}"
-        return result
+        return _with_trust(result)
 
-    return _run_test(p_oracle, lang_oracle, ir, max_words, max_length, "PDA")
+    return _with_trust(_run_test(p_oracle, lang_oracle, ir, max_words, max_length, "PDA"))
 
 
 def oracle_test(
@@ -331,7 +347,7 @@ def oracle_test(
         result = _empty_result()
         result["status"] = "error"
         result["details"] = "evidence contains neither 'grammar' nor 'pda'"
-        return result
+        return _with_trust(result)
 
     # Single evidence type
     if has_grammar and not has_pda:
@@ -384,4 +400,4 @@ def oracle_test(
     merged["details"] = (
         f"Grammar: {g_result['details']}; PDA: {p_result['details']}"
     )
-    return merged
+    return _with_trust(merged)

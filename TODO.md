@@ -29,7 +29,20 @@
   `{w b* c wᴿ}` остался ловушкой DCFL-не-LL (лемма об ограниченной гибкости, §3.4); interchange lemma
   переформулирована с условием плотности, лемма Соколовского удалена (§2.4); hard rule классификатора
   «равенство счётчиков — регулярно» исправлена (§2.3); REG-пример пересечения с `a*b*` в
-  `grammar_analyzer.md`/`proof_checker.md`/`reasoning_agent.md`/`nerode_agent.md` исправлен (§0).
+  `grammar_analyzer.md`/`proof_checker.md`/`reasoning_agent.md`/`nerode_agent.md` исправлен (§0);
+- live-прогоны на Haiku (`TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`, 2026-09-27) на всех 5 exam-задачах
+  раунда 2 (`dcfl_exam_01/02/03`, `task_grammar_filter_49`, `wbcwR`/`{w b c wᴿ}`) — все сошлись с новыми эталонами
+  (`docs/THEORY.md` Часть II, §1.10);
+- шаг 1 таксономии доверия (`well_formed`/`verified`/`bounded_pass`/`not_verified`/`refuted`) и гейт R1–R7 —
+  реализованы по `docs/VERDICT_POLICY.md` во всех четырёх системах (см. `result["verdict_gate"]`);
+- LL: `not_ll` с оговоркой `k ≤ K` (`max_k_checked`) вместо conclusive без сертификата (`docs/VERDICT_POLICY.md` R5);
+- `ll_system/orchestrator.py:631`: regularity-shortcut исправлен — читает `regularity_confidence`/`regularity_reason`,
+  не завышает confidence эвристики;
+- `ll_system/orchestrator.py:674-694`: Format 2 — заданная грамматика уходит в оракул, не только первая грамматика агента;
+- `agent_system/graph.py:1094`: `lean_verified=True` только при `status == "valid" and sorry_count == 0`;
+- рендереры (`dcfl_system/renderer.py`, `cfl_system`/`ll_system`) показывают поля контрактов раунда 2
+  (`dead_class_finite`, `technique`, `common_prefix`, `branch_words` и т.п.) и метки доверия словами вместо
+  зелёного баннера «verified» (`docs/VERDICT_POLICY.md` §5).
 
 Легенда: 🔴 high · 🟠 medium · ⚪ low; объём: S ≤ 30 мин · M ≤ день · L > дня.
 
@@ -37,64 +50,36 @@
 
 ## 1. Честность вердиктов (главная тема)
 
-- [ ] 🟠 **S** **LL: `not_ll` с confidence 1.0 после проверки только k ≤ 10** (`orchestrator.py:1158-1161, 1361-1366`).
-  S→a¹¹b | a¹¹c — это LL(12). → сохранять `max_k_checked`, писать «k ≤ 10»; conclusive — только с сертификатом
-  (левая рекурсия / неоднозначность, `docs/THEORY.md` §3.1) — это тот самый открытый подпункт после перехода
-  на полный тест Ахо–Ульмана: полный тест сам по себе не убирает необходимость сертификата при переборе k ≤ K.
-- [ ] 🔴 **S→M** **«verified» ставится за наличие полей во всех трёх верификаторах.**
-  - `dcfl_system/lib/oracle_verifier.py:115-143` — тавтологичная «семантическая» проверка; `:305-311` `concrete_words_present = True`;
-    `:430-441` — проверка по ключевым словам; `renderer.py:727-750` рисует зелёный баннер.
-  - `cfl_system/lib/claim_verifier.py:47-109, 175-239` — pumping/Ogden/decomposition только по ключам;
-    `tests/test_claim_verifier.py:49` ассертит `verified` для «доказательства» про CFL aⁿbⁿ.
-  - `ll_system/lib/claim_verifier.py:59-139` — constructive `verified` без сверки языка (`S→a` для палиндромов → verified);
-    `:142-243, 455-517, 528-598` — destructive-проверки только на поля; `:41` — символы не валидируются
-    (`S→ba|bc` при `terminals=['a']` → LL(1), verified).
-  → **шаг 1 (S):** статусы `well_formed` / `verified` / `bounded_pass` / `not_verified`, структурный проход ≠ verified.
-  → **шаг 2 (M):** реальные проверки: в ll — `is_grammar_equivalent_sample` (`grammar_transforms.py:649`) и `validate_grammar_symbols`;
-    в cfl — инстанцировать p=3..6 и перебирать uvwxy оракулом; в dcfl — разбирать w/w′ через `_parse_word_pattern`.
-- [ ] 🟠 **S–M** **Детерминированная сверка итогового вердикта с оракулом.**
-  - `agent_system/graph.py:1181-1187`: `test_result` проверяется раньше вердикта reasoning — верный `non_regular` получает `failure 0.0`,
-    ограниченный pass даёт `success 1.0`.
-  - `cfl_system/orchestrator.py:1072-1117`: ничто не мешает `done/cfl` при `grammar_incorrect`; `proof_verified` (`:1606`) — самооценка LLM.
-  - `dcfl_system/orchestrator.py:669-688`: fallback реагирует только на `refuted`, которого верификатор не выдаёт;
-    `retry_logic.py:19-84` не читает `oracle_verification`.
-  → главным считать вердикт reasoning, оракул — свидетельством; противоречие → retry или снижение confidence с пометкой `contradiction`.
-  - **Воспроизведено вживую (2026-09-26, Haiku через `TFL_MODEL_OVERRIDE`):** `cfl_system/examples/task_grammar_filter_49.json`.
-    Грамматика и PDA от агентов неверны (43 настоящих контрпримера), retry → invert → `done non_cfl` с confidence **0.92**.
-    Ревизия раунда 2 (`docs/THEORY.md` §2.3) показала: вердикт `non_cfl` был **верным** — язык действительно не КС
-    (доказано леммой Огдена; старый эталон `cfl` в `cfl_system/tests/test_e2e.py:69` был ошибочен и уже заменён на
-    `non_cfl` в этом же раунде правок).
-    Ошибочным был **путь**, а не итог: «не удалось построить верный артефакт» ≠ «язык не КС» — после inversion всё ещё
-    нужен проверенный деструктивный аргумент, иначе `inconclusive` / низкий confidence, а не совпадение с правильным
-    вердиктом по случайной причине.
-- [ ] 🟠 **S** **Live-прогон на Haiku для `ll_prefix_classes_agent.md` / `ll_substitution_agent.md`.**
-  Промпты переписаны под теорему 4.7.4 (`docs/THEORY.md` §3.3, аргумент «развилки» (C)); нужен прогон
-  `TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live` на {aⁿbⁿ}∪{aⁿcⁿ} и т.п., чтобы проверить, что агенты
-  реально следуют новым полям контракта (`common_prefix`, `branch_words`, `deciding_nonterminal_argument`,
-  `pigeonhole_argument`, `dead_class_finite`), а не повторяют старые ложные схемы по инерции few-shot.
-- [ ] 🟠 **S** **Live-прогон на Haiku для `dcfl_system/prompts/shallit.md`.**
-  Формулировка переписана на теорему 4.7.4 + лемму о продолжении (`docs/THEORY.md` §1.2–1.3); нужен тот же
-  live-прогон на Haiku, чтобы проверить, что агент `shallit` действительно выбирает `technique`
-  (`nerode_classes` | `prefix_continuation`) и заполняет `dead_class_finite`, а не игнорирует новый контракт.
-- [ ] 🟠 **S** **Верификаторы по-прежнему структурные** (из пункта «`verified` ставится за наличие полей…» ниже):
-  шаг 1 (статусы `well_formed`/`verified`/`bounded_pass`/`not_verified`) не подменяет шаг 2 (реальная сверка
-  языка/грамматики) — он всё ещё не сделан ни в одной из трёх систем.
-- [ ] ⚪ **S** `ll_system/orchestrator.py:631`: shortcut по регулярности ставит 0.95 даже эвристике с 0.75 и читает несуществующие
-  ключи `confidence/reason` (правильно `regularity_confidence/regularity_reason`).
-- [ ] 🟠 **S** `ll_system/orchestrator.py:674-694`: в Format 2 заданная грамматика не уходит в оракул, проверяется только первая
-  грамматика агента; `preprocess.py:34` (проверка конечности) для Format 2 не работает.
-- [ ] ⚪ **S** `agent_system/graph.py:1094`: `lean_verified=True` ставится файлам с `sorry` → `status=="valid" and sorry_count==0`.
-- [ ] 🟠 **S** После смены эталонов ревизии раунда 2 (`dcfl_exam_01/02/03` → `non_dcfl`, `task_grammar_filter_49` → `non_cfl`,
-  `wbcwR` → язык `{w b c wᴿ}` с вердиктом `ll`, см. `docs/THEORY.md` Часть II): прогнать
-  `TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live` на всех
-  этих exam-задачах, чтобы проверить, что агенты и оракулы реально сходятся к новым вердиктам, а не повторяют старые
-  ложные схемы по инерции few-shot.
-- [ ] 🟠 **S** `dcfl_system/renderer.py` и рендереры `cfl_system`/`ll_system`: проверить отображение новых полей
-  контрактов (например `dead_class_finite`, `technique`, `common_prefix`, `branch_words` и т.п. из промптов раунда 2) —
-  сейчас неясно, показывает ли HTML/MD-отчёт эти поля вообще или тихо их игнорирует.
-- [ ] 🟠 **S** `ll_system`: мост word-оракула для `set_builder` (открытый пункт из отчёта раунда 1) — до сих пор не
-  реализован; без него часть LL-конструкций формата `set_builder` не проверяется по словам, а верификация остаётся
-  структурной.
+Перенесено в «Уже исправлено» (см. список выше по файлу): live-прогоны Haiku на всех 5 задачах раунда 2
+(эталоны 2026-09-27), шаг 1 таксономии доверия (`well_formed`/`verified`/`bounded_pass`/`not_verified`),
+гейт R1–R7 (`docs/VERDICT_POLICY.md`), `not_ll` с оговоркой `k ≤ K` без сертификата, regularity-shortcut
+(`ll_system/orchestrator.py:631`), Format 2 в оракул, `lean_verified` при `sorry_count == 0`, рендереры
+(`dead_class_finite`, `technique`, `common_prefix`, `branch_words` и т.п. теперь отображаются).
+
+Остаётся открытым:
+
+- [ ] 🟠 **M** **`ll_system`: мост word-оракула для `set_builder`.** Шаг 2 (детерминированная семантическая проверка,
+  `docs/VERDICT_POLICY.md` §4) поднимает trust с `well_formed` до `bounded_pass`/`refuted` только там, где оракул
+  уже есть (cfl: CYK/grammar_filter; dcfl: `word_sampler`+шаблоны; reg: regex/DFA). Для LL-задач в формате
+  `set_builder` общего word-оракула по-прежнему нет (открытый пункт из отчёта раунда 1) — без него trust остаётся
+  `well_formed`, потолок confidence 0.60.
+- [ ] 🟠 **M** **Полная семантическая проверка доказательств.** Шаг 2 из `docs/VERDICT_POLICY.md` §4 покрывает
+  cfl (pumping/ogden/closure_reduction), dcfl (pumping/Shallit), ll (constructive/substitution/prefix_classes),
+  reg (pumping/Nerode) там, где оракул есть; это остаётся частичной, а не полной верификацией содержания
+  доказательства — общая переносимая инфраструктура (не только «есть оракул — есть проверка») ещё не сделана.
+- [ ] ⚪ **M** **Калибровка потолков confidence после прогонов на Opus.** Потолки в `docs/VERDICT_POLICY.md` §2
+  (0.98/0.85/0.60/0.40/0.50) подобраны по опыту с Haiku (см. живые прогоны 2026-09-27); нужна повторная калибровка
+  на Opus 5.5 (только по явному запросу — прогоны на Opus стоят реальных денег, см. `CLAUDE.md`).
+
+**Находки live-прогона 2026-09-27 (Haiku, все 5 exam-задач раунда 2 сошлись с новыми эталонами):**
+
+- `closure_reduction` на Haiku утверждал `L ∩ a⁺b⁺ = {aⁿbⁿ}` вместо верного `{a²ᵐb²ᵐ | m ≥ 2}` — грамматика/PDA были
+  синтаксически правдоподобны, но описание пересечения неверно. Закрыто добавлением поля `intersection_examples`
+  (конкретные слова пересечения) и шагом 2 (`docs/VERDICT_POLICY.md` §4): слова из `intersection_description`
+  проверяются оракулом на принадлежность `L ∩ R`, расхождение → `refuted`, а не `well_formed`.
+- `pumping_cfl` на ретрае иногда ломал JSON, добавляя мета-реплику до/после объекта (например «Хорошо, пробую другой
+  подход:» перед `{`) — парсер падал на валидном по существу ответе. Промпт ретрая ужесточён: явный запрет текста
+  вне JSON-объекта, только сам объект в ответе.
 
 ## 2. Устойчивость ретраев и ошибок
 

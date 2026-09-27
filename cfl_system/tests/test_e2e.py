@@ -37,14 +37,37 @@ def test_e2e_w1w2w1w3():
 
 
 # ---------------------------------------------------------------------------
-# Test 2: task_wwvvR → cfl
+# Test 2: task_wwvvR -> inconclusive (docs/VERDICT_POLICY.md R1/R2, §2)
+#
+# The old `cfl 0.8` reference was never actually earned by the mocks: the
+# mock grammar (S -> W W V, ONE nonterminal W used twice INDEPENDENTLY)
+# generates {w1 w2 v v^R} (no requirement w1 == w2), not L = {w w v v^R}.
+# The real oracle (CYK against the task's own language_spec, not L(G))
+# refutes it with concrete counterexamples ('baaba', 'a', 'b', 'ab', 'ba', ...
+# see result["oracle_test"]["counterexamples"]) -- every string in L has
+# even length (2|w| + 2|v|), so these can never be members. The mock
+# decomposition agent fares no better: {ww} is famously not CFL, but "one
+# component of a concatenation is not CFL" is not evidence that the
+# concatenation isn't CFL either (CFL is not closed, in either direction,
+# under concatenation with a non-CFL language) -- cfl_decomposition.md's own
+# worked example (§ "Example 1") stops at exactly this point and refuses to
+# conclude cfl from it. With no artifact anywhere reaching >= bounded_pass
+# in either direction, R1/R2 make `inconclusive` the only honest verdict --
+# this used to read `cfl 0.8` only because the trust-collection bug fixed in
+# this branch (`_strongest_trust` not checking the agent's own verdict
+# direction) let a well_formed but PRO-cfl decomposition claim get silently
+# read as unrelated evidence. Determining L's true CFL status is an open
+# question outside this fix's scope; the system's job is to say so, not
+# invent an answer it never verified.
 # ---------------------------------------------------------------------------
 
 def test_e2e_wwvvR():
     ir = load_json("task_wwvvR.json")
     mock = MockRunner(str(MOCK_DIR), "task_wwvvR")
     result = run_pipeline(ir, mock_runner=mock)
-    assert result["verdict"] == "cfl"
+    assert result["verdict"] == "inconclusive"
+    assert result["confidence"] <= 0.40
+    assert result["verdict_gate"]["downgrades"]
 
 
 # ---------------------------------------------------------------------------
@@ -117,8 +140,12 @@ def test_e2e_selective_retry():
                     "status": "success",
                     "verdict": "non_cfl",
                     "confidence": 0.85,
+                    # "abac" is a genuine member of task_w1w2w1w3's language
+                    # (w1=a, w2=b, w1=a, w3=c) — the verdict gate now checks
+                    # word_chosen against the oracle (VERDICT_POLICY.md §1: a
+                    # word not actually in L is "refuted", not "well_formed").
                     "evidence": {
-                        "word_chosen": "test",
+                        "word_chosen": "abac",
                         "cases": [{"case": "all", "why_not_in_L": "test"}],
                         "all_cases_covered": True,
                     },

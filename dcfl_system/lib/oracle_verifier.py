@@ -4,14 +4,81 @@ Oracle verifier for DCFL agent system.
 Verifies claims made by specialist agents (stack_strategy, closure_reduction,
 dcfl_pumping, shallit, inh_ambiguity) using pure-function checks — no LLM calls.
 
-Implements §6.1 of the DCFL spec.
+Implements §6.1 of the DCFL spec, and the trust taxonomy / step-2 semantic
+checks of docs/VERDICT_POLICY.md §1 and §4:
+
+- structural-only pass (fields present, JSON parses) -> ``well_formed``
+  (this used to be reported as ``verified`` — see VERDICT_POLICY.md §1).
+- a structural issue with no concrete counterexample -> ``not_verified``
+  (this used to be reported as ``issues_found``).
+- a deterministic oracle check that actually falsifies the claim (a word the
+  proof claims is in L turns out not to be, or vice versa) -> ``refuted``.
+- a deterministic oracle check that CONFIRMS the claim on concrete
+  instances (but does not exhaustively cover all p / all pairs) ->
+  ``bounded_pass``.
+- an exhaustive deterministic check -> ``verified`` (not currently produced
+  by this module — DCFL has no exhaustive checker yet, see dcfl_system/CLAUDE.md
+  "Formal verification NOT implemented").
 """
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 
-from dcfl_system.lib.word_sampler import check_constraints, sample_words
+from dcfl_system.lib.word_sampler import (
+    check_constraints,
+    sample_words,
+    build_set_builder_membership_oracle,
+    instantiate_exponent_pattern,
+)
+
+
+# ---------------------------------------------------------------------------
+# Trust taxonomy (VERDICT_POLICY.md §1-2)
+# ---------------------------------------------------------------------------
+
+# Order: refuted < not_verified < well_formed < bounded_pass < verified
+# (refuted is excluded from "strongest evidence" comparisons, not compared).
+TRUST_LEVELS: tuple[str, ...] = (
+    "refuted", "not_verified", "well_formed", "bounded_pass", "verified",
+)
+_TRUST_LEVEL_SET = frozenset(TRUST_LEVELS)
+_TRUST_RANK: dict[str, int] = {name: i for i, name in enumerate(TRUST_LEVELS)}
+
+# VERDICT_POLICY.md §2 — confidence ceilings by the strongest trust behind a claim.
+CONFIDENCE_CAPS: dict[str, float] = {
+    "verified": 0.98,
+    "bounded_pass": 0.85,
+    "well_formed": 0.60,
+    "not_verified": 0.40,
+    "not_applicable": 0.40,
+    "error": 0.40,
+}
+# Cap that applies whenever R3's contradiction condition holds, regardless of
+# which side "wins" the trust comparison.
+CONTRADICTION_CONFIDENCE_CAP = 0.50
+
+
+def trust_rank(trust: str | None) -> int:
+    """Rank a trust label for comparison; unknown/None ranks as not_verified."""
+    return _TRUST_RANK.get(trust or "", _TRUST_RANK["not_verified"])
+
+
+def trust_at_least(trust: str | None, threshold: str) -> bool:
+    """True if *trust* is >= *threshold* in the taxonomy order, excluding refuted."""
+    if trust == "refuted":
+        return False
+    return trust_rank(trust) >= _TRUST_RANK[threshold]
+
+
+def confidence_cap_for(trust: str | None) -> float:
+    """The confidence ceiling (VERDICT_POLICY.md §2) for a given trust label."""
+    return CONFIDENCE_CAPS.get(trust or "", CONFIDENCE_CAPS["not_verified"])
+
+
+def _trust_for_status(status: str) -> str:
+    """Map a verification_status to its trust-taxonomy label."""
+    return status if status in _TRUST_LEVEL_SET else "not_verified"
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +94,7 @@ def _make_result(
     """Build a single-agent verification result dict."""
     result: dict[str, Any] = {
         "verification_status": status,
+        "trust": _trust_for_status(status),
         "checks_run": checks_run,
         "checks_passed": checks_passed,
         "checks_total": len(checks_run),
@@ -146,7 +214,7 @@ def _verify_stack_strategy(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
     if not checks_run:
         return _make_result("not_verified", checks_run, 0,
                             ["no verifiable fields found in proof_sketch"])
-    status = "verified" if n_passed == len(checks_run) else "issues_found"
+    status = "well_formed" if n_passed == len(checks_run) else "not_verified"
     return _make_result(status, checks_run, n_passed, issues if issues else None)
 
 
@@ -207,7 +275,7 @@ def _verify_closure_reduction(proof_sketch: dict, _task_ir: dict) -> dict[str, A
     if not checks_run:
         return _make_result("not_verified", checks_run, 0,
                             ["no verifiable fields found in proof_sketch"])
-    status = "verified" if n_passed == len(checks_run) else "issues_found"
+    status = "well_formed" if n_passed == len(checks_run) else "not_verified"
     return _make_result(status, checks_run, n_passed, issues if issues else None)
 
 
@@ -318,43 +386,161 @@ def _verify_dcfl_pumping(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
             checks_run, passed, issues,
         )
 
-    # Concrete word membership check via check_constraints (set_builder only)
-    input_format = task_ir.get("input_format", "")
-    if input_format == "set_builder":
-        spec = task_ir.get("language_spec", {})
-        constraints = spec.get("constraints", [])
-        variables_def = spec.get("variables", [])
-        if constraints and variables_def:
-            # Check word_w if it looks like a concrete word (not a formula)
-            concrete_words = {}
-            if isinstance(word_w, str) and word_w.isalpha() and len(word_w) <= 100:
-                concrete_words["word_w"] = word_w
-            if isinstance(word_w_prime, str) and word_w_prime.isalpha() and len(word_w_prime) <= 100:
-                concrete_words["word_w_prime"] = word_w_prime
-
-            # We can only check membership if we can reconstruct variable assignments,
-            # which requires domain knowledge. For now, just note that we tried.
-            if concrete_words:
-                _check(
-                    "concrete_words_present",
-                    True,
-                    "",
-                    checks_run, passed, issues,
-                )
-
     n_passed = sum(1 for p in passed if p)
     if not checks_run:
         return _make_result("not_verified", checks_run, 0,
                             ["no verifiable fields found in proof_sketch"])
-    status = "verified" if n_passed == len(checks_run) else "issues_found"
+    status = "well_formed" if n_passed == len(checks_run) else "not_verified"
+
+    # Step 2 (VERDICT_POLICY.md §4, dcfl_pumping): if the structure is
+    # well-formed, try to instantiate word_w/word_w_prime at concrete n and
+    # check membership with a real oracle. Only runs when both an oracle and
+    # a clean (pure exponent-notation) instantiation are available; otherwise
+    # trust stays at well_formed, per the fallback in VERDICT_POLICY.md §4.
+    if status == "well_formed":
+        semantic_status, semantic_check, semantic_issue = _semantic_check_dcfl_pumping(
+            word_w, word_w_prime, task_ir,
+        )
+        if semantic_status is not None:
+            status = semantic_status
+            checks_run.append(semantic_check)
+            if semantic_status == "refuted":
+                issues.append(semantic_issue)
+            else:
+                n_passed += 1
+
     return _make_result(status, checks_run, n_passed, issues if issues else None)
+
+
+def _yu_condition2_check(
+    w: str, w_prime: str, p: int, oracle: Callable[[str], bool | None],
+) -> tuple[bool | None, str | None]:
+    """Bounded check of THEORY.md §1.1 condition (2) of Yu's DCFL pumping
+    lemma for one concrete instantiated pair (w, w') at bound p: some
+    non-empty x2 within the last p symbols of the common prefix x, pumped
+    synchronously into both words, must break membership of at least one of
+    them (docs/VERDICT_POLICY.md §4).
+
+    Returns (ok, counterexample):
+      - (None, None)  — the common prefix is too short (<= p) to exercise
+        condition (2) at all; this pair provides no evidence either way.
+      - (True, None)  — every tested x2 broke at least one word (evidence
+        FOR the claim on this pair).
+      - (False, msg)  — some x2 kept both w and w' in L (a genuine
+        counterexample to condition (2) on this pair).
+    """
+    common_len = 0
+    for a, b in zip(w, w_prime):
+        if a != b:
+            break
+        common_len += 1
+    if common_len <= p:
+        return None, None
+
+    window_start = max(0, common_len - p)
+    window = w[window_start:common_len]
+    for i in range(len(window)):
+        for j in range(i + 1, len(window) + 1):
+            x2 = window[i:j]
+            pos = window_start + i
+            pumped_w = w[:pos] + x2 + w[pos:]
+            pumped_wp = w_prime[:pos] + x2 + w_prime[pos:]
+            in_w = oracle(pumped_w)
+            in_wp = oracle(pumped_wp)
+            if in_w is None or in_wp is None:
+                continue
+            if in_w and in_wp:
+                return False, (
+                    f"p={p}: x2={x2!r} at pos {pos} — pumping keeps BOTH words in L "
+                    f"(pumped word_w={pumped_w!r}, pumped word_w_prime={pumped_wp!r})"
+                )
+    return True, None
+
+
+def _semantic_check_dcfl_pumping(
+    word_w: Any, word_w_prime: Any, task_ir: dict,
+) -> tuple[str | None, str, str]:
+    """Step 2 for dcfl_pumping (VERDICT_POLICY.md §4).
+
+    Instantiate ``word_w``/``word_w_prime`` at n = p + 1 for p in {2, 3},
+    check w, w' in L with a real membership oracle, AND exercise condition
+    (2) of Yu's lemma (THEORY.md §1.1: some x2 in the last p symbols of the
+    common prefix must break the pumping) by brute-force over all such x2 —
+    membership alone is necessary but not sufficient evidence for the claim.
+    Returns (status_or_None, check_name, issue). ``status`` is None when
+    neither the pattern nor a membership oracle could be used, and stays
+    None (leaving trust at ``well_formed``) when membership holds but
+    condition (2) could not be exercised on either p (common prefix too
+    short) — that is membership-only evidence, which is not enough to earn
+    ``bounded_pass``.
+    """
+    check_name = "semantic_word_membership[p=2,3]"
+    if not isinstance(word_w, str) or not isinstance(word_w_prime, str):
+        return None, check_name, ""
+
+    input_format = task_ir.get("input_format", "")
+    if input_format != "set_builder":
+        return None, check_name, ""
+
+    spec = task_ir.get("language_spec", {})
+    alphabet = task_ir.get("alphabet", [])
+    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    if oracle is None:
+        return None, check_name, ""
+
+    alphabet_set = set(alphabet)
+    instances: list[tuple[int, str, str]] = []
+    for p in (2, 3):
+        n = p + 1
+        w = instantiate_exponent_pattern(word_w, n, alphabet_set)
+        w_prime = instantiate_exponent_pattern(word_w_prime, n, alphabet_set)
+        if w is None or w_prime is None:
+            return None, check_name, ""
+        instances.append((p, w, w_prime))
+
+    bad: list[str] = []
+    for p, w, w_prime in instances:
+        in_w = oracle(w)
+        in_w_prime = oracle(w_prime)
+        if in_w is None or in_w_prime is None:
+            return None, check_name, ""
+        if not (in_w and in_w_prime):
+            bad.append(
+                f"p={p}: word_w={w!r} in L={in_w}, word_w_prime={w_prime!r} in L={in_w_prime}"
+            )
+
+    if bad:
+        return "refuted", check_name, (
+            "oracle check failed for instantiated word(s): " + "; ".join(bad)
+        )
+
+    # Membership alone confirmed; now exercise condition (2) (THEORY.md
+    # §1.1) — the check that actually distinguishes a real pumping argument
+    # from two arbitrary words that both happen to be in L.
+    check_name = "semantic_word_membership_and_condition2[p=2,3]"
+    condition2_evidence = False
+    for p, w, w_prime in instances:
+        ok, msg = _yu_condition2_check(w, w_prime, p, oracle)
+        if ok is False:
+            return "refuted", check_name, (
+                "condition (2) counterexample: " + msg
+            )
+        if ok is True:
+            condition2_evidence = True
+
+    if not condition2_evidence:
+        # Only membership was actually checkable — per VERDICT_POLICY.md §4,
+        # that is not enough to earn bounded_pass on its own.
+        return None, check_name, ""
+
+    return "bounded_pass", check_name, ""
 
 
 # ---------------------------------------------------------------------------
 # 4. shallit  (§6.1.4)
 # ---------------------------------------------------------------------------
 
-def _verify_shallit(proof_sketch: dict, _task_ir: dict) -> dict[str, Any]:
+def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
     checks_run: list[str] = []
     passed: list[bool] = []
     issues: list[str] = []
@@ -374,7 +560,7 @@ def _verify_shallit(proof_sketch: dict, _task_ir: dict) -> dict[str, Any]:
             checks_run, passed, issues,
         )
         n_passed = sum(1 for p in passed if p)
-        status = "verified" if n_passed == len(checks_run) else "issues_found"
+        status = "well_formed" if n_passed == len(checks_run) else "not_verified"
         return _make_result(status, checks_run, n_passed, issues if issues else None)
 
     technique = proof_sketch.get("technique")
@@ -426,8 +612,226 @@ def _verify_shallit(proof_sketch: dict, _task_ir: dict) -> dict[str, Any]:
     if not checks_run:
         return _make_result("not_verified", checks_run, 0,
                             ["no verifiable fields found in proof_sketch"])
-    status = "verified" if n_passed == len(checks_run) else "issues_found"
+    status = "well_formed" if n_passed == len(checks_run) else "not_verified"
+
+    # Step 2 (VERDICT_POLICY.md §4, shallit/nerode_classes): if distinguishing_suffix
+    # is a concrete literal word (not a parametric prose description) and a
+    # membership oracle exists for this task, instantiate 2-3 pairs of distinct
+    # short words from word_sampler and check uw in L, vw not in L.
+    if status == "well_formed" and technique == "nerode_classes":
+        semantic_status, semantic_check, semantic_issue = _semantic_check_shallit_nerode(
+            proof_sketch, task_ir,
+        )
+        if semantic_status is not None:
+            status = semantic_status
+            checks_run.append(semantic_check)
+            if semantic_issue:
+                issues.append(semantic_issue)
+            if semantic_status != "refuted":
+                n_passed += 1
+
     return _make_result(status, checks_run, n_passed, issues if issues else None)
+
+
+def _continuable(oracle, word: str, alphabet: list[str], max_extra: int = 4) -> bool | None:
+    """Whether some extension of `word` (up to `max_extra` more symbols) is in L.
+
+    Breadth-first over extension length so the shortest witness is found
+    first. Returns True/False, or None if the oracle never answered
+    definitively within the search bound (search inconclusive — the caller
+    must not treat that as evidence of an infinite dead class).
+    """
+    if not alphabet:
+        return None
+    frontier = [word]
+    saw_definite_answer = False
+    for _ in range(max_extra + 1):
+        next_frontier: list[str] = []
+        for w in frontier:
+            verdict_w = oracle(w)
+            if verdict_w is not None:
+                saw_definite_answer = True
+                if verdict_w:
+                    return True
+            for ch in alphabet:
+                next_frontier.append(w + ch)
+        # Cap the branching to keep this a "bounded, approximate check"
+        # (VERDICT_POLICY.md §4), not a real BFS over an exponential tree.
+        frontier = next_frontier[:64]
+    return False if saw_definite_answer else None
+
+
+def _check_dead_class_finite(task_ir: dict) -> tuple[bool | None, list[str]]:
+    """Step 2, dead-class part (VERDICT_POLICY.md §4): sample short words
+    (<=6) and check each is continuable into L within a bounded search.
+
+    This is necessarily approximate (failing to find a continuation in a
+    bounded search is not proof that none exists), so a failure here is
+    reported as an *issue* but never turns a `well_formed` result into
+    `refuted` on its own — only a real, unbounded contradiction (from the
+    proof's own instances) may do that.
+    """
+    input_format = task_ir.get("input_format", "")
+    if input_format != "set_builder":
+        return None, []
+    spec = task_ir.get("language_spec", {})
+    alphabet = task_ir.get("alphabet", [])
+    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    if oracle is None:
+        return None, []
+    try:
+        samples = sample_words(task_ir, count=10, max_len=6)
+    except Exception:
+        return None, []
+    short_words = [
+        s.get("word") for s in samples
+        if isinstance(s.get("word"), str) and len(s.get("word")) <= 6
+    ]
+    if not short_words:
+        return None, []
+    issues: list[str] = []
+    checked = 0
+    for w in short_words[:6]:
+        cont = _continuable(oracle, w, alphabet)
+        if cont is None:
+            continue
+        checked += 1
+        if not cont:
+            issues.append(
+                f"dead_class_finite check: no continuation of {w!r} into L found "
+                f"within a bounded search (not conclusive on its own, but worth a retry hint)"
+            )
+    if checked == 0:
+        return None, []
+    return (len(issues) == 0), issues
+
+
+def _semantic_check_shallit_nerode(
+    proof_sketch: dict, task_ir: dict,
+) -> tuple[str | None, str, str]:
+    """Step 2 for shallit/nerode_classes (VERDICT_POLICY.md §4).
+
+    The Shallit/Nerode claim is about REPRESENTATIVES of the (infinitely
+    many) Nerode classes named in the proof's own general argument, not
+    about arbitrary random strings — so this only refutes the claim against
+    concrete instances the proof itself supplies (``representative_pairs``:
+    a list of ``{"u": ..., "v": ...}`` literal words over the task alphabet,
+    understood as the proof's general argument instantiated at some chosen
+    n). Random samples from ``word_sampler`` may only be used to look for a
+    supporting separating pair (upgrading to ``bounded_pass``); they can
+    never refute the proof, since a suffix failing to separate arbitrary
+    unrelated strings says nothing about whether it separates the actual
+    class representatives the proof is about.
+
+    Only runs when ``distinguishing_suffix`` is a concrete literal word over
+    the task alphabet (no free parameters) and a set_builder membership
+    oracle is available; otherwise trust stays at ``well_formed`` per the
+    fallback in VERDICT_POLICY.md §4.
+    """
+    distinguishing_suffix = proof_sketch.get("distinguishing_suffix")
+    check_name = "semantic_nerode_separation[pairs]"
+    if not isinstance(distinguishing_suffix, str) or not distinguishing_suffix:
+        return None, check_name, ""
+
+    input_format = task_ir.get("input_format", "")
+    if input_format != "set_builder":
+        return None, check_name, ""
+
+    alphabet = task_ir.get("alphabet", [])
+    alphabet_set = set(alphabet)
+    if any(ch not in alphabet_set for ch in distinguishing_suffix):
+        # Contains variables/prose (e.g. "b a^N b u^R") — not a literal we
+        # can instantiate mechanically.
+        return None, check_name, ""
+
+    spec = task_ir.get("language_spec", {})
+    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    if oracle is None:
+        return None, check_name, ""
+
+    status: str | None = None
+    issue = ""
+
+    # Representative pairs supplied by the proof itself (its general
+    # argument, instantiated at a concrete n) — the only thing that can
+    # refute the claim.
+    raw_pairs = proof_sketch.get("representative_pairs")
+    checked_pairs: list[tuple[str, str]] = []
+    if isinstance(raw_pairs, list):
+        for item in raw_pairs[:5]:
+            if not isinstance(item, dict):
+                continue
+            u, v = item.get("u"), item.get("v")
+            if not (isinstance(u, str) and isinstance(v, str) and u != v):
+                continue
+            if any(ch not in alphabet_set for ch in u + v):
+                continue
+            checked_pairs.append((u, v))
+
+    bad: list[str] = []
+    n_definite = 0
+    for u, v in checked_pairs:
+        in_u = oracle(u + distinguishing_suffix)
+        in_v = oracle(v + distinguishing_suffix)
+        if in_u is None or in_v is None:
+            continue
+        n_definite += 1
+        if not ((in_u and not in_v) or (in_v and not in_u)):
+            bad.append(f"u={u!r}, v={v!r}: uw in L={in_u}, vw in L={in_v} (same class)")
+
+    if bad:
+        return "refuted", check_name, (
+            "distinguishing_suffix does not separate the proof's own representative "
+            "pair(s): " + "; ".join(bad)
+        )
+    if n_definite > 0:
+        status = "bounded_pass"
+
+    if status is None:
+        # No usable representative pairs — fall back to random samples,
+        # but ONLY to look for supporting evidence (never to refute).
+        try:
+            samples = sample_words(task_ir, count=10, max_len=12)
+        except Exception:
+            samples = []
+        candidate_words = sorted(
+            {s.get("word") for s in samples if isinstance(s.get("word"), str)},
+            key=len,
+        )
+        in_bucket: list[str] = []
+        out_bucket: list[str] = []
+        for w in candidate_words:
+            verdict_w = oracle(w + distinguishing_suffix)
+            if verdict_w is None:
+                continue
+            (in_bucket if verdict_w else out_bucket).append(w)
+        if in_bucket and out_bucket:
+            n_pairs = min(3, len(in_bucket) * len(out_bucket))
+            pairs = [(in_bucket[i % len(in_bucket)], out_bucket[i % len(out_bucket)])
+                     for i in range(n_pairs)]
+            seen_pairs: set[tuple[str, str]] = set()
+            unique_pairs: list[tuple[str, str]] = []
+            for pr in pairs:
+                if pr not in seen_pairs:
+                    seen_pairs.add(pr)
+                    unique_pairs.append(pr)
+            checked = "; ".join(f"u={u!r},v={v!r}" for u, v in unique_pairs)
+            check_name = check_name + f" ({checked})"
+            status = "bounded_pass"
+        # If the suffix fails to separate arbitrary random samples, that is
+        # NOT evidence against the proof (VERDICT_POLICY.md §4 fix) — leave
+        # status None so trust stays at well_formed.
+
+    if status == "bounded_pass":
+        dead_ok, dead_issues = _check_dead_class_finite(task_ir)
+        if dead_ok is False:
+            issue = "; ".join(dead_issues)
+            check_name = check_name + " + dead_class_finite"
+            # Approximate, bounded check — never downgrades past well_formed
+            # on its own (docs/VERDICT_POLICY.md §4: not conclusive).
+            status = "bounded_pass"
+
+    return status, check_name, issue
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +888,7 @@ def _verify_inh_ambiguity(proof_sketch: dict, _task_ir: dict) -> dict[str, Any]:
     if not checks_run:
         return _make_result("not_verified", checks_run, 0,
                             ["no verifiable fields found in proof_sketch"])
-    status = "verified" if n_passed == len(checks_run) else "issues_found"
+    status = "well_formed" if n_passed == len(checks_run) else "not_verified"
     return _make_result(status, checks_run, n_passed, issues if issues else None)
 
 

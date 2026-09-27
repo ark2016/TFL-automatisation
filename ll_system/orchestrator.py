@@ -60,6 +60,31 @@ LL_SPECIALIST_NAMES = (
 _CONSTRUCTIVE_AGENTS = {"ll_grammar_builder", "marker_analyzer", "grammar_transformer"}
 _DESTRUCTIVE_AGENTS = {"substitution_agent", "ambiguity_detector", "prefix_classes_agent"}
 
+# docs/VERDICT_POLICY.md §1: trust taxonomy ranking (refuted is excluded from
+# "strongest evidence" comparisons — a refuted claim is never chosen as basis
+# for its own verdict, it is handled separately as a downgrade signal).
+_TRUST_RANK = {
+    "refuted": -1,
+    "not_verified": 0,
+    "inconclusive": 0,   # legacy alias some verifiers may still emit
+    "well_formed": 1,
+    "bounded_pass": 2,
+    "verified": 3,
+}
+
+
+def _trust_rank(status: Any) -> int:
+    return _TRUST_RANK.get(status, 0)
+
+
+def _trust_of_agent(claim_verification: dict, agent_name: str | None) -> str | None:
+    if not agent_name:
+        return None
+    v = claim_verification.get(agent_name)
+    if not isinstance(v, dict):
+        return None
+    return v.get("trust") or v.get("verification_status")
+
 
 # ---------------------------------------------------------------------------
 # PipelineState
@@ -638,8 +663,24 @@ def preprocess_node(state: PipelineState) -> dict:
 
     # Regularity short-circuit: if regular → LL(1) immediately (no agents needed)
     if hints.get("is_regular"):
-        regularity_reason = hints.get("reason") or hints.get("regularity_reason")
+        # TODO §1 (a): read the keys compute_preprocess_hints actually returns
+        # (regularity_confidence/regularity_reason), not confidence/reason —
+        # those don't exist on `hints` and always read as None/default.
+        regularity_reason = hints.get("regularity_reason")
+        regularity_confidence = hints.get("regularity_confidence")
+        regularity_method = hints.get("regularity_method")
         log_msg(state, f"  regularity shortcut: {regularity_reason}")
+        # A heuristic ("trivial_constraint": bounded set-builder variables) must
+        # never be reported with the same confidence as a deterministic fact
+        # ("finite"/"regex_pattern") — cap at well_formed's ceiling either way,
+        # and never raise a less-confident heuristic up to 0.95 (docs/VERDICT_POLICY.md §2).
+        trust = "verified" if regularity_method in ("finite", "regex_pattern") else "well_formed"
+        trust_cap = 0.98 if trust == "verified" else 0.60
+        confidence = min(
+            0.95,
+            trust_cap,
+            _clamp_confidence(regularity_confidence) if regularity_confidence is not None else 0.95,
+        )
         return {
             "preprocess_hints": hints,
             "result": {
@@ -647,10 +688,10 @@ def preprocess_node(state: PipelineState) -> dict:
                 "source_text": state["ir"].get("source_text"),
                 "verdict": "ll",
                 "k": 1,
-                "confidence": 0.95,
+                "confidence": confidence,
                 "proof": {
                     "method": "regularity",
-                    "details": {"reason": regularity_reason},
+                    "details": {"reason": regularity_reason, "method": regularity_method},
                 },
                 "grammar": None,
                 "first_follow_result": None,
@@ -662,29 +703,77 @@ def preprocess_node(state: PipelineState) -> dict:
                 "reasoning_summary": "Язык является регулярным, следовательно LL(1).",
                 "errors": [],
                 "retries": 0,
+                "verdict_gate": {
+                    "basis": [{"agent": "regularity_shortcut", "trust": trust}],
+                    "contradiction": False,
+                    "downgrades": [],
+                    "confidence_cap": trust_cap,
+                },
             },
         }
     return {"preprocess_hints": hints}
+
+
+def _run_ll_k_oracle_on(grammar: dict, requested_k: int | None) -> dict:
+    """Run the LL(k) oracle on a single grammar. Raises on internal failure —
+    caller wraps in try/except (see docs/THEORY.md §3.1 for the shape)."""
+    if requested_k is not None and isinstance(requested_k, int) and requested_k >= 1:
+        # User asked: "is this grammar LL(requested_k)?"
+        # NOTE: ck_result["is_ll_k"] can be None (budget exhausted, no
+        # conflict found yet — docs/THEORY.md §3.1: "лимит ⇒ unknown").
+        # Do NOT coerce that to bool(None) == False: that would silently
+        # turn "we don't know" into a confident "not LL(k)". "found" only
+        # ever means "conclusively LL(k)".
+        ck_result = check_ll_k(grammar, requested_k, time_budget_s=_ORACLE_TIME_BUDGET_S)
+        ff_result = dict(ck_result)
+        ff_result["found"] = ck_result.get("is_ll_k") is True
+        ff_result["min_k"] = requested_k if ff_result["found"] else None
+        ff_result["checked_k"] = requested_k
+        return ff_result
+
+    result = find_min_ll_k(grammar, max_k=10, time_budget_s=_ORACLE_TIME_BUDGET_S)
+    ff_result = dict(result.get("result_for_k") or {})
+    ff_result["found"] = result.get("found", False)
+    ff_result["min_k"] = result.get("k")
+    # find_min_ll_k-only diagnostics (docs/THEORY.md §3.1): needed by
+    # assemble_result_node to tell a certified "not LL(k) for any k"
+    # apart from "not LL(k) for k <= max_k_checked" (inconclusive above it)
+    # apart from a budget-limited "undetermined" (also inconclusive).
+    ff_result["strong_k"] = result.get("strong_k")
+    ff_result["max_k_checked"] = result.get("max_k_checked")
+    ff_result["max_k_decided"] = result.get("max_k_decided")
+    ff_result["undetermined"] = result.get("undetermined")
+    ff_result["certificate"] = result.get("certificate")
+    return ff_result
 
 
 def first_follow_oracle_node(state: PipelineState) -> dict:
     """Run LL(k) oracle on a grammar.
 
     For Format 3: grammar is at state["ir"]["grammar"].
-    For Format 1/2: look for grammar produced by constructive agents
-    (ll_grammar_builder, marker_analyzer, grammar_transformer).
+    For Format 2: the given grammar (language_spec, kind == "grammar") is
+    tried FIRST — TODO §1(b): it directly answers "is this language LL?",
+    not only a grammar an agent happened to propose — falling back to a
+    grammar produced by constructive agents (ll_grammar_builder,
+    marker_analyzer, grammar_transformer) if the given grammar isn't LL(k).
+    For Format 1: only agent-produced grammars are available.
 
     Tries k=1,2,...,10 via find_min_ll_k. Returns first_follow_result.
     """
     log_msg(state, "first_follow_oracle_node...")
     ir = state["ir"]
-    grammar = None
 
+    candidates: list[tuple[str, dict]] = []
     if state.get("input_format") == 3:
-        grammar = ir.get("grammar")
-        log_msg(state, "  using grammar from IR (Format 3)")
+        g = ir.get("grammar")
+        if g:
+            candidates.append(("task_grammar", g))
     else:
-        # Try to find a grammar proposed by constructive agents
+        if state.get("input_format") == 2:
+            spec = ir.get("language_spec")
+            if isinstance(spec, dict) and spec.get("kind") == "grammar":
+                candidates.append(("given_grammar", spec))
+        # Grammar(s) proposed by constructive agents
         agent_results = state.get("agent_results", {})
         for agent_name in ("ll_grammar_builder", "marker_analyzer", "grammar_transformer"):
             out = agent_results.get(agent_name, {})
@@ -698,53 +787,37 @@ def first_follow_oracle_node(state: PipelineState) -> dict:
                     or out.get("grammar")
                 )
                 if g:
-                    grammar = g
-                    log_msg(state, f"  using grammar from agent: {agent_name}")
-                    break
+                    candidates.append((agent_name, g))
 
-    if not grammar:
+    if not candidates:
         log_msg(state, "  no grammar available for oracle")
         return {"first_follow_result": {"is_ll_k": None, "reason": "no grammar available"}}
 
     # Format 3 with a specific k: check exactly that k (not the minimum).
     # ir["k"] == None means "find minimum k" — use find_min_ll_k.
-    requested_k = state["ir"].get("k") if state.get("input_format") == 3 else None
+    requested_k = ir.get("k") if state.get("input_format") == 3 else None
 
-    try:
-        if requested_k is not None and isinstance(requested_k, int) and requested_k >= 1:
-            # User asked: "is this grammar LL(requested_k)?"
-            # NOTE: ck_result["is_ll_k"] can be None (budget exhausted, no
-            # conflict found yet — docs/THEORY.md §3.1: "лимит ⇒ unknown").
-            # Do NOT coerce that to bool(None) == False: that would silently
-            # turn "we don't know" into a confident "not LL(k)". "found" only
-            # ever means "conclusively LL(k)".
-            ck_result = check_ll_k(grammar, requested_k, time_budget_s=_ORACLE_TIME_BUDGET_S)
-            ff_result = dict(ck_result)
-            ff_result["found"] = ck_result.get("is_ll_k") is True
-            ff_result["min_k"] = requested_k if ff_result["found"] else None
-            ff_result["checked_k"] = requested_k
-        else:
-            result = find_min_ll_k(grammar, max_k=10, time_budget_s=_ORACLE_TIME_BUDGET_S)
-            ff_result = dict(result.get("result_for_k") or {})
-            ff_result["found"] = result.get("found", False)
-            ff_result["min_k"] = result.get("k")
-            # find_min_ll_k-only diagnostics (docs/THEORY.md §3.1): needed by
-            # assemble_result_node to tell a certified "not LL(k) for any k"
-            # apart from "not LL(k) for k <= max_k_checked" (inconclusive above it)
-            # apart from a budget-limited "undetermined" (also inconclusive).
-            ff_result["strong_k"] = result.get("strong_k")
-            ff_result["max_k_checked"] = result.get("max_k_checked")
-            ff_result["max_k_decided"] = result.get("max_k_decided")
-            ff_result["undetermined"] = result.get("undetermined")
-            ff_result["certificate"] = result.get("certificate")
-        log_msg(
-            state,
-            f"  oracle: found={ff_result.get('found')} k={ff_result.get('min_k')}",
-        )
-        return {"first_follow_result": ff_result}
-    except Exception as exc:
-        logger.warning("first_follow_oracle: %s", exc)
-        return {"first_follow_result": {"is_ll_k": None, "error": str(exc)}}
+    ff_result: dict = {}
+    for source_name, grammar in candidates:
+        log_msg(state, f"  trying grammar from: {source_name}")
+        try:
+            candidate_result = _run_ll_k_oracle_on(grammar, requested_k)
+        except Exception as exc:
+            logger.warning("first_follow_oracle (%s): %s", source_name, exc)
+            candidate_result = {"is_ll_k": None, "error": str(exc)}
+        candidate_result["grammar_source"] = source_name
+        ff_result = candidate_result
+        if candidate_result.get("found"):
+            # A concrete LL(k) grammar — conclusive for this candidate, stop
+            # here (a later candidate could only ever be equally good).
+            break
+
+    log_msg(
+        state,
+        f"  oracle: found={ff_result.get('found')} k={ff_result.get('min_k')} "
+        f"source={ff_result.get('grammar_source')}",
+    )
+    return {"first_follow_result": ff_result}
 
 
 def run_classifier_node(state: PipelineState) -> dict:
@@ -972,12 +1045,12 @@ def _fallback_reasoning(state: PipelineState) -> dict:
     ) -> dict | None:
         """Return the best fallback result from a set of agents.
 
-        Priority: verified + conf>=0.7 > unverified + conf>=0.7.
-        Skips refuted agents.
+        Priority: docs/VERDICT_POLICY.md §1 trust rank (verified > bounded_pass
+        > well_formed > not_verified), then higher confidence. Skips refuted agents.
         """
         candidates = []
         for name in agent_names:
-            v_status = verifications.get(name, {}).get("verification_status")
+            v_status = _trust_of_agent(verifications, name)
             if v_status == "refuted":
                 continue
             out = agent_results.get(name, {})
@@ -988,8 +1061,7 @@ def _fallback_reasoning(state: PipelineState) -> dict:
             conf = _clamp_confidence(out.get("confidence", 0.5))
             if conf < 0.7:
                 continue
-            is_verified = v_status == "verified"
-            candidates.append((not is_verified, -conf, name, out))  # sort: verified first, then higher conf
+            candidates.append((-_trust_rank(v_status), -conf, name, out))  # highest trust first, then higher conf
 
         if not candidates:
             return None
@@ -1010,38 +1082,46 @@ def _fallback_reasoning(state: PipelineState) -> dict:
         }
 
     # Check constructive agents (ll verdict), then destructive (not_ll).
-    # Verified claims have priority within each group, and destructive verified
-    # beats constructive unverified — check verified destructive before unverified constructive.
-    verified_constructive = _best_agent_result(
+    # Higher-trust claims have priority within each group, and a
+    # higher-trust destructive claim beats a lower-trust constructive one.
+    best_constructive = _best_agent_result(
         _CONSTRUCTIVE_AGENTS, "ll", "ll_grammar_construction"
     )
-    verified_destructive = _best_agent_result(
+    best_destructive = _best_agent_result(
         _DESTRUCTIVE_AGENTS, "not_ll", "substitution"
     )
 
-    # A verified destructive proof beats an unverified constructive claim.
-    if verified_constructive and not verifications.get(
-        verified_constructive.get("primary_agent", ""), {}
-    ).get("verification_status") == "verified":
-        # constructive is unverified — check if destructive is verified
-        if verified_destructive and verifications.get(
-            verified_destructive.get("primary_agent", ""), {}
-        ).get("verification_status") == "verified":
-            return verified_destructive
+    constructive_trust = (
+        _trust_of_agent(verifications, best_constructive.get("primary_agent"))
+        if best_constructive else None
+    )
+    destructive_trust = (
+        _trust_of_agent(verifications, best_destructive.get("primary_agent"))
+        if best_destructive else None
+    )
 
-    if verified_constructive:
-        return verified_constructive
-    if verified_destructive:
-        return verified_destructive
+    if best_constructive and best_destructive:
+        # Both sides have evidence — prefer the strictly higher-trust one;
+        # a tie falls through to constructive (matches prior behavior when
+        # both were equally "verified") — R3's contradiction handling lives
+        # in assemble_result_node, which has the full claim_verification map.
+        if _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
+            return best_destructive
+        return best_constructive
 
-    # Count verified vs refuted claims
+    if best_constructive:
+        return best_constructive
+    if best_destructive:
+        return best_destructive
+
+    # Count agents with real evidence (>= well_formed) vs refuted claims
     verified_count = sum(
         1 for v in verifications.values()
-        if isinstance(v, dict) and v.get("verification_status") == "verified"
+        if isinstance(v, dict) and _trust_rank(v.get("trust") or v.get("verification_status")) >= _TRUST_RANK["well_formed"]
     )
     refuted_count = sum(
         1 for v in verifications.values()
-        if isinstance(v, dict) and v.get("verification_status") == "refuted"
+        if isinstance(v, dict) and (v.get("trust") or v.get("verification_status")) == "refuted"
     )
 
     if refuted_count > 0 and retry_round < MAX_RETRIES:
@@ -1122,17 +1202,19 @@ def formalize_node(state: PipelineState) -> dict:
 
     agent_results = state.get("agent_results", {})
     # Compute proof_was_verified based on the primary agent chosen by reasoning.
-    # If the primary agent's claim was verified, the proof is verified.
-    # Fall back to any-verified only when primary_agent is not identified.
+    # docs/VERDICT_POLICY.md §1: `bounded_pass` is real, checked evidence too
+    # (not just the full `verified` level) — a claim reaches at least
+    # bounded_pass whenever it counts as this proof's trust basis.
     claim_verification = state.get("claim_verification", {})
     primary_agent = reasoning.get("primary_agent", "")
-    primary_ver = claim_verification.get(primary_agent, {})
-    if primary_agent and isinstance(primary_ver, dict):
-        proof_was_verified = primary_ver.get("verification_status") == "verified"
+    primary_trust = _trust_of_agent(claim_verification, primary_agent)
+    if primary_agent and primary_trust is not None:
+        proof_was_verified = _trust_rank(primary_trust) >= _TRUST_RANK["bounded_pass"]
     else:
-        # No primary agent identified — fall back conservatively to all-verified check
+        # No primary agent identified — fall back conservatively to any
+        # claim reaching at least bounded_pass.
         proof_was_verified = any(
-            isinstance(v, dict) and v.get("verification_status") == "verified"
+            isinstance(v, dict) and _trust_rank(v.get("trust") or v.get("verification_status")) >= _TRUST_RANK["bounded_pass"]
             for v in claim_verification.values()
         )
     formalizer_input = {
@@ -1181,37 +1263,49 @@ def assemble_result_node(state: PipelineState) -> dict:
         # (docs/THEORY.md §3.1: "лимит ⇒ unknown") — never conflate the two.
         budget_limited = is_ll_k is None or bool(ff.get("undetermined"))
 
+        # docs/VERDICT_POLICY.md R5 / §2: Format 3 verdicts from a full LL(k)-table
+        # test (or a not-LL certificate) are `verified`, capped at 0.98 (never 1.0 —
+        # self-assessment never raises it, but the cap itself already isn't absolute
+        # certainty). A "not LL(k) for k <= max_k_checked" without a certificate is
+        # NOT conclusive for every k (TODO §1: "not_ll с confidence 1.0 после k <= 10"
+        # was the bug) — that is `bounded_pass`, capped at 0.85, worded with the
+        # "k <= max_k_checked" caveat (see _format3_summary).
+        trust = "verified"
         if is_ll_k is True or found is True:
             verdict = "ll"
             k = ff.get("k") or ff.get("min_k")
-            confidence = 1.0
+            confidence = 0.98
         elif certificate is not None:
             # e.g. left recursion (after removing useless symbols) — conclusive
             # for every k (docs/THEORY.md §3.1).
             verdict = "not_ll"
             k = None
-            confidence = 1.0
+            confidence = 0.98
         elif ff.get("checked_k") is not None and is_ll_k is False:
             # A single explicit k was fully (conclusively) tested and failed.
             verdict = "not_ll"
             k = None
-            confidence = 1.0
+            confidence = 0.98
         elif budget_limited:
             verdict = "uncertain"
             k = None
             confidence = 0.0
+            trust = "not_verified"
         elif found is False:
             # find_min_ll_k exhausted k <= max_k_checked: every checked k was
             # conclusively decided (not budget-limited) and none was LL(k),
             # but larger k was never tried and there is no certificate —
-            # inconclusive beyond max_k_checked, not a claim about every k.
+            # inconclusive beyond max_k_checked, not a claim about every k
+            # (docs/VERDICT_POLICY.md R5 — TODO §1).
             verdict = "not_ll"
             k = None
-            confidence = 0.9
+            confidence = 0.85
+            trust = "bounded_pass"
         else:
             verdict = "uncertain"
             k = None
             confidence = 0.0
+            trust = "not_verified"
 
         proof = (
             {"method": "first_follow_oracle", "details": ff}
@@ -1239,6 +1333,12 @@ def assemble_result_node(state: PipelineState) -> dict:
                 "reasoning_summary": reasoning_summary,
                 "errors": state.get("errors", []),
                 "retries": 0,
+                "verdict_gate": {
+                    "basis": [{"agent": "first_follow_oracle", "trust": trust}],
+                    "contradiction": False,
+                    "downgrades": [],
+                    "confidence_cap": 0.98 if trust == "verified" else (0.85 if trust == "bounded_pass" else 0.40),
+                },
             }
         }
 
@@ -1338,17 +1438,172 @@ def assemble_result_node(state: PipelineState) -> dict:
         or reasoning.get("justification")
     )
 
+    # --- Verdict gate (docs/VERDICT_POLICY.md §§1-3, R1-R5) ---
+    # R4: reasoning is primary, but the orchestrator checks it deterministically
+    # against the trust of the underlying agent claims before trusting its
+    # confidence — this runs regardless of whether `reasoning` came from a live
+    # reasoning agent or `_fallback_reasoning`.
+    claim_verification = state.get("claim_verification", {})
+
+    def _best_trust_for(agent_names: set[str], expected_verdict: str) -> tuple[str | None, str | None]:
+        """Strongest non-refuted trust among agents claiming `expected_verdict`,
+        plus that agent's name. Returns (None, None) only if no agent claims
+        `expected_verdict` at all — a claiming agent with no claim_verification
+        entry (verification never ran) counts as "not_verified", not as absent."""
+        best_trust, best_agent = None, None
+        for name in agent_names:
+            out = agent_results.get(name)
+            if not isinstance(out, dict) or _normalize_verdict(out.get("verdict")) != expected_verdict:
+                continue
+            t = _trust_of_agent(claim_verification, name) or "not_verified"
+            if t == "refuted":
+                continue
+            if best_agent is None or _trust_rank(t) > _trust_rank(best_trust):
+                best_trust, best_agent = t, name
+        return best_trust, best_agent
+
+    def _any_refuted(agent_names: set[str], expected_verdict: str) -> str | None:
+        for name in agent_names:
+            out = agent_results.get(name)
+            if not isinstance(out, dict) or _normalize_verdict(out.get("verdict")) != expected_verdict:
+                continue
+            if _trust_of_agent(claim_verification, name) == "refuted":
+                return name
+        return None
+
+    constructive_trust, constructive_agent = _best_trust_for(_CONSTRUCTIVE_AGENTS, "ll")
+    destructive_trust, destructive_agent = _best_trust_for(_DESTRUCTIVE_AGENTS, "not_ll")
+
+    if primary_agent == "first_follow_oracle" and isinstance(ff_result, dict) and ff_result.get("found"):
+        # docs/VERDICT_POLICY.md R2 fix (reviewer finding): the oracle only
+        # ever confirms that ONE specific candidate grammar is LL(k) — that
+        # says nothing by itself about whether the candidate generates the
+        # TASK's language. Forcing bounded_pass here regardless of the
+        # grammar's own trust let a candidate REFUTED as non-equivalent (or
+        # invented terminals outside the task alphabet) still carry a "ll"
+        # verdict at 0.85, purely because the LL(k)-table check happened to
+        # pass on that (wrong) grammar.
+        grammar_source = ff_result.get("grammar_source")
+        if grammar_source == "given_grammar":
+            # Format 2: the oracle tested the TASK's OWN grammar (not a
+            # candidate) — a full LL(k)-table pass on the grammar actually in
+            # question is a complete, deterministic proof: verified.
+            if constructive_trust is None or _trust_rank("verified") > _trust_rank(constructive_trust):
+                constructive_trust, constructive_agent = "verified", "first_follow_oracle"
+        elif grammar_source:
+            # Format 1: equivalence with the task's language is exactly what
+            # that agent's own claim_verification trust measures (bidirectional
+            # sample equivalence, or refuted/well_formed otherwise) — never
+            # substitute the LL(k)-table's structural pass for it.
+            source_trust = _trust_of_agent(claim_verification, grammar_source)
+            if source_trust == "refuted":
+                pass  # constructive verdict via this grammar stays forbidden
+            elif source_trust is not None and (
+                constructive_trust is None or _trust_rank(source_trust) > _trust_rank(constructive_trust)
+            ):
+                constructive_trust, constructive_agent = source_trust, grammar_source
+
+    has_constructive = constructive_trust is not None and _trust_rank(constructive_trust) >= _TRUST_RANK["bounded_pass"]
+    has_destructive = destructive_trust is not None and _trust_rank(destructive_trust) >= _TRUST_RANK["well_formed"]
+
+    basis: list[dict] = []
+    downgrades: list[str] = []
+    contradiction = False
+    confidence_cap = 0.40  # docs/VERDICT_POLICY.md §2: only-LLM self-assessment ceiling
+
+    if has_constructive and has_destructive:
+        # R3: contradiction — verdict goes to the strictly stronger side; a tie
+        # is inconclusive. Either way confidence <= 0.50.
+        contradiction = True
+        if _trust_rank(constructive_trust) > _trust_rank(destructive_trust):
+            verdict = "ll"
+        elif _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
+            verdict = "not_ll"
+        else:
+            verdict = "uncertain"
+        confidence_cap = 0.50
+        downgrades.append(
+            f"contradiction: constructive={constructive_agent}({constructive_trust}) vs "
+            f"destructive={destructive_agent}({destructive_trust}) -> {verdict}, "
+            "confidence <= 0.50 (docs/VERDICT_POLICY.md R3)"
+        )
+        basis = [
+            {"agent": constructive_agent, "trust": constructive_trust},
+            {"agent": destructive_agent, "trust": destructive_trust},
+        ]
+    elif verdict == "ll":
+        if has_constructive:
+            confidence_cap = 0.98 if constructive_trust == "verified" else 0.85
+            basis = [{"agent": constructive_agent, "trust": constructive_trust}]
+        else:
+            refuted_agent = _any_refuted(_CONSTRUCTIVE_AGENTS, "ll")
+            if refuted_agent:
+                # R1/R2: a refuted constructive artifact is not weak evidence
+                # for "ll", it is evidence AGAINST this specific attempt.
+                downgrades.append(
+                    f"reasoning proposed done/ll but {refuted_agent}'s grammar was refuted "
+                    "-> inconclusive (docs/VERDICT_POLICY.md R2)"
+                )
+                verdict, confidence_cap = "uncertain", 0.40
+            elif constructive_agent:
+                # docs/VERDICT_POLICY.md R2 fix (reviewer finding): a
+                # constructive "ll" verdict needs trust >= bounded_pass, same
+                # as every other system's constructive direction — well_formed
+                # is structure-only (no language-equivalence oracle actually
+                # ran) and must NOT carry a positive "ll" verdict on its own,
+                # only inconclusive (this used to cap at 0.60 and keep the
+                # "ll" verdict, which is exactly the over-promotion R2 forbids
+                # — a well_formed grammar could be for an entirely different
+                # language than the task's).
+                downgrades.append(
+                    f"reasoning proposed done/ll with {constructive_agent}'s grammar only "
+                    "well_formed (no equivalence oracle) -> inconclusive "
+                    "(docs/VERDICT_POLICY.md R2)"
+                )
+                verdict, confidence_cap = "uncertain", 0.40
+            else:
+                downgrades.append(
+                    "reasoning proposed done/ll with no constructive artifact at all "
+                    "-> inconclusive (docs/VERDICT_POLICY.md R2)"
+                )
+                verdict, confidence_cap = "uncertain", 0.40
+    elif verdict == "not_ll":
+        if has_destructive:
+            # R2: destructive not_ll by agent >= well_formed; oracle-checked
+            # words raise the ceiling from 0.60 to 0.85.
+            confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.60
+            basis = [{"agent": destructive_agent, "trust": destructive_trust}]
+        else:
+            # R1: a failed/refuted constructive attempt is never, by itself,
+            # evidence for the destructive verdict (task_grammar_filter_49 precedent).
+            downgrades.append(
+                "reasoning proposed done/not_ll without a destructive claim >= well_formed "
+                "-> inconclusive (docs/VERDICT_POLICY.md R1, basis: constructive_failure_only)"
+            )
+            verdict, confidence_cap = "uncertain", 0.40
+
+    confidence = min(confidence, confidence_cap)
+
+    verdict_gate = {
+        "basis": basis,
+        "contradiction": contradiction,
+        "downgrades": downgrades,
+        "confidence_cap": confidence_cap,
+    }
+    if downgrades:
+        log_msg(state, f"  verdict_gate downgrades: {downgrades}")
+
     return {
         "result": {
             "task_type": ir.get("task_type"),
             "source_text": ir.get("source_text"),
             "verdict": verdict,
-            "k": reasoning.get("k"),
+            "k": reasoning.get("k") if verdict == "ll" else None,
             "confidence": confidence,
             "proof": proof,
             "grammar": grammar,
             "first_follow_result": ff_result,
-            "claim_verification": state.get("claim_verification", {}),
+            "claim_verification": claim_verification,
             "agents_used": sorted(agent_results.keys()),
             "agents_failed": _collect_failed_agents(state),
             "specialist_outputs": {
@@ -1359,6 +1614,7 @@ def assemble_result_node(state: PipelineState) -> dict:
             "reasoning_summary": reasoning_summary,
             "errors": state.get("errors", []),
             "retries": state.get("retry_round", 0),
+            "verdict_gate": verdict_gate,
         }
     }
 

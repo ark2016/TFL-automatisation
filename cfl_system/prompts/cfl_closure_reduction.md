@@ -58,6 +58,8 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "regular_language_regex": "regex for R",
     "regular_justification": "Russian text: why R is regular",
     "intersection_description": "description of L ∩ R",
+    "intersection_examples": ["word1", "word2", "word3"],
+    "intersection_non_examples": ["word1", "word2"],
     "intersection_not_cfl_proof": {
       "method": "pumping | ogden | known_non_cfl",
       "word_chosen": "the pumping word for L ∩ R",
@@ -86,6 +88,8 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "regular_language_regex": "<regex for R>",
   "regular_justification": "<Russian: why R is regular (e.g., described by a regex)>",
   "intersection_description": "<set-builder notation for L ∩ R>",
+  "intersection_examples": "<REQUIRED: 3+ concrete words that you claim are in L ∩ R>",
+  "intersection_non_examples": "<REQUIRED: 2+ concrete words that match R but are NOT in L (i.e. in R \\ L)>",
   "intersection_not_cfl_proof": {
     "method": "<pumping | ogden | known_non_cfl>",
     "word_chosen": "<pumping word for L ∩ R>",
@@ -95,6 +99,35 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "conclusion": "<Russian: CFL ∩ REG = CFL, so if L ∩ R is not CFL, L is not CFL>"
 }
 ```
+
+### `intersection_examples` / `intersection_non_examples` — REQUIRED, and DERIVE THEM, DO NOT GUESS
+
+These two fields are checked automatically against the actual language oracle
+(CYK for a grammar/grammar_filter task) and against the regex for R. A
+mismatch downgrades this claim to `refuted` regardless of how convincing the
+prose argument reads — so get them right.
+
+**Derive `intersection_examples` and `intersection_non_examples` from the
+grammar/definition of L and from R directly — never from the shape of a
+"classic" textbook example that merely resembles this task.** A word pattern
+that looks familiar (e.g. "this looks like {a^n b^n}") is not evidence; only
+generating actual strings from L's own grammar/predicate and checking them
+against R is.
+
+**Precedent (why this matters):** a live run on 2026-09-27 (model: Haiku,
+task: a grammar generating only {a^{2m} b^{2m} | m >= 2}) confidently
+asserted "L ∩ a⁺b⁺ = {aⁿbⁿ}" — the classic textbook shape — when the actual
+intersection was {a^{2m} b^{2m} | m >= 2}, a strict subset. The claim read as
+correct prose but was checkable and wrong. Always instantiate a few words
+from the grammar/definition and confirm membership before writing the
+set-builder description.
+
+- `intersection_examples`: at least 3 concrete words (not parametric forms
+  like "a^n b^n") that you have checked are genuinely in **both** L and R.
+- `intersection_non_examples`: at least 2 concrete words that are in R but
+  that you have checked are **not** in L (this is what pins down the "\\ L"
+  boundary of your L ∩ R description — pick words that a wrong/looser
+  description of L ∩ R would have incorrectly included).
 
 ## Solved Examples
 
@@ -147,6 +180,8 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "regular_language_regex": "a+b+aca+b+ac",
     "regular_justification": "Язык R описывается регулярным выражением a⁺b⁺aca⁺b⁺ac, следовательно, является регулярным.",
     "intersection_description": "{a^n · b^m · ac · a^n · b^m · ac | n >= 1, m >= 1}",
+    "intersection_examples": ["abacabac", "aabbacaabbac", "aabbbacaabbbac"],
+    "intersection_non_examples": ["abacabbac", "aabacaabac"],
     "intersection_not_cfl_proof": {
       "method": "pumping",
       "word_chosen": "a^p b^p ac a^p b^p ac",

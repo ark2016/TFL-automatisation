@@ -33,7 +33,13 @@ from dcfl_system.lib.hypothesis_module import analyze_dcfl_hypothesis
 from dcfl_system.lib.pattern_db import match_patterns
 from dcfl_system.lib.closure_table import closure_scan
 from dcfl_system.lib.word_sampler import sample_words
-from dcfl_system.lib.oracle_verifier import verify_agent_results
+from dcfl_system.lib.oracle_verifier import (
+    verify_agent_results,
+    trust_rank,
+    trust_at_least,
+    confidence_cap_for,
+    CONTRADICTION_CONFIDENCE_CAP,
+)
 from dcfl_system.lib.retry_logic import build_retry_plan
 
 logger = logging.getLogger(__name__)
@@ -439,6 +445,191 @@ _VALID_ACTIONS = {"done", "retry", "fail"}
 
 
 # ---------------------------------------------------------------------------
+# Verdict gate (docs/VERDICT_POLICY.md §3, R1-R4, R7)
+#
+# The reasoning agent proposes a verdict; the orchestrator is the one thing
+# that decides what confidence that verdict is allowed to carry, based on
+# the deterministic `trust` the oracle assigned to the evidence behind it
+# (never the LLM's own self-reported confidence, which can only lower the
+# ceiling, never raise it — VERDICT_POLICY.md §2).
+# ---------------------------------------------------------------------------
+
+# stack_strategy only ever argues "dcfl"; closure_reduction can argue either
+# way depending on proof_sketch.direction.
+_CONSTRUCTIVE_DCFL_AGENTS = ("stack_strategy", "closure_reduction")
+_DESTRUCTIVE_NON_DCFL_AGENTS = ("dcfl_pumping", "shallit", "inh_ambiguity", "closure_reduction")
+
+
+def _agent_trust(oracle_verification: dict, agent_name: str) -> str | None:
+    entry = oracle_verification.get(agent_name)
+    if not isinstance(entry, dict):
+        return None
+    return entry.get("trust") or entry.get("verification_status")
+
+
+def _agent_direction(name: str, output: dict) -> str | None:
+    """'constructive' (argues dcfl) / 'destructive' (argues non_dcfl) / None."""
+    if name == "stack_strategy":
+        return "constructive"
+    if name in ("dcfl_pumping", "shallit", "inh_ambiguity"):
+        return "destructive"
+    if name == "closure_reduction":
+        proof = output.get("proof_sketch")
+        direction = proof.get("direction") if isinstance(proof, dict) else None
+        if direction in ("constructive", "destructive"):
+            return direction
+    return None
+
+
+def _best_evidence(
+    agent_results: dict, oracle_verification: dict, direction: str,
+) -> tuple[str | None, str | None]:
+    """Strongest (non-refuted) agent + trust arguing *direction* ('constructive'/'destructive')."""
+    wanted_verdict = "dcfl" if direction == "constructive" else "non_dcfl"
+    best_name: str | None = None
+    best_trust: str | None = None
+    for name, output in agent_results.items():
+        if not isinstance(output, dict) or output.get("status") != "success":
+            continue
+        if output.get("verdict") != wanted_verdict:
+            continue
+        if _agent_direction(name, output) != direction:
+            continue
+        trust = _agent_trust(oracle_verification, name)
+        if trust == "refuted":
+            continue  # R2: a refuted artifact is not evidence this round
+        if best_trust is None or trust_rank(trust) > trust_rank(best_trust):
+            best_name, best_trust = name, trust
+    return best_name, best_trust
+
+
+def _apply_verdict_gate(
+    reasoning_output: dict,
+    agent_results: dict,
+    oracle_verification: dict,
+    retry_count: int,
+    max_retries: int,
+) -> dict:
+    """Check the reasoning agent's proposed action/verdict/confidence against
+    R1, R2, R3, R4 and cap confidence per the trust of the evidence behind it
+    (docs/VERDICT_POLICY.md §2-3). Returns a new reasoning-shaped dict with a
+    ``verdict_gate`` block describing what (if anything) was downgraded
+    (§5 result format)."""
+    out = dict(reasoning_output)
+    action = _get_action(out)
+    verdict = out.get("verdict")
+    confidence = _clamp_confidence(out.get("confidence"))
+
+    downgrades: list[str] = []
+    basis: list[dict] = []
+    contradiction = False
+    cap = 1.0
+
+    if action == "done" and verdict in ("dcfl", "non_dcfl"):
+        direction = "constructive" if verdict == "dcfl" else "destructive"
+        primary = out.get("primary_evidence")
+        primary_output = agent_results.get(primary) if isinstance(primary, str) else None
+        primary_trust: str | None = None
+        if (
+            isinstance(primary_output, dict)
+            and primary_output.get("status") == "success"
+            and _agent_direction(primary, primary_output) == direction
+            and primary_output.get("verdict") == verdict
+        ):
+            primary_trust = _agent_trust(oracle_verification, primary)
+
+        if primary_trust is None:
+            # No successful, direction-matching artifact behind the claim at
+            # all (R1: constructive/destructive failure alone proves nothing).
+            best_name, best_trust = _best_evidence(agent_results, oracle_verification, direction)
+            primary, primary_trust = best_name, best_trust
+
+        # R3 — contradiction: a strong artifact on one side coexists with a
+        # deterministic destructive/constructive claim on the other side. This
+        # runs BEFORE the R1/R2 threshold check below (using the trust the
+        # reasoning agent's own proposal actually has, not a post-R2 nulled
+        # verdict) — a below-threshold constructive claim (e.g. stack_strategy
+        # at well_formed) contradicted by a real destructive artifact (e.g.
+        # dcfl_pumping at bounded_pass) must still resolve to the stronger
+        # (destructive) side, not fall through to a bare "inconclusive" that
+        # throws away real evidence sitting right there on the other side.
+        opp_direction = "destructive" if direction == "constructive" else "constructive"
+        opp_name, opp_trust = _best_evidence(agent_results, oracle_verification, opp_direction)
+        if opp_trust is not None:
+            own_rank = trust_rank(primary_trust)
+            opp_rank = trust_rank(opp_trust)
+            own_strong = own_rank >= trust_rank("bounded_pass")
+            opp_strong = opp_rank >= trust_rank("well_formed")
+            # symmetric: also fires if the OTHER side is the strong (>=bounded_pass) one
+            if (own_strong and opp_strong) or (
+                opp_rank >= trust_rank("bounded_pass") and own_rank >= trust_rank("well_formed")
+            ):
+                contradiction = True
+                cap = min(cap, CONTRADICTION_CONFIDENCE_CAP)
+                if own_rank > opp_rank:
+                    winner_verdict = verdict
+                elif opp_rank > own_rank:
+                    winner_verdict = "non_dcfl" if direction == "constructive" else "dcfl"
+                else:
+                    winner_verdict = None
+                downgrades.append(
+                    f"contradiction: '{primary}' ({primary_trust}) argues {verdict} "
+                    f"while '{opp_name}' ({opp_trust}) argues the opposite -> "
+                    f"verdict={winner_verdict!r}, confidence<=0.50 (R3)"
+                )
+                verdict = winner_verdict
+                action = "retry" if retry_count < max_retries else "done"
+                basis.append({"agent": primary, "trust": primary_trust})
+                basis.append({"agent": opp_name, "trust": opp_trust})
+
+        if not contradiction:
+            # docs/VERDICT_POLICY.md R2: a CONSTRUCTIVE verdict ("dcfl") needs
+            # an artifact with trust >= bounded_pass -- well_formed is
+            # structure-only and must not by itself carry a positive "dcfl"
+            # verdict (only inconclusive, capped by well_formed's own 0.60
+            # ceiling once R1's "constructive_failure_only" gate has already
+            # let it through as a verdict at all). A DESTRUCTIVE verdict
+            # ("non_dcfl") still only needs trust >= well_formed per R1.
+            required_trust = "bounded_pass" if direction == "constructive" else "well_formed"
+
+            if primary_trust == "refuted":
+                downgrades.append(
+                    f"reasoning proposed done/{verdict} on '{primary}' but its artifact "
+                    "is refuted by the oracle (R2) -> retry/inconclusive"
+                )
+                if retry_count < max_retries:
+                    action, verdict, cap = "retry", None, 0.25
+                else:
+                    action, verdict, cap = "done", None, 0.40
+            elif primary_trust is None or not trust_at_least(primary_trust, required_trust):
+                downgrades.append(
+                    f"reasoning proposed done/{verdict} with no {required_trust}+ {direction} "
+                    f"artifact (basis: constructive_failure_only, R1/R2) -> inconclusive"
+                )
+                action, verdict, cap = "done", None, 0.40
+            else:
+                basis.append({"agent": primary, "trust": primary_trust})
+                cap = confidence_cap_for(primary_trust)
+
+    elif action == "done" and verdict not in ("dcfl", "non_dcfl") and verdict is not None:
+        # Unnormalized/unknown verdict slipped through — never trust it above not_verified.
+        cap = min(cap, confidence_cap_for("not_verified"))
+
+    final_confidence = min(confidence, cap) if action == "done" or action == "retry" else confidence
+    out["action"] = action
+    out["decision"] = action
+    out["verdict"] = verdict
+    out["confidence"] = _clamp_confidence(final_confidence)
+    out["verdict_gate"] = {
+        "basis": basis,
+        "contradiction": contradiction,
+        "downgrades": downgrades,
+        "confidence_cap": cap,
+    }
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Node functions
 # ---------------------------------------------------------------------------
 
@@ -628,6 +819,17 @@ def reasoning_agent_node(state: DCFLState) -> dict:
         log_msg(state, "  reasoning unavailable/invalid, using fallback")
         output = _fallback_reasoning(state)
 
+    # Verdict gate (docs/VERDICT_POLICY.md §3): the reasoning agent's verdict
+    # is checked against R1/R2/R3/R4 and confidence is capped per the trust
+    # of the evidence behind it — never raised by the LLM's own self-assessment.
+    output = _apply_verdict_gate(
+        output,
+        agent_results=state.get("agent_results") or {},
+        oracle_verification=state.get("oracle_verification") or {},
+        retry_count=state.get("retry_count", 0),
+        max_retries=MAX_RETRIES,
+    )
+
     action = _get_action(output)
     log_msg(state, f"  action={action} verdict={output.get('verdict')}")
     return {"reasoning": output}
@@ -776,6 +978,10 @@ def retry_planner_node(state: DCFLState) -> dict:
                     plan["hints"] = merged_hints
 
     agents_to_retry = plan.get("agents_to_retry", [])
+    # Recompute needs_retry from the MERGED list, not build_retry_plan's raw
+    # (pre-merge) one — otherwise a reasoning-agent override that adds agents
+    # to an empty plan would be silently dropped by setup_dispatch_node.
+    plan["needs_retry"] = bool(agents_to_retry)
     next_count = retry_count + 1
 
     log_msg(
@@ -791,8 +997,48 @@ def retry_planner_node(state: DCFLState) -> dict:
     }
 
 
+def decide_after_retry_planner(state: DCFLState) -> str:
+    """Conditional edge after retry_planner_node.
+
+    An EMPTY retry plan (no agent qualifies for retry — e.g. every failing
+    agent is `not_applicable`, or a `refuted` agent already retried its
+    budget away) is terminal: it must render the current reasoning output
+    as-is, not silently fall back to re-dispatching all 5 specialists again
+    (docs/VERDICT_POLICY.md §3, R7)."""
+    plan = state.get("retry_plan") or {}
+    if plan.get("needs_retry"):
+        return "retry"
+    return "terminal"
+
+
 def renderer_node(state: DCFLState) -> dict:
-    """Assemble final DCFLSolutionOutput dict."""
+    """Assemble final DCFLSolutionOutput dict.
+
+    docs/VERDICT_POLICY.md R1/R2 + §2: `_apply_verdict_gate` only ran against
+    the reasoning agent's `action == "done"` branch. When the graph reaches
+    this node via the *terminal* path out of `decide_after_retry_planner`
+    (an empty retry plan, or budget exhausted) with `action == "retry"` or
+    `"fail"` still on the reasoning output, that gate never ran at all — a
+    destructive verdict with zero verified evidence would render as-is with
+    whatever confidence the LLM proposed. Re-run the gate here, forced to
+    `action == "done"` and with the retry budget treated as exhausted (no
+    more retries are coming — we are terminal), so R1/R2/R3 and the §2
+    confidence ceiling apply to every rendered verdict, not just the ones
+    that arrived already marked "done".
+    """
+    reasoning = state.get("reasoning") or {}
+    if _get_action(reasoning) != "done":
+        forced = dict(reasoning)
+        forced["action"] = "done"
+        forced["decision"] = "done"
+        gated = _apply_verdict_gate(
+            forced,
+            agent_results=state.get("agent_results") or {},
+            oracle_verification=state.get("oracle_verification") or {},
+            retry_count=MAX_RETRIES,
+            max_retries=MAX_RETRIES,
+        )
+        state = {**state, "reasoning": gated}
     return assemble_result_node(state)
 
 
@@ -859,6 +1105,8 @@ def assemble_result_node(state: DCFLState) -> dict:
             "hints_for_human": hints,
             "retries": state.get("retry_count", 0),
             "errors": errors,
+            # VERDICT_POLICY.md §5 — additive field, never replaces existing ones.
+            "verdict_gate": reasoning.get("verdict_gate"),
         },
         "solution": {
             "verdict": verdict,
@@ -911,6 +1159,7 @@ def early_failure_node(state: DCFLState) -> dict:
             "hints_for_human": [],
             "retries": state.get("retry_count", 0),
             "errors": errors if errors else [detail],
+            "verdict_gate": reasoning.get("verdict_gate"),
         },
         "solution": None,
         "error": detail,
@@ -929,7 +1178,8 @@ def build_dcfl_pipeline_graph() -> Any:
               -> preprocess -> setup_dispatch -> (fan-out 5 specialists)
               -> collect_specialists -> oracle_verify -> reasoning
               -> [done] -> renderer -> END
-              -> [retry] -> retry_planner -> setup_dispatch (loop)
+              -> [retry] -> retry_planner -> [non-empty plan] -> setup_dispatch (loop)
+                                           -> [empty plan] -> renderer -> END
               -> [fail] -> early_failure -> END
         input_parser -> [fail] -> early_failure -> END
     """
@@ -992,8 +1242,13 @@ def build_dcfl_pipeline_graph() -> Any:
         },
     )
 
-    # Retry planner -> back to dispatch (loop)
-    graph.add_edge("retry_planner_node", "setup_dispatch_node")
+    # Retry planner -> back to dispatch (loop), unless the plan is empty
+    # (terminal — R7, don't re-dispatch all 5 specialists on a no-op plan)
+    graph.add_conditional_edges(
+        "retry_planner_node",
+        decide_after_retry_planner,
+        {"retry": "setup_dispatch_node", "terminal": "renderer_node"},
+    )
 
     # Final
     graph.add_edge("renderer_node", END)

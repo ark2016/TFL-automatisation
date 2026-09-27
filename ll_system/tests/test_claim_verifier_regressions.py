@@ -52,7 +52,7 @@ class TestForAllKMustBeTrue:
     def test_substitution_for_all_k_true_verified(self):
         ps = {**BASE_SUBSTITUTION_PS, "for_all_k": True, "proof_explanation": "full proof"}
         result = verify_substitution_claim(ps, IR_SIMPLE)
-        assert result["verification_status"] == "verified", result["issues"]
+        assert result["verification_status"] == "well_formed"  # docs/VERDICT_POLICY.md §1: structural pass, no oracle, result["issues"]
 
     def test_substitution_for_all_k_false_not_verified(self):
         """Regression: for_all_k: False was previously accepted as verified."""
@@ -78,7 +78,7 @@ class TestForAllKMustBeTrue:
     def test_prefix_classes_for_all_k_true_verified(self):
         ps = {**BASE_PREFIX_CLASSES_PS, "for_all_k": True, "proof_explanation": "full proof"}
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
-        assert result["verification_status"] == "verified", result["issues"]
+        assert result["verification_status"] == "well_formed"  # docs/VERDICT_POLICY.md §1: structural pass, no oracle, result["issues"]
 
     def test_prefix_classes_for_all_k_false_not_verified(self):
         """Regression: prefix_classes with for_all_k: False was accepted as verified."""
@@ -152,7 +152,7 @@ class TestMarkerAnalyzerReadsArtifactsGrammar:
             artifacts={"ll_grammar": _VALID_GRAMMAR}
         )
         result = verify_ll_claim(agent_result, IR_SIMPLE)
-        assert result["verification_status"] == "verified"
+        assert result["verification_status"] == "well_formed"  # docs/VERDICT_POLICY.md §1: structural pass, no oracle
 
     def test_proof_sketch_grammar_still_works(self):
         """If grammar is already in proof_sketch, artifacts injection is a no-op."""
@@ -161,11 +161,11 @@ class TestMarkerAnalyzerReadsArtifactsGrammar:
             proof_grammar=_VALID_GRAMMAR,
         )
         result = verify_ll_claim(agent_result, IR_SIMPLE)
-        assert result["verification_status"] == "verified"
+        assert result["verification_status"] == "well_formed"  # docs/VERDICT_POLICY.md §1: structural pass, no oracle
 
     def test_no_grammar_anywhere_still_verified_on_marker_and_explanation(self):
         """Grammar is optional in marker_detection — marker + explanation alone suffice."""
         agent_result = self._marker_agent_result(artifacts={})
         result = verify_ll_claim(agent_result, IR_SIMPLE)
         # Grammar check is skipped (optional), so marker+explanation checks still pass
-        assert result["verification_status"] == "verified"
+        assert result["verification_status"] == "well_formed"  # docs/VERDICT_POLICY.md §1: structural pass, no oracle

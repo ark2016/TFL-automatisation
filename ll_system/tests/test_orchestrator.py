@@ -515,7 +515,11 @@ IR_FORMAT1 = {
 }
 
 
-def _make_both_agents_state(verdict: str) -> dict:
+def _make_both_agents_state(
+    verdict: str,
+    constructive_trust: str = "well_formed",
+    destructive_trust: str = "well_formed",
+) -> dict:
     """State with both ll_grammar_builder (ll) and substitution_agent (not_ll)."""
     return {
         "ir": IR_FORMAT1,
@@ -558,7 +562,16 @@ def _make_both_agents_state(verdict: str) -> dict:
             ),
         },
         "first_follow_result": {},
-        "claim_verification": {},
+        # docs/VERDICT_POLICY.md §1/R2: the destructive floor is well_formed,
+        # but the constructive floor is bounded_pass (same threshold as every
+        # other system's constructive direction — a bare well_formed grammar
+        # with no equivalence oracle must downgrade to "uncertain", it cannot
+        # sustain a positive "ll" verdict at any confidence). Callers pass the
+        # trust level that actually exercises their own scenario.
+        "claim_verification": {
+            "ll_grammar_builder": {"trust": constructive_trust, "verification_status": constructive_trust},
+            "substitution_agent": {"trust": destructive_trust, "verification_status": destructive_trust},
+        },
         "preprocess_hints": {},
         "classifier_output": {},
         "errors": [],
@@ -582,7 +595,12 @@ class TestProofAlignedWithVerdict:
             )
 
     def test_ll_verdict_gets_constructive_proof(self):
-        state = _make_both_agents_state("ll")
+        # bounded_pass constructive (its own R2 floor), and the destructive
+        # agent's claim kept below its own well_formed floor so this test's
+        # subject (proof/verdict alignment) isn't entangled with R3 contradiction.
+        state = _make_both_agents_state(
+            "ll", constructive_trust="bounded_pass", destructive_trust="not_verified",
+        )
         out = assemble_result_node(state)
         result = out.get("result", {})
         assert result.get("verdict") == "ll"
@@ -823,8 +841,9 @@ class TestBudgetExhaustionIsUncertainNotNotLL:
 
     def test_find_min_ll_k_exhausted_without_undetermined_is_not_ll_09(self):
         # Every checked k was conclusively decided (no budget cut anywhere) —
-        # the pre-existing "not LL(k) for k <= max_k_checked" behaviour
-        # (confidence 0.9, not a universal claim) must still hold.
+        # "not LL(k) for k <= max_k_checked" without a certificate is bounded_pass,
+        # not a universal claim, capped at 0.85 (docs/VERDICT_POLICY.md R5, TODO §1:
+        # this used to be 0.9, wrongly close to the 0.98 "verified" ceiling).
         ff = {
             "is_ll_k": False,
             "is_strong_ll_k": False,
@@ -842,7 +861,7 @@ class TestBudgetExhaustionIsUncertainNotNotLL:
         out = assemble_result_node(_format3_state(ff))
         result = out["result"]
         assert result["verdict"] == "not_ll"
-        assert result["confidence"] == 0.9
+        assert result["confidence"] == 0.85
 
     def test_left_recursion_certificate_is_conclusive_not_ll(self):
         ff = {
@@ -860,4 +879,6 @@ class TestBudgetExhaustionIsUncertainNotNotLL:
         out = assemble_result_node(_format3_state(ff))
         result = out["result"]
         assert result["verdict"] == "not_ll"
-        assert result["confidence"] == 1.0
+        # docs/VERDICT_POLICY.md §2: "verified" (a certificate is conclusive for
+        # every k) is capped at 0.98, never 1.0.
+        assert result["confidence"] == 0.98

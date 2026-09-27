@@ -614,37 +614,57 @@ def verify_closure_node(state: PipelineState) -> dict:
 
 
 def verify_claims_node(state: PipelineState) -> dict:
-    """Step 5c: verify ALL word-membership claims via oracle."""
+    """Step 5c: verify ALL word-membership claims via oracle, plus the
+    VERDICT_POLICY.md §4 step-2 semantic checks for pumping/nerode."""
     oracle_ok = state.get("oracle_ok", False)
-    if not oracle_ok:
-        return {}
-
-    from .lib.claim_verifier import verify_claims
-
     evidence = dict(state.get("evidence", {}))
-    claims_result = verify_claims(
-        evidence, state["oracle_fn"], get_alphabet(state["ir"]),
-    )
+    updates: dict[str, Any] = {}
 
-    if claims_result["disproved"] > 0:
-        evidence["claim_verification"] = claims_result
-        log_msg(
-            state,
-            f"  CLAIM ERRORS: {claims_result['disproved']} false claims found!",
-        )
-        for err in claims_result["errors"][:5]:
-            log_msg(state, f"    {err}")
-        return {"claim_verification": claims_result, "evidence": evidence}
-    elif claims_result["total_claims"] > 0:
-        evidence["claim_verification"] = claims_result
-        log_msg(
-            state,
-            f"  claims verified: {claims_result['verified']}"
-            f"/{claims_result['total_claims']}",
-        )
-        return {"claim_verification": claims_result, "evidence": evidence}
+    if oracle_ok:
+        from .lib.claim_verifier import verify_claims
 
-    return {}
+        claims_result = verify_claims(
+            evidence, state["oracle_fn"], get_alphabet(state["ir"]),
+        )
+
+        if claims_result["disproved"] > 0:
+            evidence["claim_verification"] = claims_result
+            updates["claim_verification"] = claims_result
+            log_msg(
+                state,
+                f"  CLAIM ERRORS: {claims_result['disproved']} false claims found!",
+            )
+            for err in claims_result["errors"][:5]:
+                log_msg(state, f"    {err}")
+        elif claims_result["total_claims"] > 0:
+            evidence["claim_verification"] = claims_result
+            updates["claim_verification"] = claims_result
+            log_msg(
+                state,
+                f"  claims verified: {claims_result['verified']}"
+                f"/{claims_result['total_claims']}",
+            )
+
+    # Step 2 (VERDICT_POLICY.md §4): instantiate the pumping/nerode proofs
+    # at concrete p/i/j and check them against the oracle, raising trust
+    # from `well_formed` to `bounded_pass` (or catching a `refuted` proof).
+    from .lib.claim_verifier import verify_nerode_claim, verify_pumping_claim
+
+    oracle_fn = state.get("oracle_fn") if oracle_ok else None
+    alphabet = get_alphabet(state["ir"])
+
+    if "pumping" in evidence:
+        pumping_check = verify_pumping_claim(evidence["pumping"], oracle_fn, alphabet)
+        evidence["pumping_verification"] = pumping_check
+        log_msg(state, f"  pumping step-2 check: trust={pumping_check['trust']}")
+
+    if "nerode" in evidence:
+        nerode_check = verify_nerode_claim(evidence["nerode"], oracle_fn, alphabet)
+        evidence["nerode_verification"] = nerode_check
+        log_msg(state, f"  nerode step-2 check: trust={nerode_check['trust']}")
+
+    updates["evidence"] = evidence
+    return updates
 
 
 def oracle_test_node(state: PipelineState) -> dict:
@@ -1153,14 +1173,26 @@ def formalize_node(state: PipelineState) -> dict:
 
 
 def assemble_result_node(state: PipelineState) -> dict:
-    """Step 9: assemble the final result dict."""
+    """Step 9: assemble the final result dict.
+
+    Implements docs/VERDICT_POLICY.md R6 (agent_system): the final
+    status/confidence is bounded by the *trust* of the evidence behind it
+    (see §1-§2), never derived from a bare test_result.pass/fail or an
+    unbounded LLM self-estimate. See R1 (constructive failure is not
+    destructive evidence), R3 (contradiction) and R6 (regularity gate).
+    """
     log_msg(state, "Step 9/9: assembling result...")
+
+    from .lib.claim_verifier import CONFIDENCE_CAPS, compute_destructive_trust
 
     evidence = dict(state.get("evidence", {}))
     errors = list(state.get("errors", []))
     reasoning_output = state.get("reasoning_output")
     test_result = state.get("test_result")
     hypothesis = state.get("hypothesis", {})
+    closure_verification = (
+        state.get("closure_verification") or evidence.get("closure_verification")
+    )
 
     r_ev = (reasoning_output or {}).get("evidence", reasoning_output or {})
     reasoning_verdict = r_ev.get(
@@ -1173,38 +1205,187 @@ def assemble_result_node(state: PipelineState) -> dict:
         "action", (reasoning_output or {}).get("action", ""),
     )
 
+    downgrades: list[str] = []
+    basis: list[dict[str, str]] = []
+    contradiction = False
+
+    def _cap(trust: str) -> float:
+        return CONFIDENCE_CAPS.get(trust, CONFIDENCE_CAPS["not_verified"])
+
+    def _bounded(value: Any, cap: float) -> float:
+        try:
+            return min(float(value), cap)
+        except (TypeError, ValueError):
+            return cap
+
     # Escalation → needs human review, never mark as "success"
     if reasoning_action == "escalate":
         status = "partial"
         confidence = float(reasoning_confidence or hypothesis.get("confidence", 0.0))
         evidence["needs_human_review"] = True
-    elif test_result is not None:
-        if test_result.get("status") == "pass":
-            status = "success"
-            confidence = 1.0
-        else:
-            status = "failure"
-            confidence = 0.0
-    elif reasoning_verdict is not None:
-        status = "success"
-        confidence = float(reasoning_confidence or 0.9)
-    elif errors:
-        status = "partial"
-        confidence = hypothesis.get("confidence", 0.0)
     else:
-        status = "partial"
-        confidence = hypothesis.get("confidence", 0.0)
+        # -- Lean formalization: only a deterministic FULL check earns
+        #    the top `verified` trust (TODO §1 ⚪) --
+        formalization = evidence.get("formalization") or {}
+        lean_verified = (
+            formalization.get("status") == "valid"
+            and formalization.get("sorry_count", 1) == 0
+        )
+
+        # -- Constructive trust: from the DFA/regex oracle test --
+        constructive_trust = None
+        if test_result is not None:
+            constructive_trust = (
+                "bounded_pass" if test_result.get("status") == "pass" else "refuted"
+            )
+            basis.append({"agent": "oracle_test", "trust": constructive_trust})
+
+        # -- Destructive trust: pumping/nerode/closure, step-2 checked --
+        destructive = compute_destructive_trust(evidence, closure_verification)
+        for agent_info in destructive["agents"]:
+            basis.append({"agent": agent_info["agent"], "trust": agent_info["trust"]})
+        destructive_trust = destructive["trust"]
+        destructive_ok = destructive_trust not in (None, "refuted", "not_verified")
+
+        if lean_verified:
+            # R6: Lean without `sorry` -> verified, 0.98.
+            status = "success"
+            confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["verified"])
+            basis.append({"agent": "formalizer", "trust": "verified"})
+
+        elif constructive_trust == "bounded_pass" and destructive_ok:
+            # R3: a passing constructive artifact AND a standing destructive
+            # proof cannot both be right — flag the contradiction instead of
+            # silently picking one.
+            contradiction = True
+            status = "partial"
+            confidence = _bounded(reasoning_confidence, 0.50)
+            downgrades.append(
+                "contradiction: oracle_test passed (constructive bounded_pass) "
+                f"while a destructive proof ({destructive_trust}) also stands "
+                "-> confidence capped at 0.50 (VERDICT_POLICY.md R3)"
+            )
+
+        elif reasoning_verdict == "non_regular":
+            # docs/VERDICT_POLICY.md R1/R2 fix (reviewer finding): the gate
+            # must branch on which DIRECTION reasoning actually claimed, not
+            # just "is there ANY evidence lying around" — a destructive proof
+            # only ever supports non_regular, so it must never be read as
+            # backing a "regular" verdict (see the `regular` branch below),
+            # and a claimed non_regular with NO destructive evidence at all
+            # (regardless of whether the constructive side happened to be
+            # refuted, absent, or even passed) is never earned.
+            if destructive_ok:
+                status = "success"
+                confidence = _bounded(reasoning_confidence, _cap(destructive_trust))
+                if constructive_trust == "refuted":
+                    downgrades.append(
+                        "constructive artifact refuted by oracle_test, but a "
+                        f"destructive proof ({destructive_trust}) supports non_regular "
+                        "-> success instead of failure 0.0 (VERDICT_POLICY.md R6)"
+                    )
+            else:
+                status = "partial"
+                confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
+                evidence["basis"] = "constructive_failure_only"
+                downgrades.append(
+                    "reasoning proposed non_regular but no destructive proof reaches "
+                    ">= well_formed trust -> partial, confidence <= 0.40 "
+                    "(VERDICT_POLICY.md R1/R2)"
+                )
+
+        elif reasoning_verdict == "regular":
+            # Symmetric direction check: a "regular" verdict needs the
+            # constructive artifact (oracle_test) to have actually passed —
+            # a destructive proof standing next to it (or a refuted/absent
+            # oracle_test) is never evidence FOR regular.
+            if constructive_trust == "bounded_pass":
+                status = "success"
+                confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
+            else:
+                status = "partial"
+                confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
+                downgrades.append(
+                    "reasoning proposed regular without oracle_test passing "
+                    "(constructive trust >= bounded_pass) -> partial, "
+                    "confidence <= 0.40 (VERDICT_POLICY.md R2)"
+                )
+
+        elif constructive_trust == "bounded_pass":
+            # No reasoning verdict to check direction against (e.g. no
+            # reasoning agent ran) — fall back to whatever deterministic
+            # evidence exists, as before.
+            status = "success"
+            confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
+
+        elif destructive_ok:
+            # R6: a real destructive proof (well_formed/bounded_pass, oracle
+            # step-2 checked) supports non_regular even when the
+            # constructive track was refuted or never ran at all — never
+            # "failure 0.0" for a verdict that the destructive side proves.
+            status = "success"
+            confidence = _bounded(reasoning_confidence, _cap(destructive_trust))
+            if constructive_trust == "refuted":
+                downgrades.append(
+                    "constructive artifact refuted by oracle_test, but a "
+                    f"destructive proof ({destructive_trust}) supports non_regular "
+                    "-> success instead of failure 0.0 (VERDICT_POLICY.md R6)"
+                )
+
+        elif constructive_trust == "refuted":
+            # R1: a refuted constructive artifact alone is never destructive
+            # evidence -> inconclusive, not "failure 0.0".
+            status = "partial"
+            confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
+            evidence["basis"] = "constructive_failure_only"
+            downgrades.append(
+                "constructive artifact refuted by oracle_test and no verified "
+                "destructive proof exists -> inconclusive, not failure 0.0 "
+                "(VERDICT_POLICY.md R1)"
+            )
+
+        elif reasoning_verdict is not None:
+            # Reasoning proposed some other (unrecognized) verdict value,
+            # and nothing deterministic backs it -> capped at well_formed
+            # (structural-only trust).
+            status = "success"
+            confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["well_formed"])
+            downgrades.append(
+                "reasoning verdict has no deterministic evidence behind it "
+                "-> capped at well_formed 0.60 (VERDICT_POLICY.md §2)"
+            )
+
+        elif errors:
+            status = "partial"
+            confidence = _bounded(
+                hypothesis.get("confidence", 0.0), CONFIDENCE_CAPS["not_verified"],
+            )
+        else:
+            status = "partial"
+            confidence = _bounded(
+                hypothesis.get("confidence", 0.0), CONFIDENCE_CAPS["not_verified"],
+            )
 
     log_msg(state, f"  final: status={status}, confidence={confidence}")
 
-    return {
-        "result": _make_result(
-            status,
-            evidence=evidence,
-            errors=errors if errors else None,
-            confidence=confidence,
-        ),
+    verdict_gate = {
+        "basis": basis,
+        "contradiction": contradiction,
+        "downgrades": downgrades,
+        "confidence_cap": confidence,
     }
+    evidence["verdict_gate"] = verdict_gate
+
+    result = _make_result(
+        status,
+        evidence=evidence,
+        errors=errors if errors else None,
+        confidence=confidence,
+    )
+    # Also top-level, per VERDICT_POLICY.md §5 (new field, additive only).
+    result["verdict_gate"] = verdict_gate
+
+    return {"result": result}
 
 
 # ---------------------------------------------------------------------------

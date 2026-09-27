@@ -76,6 +76,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "evidence": {
     "word_chosen": "a^p b^p c^p",
     "word_parametric": "a^{p} b^{p} c^{p}",
+    "word_instances": {"3": "aaabbbccc", "4": "aaaabbbbcccc"},
     "membership_argument": "Russian text: why z is in L",
     "length_argument": "|z| = 3p >= p",
     "cases": [
@@ -101,6 +102,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
 {
   "word_chosen": "<the pumping word z as a string>",
   "word_parametric": "<LaTeX-friendly parametric form>",
+  "word_instances": "<REQUIRED: {\"3\": \"<z with p=3, literal chars>\", \"4\": \"<z with p=4, literal chars>\"}>",
   "membership_argument": "<Russian: why z is in L>",
   "length_argument": "<why |z| >= p>",
   "cases": [
@@ -116,6 +118,20 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "conclusion": "<Russian: final statement citing the pumping lemma>"
 }
 ```
+
+### `word_instances` — REQUIRED, literal (non-parametric) words
+
+Instantiate your chosen word `word_parametric` at p=3 and at p=4 as concrete,
+literal strings (only terminal symbols — no `^`, no `p`, no LaTeX). These are
+checked automatically: membership of each instance in L, then an exhaustive
+search over every decomposition `uvwxy` with `|vwx| <= p`, `|vx| >= 1`,
+confirming some `i` in `{0, 2}` pumps the word out of L for every single
+decomposition. If your case analysis in `cases` is genuinely exhaustive, both
+instances will close automatically — if one doesn't, your proof has a gap
+that the case analysis missed (this happens most often when `vwx` sits
+exactly on a block boundary, or when the language has a second way to absorb
+the pumped material — see Example 2 below). Do not omit `word_instances` even
+when `all_cases_covered` is true.
 
 ## Solved Examples
 
@@ -141,6 +157,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "evidence": {
     "word_chosen": "a^p b^p c^p",
     "word_parametric": "a^{p} b^{p} c^{p}",
+    "word_instances": {"3": "aaabbbccc", "4": "aaaabbbbcccc"},
     "membership_argument": "Слово a^p b^p c^p принадлежит L, так как количество каждого символа равно p.",
     "length_argument": "|a^p b^p c^p| = 3p >= p",
     "cases": [
@@ -285,3 +302,15 @@ Actions on retry:
 2. If the hint suggests using closure_reduction first, return "inconclusive" with a note for the reasoning agent.
 3. Double-check all cases for the new word before claiming success.
 4. If no word works, return "failure" honestly.
+
+**CRITICAL — on retry, output ONLY the JSON object, nothing else.** A retry
+prompt gives you the previous attempt's context and feedback to reconsider —
+that is information for you to use while composing the JSON, not an
+invitation to write prose about your reconsideration. Do NOT begin your
+reply with commentary like "Переосмыслим..." / "Let me reconsider..." or any
+other text before or after the JSON object: even a single sentence of
+meta-commentary breaks JSON parsing and wastes the retry. (Precedent: a live
+run with Haiku broke its own JSON output this way in response to retry
+context.) If you need to reconsider your approach, do the reconsidering
+silently and then emit the single corrected JSON object — same rule applies
+to a `failure`/`inconclusive` response.

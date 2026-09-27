@@ -185,6 +185,200 @@ def _parse_word_pattern(pattern: str, var_names: list[str]) -> list[dict]:
     return segments
 
 
+class _BudgetExceeded(Exception):
+    """Raised internally when the membership-oracle backtracking search
+    exceeds its step budget; the caller treats this as "inconclusive"
+    rather than guessing True/False."""
+
+
+def _match_segments(
+    word: str,
+    segments: list[dict],
+    idx: int,
+    pos: int,
+    assignments: dict[str, str],
+    constraints: list[dict],
+    domain_map: dict[str, str | None],
+    budget: list[int],
+) -> bool:
+    """Backtracking matcher: does *word* decompose per *segments* (var/literal),
+    with all variable occurrences consistent, all domain regexes satisfied,
+    and *constraints* holding for the resulting assignment?"""
+    budget[0] -= 1
+    if budget[0] <= 0:
+        raise _BudgetExceeded()
+
+    if idx == len(segments):
+        if pos != len(word):
+            return False
+        return check_constraints(assignments, constraints)
+
+    seg = segments[idx]
+    if seg["type"] == "literal":
+        text = seg["text"]
+        if word.startswith(text, pos):
+            return _match_segments(
+                word, segments, idx + 1, pos + len(text),
+                assignments, constraints, domain_map, budget,
+            )
+        return False
+
+    # seg["type"] == "var"
+    name = seg["name"]
+    modifier = seg.get("modifier")
+    if name in assignments:
+        val = assignments[name]
+        consumed = val[::-1] if modifier == "R" else val
+        if word.startswith(consumed, pos):
+            return _match_segments(
+                word, segments, idx + 1, pos + len(consumed),
+                assignments, constraints, domain_map, budget,
+            )
+        return False
+
+    domain = domain_map.get(name)
+    max_len = len(word) - pos
+    for length in range(0, max_len + 1):
+        consumed = word[pos:pos + length]
+        val = consumed[::-1] if modifier == "R" else consumed
+        if domain is not None and not re.fullmatch(domain, val):
+            continue
+        assignments[name] = val
+        if _match_segments(
+            word, segments, idx + 1, pos + length,
+            assignments, constraints, domain_map, budget,
+        ):
+            return True
+        del assignments[name]
+    return False
+
+
+def build_set_builder_membership_oracle(
+    spec: dict,
+    alphabet: list[str],
+    max_word_len: int = 60,
+    step_budget: int = 200_000,
+) -> Any:
+    """Build a membership oracle ``word -> bool | None`` for a set_builder
+    ``language_spec``, when the spec's ``word_pattern`` is a pure
+    concatenation of named variables and alphabet-only literals (the
+    "word_sampler + шаблоны" oracle referenced in docs/VERDICT_POLICY.md §4).
+
+    Returns ``None`` when the pattern isn't of that shape (e.g. it uses
+    exponent/star/alternation notation like ``"aⁿb*(cⁿ|bⁿ)ac*"``, which this
+    matcher does not attempt to decide) — callers must then leave trust at
+    ``well_formed`` rather than guess.
+
+    The returned oracle itself returns ``None`` (rather than True/False) when
+    the backtracking search exceeds its step budget — an "inconclusive", not
+    a guess.
+    """
+    variables: list[dict] = spec.get("variables", [])
+    var_names = [v["name"] for v in variables]
+    word_pattern: str = spec.get("word_pattern", "")
+    segments = _parse_word_pattern(word_pattern, var_names)
+
+    if not any(s["type"] == "var" for s in segments):
+        return None
+
+    alphabet_set = set(alphabet)
+    for seg in segments:
+        if seg["type"] == "literal" and any(ch not in alphabet_set for ch in seg["text"]):
+            # Pattern has non-alphabet meta characters (*, (, ), |, digits, …)
+            # — not a plain concatenation-of-variables pattern.
+            return None
+
+    domain_map: dict[str, str | None] = {v["name"]: v.get("domain") for v in variables}
+    constraints: list[dict] = spec.get("constraints", [])
+
+    def oracle(word: str) -> bool | None:
+        if not isinstance(word, str) or len(word) > max_word_len:
+            return None
+        budget = [step_budget]
+        try:
+            return _match_segments(word, segments, 0, 0, {}, constraints, domain_map, budget)
+        except _BudgetExceeded:
+            return None
+
+    return oracle
+
+
+# ===================================================================
+# Parametric exponent-notation word instantiation (VERDICT_POLICY.md §4)
+# ===================================================================
+
+_SUPERSCRIPT_MAP: dict[str, str] = {
+    "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+    "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+    "ⁿ": "n",  # ⁿ
+    "⁺": "+",  # ⁺
+    "⁻": "-",  # ⁻
+}
+_SUPERSCRIPT_CHARS = frozenset(_SUPERSCRIPT_MAP)
+_EXPONENT_EXPR_RE = re.compile(r"\A[0-9n+\-*]+\Z")
+
+
+def _parse_exponent_word(pattern: str, alphabet: set[str]) -> list[tuple[str, str]] | None:
+    """Parse a pure exponent-notation word like ``"aⁿbⁿ⁻¹"`` into
+    ``[(letter, exponent_expr), ...]`` where ``exponent_expr`` is an ascii
+    arithmetic expression in ``n`` (e.g. ``"n"``, ``"n-1"``, ``"2*n"``).
+
+    Returns ``None`` for anything that isn't purely (alphabet letter +
+    optional superscript exponent)* — prose, spaces, ``=``, parentheses,
+    etc. all bail out, so free-text proof fields are never misinterpreted.
+    """
+    tokens: list[tuple[str, str]] = []
+    i = 0
+    n = len(pattern)
+    while i < n:
+        ch = pattern[i]
+        if ch not in alphabet:
+            return None
+        i += 1
+        exp_chars: list[str] = []
+        while i < n and pattern[i] in _SUPERSCRIPT_CHARS:
+            exp_chars.append(_SUPERSCRIPT_MAP[pattern[i]])
+            i += 1
+        if exp_chars:
+            expr = re.sub(r"(\d)(n)", r"\1*\2", "".join(exp_chars))
+            tokens.append((ch, expr))
+        else:
+            tokens.append((ch, "1"))
+    return tokens
+
+
+def _eval_exponent_expr(expr: str, n: int) -> int | None:
+    if not _EXPONENT_EXPR_RE.match(expr):
+        return None
+    try:
+        value = eval(expr, {"__builtins__": {}}, {"n": n})  # noqa: S307 — validated charset
+    except Exception:
+        return None
+    if not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def instantiate_exponent_pattern(pattern: str, n: int, alphabet: set[str]) -> str | None:
+    """Instantiate a pure exponent-notation word pattern (e.g. ``"aⁿbⁿ⁻¹"``)
+    at a concrete integer ``n``, returning the concrete word, or ``None`` if
+    *pattern* isn't purely exponent notation over *alphabet* (prose, spacing,
+    formulas with ``=``, parenthesised groups, etc. all bail out safely).
+    """
+    if not isinstance(pattern, str) or not pattern:
+        return None
+    tokens = _parse_exponent_word(pattern, alphabet)
+    if tokens is None:
+        return None
+    out: list[str] = []
+    for letter, expr in tokens:
+        exp = _eval_exponent_expr(expr, n)
+        if exp is None:
+            return None
+        out.append(letter * exp)
+    return "".join(out)
+
+
 def _build_word_from_segments(
     segments: list[dict],
     assignments: dict[str, str],

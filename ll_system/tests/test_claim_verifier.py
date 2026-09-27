@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from ll_system.lib import claim_verifier as cv
 from ll_system.lib.claim_verifier import (
     verify_ll_claim,
     verify_ll_grammar_claim,
@@ -11,6 +12,7 @@ from ll_system.lib.claim_verifier import (
     verify_prefix_classes_claim,
     verify_essential_ambiguity_claim,
     _make_result,
+    _task_language_equivalence_trust,
 )
 
 # ---------------------------------------------------------------------------
@@ -139,7 +141,10 @@ AGENT_MARKER_CLAIM = {
 # ---------------------------------------------------------------------------
 
 RESULT_KEYS = {"agent", "verification_status", "checks_passed", "checks_total", "issues", "details"}
-VALID_STATUSES = {"verified", "refuted", "inconclusive", "error"}
+# docs/VERDICT_POLICY.md §1 trust taxonomy: a structural-only pass is
+# "well_formed", not "verified" — "verified" is reserved for a deterministic
+# *complete* check, "bounded_pass" for a deterministic *approximate* one.
+VALID_STATUSES = {"verified", "bounded_pass", "well_formed", "not_verified", "refuted", "error"}
 
 
 def _assert_result_shape(result: dict) -> None:
@@ -157,8 +162,9 @@ def _assert_result_shape(result: dict) -> None:
 
 class TestVerifyLlClaim:
     def test_uncertain_verdict_is_inconclusive(self):
+        # docs/VERDICT_POLICY.md §1: verification impossible -> not_verified.
         result = verify_ll_claim(AGENT_UNCERTAIN, IR_SIMPLE)
-        assert result["verification_status"] == "inconclusive"
+        assert result["verification_status"] == "not_verified"
 
     def test_uncertain_result_shape(self):
         result = verify_ll_claim(AGENT_UNCERTAIN, IR_SIMPLE)
@@ -173,7 +179,8 @@ class TestVerifyLlClaim:
             "artifacts": {},
         }
         result = verify_ll_claim(agent_result, IR_SIMPLE)
-        assert result["verification_status"] == "inconclusive"
+        # docs/VERDICT_POLICY.md §1: no proof_sketch -> not_verified.
+        assert result["verification_status"] == "not_verified"
 
     def test_no_proof_sketch_result_shape(self):
         agent_result = {
@@ -195,12 +202,16 @@ class TestVerifyLlClaim:
             "artifacts": {},
         }
         result = verify_ll_claim(agent_result, IR_SIMPLE)
-        assert result["verification_status"] == "inconclusive"
+        # docs/VERDICT_POLICY.md §1: unknown method -> not_verified.
+        assert result["verification_status"] == "not_verified"
 
     def test_ll_grammar_claim_status_verified_or_inconclusive(self):
         result = verify_ll_claim(AGENT_LL_CLAIM, IR_SIMPLE)
-        # If table builder is available, verified; otherwise inconclusive
-        assert result["verification_status"] in ("verified", "inconclusive")
+        # docs/VERDICT_POLICY.md §1/§2: IR_SIMPLE has no language_spec, so the
+        # language-equivalence oracle is unavailable and a structural pass
+        # (even with check_ll_k confirming LL(k)) stays well_formed, not
+        # verified/bounded_pass.
+        assert result["verification_status"] in ("well_formed", "not_verified")
 
     def test_ll_grammar_claim_result_shape(self):
         result = verify_ll_claim(AGENT_LL_CLAIM, IR_SIMPLE)
@@ -309,9 +320,11 @@ class TestVerifySubstitutionClaim:
         assert result["checks_passed"] > 0
 
     def test_complete_witness_verified(self):
+        # docs/VERDICT_POLICY.md §1: structural pass with no oracle available
+        # (IR_SIMPLE has no language_spec) is well_formed, not verified.
         proof = AGENT_NOT_LL_CLAIM["proof_sketch"]
         result = verify_substitution_claim(proof, IR_SIMPLE)
-        assert result["verification_status"] == "verified", result["issues"]
+        assert result["verification_status"] == "well_formed", result["issues"]
 
     def test_complete_witness_result_shape(self):
         proof = AGENT_NOT_LL_CLAIM["proof_sketch"]
@@ -362,8 +375,9 @@ class TestVerifySubstitutionClaim:
         proof["witness"] = {"w1": "a^n", "lookahead": "b^k", "why_not_in_L": "old contract"}
         result = verify_substitution_claim(proof, IR_SIMPLE)
         assert any("obsolete" in i for i in result["issues"])
-        # Structural checks on the new contract still pass despite the obsolete leftover.
-        assert result["verification_status"] == "verified", result["issues"]
+        # Structural checks on the new contract still pass despite the obsolete leftover
+        # (docs/VERDICT_POLICY.md §1: structural pass, no oracle -> well_formed).
+        assert result["verification_status"] == "well_formed", result["issues"]
 
     def test_result_has_all_keys(self):
         proof = AGENT_NOT_LL_CLAIM["proof_sketch"]
@@ -590,8 +604,9 @@ class TestSubstitutionPromptFieldNames:
         return proof
 
     def test_new_contract_fully_verified(self):
+        # docs/VERDICT_POLICY.md §1: structural pass, no oracle -> well_formed.
         result = verify_substitution_claim(self._make_proof(), IR_SIMPLE)
-        assert result["verification_status"] == "verified", result["issues"]
+        assert result["verification_status"] == "well_formed", result["issues"]
 
     def test_old_witness_shape_alone_is_not_verified(self):
         """Regression: the pre-revision witness/lookahead/why_not_ll shape must
@@ -615,7 +630,8 @@ class TestSubstitutionPromptFieldNames:
         assert any("branch_words" in i for i in result["issues"])
 
     def test_prompt_shaped_payload_fully_verified(self):
-        """End-to-end: a payload shaped exactly like the new prompt output must be verified."""
+        """End-to-end: a payload shaped exactly like the new prompt output must pass
+        structurally (docs/VERDICT_POLICY.md §1: well_formed, no oracle available)."""
         prompt_payload = self._make_proof(
             branch_words={
                 "common_prefix": "a^j, n-k < j <= n",
@@ -626,7 +642,7 @@ class TestSubstitutionPromptFieldNames:
             proof_explanation="Полное доказательство на русском.",
         )
         result = verify_substitution_claim(prompt_payload, IR_SIMPLE)
-        assert result["verification_status"] == "verified", result["issues"]
+        assert result["verification_status"] == "well_formed", result["issues"]
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +751,7 @@ class TestVerifyPrefixClassesClaim:
 
     def test_valid_claim_verified(self):
         result = verify_prefix_classes_claim(self.VALID_PS, IR_SIMPLE)
-        assert result["verification_status"] == "verified", result["issues"]
+        assert result["verification_status"] == "well_formed", result["issues"]  # docs/VERDICT_POLICY.md §1: no semantic check for prefix_classes/essential_ambiguity yet
 
     def test_checks_passed_all_eight(self):
         result = verify_prefix_classes_claim(self.VALID_PS, IR_SIMPLE)
@@ -776,7 +792,7 @@ class TestVerifyPrefixClassesClaim:
         }
         result = verify_ll_claim(agent_result, IR_SIMPLE)
         assert "No verifier" not in " ".join(result.get("issues", []))
-        assert result["verification_status"] == "verified"
+        assert result["verification_status"] == "well_formed"  # docs/VERDICT_POLICY.md §1
 
     def test_old_ll_nerode_theorem_shape_not_verified(self):
         """Regression: the false 'LL Nerode theorem' (k-distinguishable prefixes) shape
@@ -810,7 +826,7 @@ class TestVerifyPrefixClassesClaim:
             "proof_explanation": "Полное доказательство на русском.",
         }
         result = verify_prefix_classes_claim(ps, IR_SIMPLE)
-        assert result["verification_status"] == "verified", result["issues"]
+        assert result["verification_status"] == "well_formed", result["issues"]  # docs/VERDICT_POLICY.md §1
 
 
 class TestVerifyEssentialAmbiguityClaim:
@@ -839,7 +855,7 @@ class TestVerifyEssentialAmbiguityClaim:
 
     def test_valid_claim_verified(self):
         result = verify_essential_ambiguity_claim(self.VALID_PS, IR_SIMPLE)
-        assert result["verification_status"] == "verified", result["issues"]
+        assert result["verification_status"] == "well_formed", result["issues"]  # docs/VERDICT_POLICY.md §1
 
     def test_checks_passed_all_five(self):
         result = verify_essential_ambiguity_claim(self.VALID_PS, IR_SIMPLE)
@@ -876,4 +892,76 @@ class TestVerifyEssentialAmbiguityClaim:
         }
         result = verify_ll_claim(agent_result, IR_SIMPLE)
         assert "No verifier" not in " ".join(result.get("issues", []))
-        assert result["verification_status"] == "verified"
+        assert result["verification_status"] == "well_formed"  # docs/VERDICT_POLICY.md §1
+
+
+# ---------------------------------------------------------------------------
+# docs/VERDICT_POLICY.md R2/§4 fix (reviewer finding): Format 1 language
+# equivalence must check BOTH directions, not just L(G) subseteq L.
+# ---------------------------------------------------------------------------
+
+_ANBN_IR = {
+    "task_type": "ll_check_language",
+    "source_text": "{a^n b^n | n >= 0}",
+    "language_spec": {
+        "kind": "predicate",
+        "alphabet": ["a", "b"],
+        "variable": "w",
+        "predicate": {
+            "op": "and",
+            "args": [
+                {"op": "matches_regex", "args": {"var": "w", "pattern": "^a*b*$"}},
+                {"op": "count_eq", "args": {"var": "w", "chars": ["a"], "chars2": ["b"]}},
+            ],
+        },
+    },
+    "alphabet": ["a", "b"],
+}
+
+
+def _anbn_oracle(word: str) -> bool:
+    i = 0
+    n = len(word)
+    while i < n and word[i] == "a":
+        i += 1
+    if any(ch != "b" for ch in word[i:]):
+        return False
+    return i == len(word) - i
+
+
+class TestTaskLanguageEquivalenceChecksBothDirections:
+    """S -> ab only generates {'ab'} subset {a^n b^n} -- checking only
+    L(G) subseteq L (the pre-fix behaviour) would falsely pass this as
+    bounded_pass; a real equivalence check must also verify L subseteq L(G)
+    and refute it."""
+
+    STRICT_SUBSET_GRAMMAR = {
+        "nonterminals": ["S"],
+        "terminals": ["a", "b"],
+        "start": "S",
+        "rules": [{"lhs": "S", "rhs": ["a", "b"]}],
+    }
+
+    EQUIVALENT_GRAMMAR = {
+        "nonterminals": ["S"],
+        "terminals": ["a", "b"],
+        "start": "S",
+        "rules": [
+            {"lhs": "S", "rhs": ["a", "S", "b"]},
+            {"lhs": "S", "rhs": []},
+        ],
+    }
+
+    def test_strict_subset_grammar_is_refuted_not_bounded_pass(self, monkeypatch):
+        monkeypatch.setattr(cv, "_try_word_oracle", lambda ir: _anbn_oracle)
+        trust, details = _task_language_equivalence_trust(self.STRICT_SUBSET_GRAMMAR, _ANBN_IR)
+        assert trust == "refuted", (
+            "S -> ab only covers n=1 of {a^n b^n} -- inclusion-only checking "
+            "used to wrongly certify this as bounded_pass"
+        )
+        assert details.get("missing_from_grammar")
+
+    def test_actually_equivalent_grammar_is_bounded_pass(self, monkeypatch):
+        monkeypatch.setattr(cv, "_try_word_oracle", lambda ir: _anbn_oracle)
+        trust, _details = _task_language_equivalence_trust(self.EQUIVALENT_GRAMMAR, _ANBN_IR)
+        assert trust == "bounded_pass"

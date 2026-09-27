@@ -70,8 +70,8 @@ You are the central reasoning and consolidation agent for the CFL agent system. 
     "negative_checked": 50
   },
   "claim_verification": {
-    "pumping_cfl": { "status": "verified | issues_found", "issues": [] },
-    "closure_reduction": { "status": "verified | issues_found", "issues": [] }
+    "pumping_cfl": { "status": "well_formed | bounded_pass | refuted | not_verified | verified", "issues": [] },
+    "closure_reduction": { "status": "well_formed | bounded_pass | refuted | not_verified | verified", "issues": [] }
   },
   "proof_checker": {
     "status": "verified | issues_found | not_run",
@@ -86,6 +86,22 @@ You are the central reasoning and consolidation agent for the CFL agent system. 
   "inversion_count": 0
 }
 ```
+
+### `claim_verification.*.status` — trust taxonomy, not a yes/no
+
+`status` is the deterministic trust label (docs/VERDICT_POLICY.md §1), not a
+verdict on the underlying theorem: `refuted` (an oracle counterexample), `not_verified`
+(nothing could be checked), `well_formed` (structure only — fields present, nothing
+was checked semantically), `bounded_pass` (a real semantic check passed, but only
+on a finite sample), `verified` (a full deterministic proof — reserved for cases the
+CFL claim_verifier does not currently produce). **`well_formed` and `bounded_pass`
+are NOT "verified".** Never write "проверено"/"verified" in your summary or
+`primary_justification` for a `well_formed` or `bounded_pass` claim — say
+"корректно оформлено" (well_formed) or "проверено выборочно" (bounded_pass)
+instead. The orchestrator applies a deterministic confidence ceiling per this
+taxonomy after you decide (docs/VERDICT_POLICY.md §2) — your own confidence
+can only be capped lower by it, never raised, so do not inflate confidence to
+compensate for a lower trust tier.
 
 ### CRITICAL rules about proof_checker and failed_agents
 

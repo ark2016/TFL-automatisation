@@ -117,7 +117,27 @@ flowchart TD
 - **Selective retry.** `retry_planner` can re-dispatch a subset of agents with specific hints (e.g. "try pumping word $a^p b^p c^p$ instead of $a^{2p}$") without re-running the whole pipeline.
 - **Hypothesis inversion.** If every specialist under the current guess (`cfl` / `non_cfl`) fails, `invert_hypothesis` flips the hypothesis and restarts the dispatch. Bounded by `MAX_INVERSIONS`.
 - **Error tracking.** `proof_verified: true` is set only if `proof_checker` actually ran and returned `status = verified` (REG / CFL). Agent errors, API failures, and JSON-parse problems are tracked in `state["errors"]` and surfaced in the final result.
-- **Known limitations.** Several claim verifiers still mark an agent claim `verified` when it is merely well-formed, and the final verdict is not yet cross-checked against the oracle — a run can end with a confident verdict the oracle does not support. Treat verdicts as strong hints, not proofs; see [`TODO.md`](TODO.md) §1.
+- **Known limitations.** Claim verifiers that used to mark an agent claim `verified` for being merely well-formed now
+  return `well_formed` (see trust taxonomy below); semantic (word-level) verification of the claim's content is only
+  partial so far — implemented where an oracle already exists (CFL pumping/ogden/closure_reduction, DCFL pumping/Shallit,
+  LL constructive/substitution/prefix_classes, REG pumping/Nerode), not yet for set_builder languages without a
+  word-oracle. Treat a verdict's confidence per its `trust` level, not as a proof; see [`TODO.md`](TODO.md) §1 and
+  [`docs/VERDICT_POLICY.md`](docs/VERDICT_POLICY.md) §4.
+
+- **Trust taxonomy and confidence caps.** Every artifact/claim carries a `trust` level, and the orchestrator caps the
+  final `confidence` accordingly (full rules: [`docs/VERDICT_POLICY.md`](docs/VERDICT_POLICY.md)):
+
+  | trust | meaning | confidence cap |
+  |---|---|---|
+  | `verified` | deterministic, complete check (LL(k) table, Lean proof w/o `sorry`, regex/DFA regularity) | 0.98 |
+  | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, pumping checked for p ∈ {3,4,5}) | 0.85 |
+  | `well_formed` | structure only — fields present, JSON/words parsed | 0.60 |
+  | `not_verified` | check impossible or fields missing (verdict must be `inconclusive`/`uncertain`) | 0.40 |
+  | unresolved `contradiction` (constructive vs. destructive evidence) | — | 0.50 |
+
+  The result's `verdict_gate` block (`basis`, `contradiction`, `downgrades`, `confidence_cap`) records which trust
+  levels backed the verdict and any downgrade the gate applied; renderers label evidence in words (`verified` /
+  `bounded_pass` / `well_formed` / `refuted`) rather than a blanket green "verified" banner.
 
 ### Pipeline differences
 

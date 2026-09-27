@@ -54,6 +54,25 @@ CFL_SPECIALIST_NAMES = (
 # deterministic (independent of PYTHONHASHSEED).
 _CONSTRUCTIVE_AGENTS = ("cfg_builder", "pda_builder")
 
+# Agents whose claim, when trusted, supports a *destructive* (non_cfl) verdict.
+_DESTRUCTIVE_AGENTS = (
+    "pumping_cfl", "ogden", "closure_reduction", "decomposition",
+    "parikh", "interchange", "morphism",
+)
+
+# docs/VERDICT_POLICY.md §1: trust taxonomy order (refuted is excluded from
+# this ranking on purpose — it is a disqualifier, never "weaker evidence").
+_TRUST_RANK = {"not_verified": 0, "well_formed": 1, "bounded_pass": 2, "verified": 3}
+
+# docs/VERDICT_POLICY.md §2: confidence ceiling by strongest supporting basis.
+_CONFIDENCE_CAP_BY_TRUST = {
+    "verified": 0.98,
+    "bounded_pass": 0.85,
+    "well_formed": 0.60,
+    "not_verified": 0.40,
+}
+_CONTRADICTION_CONFIDENCE_CAP = 0.50
+
 
 # ---------------------------------------------------------------------------
 # PipelineState
@@ -86,6 +105,10 @@ class PipelineState(TypedDict):
     # -- Verification --
     claim_verification: dict
     oracle_test_result: dict
+
+    # -- Verdict gate (docs/VERDICT_POLICY.md) --
+    trust: dict                                          # {agent_name: trust_level}
+    verdict_gate: dict                                    # {basis, contradiction, downgrades, confidence_cap}
 
     # -- Reasoning & retry --
     reasoning_output: dict
@@ -733,12 +756,19 @@ def _normalize_oracle_test(raw: dict | None) -> dict:
 def _normalize_claim_verification(raw: dict | None) -> dict:
     """Normalize claim_verification for the reasoning agent prompt.
 
-    The claim verifier returns verification_status in
-    {verified, refuted, inconclusive, error}. The reasoning prompt
-    expects status in {verified, issues_found}. Map them:
-      verified → verified
-      refuted, inconclusive, error → issues_found
-    We also preserve the original verification_status for nuance.
+    docs/VERDICT_POLICY.md §1: claim_verifier returns verification_status in
+    {well_formed, bounded_pass, refuted, not_verified} (never "verified" —
+    that trust level is reserved for deterministic full proofs elsewhere).
+    Earlier this collapsed that taxonomy into a binary {verified,
+    issues_found} for the reasoning prompt — that literally told the LLM
+    "verified" for a merely well_formed (structure-only) claim, which is
+    exactly the honesty gap docs/VERDICT_POLICY.md exists to close (a
+    self-reported "verified" must never leak into the rendered proof text
+    just because the structure parsed). The prompt contract (cfl_reasoning.md)
+    now enumerates the real trust taxonomy, so `status` here IS the trust
+    label, unmodified — "verified" is passed through only when the
+    verifier itself actually reached that tier (it doesn't yet, for any
+    CFL claim_verifier check), never as a stand-in for "structurally OK".
     """
     if not isinstance(raw, dict):
         return {}
@@ -746,17 +776,270 @@ def _normalize_claim_verification(raw: dict | None) -> dict:
     for agent, cv in raw.items():
         if isinstance(cv, dict):
             normalized = dict(cv)
-            vs = normalized.get("verification_status")
-            if vs == "verified":
-                normalized["status"] = "verified"
-            elif vs in ("refuted", "inconclusive", "error"):
-                normalized["status"] = "issues_found"
-            elif "status" not in normalized:
-                normalized["status"] = "issues_found"
+            vs = normalized.get("verification_status") or normalized.get("trust")
+            normalized["status"] = vs if vs in _TRUST_LEVEL_VALUES else "not_verified"
             result[agent] = normalized
         else:
             result[agent] = cv
     return result
+
+
+_TRUST_LEVEL_VALUES = frozenset({"refuted", "not_verified", "well_formed", "bounded_pass", "verified"})
+
+
+# ---------------------------------------------------------------------------
+# Verdict gate (docs/VERDICT_POLICY.md) — deterministic post-reasoning check
+# ---------------------------------------------------------------------------
+
+def _trust_rank(trust: str | None) -> int:
+    return _TRUST_RANK.get(trust or "not_verified", 0)
+
+
+def _oracle_trust(oracle_result: dict | None) -> str:
+    """Trust contributed by the shared cfg_builder/pda_builder oracle_test."""
+    if not isinstance(oracle_result, dict):
+        return "not_verified"
+    t = oracle_result.get("trust")
+    if isinstance(t, str):
+        return t
+    status = oracle_result.get("status")
+    if status == "pass":
+        return "bounded_pass"
+    if status == "grammar_incorrect":
+        return "refuted"
+    return "not_verified"
+
+
+def _collect_agent_trust(state: PipelineState) -> dict[str, str]:
+    """trust per agent (docs/VERDICT_POLICY.md §5): constructive agents get
+    the shared oracle_test trust (there is one oracle_test per round, covering
+    whichever of cfg_builder/pda_builder produced an artifact); every other
+    agent gets its own claim_verification trust.
+    """
+    trust: dict[str, str] = {}
+    agent_results = state.get("agent_results") or {}
+    ot_trust = _oracle_trust(state.get("oracle_test_result"))
+    for name in _CONSTRUCTIVE_AGENTS:
+        if name in agent_results:
+            trust[name] = ot_trust
+    # claim_verification has a generic not_verified fallback entry for ANY
+    # dispatched agent without a dedicated verifier (cfg_builder, pda_builder
+    # included) — that fallback must never clobber the oracle-derived trust
+    # constructive agents already got above.
+    cv = state.get("claim_verification") or {}
+    for name, v in cv.items():
+        if name in _CONSTRUCTIVE_AGENTS:
+            continue
+        if isinstance(v, dict):
+            trust[name] = v.get("trust") or v.get("verification_status") or "not_verified"
+    return trust
+
+
+def _strongest_trust(trust_map: dict[str, str], agents: tuple[str, ...]) -> tuple[str, bool]:
+    """Return (best non-refuted trust among `agents`, whether any is refuted)."""
+    best = "not_verified"
+    any_refuted = False
+    for name in agents:
+        t = trust_map.get(name)
+        if not t:
+            continue
+        if t == "refuted":
+            any_refuted = True
+            continue
+        if _trust_rank(t) > _trust_rank(best):
+            best = t
+    return best, any_refuted
+
+
+def _destructive_agent_argues_non_cfl(state: PipelineState, name: str) -> bool:
+    """Whether agent `name`'s own output actually argues non_cfl.
+
+    docs/VERDICT_POLICY.md R1: `_DESTRUCTIVE_AGENTS` includes agents like
+    `decomposition` (schema: verdict in {"cfl", null} — it argues FOR cfl by
+    exhibiting a CFL-closed decomposition) and `parikh` (schema: verdict in
+    {"non_cfl", null}). A well_formed *structural* verification of
+    decomposition's claim says nothing about which side that claim
+    supports — a well-formed pro-CFL decomposition must never be counted as
+    destructive evidence for non_cfl just because it passed structural
+    checks (that was the grammar_filter_49 + decomposition regression: a
+    well-formed decomposition arguing CFL was silently read as an
+    unrelated destructive claim). Only an agent whose own verdict is
+    literally "non_cfl", with status=="success", counts here; for `parikh`
+    that verdict must additionally be backed by `is_semilinear is False` in
+    its own evidence (not just the LLM's textual conclusion).
+    """
+    agent_results = state.get("agent_results") or {}
+    out = agent_results.get(name)
+    if not isinstance(out, dict) or out.get("status") != "success":
+        return False
+    if _normalize_verdict(out.get("verdict")) != "non_cfl":
+        return False
+    if name == "parikh":
+        evidence = out.get("evidence")
+        if not isinstance(evidence, dict) or evidence.get("is_semilinear") is not False:
+            return False
+    return True
+
+
+def _strongest_destructive_trust(
+    state: PipelineState, trust_map: dict[str, str],
+) -> tuple[str, bool]:
+    """Like `_strongest_trust`, but restricted to agents whose own verdict
+    actually argues non_cfl (see `_destructive_agent_argues_non_cfl`)."""
+    eligible = tuple(
+        name for name in _DESTRUCTIVE_AGENTS
+        if _destructive_agent_argues_non_cfl(state, name)
+    )
+    return _strongest_trust(trust_map, eligible)
+
+
+def apply_verdict_gate(state: PipelineState) -> dict:
+    """Deterministic gate applied to the reasoning agent's proposed verdict.
+
+    Implements docs/VERDICT_POLICY.md rules R1 (failure != refutation), R2
+    (constructive verdict needs a >= bounded_pass artifact), R3 (contradiction
+    between constructive and destructive evidence), R4 (log every downgrade),
+    and the confidence ceiling of §2. Never raises `proof_verified` from an
+    LLM's own self-assessment — only from the trust levels computed here.
+
+    Returns the fields to merge into state: an updated `reasoning_output`
+    (action/verdict/confidence adjusted in place of the LLM's proposal when a
+    rule is violated), plus `trust` and `verdict_gate` for the final result.
+    """
+    reasoning = dict(state.get("reasoning_output") or {})
+    trust_map = _collect_agent_trust(state)
+
+    action = _get_action(reasoning)
+    verdict = _normalize_verdict(reasoning.get("verdict"))
+    confidence = _clamp_confidence(reasoning.get("confidence"))
+
+    constructive_trust, constructive_refuted = _strongest_trust(trust_map, _CONSTRUCTIVE_AGENTS)
+    destructive_trust, destructive_refuted = _strongest_destructive_trust(state, trust_map)
+
+    basis: list[dict] = [
+        {"agent": name, "trust": t} for name, t in sorted(trust_map.items())
+    ]
+    downgrades: list[str] = []
+    basis_note: str | None = None
+
+    retry_round = state.get("retry_round", 0)
+    budget_left = retry_round < MAX_RETRIES
+
+    def _downgrade_to_inconclusive_or_retry(reason: str) -> None:
+        nonlocal action, verdict, confidence, basis_note
+        if budget_left:
+            downgrades.append(f"{reason} -> retry")
+            action = "retry"
+        else:
+            downgrades.append(f"{reason} -> inconclusive")
+            action = "done"
+            verdict = None
+            confidence = min(confidence, 0.40)
+
+    if action == "done" and verdict == "cfl":
+        # R2: constructive verdict requires a >= bounded_pass artifact that
+        # was not itself refuted by the oracle.
+        if constructive_refuted or _trust_rank(constructive_trust) < _trust_rank("bounded_pass"):
+            basis_note = "constructive_failure_only" if constructive_refuted else "no_verified_artifact"
+            _downgrade_to_inconclusive_or_retry(
+                "reasoning proposed done/cfl without a >= bounded_pass constructive artifact"
+            )
+
+    elif action == "done" and verdict == "non_cfl":
+        # R1/R4: a destructive verdict needs a destructive claim with trust
+        # >= well_formed — a constructive agent's failure is NOT evidence.
+        # destructive_trust is already the best NON-refuted agent's trust
+        # (a different, refuted agent must not veto a genuinely well_formed
+        # one — docs/VERDICT_POLICY.md §4/R7 still surfaces the refuted
+        # agent separately for the retry planner via `trust`/`basis`).
+        if _trust_rank(destructive_trust) < _trust_rank("well_formed"):
+            basis_note = "constructive_failure_only" if constructive_refuted else "no_verified_artifact"
+            _downgrade_to_inconclusive_or_retry(
+                "reasoning proposed done/non_cfl without a >= well_formed destructive claim"
+            )
+
+    # R3: contradiction — both sides clear their threshold (destructive_trust/
+    # constructive_trust already exclude any individually-refuted agent, per
+    # _strongest_trust). Flagged regardless of whether one side outranks the
+    # other; confidence stays capped at 0.50 while unresolved.
+    contradiction = (
+        _trust_rank(constructive_trust) >= _trust_rank("bounded_pass")
+        and _trust_rank(destructive_trust) >= _trust_rank("well_formed")
+    )
+    if contradiction:
+        downgrades.append(
+            "contradiction: constructive artifact (trust="
+            f"{constructive_trust}) and destructive claim (trust="
+            f"{destructive_trust}) both clear their threshold"
+        )
+        if _trust_rank(constructive_trust) > _trust_rank(destructive_trust):
+            verdict = "cfl"
+        elif _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
+            verdict = "non_cfl"
+        else:
+            verdict = None
+            basis_note = basis_note or "contradiction"
+        confidence = min(confidence, _CONTRADICTION_CONFIDENCE_CAP)
+
+    # §2: confidence ceiling by the strongest basis actually behind the
+    # (possibly just-adjusted) verdict.
+    strongest = constructive_trust if _trust_rank(constructive_trust) >= _trust_rank(destructive_trust) else destructive_trust
+    cap = _CONFIDENCE_CAP_BY_TRUST.get(strongest, 0.40)
+    if contradiction:
+        cap = min(cap, _CONTRADICTION_CONFIDENCE_CAP)
+    confidence = min(confidence, cap)
+
+    # proof_verified must come only from these deterministic trust levels,
+    # never from proof_checker's own self-assessment (docs/VERDICT_POLICY.md §3).
+    # The strongest trust actually behind the (possibly gated) verdict —
+    # renderers use this to show the honest word-label (docs/VERDICT_POLICY.md
+    # §5: "проверено полностью" / "проверено выборочно" / "корректно
+    # оформлено" / "опровергнуто"), and the green "fully verified" banner is
+    # reserved for `trust == "verified"` specifically — bounded_pass is a
+    # real, deterministic check, but only over a finite sample, not a proof.
+    if verdict == "cfl":
+        basis_trust = constructive_trust if not constructive_refuted else "refuted"
+    elif verdict == "non_cfl":
+        basis_trust = destructive_trust
+    else:
+        basis_trust = "not_verified"
+    if contradiction:
+        basis_trust = "not_verified"
+    proof_verified = basis_trust == "verified"
+
+    reasoning["action"] = action
+    reasoning["decision"] = action
+    reasoning["verdict"] = verdict
+    reasoning["confidence"] = confidence
+    if action == "retry" and not reasoning.get("retry_plan"):
+        # Synthesize a minimal retry plan so run_retry_planner_node's
+        # fallback path (when the LLM planner is unavailable) has somewhere
+        # to point — R7: retry the side that failed its threshold.
+        if verdict == "cfl" or (verdict is None and constructive_refuted):
+            agents_to_retry = [a for a in _CONSTRUCTIVE_AGENTS if trust_map.get(a) != "bounded_pass"]
+        else:
+            agents_to_retry = [
+                a for a in _DESTRUCTIVE_AGENTS
+                if _trust_rank(trust_map.get(a)) < _trust_rank("well_formed") or trust_map.get(a) == "refuted"
+            ] or list(_DESTRUCTIVE_AGENTS)
+        reasoning["retry_plan"] = {
+            "agents_to_retry": agents_to_retry,
+            "hints": {},
+            "reason": downgrades[-1] if downgrades else "verdict_gate",
+        }
+
+    verdict_gate: dict[str, Any] = {
+        "basis": basis,
+        "basis_trust": basis_trust,
+        "contradiction": contradiction,
+        "downgrades": downgrades,
+        "confidence_cap": cap,
+        "proof_verified": proof_verified,
+    }
+    if basis_note:
+        verdict_gate["basis_note"] = basis_note
+
+    return {"reasoning_output": reasoning, "trust": trust_map, "verdict_gate": verdict_gate}
 
 
 # ---------------------------------------------------------------------------
@@ -811,10 +1094,14 @@ def assemble_early_failure(state: PipelineState) -> dict:
         if not pda:
             pda = output.get("pda") or (output.get("evidence", {}) or {}).get("pda")
 
+    trust_map = state.get("trust") or {}
     specialist_outputs_out: dict[str, dict] = {}
     for name in CFL_SPECIALIST_NAMES:
         out = agent_results.get(name)
         if isinstance(out, dict):
+            out = dict(out)
+            if name in trust_map:
+                out["trust"] = trust_map[name]
             specialist_outputs_out[name] = out
 
     return {
@@ -831,6 +1118,8 @@ def assemble_early_failure(state: PipelineState) -> dict:
             "agents_used": sorted(agent_results.keys()),
             "agents_failed": _collect_failed_agents(state),
             "specialist_outputs": specialist_outputs_out,
+            "claim_verification": state.get("claim_verification") or {},
+            "verdict_gate": state.get("verdict_gate") or {},
             "hints_for_human": [],
             "classifier_hint": state.get("classifier_output") or {},
             "retries": state.get("retry_round", 0),
@@ -1130,6 +1419,31 @@ def run_reasoning_node(state: PipelineState) -> dict:
     return {"reasoning_output": output, "retry_context": {}}
 
 
+def verdict_gate_node(state: PipelineState) -> dict:
+    """Deterministic gate (docs/VERDICT_POLICY.md) run right after reasoning.
+
+    Validates the reasoning agent's proposed action/verdict/confidence
+    against R1-R4 and the confidence ceiling of §2, downgrading in place
+    when the underlying trust doesn't support what was proposed. Runs before
+    `decide_retry`, which reads the (possibly gated) action from
+    `reasoning_output`.
+    """
+    log_msg(state, "verdict_gate_node...")
+    gate = apply_verdict_gate(state)
+    if state.get("verbose"):
+        vg = gate["verdict_gate"]
+        if vg.get("downgrades"):
+            log_msg(state, f"  downgrades: {vg['downgrades']}")
+        log_msg(
+            state,
+            f"  gated action={_get_action(gate['reasoning_output'])} "
+            f"verdict={gate['reasoning_output'].get('verdict')} "
+            f"confidence={gate['reasoning_output'].get('confidence')} "
+            f"contradiction={vg.get('contradiction')}",
+        )
+    return gate
+
+
 def _clamp_confidence(value: Any) -> float:
     """Clamp any value to a valid confidence [0.0, 1.0]."""
     try:
@@ -1200,9 +1514,15 @@ def _fallback_reasoning(state: PipelineState) -> dict:
             primary_evidence="preprocess",
         )
 
+    # docs/VERDICT_POLICY.md §1: claim_verifier reports well_formed/bounded_pass
+    # for a passing claim (never "verified" — that trust level is reserved for
+    # full deterministic proofs). Recognize both the current vocabulary and
+    # the literal string "verified" (kept for callers/tests that inject a
+    # claim_verification dict directly rather than through claim_verifier).
     verified_count = sum(
         1 for v in verifications.values()
-        if isinstance(v, dict) and v.get("verification_status") == "verified"
+        if isinstance(v, dict)
+        and v.get("verification_status") in ("verified", "well_formed", "bounded_pass")
     )
     refuted_count = sum(
         1 for v in verifications.values()
@@ -1338,6 +1658,11 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         state.get("oracle_test_result")
     )
     reasoning_with_context["proof_checker"] = state.get("proof_checker_output", {})
+    # R7 (docs/VERDICT_POLICY.md): the planner sees per-agent trust so it can
+    # prioritize retrying `refuted` agents (with their counterexamples,
+    # already carried in oracle_test/specialist_outputs) over merely
+    # `not_verified` ones.
+    reasoning_with_context["trust"] = state.get("trust", {})
 
     planner_input = {
         "reasoning_output": reasoning_with_context,
@@ -1484,14 +1809,16 @@ def formalize_node(state: PipelineState) -> dict:
     agent_results = state.get("agent_results", {})
     primary = reasoning.get("primary_evidence", "")
 
-    # Pass the proof_checker status explicitly so the formalizer knows
-    # whether the evidence was independently verified. The formalizer
-    # prompt starts with "The informal proof has already been verified
-    # by the proof checker" — we must override that assumption when
-    # proof_checker did not actually run.
-    pc_out = state.get("proof_checker_output") or {}
-    proof_was_verified = (
-        isinstance(pc_out, dict) and pc_out.get("status") == "verified"
+    # Pass the deterministic gate's verdict — not the proof_checker LLM's
+    # own self-assessment (docs/VERDICT_POLICY.md §3: an LLM's self-report
+    # can never promote a claim to "verified"; only verdict_gate.trust ==
+    # "verified" can). The formalizer prompt starts with "The informal proof
+    # has already been verified by the proof checker" — we must override
+    # that assumption unless the deterministic gate itself reached the
+    # `verified` trust tier.
+    verdict_gate = state.get("verdict_gate") or {}
+    proof_was_verified = bool(
+        isinstance(verdict_gate, dict) and verdict_gate.get("proof_verified")
     )
 
     formalizer_input = {
@@ -1613,21 +1940,27 @@ def assemble_result_node(state: PipelineState) -> dict:
     failed_agents = _collect_failed_agents(state)
 
     # Independent-verification flag for the consumer of the result.
-    # The proof checker actually verified the evidence iff it produced
-    # a dict with status='verified'. Anything else (not_run / issues_found
-    # / missing) means the proof is unverified and must be presented as such.
-    pc_out = state.get("proof_checker_output") or {}
-    proof_verified = (
-        isinstance(pc_out, dict) and pc_out.get("status") == "verified"
-    )
+    # docs/VERDICT_POLICY.md §3: proof_verified must come ONLY from
+    # deterministic signals (verdict_gate's trust-based check), never from
+    # proof_checker's own LLM self-assessment — a self-reported "verified"
+    # is not evidence. verdict_gate is populated by verdict_gate_node; when
+    # this function is called directly (unit tests) without that node
+    # having run, it defaults to {} and proof_verified is conservatively False.
+    verdict_gate = state.get("verdict_gate") or {}
+    trust_map = state.get("trust") or {}
+    proof_verified = bool(verdict_gate.get("proof_verified", False))
 
     # Include raw specialist outputs so the renderer can build per-approach
     # tabs (pumping / Ogden / Parikh / closure / CFG / PDA / ...).
-    # Each value is the full agent output dict with verdict+status+evidence.
+    # Each value is the full agent output dict with verdict+status+evidence,
+    # plus its trust level (docs/VERDICT_POLICY.md §5) when known.
     specialist_outputs_out: dict[str, dict] = {}
     for name in CFL_SPECIALIST_NAMES:
         out = agent_results.get(name)
         if isinstance(out, dict):
+            out = dict(out)
+            if name in trust_map:
+                out["trust"] = trust_map[name]
             specialist_outputs_out[name] = out
 
     hints = reasoning.get("hints_for_human") or []
@@ -1648,6 +1981,8 @@ def assemble_result_node(state: PipelineState) -> dict:
             "agents_used": sorted(agent_results.keys()),
             "agents_failed": failed_agents,
             "specialist_outputs": specialist_outputs_out,
+            "claim_verification": state.get("claim_verification") or {},
+            "verdict_gate": verdict_gate,
             "hints_for_human": hints,
             "classifier_hint": state.get("classifier_output") or {},
             "retries": state.get("retry_round", 0),
@@ -1682,6 +2017,7 @@ def build_cfl_pipeline_graph() -> Any:
     graph.add_node("oracle_test_node", oracle_test_node)
     graph.add_node("run_proof_checker_node", run_proof_checker_node)
     graph.add_node("run_reasoning_node", run_reasoning_node)
+    graph.add_node("verdict_gate_node", verdict_gate_node)
     graph.add_node("run_retry_planner_node", run_retry_planner_node)
     graph.add_node("invert_hypothesis_node", invert_hypothesis_node)
     graph.add_node("formalize_node", formalize_node)
@@ -1721,10 +2057,11 @@ def build_cfl_pipeline_graph() -> Any:
     graph.add_edge("verify_claims_node", "oracle_test_node")
     graph.add_edge("oracle_test_node", "run_proof_checker_node")
     graph.add_edge("run_proof_checker_node", "run_reasoning_node")
+    graph.add_edge("run_reasoning_node", "verdict_gate_node")
 
-    # Decision: done / retry / invert / fail
+    # Decision: done / retry / invert / fail (reads the gated reasoning_output)
     graph.add_conditional_edges(
-        "run_reasoning_node",
+        "verdict_gate_node",
         decide_retry,
         {
             "done": "formalize_node",
@@ -1791,6 +2128,8 @@ def run_pipeline(
         "oracle_ok": False,
         "claim_verification": {},
         "oracle_test_result": {},
+        "trust": {},
+        "verdict_gate": {},
         "reasoning_output": {},
         "proof_checker_output": {},
         "retry_round": 0,
