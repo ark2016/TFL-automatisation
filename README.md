@@ -186,8 +186,8 @@ described above, and `call()` does one streamed request and returns a typed `Cal
 model, usage, refusal info). API errors are typed — `FatalAPIError` (400/401/403/404, never retried) vs
 `RetryableAPIError` (429/5xx/overloaded/a broken stream, retried with jittered backoff) — and concurrent calls
 across all four pipelines share one process-wide semaphore, sized by the `TFL_MAX_CONCURRENCY` env var. A
-`UsageTracker` accumulates tokens/cache-hit/cost per run (`as_dict()`); it is not yet wired into each pipeline's
-top-level result JSON or CLI `--verbose` output (`TODO.md` §3).
+`UsageTracker` accumulates tokens/cache-hit/cost per run (`as_dict()`) and is now wired into each pipeline's
+top-level result JSON and CLI `--verbose` output, so every run reports its own token/cost usage block.
 
 **Structured outputs.** Agent responses are parsed primarily via the Messages API's `output_config.format`
 (a closed per-agent JSON schema built by `build_agent_output_schema()` / `agent_output_schema.py` in each
@@ -268,6 +268,14 @@ flowchart LR
 - **DCFL pumping lemma (Yu).** Works with *two* words `xy`, `xz ∈ L` sharing a long prefix `x` (|x| > p, first(y) = first(z)). At least one of two conditions must hold: **(1)** a *pair* of factors `x₂, x₄` — the pair may sit **anywhere** in `x`, only the window `|x₂x₃x₄| ≤ p` is bounded — pumps synchronously in both `xy` and `xz`; **(2)** a single factor in the *last* `p` symbols of `x` pumps synchronously with matching factors of `y` and `z`. Refuting **both** for every decomposition shows `L` is not DCFL. (A single-factor reading of condition (1) is unsound — it would wrongly reject DCFLs like {aⁿbⁿcᵐ}.)
 - **Shallit's theorem (Myhill–Nerode classes, [Sh] Thm 4.7.4).** If `L` is a DCFL, at least one Nerode-equivalence class of `L` is infinite. Contrapositive: if **all** classes are finite — every pair of distinct words separable by some suffix — then `L` is not DCFL. The argument only bites if the "dead" class `D = {x | no z: xz ∈ L}` is finite (usually `D = ∅`); an infinite dead class makes the theorem vacuously true and the method inapplicable (`not_applicable`), so it must be checked first.
 - **Continuation lemma.** For a DCFL `L`, `haspref(L) = {xy | x, xy ∈ L, y ≠ ε}` and `L_$ = {x$y | x, xy ∈ L}` are also DCFL. Since DCFL ⊆ CFL and DCFLs are closed under ∩ REG, showing `L_$ ∩ R` is not CFL for some regular `R` proves `L` is not DCFL — a route around languages where direct pumping/Shallit arguments are awkward.
+
+**Constructive DCFL certificate (R2′, [`docs/VERDICT_POLICY.md`](docs/VERDICT_POLICY.md)).** A positive (`dcfl`)
+verdict requires more than prose: `stack_strategy`'s `proof_sketch` must include an executable `dpda` field
+(states, start, accept states/mode, stack alphabet, initial stack, transitions with `read`/`top`/topmost-first
+`push`) alongside the word-strategy description. `dcfl_system/lib/dpda.py` runs a syntactic determinism check
+(at most one transition per `(state, top, letter)`, no ε/letter coexistence on the same `(state, top)`). No
+`dpda` field ⇒ `status: "uncertain"`/`"not_applicable"`, never a bare prose "strategy" standing in for a
+verdict.
 - **Inherent ambiguity.** Every DCFL has an unambiguous grammar, so an *inherently* ambiguous language (every CFG for it is ambiguous) is not DCFL. One ambiguous grammar proves nothing.
 - **Closure under complement (DCFL-specific).** DCFLs are closed under complement but CFLs are not — useful discriminator.
 
@@ -414,6 +422,11 @@ fixture; otherwise it is reported `skipped` rather than guessed at. Metrics (`tf
 per-system / trap-task accuracy, a Brier score for confidence calibration, the inconclusive rate, and the
 "false confident wrong" rate (confidence ≥ 0.6 but incorrect verdict). Results land under `.tfl_lab_runs/evals/`.
 This is what lets a prompt or model change be measured rather than eyeballed (`TODO.md` §7).
+
+The first `--live` run (24 trap tasks, Haiku, 2026-09-27) is written up in
+[`docs/EVAL_RESULTS.md`](docs/EVAL_RESULTS.md): 19/19 solved tasks correct, 0 false-confident-wrong, with
+per-task tables, per-pipeline token/cost usage, and the diagnoses that fed the DCFL certificate, R4′ and the
+structured-output fixes below. A full-73-task run and a re-run after those fixes are still open (`TODO.md` §7).
 
 ---
 

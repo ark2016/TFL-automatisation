@@ -35,6 +35,10 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
   run, without passing `--formalize` each time; unset/other values keep it opt-in per `--formalize`.
 - Eval set: `docs/EVAL_SET.md` (73 tasks, expected verdicts) is run by `tfl-eval` (`tfl_eval/`), which reports
   accuracy/calibration metrics — see `README.md` and `TODO.md` §7. Mock mode by default; `--live` only on request.
+  Live results so far: `docs/EVAL_RESULTS.md` (24 trap tasks on Haiku, 2026-09-27) — read it before claiming a
+  pipeline is or isn't calibrated; a full 73-task run and a post-C2 re-run are still open.
+- Model prices live in each project's `config.py` alongside `EFFORT`/`MAX_TOKENS` (see "Models and LLM calls"
+  above) — change the pricing table there, in all four projects together, not in docs.
 
 ## Commands
 ```bash

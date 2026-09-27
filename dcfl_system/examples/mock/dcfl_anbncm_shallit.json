@@ -1,0 +1,12 @@
+{
+  "agent_name": "shallit",
+  "status": "not_applicable",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "Мёртвый класс D для L = {aⁿbⁿcᵐ | n,m>=1} бесконечен (любое слово, нарушающее порядок a*b*c*, не продолжается ни до какого слова из L) — теорема 4.7.4 ничего не доказывает",
+    "L — DCFL (прямой ДМПА агента stack_strategy), техника prefix_continuation тоже не даёт противоречия с замкнутостью DCFL"
+  ],
+  "confidence": 0.0,
+  "errors": []
+}

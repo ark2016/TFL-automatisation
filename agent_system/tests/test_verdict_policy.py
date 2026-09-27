@@ -436,8 +436,13 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
     def test_regular_verdict_not_backed_by_refuted_dfa_is_partial(self):
         """Probe 3 (R2 violation): DFA refuted, reasoning says 'regular',
         pumping well_formed (argues non_regular) -> the 'regular' claim must
-        downgrade, not ride along on the (wrongly-directed) destructive
-        evidence as success 0.6."""
+        downgrade, not ride along UNCHANGED on the (wrongly-directed)
+        destructive evidence as a 'regular' success 0.6. docs/VERDICT_POLICY.md
+        R4' (this node always runs post-retry, i.e. with the budget already
+        exhausted): the gate does not just null the verdict here -- a
+        well_formed destructive proof IS the strongest admissible basis
+        still standing, so it flips the verdict itself to non_regular
+        (capped at well_formed's own 0.60 ceiling), not 'regular'."""
         state = _state(
             test_result={
                 "status": "fail",
@@ -450,8 +455,73 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
             reasoning_output={"evidence": {"verdict": "regular", "confidence": 0.9}},
         )
         result = assemble_result_node(state)["result"]
-        self.assertNotEqual(result["status"], "success")
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "non_regular")
+        self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["well_formed"])
+        self.assertTrue(
+            any("strongest admissible basis" in d for d in result["verdict_gate"]["downgrades"])
+        )
+
+
+# ---------------------------------------------------------------------------
+# docs/VERDICT_POLICY.md R4' — retry budget exhausted (assemble_result_node
+# always runs post-retry): the gate picks the strongest admissible basis
+# instead of defaulting straight to inconclusive/`failure`. Precedent:
+# live-run eval 2026-09-27, cfl-07/cfl-12 ended `failure 0.0` despite a
+# well_formed destructive proof on record.
+# ---------------------------------------------------------------------------
+
+class TestR4PrimeStrongestAdmissibleBasis(unittest.TestCase):
+
+    def test_destructive_well_formed_rescues_unsupported_regular_proposal(self):
+        """reasoning proposes 'regular' with no passing oracle_test at all
+        (test_result never ran); pumping is well_formed and argues
+        non_regular -> non_regular <= 0.60, not inconclusive/`failure`."""
+        state = _state(
+            test_result=None,
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "well_formed", "reason": "no oracle available"},
+            },
+            reasoning_output={"evidence": {"verdict": "regular", "confidence": 0.9}},
+        )
+        result = assemble_result_node(state)["result"]
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "non_regular")
+        self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["well_formed"])
+        self.assertTrue(
+            any("strongest admissible basis" in d for d in result["verdict_gate"]["downgrades"])
+        )
+
+    def test_no_destructive_evidence_stays_partial_not_failure(self):
+        """Same unsupported 'regular' proposal, but with no destructive proof
+        of any kind on record -> partial/inconclusive, confidence <= 0.40,
+        never `failure`."""
+        state = _state(
+            test_result=None,
+            evidence={},
+            reasoning_output={"evidence": {"verdict": "regular", "confidence": 0.9}},
+        )
+        result = assemble_result_node(state)["result"]
+        self.assertEqual(result["status"], "partial")
         self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["not_verified"])
+
+    def test_constructive_bounded_pass_rescues_unsupported_non_regular_proposal(self):
+        """Symmetric case: reasoning proposes 'non_regular' with no
+        destructive proof at all, but oracle_test passed -> the gate falls
+        back to 'regular', not inconclusive."""
+        state = _state(
+            test_result={"status": "pass", "tested": 200},
+            evidence={},
+            reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.9}},
+        )
+        result = assemble_result_node(state)["result"]
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "regular")
+        self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["bounded_pass"])
+        self.assertTrue(
+            any("strongest admissible basis" in d for d in result["verdict_gate"]["downgrades"])
+        )
 
 
 # ---------------------------------------------------------------------------

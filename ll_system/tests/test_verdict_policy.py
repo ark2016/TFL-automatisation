@@ -660,6 +660,97 @@ class TestReasoningProposedRetryAtExhaustedBudget:
 
 
 # ---------------------------------------------------------------------------
+# R4' — retry budget exhausted: the gate picks the strongest admissible
+# basis instead of defaulting straight to `uncertain`. Precedent: live-run
+# eval 2026-09-27, cfl-07/cfl-12 ended `failure 0.0` despite a well_formed
+# destructive proof on record.
+# ---------------------------------------------------------------------------
+
+class TestR4PrimeStrongestAdmissibleBasis:
+    def test_destructive_well_formed_rescues_unsupported_ll_proposal(self):
+        """reasoning proposes done/ll with no constructive artifact at all;
+        retries are exhausted; substitution_agent is well_formed and argues
+        not_ll -> not_ll <= 0.60, not `uncertain` and not `failure`."""
+        state = _state(
+            retry_round=MAX_RETRIES,
+            agent_results={
+                "substitution_agent": {
+                    "verdict": "not_ll",
+                    "confidence": 0.8,
+                    "proof_sketch": {"method": "substitution", "for_all_k": True},
+                },
+            },
+            claim_verification={
+                "substitution_agent": {"trust": "well_formed", "verification_status": "well_formed"},
+            },
+            reasoning_output={
+                "action": "done",
+                "verdict": "ll",
+                "confidence": 0.9,
+                "primary_agent": None,
+                "summary": "reasoning claims ll with no constructive artifact at all",
+            },
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "not_ll"
+        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert any("strongest admissible basis" in d and "not_ll" in d for d in vg["downgrades"])
+
+    def test_no_admissible_basis_either_side_stays_uncertain_not_failure(self):
+        state = _state(
+            retry_round=MAX_RETRIES,
+            agent_results={},
+            claim_verification={},
+            reasoning_output={
+                "action": "done",
+                "verdict": "ll",
+                "confidence": 0.9,
+                "primary_agent": None,
+                "summary": "no evidence at all",
+            },
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "uncertain"
+        assert gate["reasoning_output"]["confidence"] <= 0.40
+        assert any("strongest admissible basis: inconclusive" in d for d in vg["downgrades"])
+
+    def test_constructive_bounded_pass_rescues_unsupported_not_ll_proposal(self):
+        """Symmetric case: reasoning proposes done/not_ll without adequate
+        destructive evidence, retries exhausted, but a constructive artifact
+        clears bounded_pass -> the gate falls back to ll, not uncertain."""
+        state = _state(
+            retry_round=MAX_RETRIES,
+            agent_results={
+                "ll_grammar_builder": {
+                    "verdict": "ll",
+                    "confidence": 0.9,
+                    "proof_sketch": {"method": "ll_grammar_construction", "k": 1, "grammar": {}},
+                },
+            },
+            claim_verification={
+                "ll_grammar_builder": {"trust": "bounded_pass", "verification_status": "bounded_pass"},
+            },
+            reasoning_output={
+                "action": "done",
+                "verdict": "not_ll",
+                "confidence": 0.9,
+                "primary_agent": None,
+                "summary": "reasoning claims not_ll with no destructive claim at all",
+            },
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "ll"
+        assert gate["reasoning_output"]["confidence"] <= 0.85
+        assert any("strongest admissible basis" in d and "-> ll" in d for d in vg["downgrades"])
+
+
+# ---------------------------------------------------------------------------
 # Reviewer round 4, item 2 (R7) — retry_plan carries per-agent trust and
 # counterexamples in `hints`.
 # ---------------------------------------------------------------------------

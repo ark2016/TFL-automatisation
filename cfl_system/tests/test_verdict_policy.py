@@ -489,6 +489,74 @@ class TestR3PrimeCrossCheck:
         assert gate["reasoning_output"]["confidence"] == 0.85
 
 
+# ---------------------------------------------------------------------------
+# R4': retry budget exhausted -> gate picks the strongest admissible basis
+# instead of defaulting straight to inconclusive (docs/VERDICT_POLICY.md R4').
+# Precedent: live-run eval 2026-09-27, cfl-07/cfl-12 ended `failure 0.0`
+# despite a well_formed destructive proof on record.
+# ---------------------------------------------------------------------------
+
+class TestR4PrimeStrongestAdmissibleBasis:
+    def test_destructive_well_formed_wins_when_constructive_has_no_artifact(self):
+        """reasoning proposes done/cfl with no artifact at all; retries are
+        exhausted; ogden is well_formed and argues non_cfl -> non_cfl 0.60,
+        not inconclusive and not `failure`."""
+        state = _base_state(
+            retry_round=MAX_RETRIES,
+            agent_results={"ogden": {"status": "success", "verdict": "non_cfl", "evidence": {}}},
+            oracle_test_result={},
+            claim_verification={
+                "ogden": {"trust": "well_formed", "verification_status": "well_formed"},
+            },
+            reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.9},
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "non_cfl"
+        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert any("retry budget exhausted" in d and "strongest admissible basis" in d for d in vg["downgrades"])
+        # R1/R3 must still hold: this is a real destructive claim, not a
+        # constructive-failure inference.
+        assert vg["basis_trust"] == "well_formed"
+
+    def test_no_destructive_evidence_stays_inconclusive_not_failure(self):
+        """Same exhausted-budget situation, but with no destructive claim of
+        any kind on record -> inconclusive (verdict None, confidence <=
+        0.40), never `failure`."""
+        state = _base_state(
+            retry_round=MAX_RETRIES,
+            agent_results={"cfg_builder": {"status": "failure", "evidence": None}},
+            oracle_test_result={"status": "not_applicable"},
+            claim_verification={},
+            reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.9},
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] is None
+        assert gate["reasoning_output"]["confidence"] <= 0.40
+        assert any("strongest admissible basis: inconclusive" in d for d in vg["downgrades"])
+
+    def test_constructive_bounded_pass_rescues_unsupported_destructive_proposal(self):
+        """Symmetric case: reasoning proposes done/non_cfl without adequate
+        destructive evidence, retries exhausted, but a constructive artifact
+        clears bounded_pass -> the gate falls back to cfl, not inconclusive."""
+        state = _base_state(
+            retry_round=MAX_RETRIES,
+            agent_results={"cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}}},
+            oracle_test_result={"status": "pass", "trust": "bounded_pass"},
+            claim_verification={},
+            reasoning_output={"action": "done", "verdict": "non_cfl", "confidence": 0.9},
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "cfl"
+        assert gate["reasoning_output"]["confidence"] <= 0.85
+        assert any("strongest admissible basis" in d and "-> cfl" in d for d in vg["downgrades"])
+
+
 class TestRetryPlannerReceivesTrust:
     def test_run_retry_planner_node_forwards_trust(self):
         from cfl_system.orchestrator import run_retry_planner_node

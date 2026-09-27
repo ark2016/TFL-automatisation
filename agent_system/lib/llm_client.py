@@ -149,30 +149,124 @@ class _AgentRefusal(Exception):
         super().__init__(msg)
 
 
-def build_agent_output_schema(required_keys: Any) -> dict[str, Any]:
+def build_agent_output_schema(properties: Any) -> dict[str, Any]:
     """Build the ``output_config.format`` JSON schema for one agent's
     ``AgentOutput`` envelope (TODO.md §3 M).
 
-    ``required_keys`` is the *exhaustive* set of top-level keys the agent's
-    own prompt contract ("## Output Format") declares — every one of them
-    becomes a required property with an unconstrained (``{}``) subschema,
-    so nested proof/evidence content stays completely free-form: only the
-    envelope shape is fixed, not what goes inside it. The schema closes the
+    ``properties`` maps each top-level key the agent's own prompt contract
+    ("## Output Format") declares to its **real** JSON-schema subschema
+    (built with :func:`schema_string` / :func:`schema_number` / etc. below)
+    — every one of them becomes a required property. The schema closes the
     object (``additionalProperties: False``) because the API requires
-    every object schema to set it — see the ``claude-api`` skill's
-    structured-outputs notes ("additionalProperties: false required for
-    all objects; anything else is not supported"). A **closed** schema
-    constrains generation, so ``required_keys`` must be exhaustive: leaving
-    out a key the prompt actually uses would silently make the model drop
-    it, not just fail validation.
+    *every* object schema, at *every* nesting level, to set it: verified
+    live (2026-06) against ``output_config.format`` —
+
+    - an empty/unconstrained ``{}`` subschema is rejected outright:
+      ``"output_config.format.schema: Empty schema ({}) that accepts any
+      JSON value is not supported. Please specify a concrete type."`` —
+      this was the actual TODO.md §3 M bug: every ``AgentOutput`` schema
+      built by the previous version of this function used ``{}`` for every
+      property, so the *very first* structured-output call for any given
+      model in the process got this 400, was (correctly) recognised as a
+      schema rejection and retried without the schema, and — because that
+      outcome is cached process-wide per model
+      (:func:`_remember_schema_rejected`, so a doomed request is never
+      retried) — every *other* call for that model for the rest of the
+      run silently skipped structured outputs too. Hence a live eval run
+      showing ``structured_output_calls == 0`` and
+      ``extraction_fallback_calls`` equal to the *entire* call count.
+    - ``additionalProperties: true`` is rejected too (there is no
+      free-form/opaque object type): ``"For 'object' type,
+      'additionalProperties: true' is not supported. Please set
+      'additionalProperties' to false"``.
+
+    A **closed** schema constrains generation, so ``properties`` must be
+    exhaustive (every key the prompt's own contract documents): leaving
+    one out would silently make the model drop it, not just fail
+    validation. A field whose real contract is a map keyed by something
+    that varies at *runtime* (a chosen pumping multiplier, a grammar's own
+    nonterminal names, ...) cannot be expressed this way at all —
+    ``additionalProperties: false`` would forbid the very keys the model
+    needs to emit — so the handful of agents with such a field are
+    exempted from structured outputs entirely (``schema_for`` returns
+    ``None`` for them, same as ``input_parser``/``formalizer``) instead of
+    being mistyped.
     """
-    keys = sorted(set(required_keys))
+    props = dict(properties)
+    keys = sorted(props)
     return {
         "type": "object",
-        "properties": {key: {} for key in keys},
+        "properties": props,
         "required": keys,
         "additionalProperties": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# JSON-schema subschema helpers (TODO.md §3 M — structured outputs)
+# ---------------------------------------------------------------------------
+# Small builders for the property-level subschemas ``build_agent_output_schema``
+# assembles into a closed envelope. Kept here (not duplicated in each
+# system's ``agent_output_schema.py``) since every one of those imports from
+# this module already. "nullable" fields use ``anyOf: [<type>, {"type":
+# "null"}]`` — a bare ``{"type": ["string", "null"]}`` (JSON Schema's
+# array-of-types form) is not documented as supported by
+# ``output_config.format``, while ``anyOf`` is confirmed (live + docs).
+
+def schema_string(*, enum: list[str] | None = None) -> dict[str, Any]:
+    """A required string field, optionally closed to ``enum`` values (the
+    prompt's own ``"a" | "b" | "c"`` union-of-literals documentation)."""
+    if enum is not None:
+        return {"type": "string", "enum": list(enum)}
+    return {"type": "string"}
+
+
+def schema_number() -> dict[str, Any]:
+    return {"type": "number"}
+
+
+def schema_boolean() -> dict[str, Any]:
+    return {"type": "boolean"}
+
+
+def schema_null() -> dict[str, Any]:
+    """A field the prompt documents as *always* ``null`` (e.g. LL's
+    ``lean_sketch`` — "Lean formalization is out of scope for this
+    phase")."""
+    return {"type": "null"}
+
+
+def schema_array(items: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "array", "items": items}
+
+
+def schema_string_array() -> dict[str, Any]:
+    return schema_array(schema_string())
+
+
+def schema_object(
+    properties: dict[str, Any], *, required: list[str] | None = None,
+) -> dict[str, Any]:
+    """A closed nested object. ``required`` defaults to every key in
+    ``properties`` (the common case); pass an explicit (smaller) list for
+    an object whose worked examples show some keys only sometimes present
+    — every such key must still be *listed* in ``properties`` (or
+    ``additionalProperties: false`` would forbid the model from ever
+    emitting it), it just isn't mandatory on every response."""
+    props = dict(properties)
+    return {
+        "type": "object",
+        "properties": props,
+        "required": sorted(props) if required is None else list(required),
+        "additionalProperties": False,
+    }
+
+
+def nullable(schema: dict[str, Any]) -> dict[str, Any]:
+    """``schema``, or ``null`` — for a field the prompt documents as
+    ``"<value>" | null`` (e.g. a ``verdict`` that's unset until the agent
+    reaches a final ``status``, or content that's ``null`` on failure)."""
+    return {"anyOf": [schema, schema_null()]}
 
 
 # 400s that mean "the API rejected output_config itself" (schema too
@@ -428,15 +522,46 @@ def _sleep_with_backoff(attempt: int, base: float = 1.0, cap: float = 20.0) -> N
 # ---------------------------------------------------------------------------
 
 # USD per million tokens. UPDATE THIS TABLE BY HAND when prices change —
-# nothing here is fetched live. ``None`` means "not confirmed — don't guess"
-# (docs/TFL_LAB or a pricing-page check should fill it in, not a re-guess).
+# nothing here is fetched live (source: the `claude-api` skill's cached
+# model table / platform.claude.com pricing page). ``None`` means "not
+# confirmed — don't guess" (a pricing-page check should fill it in, not a
+# re-guess) — :func:`estimate_cost_usd` returns ``None`` for any model not
+# listed here at all, and for any listed model with a non-zero token
+# bucket whose price is still ``None``.
+#
 # Known values below are the first-party Anthropic API rates as of the
-# 2026-06-24 pricing snapshot.
+# 2026-06-24 pricing snapshot. ``cache_read`` is ~0.1x `input` and
+# `cache_write` is ~1.25x `input` for every model here — the standard
+# Anthropic prompt-caching multipliers — except Claude Opus 5.5's
+# `cache_read`, which is the confirmed $0.20/MTok rate (not 0.1x its
+# $4.00 input rate; Opus 5.5 prices cache reads the same as it prices
+# Sonnet 5's own input tokens, not as a fraction of its own).
 MODEL_PRICING: dict[str, dict[str, float | None]] = {
-    "claude-opus-5-5":  {"input": 4.00, "output": 20.00, "cache_read": 0.20, "cache_write": None},
-    "claude-sonnet-5":  {"input": 2.00, "output": 10.00, "cache_read": None, "cache_write": None},
-    "claude-haiku-4-5": {"input": 1.00, "output": 5.00,  "cache_read": None, "cache_write": None},
+    "claude-opus-5-5":  {"input": 4.00, "output": 20.00, "cache_read": 0.20, "cache_write": 5.00},
+    "claude-sonnet-5":  {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00,  "cache_read": 0.10, "cache_write": 1.25},
 }
+
+
+_DATED_SNAPSHOT_SUFFIX_RE = re.compile(r"-\d{8}$")
+
+
+def _normalize_model_id(model: str) -> str:
+    """Strip a trailing ``-YYYYMMDD`` dated-snapshot suffix.
+
+    The live API's own response always names the *exact* snapshot it ran
+    (e.g. ``claude-haiku-4-5-20251001``) in ``final_msg.model`` — not the
+    bare alias (``claude-haiku-4-5``) the request asked for
+    (``TFL_MODEL_OVERRIDE`` / each project's ``config.py``) —
+    :data:`MODEL_PRICING` is keyed by the bare alias, so a raw lookup with
+    the dated id always misses and every live run's cost silently comes
+    back ``None``. Only strips the suffix when the *bare* alias isn't
+    already a distinct, separately-priced entry (there is none today, but
+    this keeps a future exact dated-snapshot entry authoritative)."""
+    if model in MODEL_PRICING:
+        return model
+    stripped = _DATED_SNAPSHOT_SUFFIX_RE.sub("", model)
+    return stripped if stripped in MODEL_PRICING else model
 
 
 def estimate_cost_usd(model: str, usage: Any) -> float | None:
@@ -444,10 +569,13 @@ def estimate_cost_usd(model: str, usage: Any) -> float | None:
     anything duck-typed the same way, e.g. :class:`UsageTotals`) using
     :data:`MODEL_PRICING`. Returns ``None`` when the model is unknown, or
     when a token bucket that was actually used (non-zero) has no confirmed
-    price — never fabricates a number for missing pricing."""
+    price — never fabricates a number for missing pricing. `model` is
+    normalized first (:func:`_normalize_model_id`) since the live API
+    reports the exact dated snapshot it ran, not the bare alias
+    :data:`MODEL_PRICING` is keyed by."""
     if usage is None:
         return None
-    prices = MODEL_PRICING.get(model)
+    prices = MODEL_PRICING.get(_normalize_model_id(model))
     if not prices:
         return None
     buckets = (
@@ -674,6 +802,36 @@ class CallResult:
     # when it's safe to trust the text as pure JSON can check this instead
     # of re-deriving it.
     used_structured_output: bool = False
+    # Whether the *caller* asked for structured outputs at all (i.e. the
+    # agent has a fixed contract / `schema_for` returned non-None) —
+    # distinguishes "no schema requested" (verbose logging has nothing to
+    # explain) from "schema requested but not used" (a real fallback,
+    # explained by `schema_fallback_reason`).
+    requested_structured_output: bool = False
+    # Set only when `requested_structured_output` is True and
+    # `used_structured_output` is False: why this call didn't get
+    # structured outputs even though the agent has a schema — surfaced in
+    # `--verbose` logging (TODO.md §3 M) instead of a bare "so=no" that
+    # can't distinguish "never had a schema" from "the API rejected it".
+    schema_fallback_reason: str | None = None
+
+
+def format_structured_output_flag(result: "CallResult") -> str:
+    """The ``--verbose`` fragment for one call's structured-output status
+    (TODO.md §3 M) — shared by every pipeline's LiveRunner/LLMRunner so the
+    log line always distinguishes "no schema requested" from "requested but
+    fell back", instead of a bare ``so=no`` that can't tell them apart.
+
+    Returns ``" so=yes"``, ``" so=no"`` (no schema was ever requested — the
+    agent has no fixed contract, e.g. ``input_parser``), or
+    ``" so=no (fallback: <reason>)"`` (the agent has a schema but this call
+    didn't get it — see :attr:`CallResult.schema_fallback_reason`).
+    """
+    if result.used_structured_output:
+        return " so=yes"
+    if result.requested_structured_output and result.schema_fallback_reason:
+        return f" so=no (fallback: {result.schema_fallback_reason})"
+    return " so=no"
 
 
 class AnthropicClient:
@@ -782,22 +940,38 @@ class AnthropicClient:
             RetryableAPIError: every attempt (``self.max_retries``, default
                 3, exponential backoff + jitter) hit a retryable error.
         """
-        if output_schema is not None and _model_schema_known_rejected(model):
-            output_schema = None
+        requested = output_schema is not None
+        if requested and _model_schema_known_rejected(model):
+            result = self._call_once(
+                client, model=model, max_tokens=max_tokens, system=system, user=user,
+                effort=effort, temperature=temperature, output_schema=None,
+                agent=agent,
+            )
+            result.requested_structured_output = True
+            result.schema_fallback_reason = (
+                f"schema previously rejected by the API for model {model!r} "
+                "this process — skipped up front"
+            )
+            return result
         try:
-            return self._call_once(
+            result = self._call_once(
                 client, model=model, max_tokens=max_tokens, system=system, user=user,
                 effort=effort, temperature=temperature, output_schema=output_schema,
                 agent=agent,
             )
+            result.requested_structured_output = requested
+            return result
         except FatalAPIError as exc:
-            if output_schema is not None and _looks_like_schema_rejection(exc):
+            if requested and _looks_like_schema_rejection(exc):
                 _remember_schema_rejected(model)
-                return self._call_once(
+                result = self._call_once(
                     client, model=model, max_tokens=max_tokens, system=system, user=user,
                     effort=effort, temperature=temperature, output_schema=None,
                     agent=agent,
                 )
+                result.requested_structured_output = True
+                result.schema_fallback_reason = f"schema rejected by the API: {exc}"
+                return result
             raise
 
     def _call_once(
@@ -1023,7 +1197,7 @@ class LLMRunner:
         if self.verbose:
             tokens_in = result.usage.input_tokens if result.usage else 0
             tokens_out = result.usage.output_tokens if result.usage else 0
-            so_str = " so=yes" if result.used_structured_output else " so=no"
+            so_str = format_structured_output_flag(result)
             print(
                 f"[{agent_name or 'LLM'}] model={result.model} effort={effort} "
                 f"tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{so_str}",

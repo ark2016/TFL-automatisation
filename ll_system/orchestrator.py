@@ -46,6 +46,7 @@ from agent_system.lib.llm_client import (
     estimate_cost_usd,
     extract_json as _extract_json,
     extract_json_with_error as _extract_json_with_error,
+    format_structured_output_flag as _format_structured_output_flag,
     get_concurrency_semaphore,
 )
 from ll_system.lib.agent_output_schema import schema_for as _output_schema_for
@@ -482,7 +483,7 @@ class LiveRunner:
                 )
                 cost = estimate_cost_usd(result.model or model, result.usage)
                 cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
-                so_str = " so=yes" if result.used_structured_output else " so=no"
+                so_str = _format_structured_output_flag(result)
                 print(
                     f"[{agent_name}] model={result.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
@@ -1347,9 +1348,37 @@ def apply_verdict_gate(state: PipelineState) -> dict:
                 "reason": downgrades[-1],
             }
         else:
-            downgrades.append(f"{reason} -> inconclusive")
-            verdict = "uncertain"
-            confidence_cap = 0.40
+            # docs/VERDICT_POLICY.md R4' -- retry budget exhausted (or
+            # nothing left worth retrying this round): pick the STRONGEST
+            # ADMISSIBLE basis still standing instead of defaulting straight
+            # to `uncertain` -- destructive >= well_formed (not refuted)
+            # first, then constructive >= bounded_pass, only then
+            # inconclusive. `failure` stays reserved for technical failures,
+            # never for "reasoning argued the wrong side" (precedent:
+            # cfl-07/cfl-12 eval live-run ending in `failure 0.0` despite a
+            # well_formed destructive proof on record).
+            if has_destructive:
+                verdict = "not_ll"
+                confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.60
+                basis.append({"agent": destructive_agent, "trust": destructive_trust})
+                downgrades.append(
+                    f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                    f"destructive claim ({destructive_agent}, trust={destructive_trust}) -> not_ll"
+                )
+            elif has_constructive:
+                verdict = "ll"
+                confidence_cap = 0.98 if constructive_trust == "verified" else 0.85
+                basis.append({"agent": constructive_agent, "trust": constructive_trust})
+                downgrades.append(
+                    f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                    f"constructive artifact ({constructive_agent}, trust={constructive_trust}) -> ll"
+                )
+            else:
+                downgrades.append(
+                    f"{reason} -> retry budget exhausted -> strongest admissible basis: inconclusive"
+                )
+                verdict = "uncertain"
+                confidence_cap = 0.40
 
     if verdict == "ll":
         if has_constructive:

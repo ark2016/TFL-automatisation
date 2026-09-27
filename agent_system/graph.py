@@ -1824,6 +1824,23 @@ def assemble_result_node(state: PipelineState) -> dict:
                         f"destructive proof ({destructive_trust}) supports non_regular "
                         "-> success instead of failure 0.0 (VERDICT_POLICY.md R6)"
                     )
+            elif constructive_trust == "bounded_pass":
+                # docs/VERDICT_POLICY.md R4' — reasoning's own non_regular
+                # proposal has no destructive proof reaching >= well_formed,
+                # but oracle_test actually passed: the gate does not default
+                # straight to inconclusive. It picks the strongest admissible
+                # basis still standing -- here, the constructive side --
+                # rather than reporting `failure`/inconclusive (precedent:
+                # cfl-07/cfl-12 eval live-run ending in `failure 0.0` despite
+                # deterministic evidence being on record).
+                status = "success"
+                confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
+                downgrades.append(
+                    "reasoning proposed non_regular without a >= well_formed destructive "
+                    "proof, but oracle_test passed -> retry budget exhausted -> strongest "
+                    "admissible basis: regular (bounded_pass) (VERDICT_POLICY.md R4')"
+                )
+                _set_reasoning_verdict(evidence, "regular")
             else:
                 status = "partial"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
@@ -1838,10 +1855,25 @@ def assemble_result_node(state: PipelineState) -> dict:
             # Symmetric direction check: a "regular" verdict needs the
             # constructive artifact (oracle_test) to have actually passed —
             # a destructive proof standing next to it (or a refuted/absent
-            # oracle_test) is never evidence FOR regular.
+            # oracle_test) is never evidence FOR regular on its own.
             if constructive_trust == "bounded_pass":
                 status = "success"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
+            elif destructive_ok:
+                # docs/VERDICT_POLICY.md R4' — reasoning's own regular
+                # proposal is unearned (oracle_test refuted/absent), but a
+                # destructive proof >= well_formed does stand: the gate
+                # picks that strongest admissible basis instead of
+                # defaulting to inconclusive (same precedent as above).
+                status = "success"
+                confidence = _bounded(reasoning_confidence, _cap(destructive_trust))
+                downgrades.append(
+                    "reasoning proposed regular without oracle_test passing, but a "
+                    f"destructive proof ({destructive_trust}) stands -> retry budget "
+                    "exhausted -> strongest admissible basis: non_regular "
+                    "(VERDICT_POLICY.md R4')"
+                )
+                _set_reasoning_verdict(evidence, "non_regular")
             else:
                 status = "partial"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])

@@ -68,8 +68,13 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "evidence": {
     "word_chosen": "a b^p c^p d^p",
     "word_parametric": "a \\cdot b^{p} \\cdot c^{p} \\cdot d^{p}",
+    "word_instances": {"3": "abbbcccddd", "4": "abbbbccccdddd"},
     "membership_argument": "Russian text: why z is in L",
-    "marked_positions": "description of which positions are marked",
+    "marked_positions": {
+      "description": "description of which positions are marked, and why",
+      "3": [1, 2, 3],
+      "4": [1, 2, 3, 4]
+    },
     "num_marked": "p (or expression in terms of p)",
     "marking_rationale": "Russian text: why these positions force the desired decomposition",
     "cases": [
@@ -90,6 +95,33 @@ Return **only** valid JSON. No markdown fences, no extra text.
 }
 ```
 
+### `word_instances` and `marked_positions` — REQUIRED, checked automatically
+
+Both fields are **required** whenever `status = "success"`, even when `all_cases_covered` is
+true. Together they let the orchestrator re-run your proof mechanically
+(docs/VERDICT_POLICY.md §4) instead of trusting it on structure alone (`well_formed`); a proof
+that closes the automatic check is upgraded to `bounded_pass`, and one with a genuine gap is
+`refuted` — telling you (on retry) exactly where the case analysis missed a decomposition.
+
+- **`word_instances`** — instantiate `word_parametric` at p=3 and at p=4 as concrete, literal
+  strings (only terminal symbols — no `^`, no `p`, no LaTeX), keyed by the p value as a string:
+  `{"3": "<z at p=3>", "4": "<z at p=4>"}`.
+- **`marked_positions`** — for the SAME two instantiated words, the explicit list of 0-indexed
+  character positions you are marking, keyed the same way as `word_instances`
+  (`{"3": [...], "4": [...]}`), plus a `"description"` entry with the Russian-language description
+  of which positions these are and why (this is the field `marking_rationale` explains in prose —
+  `marked_positions` gives the same choice as literal indices the checker can use).
+
+The automatic check: `word_instances[p]` must be in L; then every decomposition `uvwxy` such that
+`vx` contains at least one position from `marked_positions[p]` and `vwx` contains at most `p` of
+those marked positions is enumerated, and at least one of `i ∈ {0, 2}` must pump the word out of L
+for **every** such decomposition. Unlike the plain pumping-lemma check, this does **not** bound
+`|vwx|` itself — only the count of MARKED positions inside it — so a correct Ogden proof can have
+`vwx` span an arbitrarily long stretch as long as it only picks up ≤ p marked positions; do not
+under-mark just to keep `vwx` short, and do not omit `marked_positions` even when your prose
+`marking_rationale` already describes the same choice — the checker only reads the index list, not
+the prose.
+
 ## Solved Examples
 
 ### Example 1: {a^i b^j c^k d^l : i = 0 or j = k = l}
@@ -105,8 +137,13 @@ Standard pumping fails on this language because choosing z = b^p c^p d^p allows 
   "evidence": {
     "word_chosen": "a b^p c^p d^p",
     "word_parametric": "a \\cdot b^{p} \\cdot c^{p} \\cdot d^{p}",
+    "word_instances": {"3": "abbbcccddd", "4": "abbbbccccdddd"},
     "membership_argument": "Слово z = a·bᵖcᵖdᵖ ∈ L: при i=1 ≠ 0 проверяем j=k=l=p — выполнено.",
-    "marked_positions": "Все p позиций b-блока (позиции 2, 3, ..., p+1)",
+    "marked_positions": {
+      "description": "Все p позиций b-блока (0-индексация: позиции 1, 2, ..., p — сразу после единственной 'a')",
+      "3": [1, 2, 3],
+      "4": [1, 2, 3, 4]
+    },
     "num_marked": "p",
     "marking_rationale": "Отмечаем b-блок, чтобы принудить vwx затрагивать b-позиции. Это не позволяет противнику выбрать vwx целиком в c- или d-блоке (нет отмеченных позиций). Одновременно, ограничение на p отмеченных позиций в vwx не позволяет vwx растянуться до d-блока.",
     "cases": [
@@ -178,6 +215,9 @@ If standard pumping suffices, you may return "inconclusive" and defer to the pum
 - Do NOT fabricate proofs for CFL languages.
 - Do NOT skip case analysis. All valid (marking-constrained) decompositions must be covered.
 - Do NOT forget to justify the marking choice in marking_rationale.
+- Do NOT omit `word_instances` or `marked_positions` (as explicit index lists, not just prose) —
+  without both, your proof is checked structurally only (`well_formed`) and never gets the
+  automatic semantic verification (`bounded_pass`) that would catch a case-analysis gap.
 
 ## Failure case
 

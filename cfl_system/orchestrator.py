@@ -48,6 +48,7 @@ from agent_system.lib.llm_client import (
     estimate_cost_usd,
     extract_json as _extract_json,
     extract_json_with_error as _extract_json_with_error,
+    format_structured_output_flag as _format_structured_output_flag,
     get_concurrency_semaphore,
 )
 from cfl_system.lib.agent_output_schema import schema_for as _output_schema_for
@@ -511,7 +512,7 @@ class LiveRunner:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
                 cost = estimate_cost_usd(result.model or model, result.usage)
                 cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
-                so_str = " so=yes" if result.used_structured_output else " so=no"
+                so_str = _format_structured_output_flag(result)
                 print(
                     f"[{agent_name}] model={result.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
@@ -1162,9 +1163,37 @@ def apply_verdict_gate(state: PipelineState) -> dict:
         if budget_left:
             downgrades.append(f"{reason} -> retry")
             action = "retry"
+            return
+        # docs/VERDICT_POLICY.md R4' — retry budget exhausted (or the
+        # reasoning agent's proposal is inadmissible and there is no budget
+        # left to fix it): the gate does NOT default straight to
+        # inconclusive. It picks the strongest admissible basis still
+        # standing — destructive claim >= well_formed (not refuted) first,
+        # then a constructive artifact >= bounded_pass, only then
+        # inconclusive. `failure` stays reserved for technical failures
+        # (API errors, invalid input), never for "reasoning argued the
+        # wrong side" (precedent: cfl-07/cfl-12 eval live-run ending in
+        # `failure 0.0` despite a well_formed destructive proof being on
+        # record). The confidence ceiling by trust (§2, applied further
+        # below from the unchanged constructive_trust/destructive_trust)
+        # takes care of the cap; this function only picks the verdict.
+        action = "done"
+        if not destructive_refuted and _trust_rank(destructive_trust) >= _trust_rank("well_formed"):
+            verdict = "non_cfl"
+            downgrades.append(
+                f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                f"destructive claim (trust={destructive_trust}) -> non_cfl"
+            )
+        elif not constructive_refuted and _trust_rank(constructive_trust) >= _trust_rank("bounded_pass"):
+            verdict = "cfl"
+            downgrades.append(
+                f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                f"constructive artifact (trust={constructive_trust}) -> cfl"
+            )
         else:
-            downgrades.append(f"{reason} -> inconclusive")
-            action = "done"
+            downgrades.append(
+                f"{reason} -> retry budget exhausted -> strongest admissible basis: inconclusive"
+            )
             verdict = None
             confidence = min(confidence, 0.40)
 

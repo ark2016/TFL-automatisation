@@ -6,10 +6,15 @@ invalid outputs, empty inputs, and mixed scenarios.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from dcfl_system.lib.oracle_verifier import verify_agent_results
 from dcfl_system.lib import oracle_verifier as ov
+
+EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 
 
 # ---------------------------------------------------------------------------
@@ -296,3 +301,123 @@ def test_extract_literal_word_pairs_empty_for_purely_symbolic_prose():
     text = "uw ∈ L, vw ∉ L (или наоборот) для произвольных u != v"
     pairs = ov._extract_literal_word_pairs(text, {"a", "b"}, limit=5)
     assert pairs == []
+
+
+# ---------------------------------------------------------------------------
+# stack_strategy / dpda  (docs/VERDICT_POLICY.md R2')
+# ---------------------------------------------------------------------------
+
+ANBNCM_TASK_IR = json.loads((EXAMPLES_DIR / "task_anbncm.json").read_text(encoding="utf-8"))
+
+# A correct, deterministic DPDA for L = {a^n b^n c^m | n,m>=1}
+# (dcfl_system/examples/mock/dcfl_anbncm_stack_strategy.json). q_push/q_pop
+# are kept as SEPARATE states (rather than one state handling both 'a'-push
+# and 'b'-pop on stack_top='A') so that once any 'b' is read, a later stray
+# 'a' has no transition at all and is correctly rejected -- a single shared
+# state here would (wrongly) accept interleavings like "aababbc" by reading
+# a post-'b' 'a' as "still pushing".
+ANBNCM_DPDA = {
+    "states": ["q_push", "q_pop", "q_c"],
+    "start": "q_push",
+    "accept_states": ["q_c"],
+    "stack_alphabet": ["Z0", "A"],
+    "initial_stack": ["Z0"],
+    "transitions": [
+        {"from": "q_push", "read": "a", "top": "Z0", "to": "q_push", "push": ["A", "Z0"]},
+        {"from": "q_push", "read": "a", "top": "A", "to": "q_push", "push": ["A", "A"]},
+        {"from": "q_push", "read": "b", "top": "A", "to": "q_pop", "push": []},
+        {"from": "q_pop", "read": "b", "top": "A", "to": "q_pop", "push": []},
+        {"from": "q_pop", "read": "c", "top": "Z0", "to": "q_c", "push": ["Z0"]},
+        {"from": "q_c", "read": "c", "top": "Z0", "to": "q_c", "push": ["Z0"]},
+    ],
+}
+
+# Wrong: drops the |u| == |v| synchronisation, so it accepts e.g. "aabbbcc"
+# (n=2, b-count=3) that is NOT in L -- deterministic, but semantically wrong.
+ANBNCM_DPDA_WRONG = {
+    "states": ["q0", "q_c"],
+    "start": "q0",
+    "accept_states": ["q_c"],
+    "stack_alphabet": ["Z0"],
+    "initial_stack": ["Z0"],
+    "transitions": [
+        {"from": "q0", "read": "a", "top": "Z0", "to": "q0", "push": ["Z0"]},
+        {"from": "q0", "read": "b", "top": "Z0", "to": "q0", "push": ["Z0"]},
+        {"from": "q0", "read": "c", "top": "Z0", "to": "q_c", "push": ["Z0"]},
+        {"from": "q_c", "read": "c", "top": "Z0", "to": "q_c", "push": ["Z0"]},
+    ],
+}
+
+# Not deterministic: two transitions for (q_push, top=Z0, read='a').
+ANBNCM_DPDA_NONDETERMINISTIC = {
+    "states": ["q_push", "q_pop", "q_alt", "q_c"],
+    "start": "q_push",
+    "accept_states": ["q_c"],
+    "stack_alphabet": ["Z0", "A"],
+    "initial_stack": ["Z0"],
+    "transitions": [
+        {"from": "q_push", "read": "a", "top": "Z0", "to": "q_push", "push": ["A", "Z0"]},
+        {"from": "q_push", "read": "a", "top": "Z0", "to": "q_alt", "push": ["Z0"]},
+        {"from": "q_push", "read": "a", "top": "A", "to": "q_push", "push": ["A", "A"]},
+        {"from": "q_push", "read": "b", "top": "A", "to": "q_pop", "push": []},
+        {"from": "q_pop", "read": "b", "top": "A", "to": "q_pop", "push": []},
+        {"from": "q_pop", "read": "c", "top": "Z0", "to": "q_c", "push": ["Z0"]},
+        {"from": "q_c", "read": "c", "top": "Z0", "to": "q_c", "push": ["Z0"]},
+    ],
+}
+
+
+def test_stack_strategy_without_dpda_stays_well_formed_at_most():
+    """Backward compatibility (docs/VERDICT_POLICY.md R2'): a proof_sketch
+    with no `dpda` field behaves exactly as before -- structural fields only,
+    capped at `well_formed`."""
+    proof_sketch = {
+        "phases": [
+            {"name": "push", "action": "push", "what": "a", "trigger": "reading a"},
+        ],
+        "separator": "$",
+        "determinism_argument": "...",
+    }
+    result = ov._verify_stack_strategy(proof_sketch, {})
+    assert result["verification_status"] == "well_formed"
+    assert "dpda_determinism_and_simulation" not in result["checks_run"]
+
+
+def test_stack_strategy_dpda_nondeterministic_refuted():
+    proof_sketch = {"dpda": ANBNCM_DPDA_NONDETERMINISTIC}
+    result = ov._verify_stack_strategy(proof_sketch, ANBNCM_TASK_IR)
+    assert result["verification_status"] == "refuted"
+    assert result["trust"] == "refuted"
+    issues = " ".join(result.get("issues", []))
+    assert "not deterministic" in issues
+
+
+def test_stack_strategy_dpda_correct_simulation_bounded_pass():
+    proof_sketch = {"dpda": ANBNCM_DPDA}
+    result = ov._verify_stack_strategy(proof_sketch, ANBNCM_TASK_IR)
+    assert result["verification_status"] == "bounded_pass"
+    assert result["trust"] == "bounded_pass"
+    details = result["details"]
+    assert details["determinism"] == "verified"
+    assert details["words_checked"] >= 30
+
+
+def test_stack_strategy_dpda_wrong_language_refuted():
+    proof_sketch = {"dpda": ANBNCM_DPDA_WRONG}
+    result = ov._verify_stack_strategy(proof_sketch, ANBNCM_TASK_IR)
+    assert result["verification_status"] == "refuted"
+    assert result["trust"] == "refuted"
+    issues = " ".join(result.get("issues", []))
+    assert "disagrees with the task's language oracle" in issues
+
+
+def test_stack_strategy_dpda_no_oracle_falls_back_to_well_formed():
+    """No set_builder membership oracle available for this task (e.g. a
+    grammar-format task, or an exponent-notation word_pattern the oracle
+    builder can't parse) -> a deterministic dpda still caps at well_formed,
+    never silently promoted to bounded_pass."""
+    proof_sketch = {"dpda": ANBNCM_DPDA}
+    task_ir = {"input_format": "grammar", "language_spec": {}, "alphabet": ["a", "b", "c"]}
+    result = ov._verify_stack_strategy(proof_sketch, task_ir)
+    assert result["verification_status"] == "well_formed"
+    assert result["details"]["determinism"] == "verified"

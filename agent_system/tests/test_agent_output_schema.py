@@ -19,8 +19,18 @@ from pathlib import Path
 import pytest
 
 from agent_system.lib.agent_output_schema import (
-    REQUIRED_KEYS, _NO_FIXED_CONTRACT, build_agent_output_schema, schema_for,
+    REQUIRED_KEYS, _FIELD_SCHEMAS, _NO_FIXED_CONTRACT, build_agent_output_schema, schema_for,
 )
+from agent_system.lib.testing.schema_checks import assert_field_schemas_are_valid
+
+# Agents whose top-level key set is fixed (REQUIRED_KEYS has an entry) but
+# whose contract has a nested field keyed by something chosen at
+# generation time (a DFA's own state names, an alphabet-keyed
+# homomorphism mapping, ...) -- see agent_output_schema.py's module
+# docstring. `output_config.format`'s `additionalProperties: false`
+# requirement (every nesting level, no `patternProperties`) can't express
+# that, so these get no schema at all, same as `_NO_FIXED_CONTRACT`.
+_DYNAMIC_KEY_EXEMPT = frozenset({"closure_agent", "dfa_builder"})
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -62,12 +72,41 @@ def test_schema_for_unknown_or_exempt_agent_is_none():
     assert schema_for("no_such_agent") is None
 
 
+def test_schema_for_dynamic_key_exempt_agent_is_none():
+    """`closure_agent` / `dfa_builder` stay in REQUIRED_KEYS (their
+    top-level key set is fixed and prompt-verified) but have no
+    `_FIELD_SCHEMAS` entry -- a nested field is keyed by something chosen
+    at generation time (DFA state names, an alphabet-keyed homomorphism
+    mapping), which `additionalProperties: false` can't express."""
+    for agent_name in _DYNAMIC_KEY_EXEMPT:
+        assert agent_name in REQUIRED_KEYS
+        assert agent_name not in _FIELD_SCHEMAS
+        assert schema_for(agent_name) is None
+
+
 def test_schema_for_known_agent_is_closed_and_required():
     schema = schema_for("classifier")
-    assert schema == build_agent_output_schema(REQUIRED_KEYS["classifier"])
+    assert schema == build_agent_output_schema(_FIELD_SCHEMAS["classifier"])
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(REQUIRED_KEYS["classifier"])
     assert set(schema["properties"]) == set(REQUIRED_KEYS["classifier"])
+
+
+@pytest.mark.parametrize("agent_name", sorted(_FIELD_SCHEMAS))
+def test_field_schema_keys_match_required_keys_exactly(agent_name):
+    """Every `_FIELD_SCHEMAS` entry must cover exactly the same top-level
+    keys as `REQUIRED_KEYS` -- a real per-key subschema for a key the
+    prompt doesn't have (or a missing one for a key it does) would build
+    an invalid or silently-wrong `output_config.format` schema."""
+    assert set(_FIELD_SCHEMAS[agent_name]) == set(REQUIRED_KEYS[agent_name])
+
+
+def test_every_field_schema_property_is_a_concrete_type():
+    """No empty ``{}`` subschema anywhere, and every object closes with
+    ``additionalProperties: False`` at every nesting level (TODO.md §3 M's
+    actual bug -- see ``agent_system.lib.testing.schema_checks`` for the
+    exact API error messages this guards against)."""
+    assert_field_schemas_are_valid(_FIELD_SCHEMAS)
 
 
 def test_schema_for_resolves_run_agent_names_after_alias_resolution():
@@ -75,7 +114,10 @@ def test_schema_for_resolves_run_agent_names_after_alias_resolution():
     `graph.py` dispatches under ('pumping', 'nerode', 'closure', 'reasoning',
     ...), not the prompt file names REQUIRED_KEYS is keyed by -- it must
     resolve them first (`self._resolve_prompt_name(agent_name)`), or every
-    one of these agents silently gets no structured-output schema."""
+    one of these agents silently gets no structured-output schema. The
+    `_DYNAMIC_KEY_EXEMPT` agents are the deliberate exception (a nested
+    field's real contract can't be expressed as a closed schema at all --
+    see agent_output_schema.py's module docstring), not an oversight."""
     from agent_system import graph
     from agent_system.lib.llm_client import LLMRunner
 
@@ -85,7 +127,10 @@ def test_schema_for_resolves_run_agent_names_after_alias_resolution():
     }
     for name in sorted(names):
         resolved = runner._resolve_prompt_name(name)
+        if resolved in _DYNAMIC_KEY_EXEMPT:
+            assert schema_for(resolved) is None
+            continue
         assert schema_for(resolved) is not None, (
             f"{name!r} (resolved to {resolved!r}) has no structured-output "
-            f"schema -- update REQUIRED_KEYS or _PROMPT_ALIASES"
+            f"schema -- update _FIELD_SCHEMAS or _PROMPT_ALIASES"
         )

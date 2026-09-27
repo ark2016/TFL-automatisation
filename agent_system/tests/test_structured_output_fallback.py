@@ -26,12 +26,18 @@ import agent_system.lib.llm_client as llm_client
 from agent_system.lib.agent_output_schema import schema_for
 from agent_system.lib.llm_client import (
     AnthropicClient, FatalAPIError, build_agent_output_schema,
+    format_structured_output_flag,
+    nullable, schema_number, schema_string, schema_string_array,
 )
 from agent_system.lib.testing.fake_anthropic import (
     FakeAnthropic, fatal_error, raises_turn, text_turn,
 )
 
-SCHEMA = build_agent_output_schema({"status", "confidence", "errors"})
+SCHEMA = build_agent_output_schema({
+    "status": schema_string(),
+    "confidence": schema_number(),
+    "errors": nullable(schema_string_array()),
+})
 
 
 def _client() -> AnthropicClient:
@@ -152,6 +158,72 @@ def test_unrelated_fatal_error_is_not_treated_as_schema_rejection():
             system="sys", user="u", output_schema=SCHEMA,
         )
     assert len(fake.stream_calls) == 1
+
+
+def test_no_schema_requested_verbose_flag_is_plain_so_no():
+    """No schema was ever requested (e.g. input_parser) -- the verbose
+    flag has nothing to explain, unlike a real fallback."""
+    fake = FakeAnthropic([text_turn('{"status": "success"}')])
+    result = _client().call(
+        fake, model="claude-sonnet-5", max_tokens=1000, system="sys", user="u",
+    )
+    assert result.requested_structured_output is False
+    assert result.schema_fallback_reason is None
+    assert format_structured_output_flag(result) == " so=no"
+
+
+def test_schema_rejection_verbose_flag_names_the_reason():
+    """A schema that gets rejected this call -- the verbose flag must say
+    *why* it fell back (TODO.md §3 M: distinguish "never had a schema"
+    from "requested but the API rejected it"), not just ``so=no``."""
+    fake = FakeAnthropic([
+        raises_turn(fatal_error(400, "output_config.format is not supported for this model")),
+        text_turn('{"status": "success", "confidence": 0.5, "errors": []}'),
+    ])
+    result = _client().call(
+        fake, model="claude-sonnet-5", max_tokens=1000,
+        system="sys", user="u", output_schema=SCHEMA,
+    )
+    assert result.requested_structured_output is True
+    assert result.schema_fallback_reason is not None
+    assert "rejected" in result.schema_fallback_reason
+    flag = format_structured_output_flag(result)
+    assert flag.startswith(" so=no (fallback:")
+    assert "rejected" in flag
+
+
+def test_schema_known_rejected_upfront_verbose_flag_names_the_reason():
+    """The *second* call to a model whose schema was already rejected this
+    process skips the schema up front (no doomed request) -- the verbose
+    flag must still explain why, not just say ``so=no``."""
+    fake = FakeAnthropic([
+        raises_turn(fatal_error(400, "output_config.format is not supported for this model")),
+        text_turn('{"status": "success", "confidence": 0.5, "errors": []}'),
+        text_turn('{"status": "success", "confidence": 0.6, "errors": []}'),
+    ])
+    client = _client()
+    client.call(
+        fake, model="claude-sonnet-5", max_tokens=1000,
+        system="sys", user="u", output_schema=SCHEMA,
+    )
+    result = client.call(
+        fake, model="claude-sonnet-5", max_tokens=1000,
+        system="sys", user="u2", output_schema=SCHEMA,
+    )
+    assert result.requested_structured_output is True
+    assert result.used_structured_output is False
+    assert result.schema_fallback_reason is not None
+    assert "previously rejected" in result.schema_fallback_reason
+    assert format_structured_output_flag(result).startswith(" so=no (fallback:")
+
+
+def test_successful_structured_call_verbose_flag_is_so_yes():
+    fake = FakeAnthropic([text_turn('{"status": "success", "confidence": 0.9, "errors": []}')])
+    result = _client().call(
+        fake, model="claude-sonnet-5", max_tokens=1000,
+        system="sys", user="u", output_schema=SCHEMA,
+    )
+    assert format_structured_output_flag(result) == " so=yes"
 
 
 def test_agent_output_schema_end_to_end_for_a_real_agent():

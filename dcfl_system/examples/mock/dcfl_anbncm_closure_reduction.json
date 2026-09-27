@@ -1,0 +1,11 @@
+{
+  "agent_name": "closure_reduction",
+  "status": "not_applicable",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "stack_strategy уже даёт прямой конструктивный ДМПА для L = {aⁿbⁿcᵐ | n,m>=1} — сведение к замкнутым операциям не требуется"
+  ],
+  "confidence": 0.0,
+  "errors": []
+}

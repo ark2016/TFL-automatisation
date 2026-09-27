@@ -39,16 +39,25 @@ def test_usage_block_present_and_zero_without_agent_runner():
 
 
 def test_usage_tracker_consistent_with_calls_made():
+    # `pumping` (-> `pumping_agent`) has a real `_FIELD_SCHEMAS` entry
+    # (agent_output_schema.py) -- unlike `closure` (-> `closure_agent`),
+    # which is `_DYNAMIC_KEY_EXEMPT` (its `details` field is keyed by a
+    # homomorphism's own alphabet symbols for 2 of its 4 methods, which
+    # `output_config.format` can't express) and so never gets structured
+    # outputs at all.
     runner = LLMRunner(api_key="sk-ant-test-not-used")
     runner._client = FakeAnthropic([
         text_turn(
-            '{"module": "closure_agent", "status": "success", "conclusion": "regular", '
-            '"confidence": 0.8, "details": {}, "errors": [], "method": "union"}',
+            '{"module": "pumping_agent", "status": "success", "confidence": 0.8, '
+            '"proof": {"word_choice": {"word": "a^n b^n", "word_parameterized": true, '
+            '"parameter": "n", "membership_argument": "..."}, "length_argument": "...", '
+            '"cut_analysis": {"method": "...", "argument": "...", "cases": []}, '
+            '"pump_value": 1, "conclusion": "..."}, "errors": []}',
             input_tokens=90, output_tokens=30,
         ),
     ])
 
-    out = runner.run_agent("closure", {"x": 1})
+    out = runner.run_agent("pumping", {"x": 1})
     assert out["status"] == "success"
 
     usage = runner.usage_tracker.as_dict()
@@ -58,7 +67,7 @@ def test_usage_tracker_consistent_with_calls_made():
     assert usage["total_tokens"] == 120
     assert usage["structured_output_calls"] == 1
     assert usage["extraction_fallback_calls"] == 0
-    assert usage["per_agent"]["closure"]["calls"] == 1
+    assert usage["per_agent"]["pumping"]["calls"] == 1
     assert usage["by_model"]["claude-sonnet-5"]["calls"] == 1
 
 

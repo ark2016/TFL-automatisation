@@ -52,6 +52,8 @@ class _Turn:
     refusal_explanation: str | None = None
     input_tokens: int = 100
     output_tokens: int = 50
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
     exc: Exception | None = None
     # Raise `exc` only once the caller reads the response (get_final_message
     # / text_stream / .create()'s return), not when .stream() is invoked --
@@ -71,6 +73,8 @@ def text_turn(
     thinking: str | None = None,
     input_tokens: int = 100,
     output_tokens: int = 50,
+    cache_read_input_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
     delay: float = 0.0,
 ) -> _Turn:
     """A normal (or truncated) successful response.
@@ -79,11 +83,17 @@ def text_turn(
     text block (adaptive-thinking models put reasoning there --
     ``content[0]`` is not necessarily the answer, see
     ``llm_client._extract_answer_text``). Pass ``stop_reason="max_tokens"``
-    for a response truncated mid-JSON.
+    for a response truncated mid-JSON. ``cache_read_input_tokens`` /
+    ``cache_creation_input_tokens`` feed ``usage`` for cost-estimation
+    tests (``estimate_cost_usd`` / ``UsageTracker`` -- TODO.md §3 M's
+    pricing table); both default to 0 (no caching), matching every other
+    existing test that doesn't care about them.
     """
     return _Turn(
         kind="message", text=text, stop_reason=stop_reason, model=model,
         thinking=thinking, input_tokens=input_tokens, output_tokens=output_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
         delay=delay,
     )
 
@@ -168,7 +178,8 @@ def _build_message(turn: _Turn) -> SimpleNamespace:
         content.append(SimpleNamespace(type="text", text=turn.text))
     usage = SimpleNamespace(
         input_tokens=turn.input_tokens, output_tokens=turn.output_tokens,
-        cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        cache_read_input_tokens=turn.cache_read_input_tokens,
+        cache_creation_input_tokens=turn.cache_creation_input_tokens,
     )
     return SimpleNamespace(
         content=content, stop_reason=turn.stop_reason, model=turn.model,

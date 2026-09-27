@@ -658,11 +658,13 @@ def test_well_formed_constructive_does_not_block_non_dcfl():
 
 
 def test_well_formed_constructive_alone_still_fails_r2_for_dcfl():
-    """The flip side: a well_formed stack_strategy is still not enough, on
-    its own, to carry a "dcfl" verdict (R2) — regardless of what stands on
-    the destructive side, and regardless of whether reasoning proposed the
-    constructive side. This is R1/R2, not R3 — no contradiction is even
-    considered because "dcfl" itself is unearned."""
+    """A well_formed stack_strategy is still not enough, on its own, to carry
+    a "dcfl" verdict (R2) — this is R1/R2, not R3: no contradiction is even
+    considered because "dcfl" itself is unearned (stack_strategy never
+    clears bounded_pass). But retries are exhausted and a bounded_pass
+    dcfl_pumping IS sitting on the destructive side — docs/VERDICT_POLICY.md
+    R4' now picks that strongest admissible basis instead of defaulting to
+    inconclusive: non_dcfl, capped at bounded_pass's own 0.85 ceiling."""
     reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
                  "primary_evidence": "stack_strategy"}
     agent_results = {
@@ -676,8 +678,30 @@ def test_well_formed_constructive_alone_still_fails_r2_for_dcfl():
     gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
                                  retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
     assert gated["verdict_gate"]["contradiction"] is False
+    assert gated["verdict"] == "non_dcfl"
+    assert gated["confidence"] <= 0.85
+    assert any(
+        "strongest admissible basis" in d and "non_dcfl" in d
+        for d in gated["verdict_gate"]["downgrades"]
+    )
+
+
+def test_r4prime_no_admissible_basis_either_side_stays_inconclusive_not_failure():
+    """docs/VERDICT_POLICY.md R4' — retries exhausted, reasoning's proposal
+    unearned, and NEITHER side has any admissible evidence at all -> plain
+    inconclusive (verdict None, confidence <= 0.40), never `failure`
+    (precedent: cfl-07/cfl-12 eval live-run ending in `failure 0.0`)."""
+    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
+                 "primary_evidence": "stack_strategy"}
+    agent_results = {
+        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {}},
+    }
+    oracle_verification = {"stack_strategy": {"trust": "well_formed"}}
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
     assert gated["verdict"] is None
     assert gated["confidence"] <= 0.40
+    assert any("strongest admissible basis: inconclusive" in d for d in gated["verdict_gate"]["downgrades"])
 
 
 def test_r3_genuine_contradiction_stays_inconclusive_when_neither_side_verified():
@@ -722,6 +746,107 @@ def test_r3_contradiction_verified_side_wins_capped_at_085():
     assert gated["verdict_gate"]["contradiction"] is True
     assert gated["verdict"] == "non_dcfl"
     assert gated["confidence"] == 0.85
+
+
+# ---------------------------------------------------------------------------
+# §3 R4': retry budget exhausted, reasoning's own proposal has no artifact at
+# all (not just insufficient trust) -> the well_formed destructive evidence
+# still on record rescues the round instead of `failure`/inconclusive.
+# Precedent: live-run eval 2026-09-27, cfl-07/cfl-12 ended `failure 0.0`
+# despite a well_formed destructive proof on record.
+# ---------------------------------------------------------------------------
+
+def test_r4prime_destructive_well_formed_rescues_unsupported_constructive_proposal():
+    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
+                 "primary_evidence": "stack_strategy"}
+    agent_results = {
+        "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": {"kind": "dcfl_pumping"}},
+    }
+    oracle_verification = {"dcfl_pumping": {"trust": "well_formed"}}
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
+    assert gated["action"] == "done"
+    assert gated["verdict"] == "non_dcfl"
+    assert gated["confidence"] <= 0.60
+    assert any("strongest admissible basis" in d for d in gated["verdict_gate"]["downgrades"])
+
+
+# ---------------------------------------------------------------------------
+# §3 R4' x R3 (reviewer finding fix) — _r4prime_rescue must not violate R3.
+# The contradiction check earlier in _apply_verdict_gate only ever compares
+# reasoning's own `primary_evidence` agent against the best OPPOSING
+# evidence; when `primary` itself is refuted (scenario A) or simply weaker
+# than another agent on its own side (scenario B), that check's "own side"
+# trust is not the strongest evidence actually on the table, so a real
+# bounded_pass-vs-well_formed contradiction can slip past it undetected and
+# reach _r4prime_rescue, which used to just grab the destructive (or
+# constructive) side without re-checking R3 at all. Both scenarios below
+# are taken verbatim from the reviewer's repro.
+# ---------------------------------------------------------------------------
+
+def test_r4prime_rescue_scenario_a_does_not_bypass_r3():
+    """Scenario A: reasoning proposes done/non_dcfl on dcfl_pumping (refuted
+    by the oracle); shallit (well_formed) is the only OTHER destructive
+    evidence, but stack_strategy sits on the constructive side at
+    bounded_pass (now reachable via the DPDA certificate). Retries are
+    exhausted. The old code let dcfl_pumping's refutation fall through to
+    _r4prime_rescue, which then picked shallit as the "strongest admissible
+    destructive basis" and returned non_dcfl at 0.60 with
+    contradiction=False -- but stack_strategy (bounded_pass, constructive)
+    vs shallit (well_formed, destructive) IS a genuine, unresolved R3
+    contradiction (neither side `verified`) and must stay inconclusive at
+    confidence <= 0.50."""
+    reasoning = {"action": "done", "verdict": "non_dcfl", "confidence": 0.9,
+                 "primary_evidence": "dcfl_pumping"}
+    agent_results = {
+        "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": {"kind": "dcfl_pumping"}},
+        "shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": {"kind": "shallit"}},
+        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {}},
+    }
+    oracle_verification = {
+        "dcfl_pumping": {"trust": "refuted"},
+        "shallit": {"trust": "well_formed"},
+        "stack_strategy": {"trust": "bounded_pass"},
+    }
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
+    assert gated["action"] == "done"
+    assert gated["verdict_gate"]["contradiction"] is True
+    assert gated["verdict"] is None
+    assert gated["confidence"] <= 0.50
+
+
+def test_r4prime_rescue_scenario_b_does_not_bypass_r3():
+    """Scenario B: reasoning proposes done/dcfl on stack_strategy
+    (well_formed only -- fails R2 on its own), closure_reduction argues the
+    constructive side too and clears bounded_pass, while shallit sits on the
+    destructive side at well_formed. Retries are exhausted. The old code let
+    _r4prime_rescue search destructive-first and return non_dcfl at 0.60 via
+    shallit, with contradiction=False -- but closure_reduction (bounded_pass,
+    constructive) vs shallit (well_formed, destructive) is the same genuine
+    R3 contradiction as scenario A and must stay inconclusive at
+    confidence <= 0.50, not resolve to either side."""
+    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
+                 "primary_evidence": "stack_strategy"}
+    agent_results = {
+        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {}},
+        "closure_reduction": {
+            "status": "success", "verdict": "dcfl",
+            "proof_sketch": {"kind": "closure_reduction", "direction": "constructive"},
+        },
+        "shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": {"kind": "shallit"}},
+    }
+    oracle_verification = {
+        "stack_strategy": {"trust": "well_formed"},
+        "closure_reduction": {"trust": "bounded_pass"},
+        "shallit": {"trust": "well_formed"},
+    }
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
+    assert gated["action"] == "done"
+    assert gated["verdict_gate"]["contradiction"] is True
+    assert gated["verdict"] is None
+    assert gated["confidence"] <= 0.50
 
 
 # ---------------------------------------------------------------------------

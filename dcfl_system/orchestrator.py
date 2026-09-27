@@ -54,6 +54,7 @@ from agent_system.lib.llm_client import (
     estimate_cost_usd,
     extract_json as _extract_json,
     extract_json_with_error as _extract_json_with_error,
+    format_structured_output_flag as _format_structured_output_flag,
     get_concurrency_semaphore,
 )
 from dcfl_system.lib.agent_output_schema import schema_for as _output_schema_for
@@ -369,7 +370,7 @@ class LiveRunner:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
                 cost = estimate_cost_usd(result.model or model, result.usage)
                 cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
-                so_str = " so=yes" if result.used_structured_output else " so=no"
+                so_str = _format_structured_output_flag(result)
                 print(f"[{agent_name}] model={result.model} effort={effort} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}{cost_str}{so_str}",
                       file=sys.stderr, flush=True)
 
@@ -665,21 +666,106 @@ def _apply_verdict_gate(
             # ("non_dcfl") still only needs trust >= well_formed per R1.
             required_trust = "bounded_pass" if direction == "constructive" else "well_formed"
 
-            if primary_trust == "refuted":
+            def _r4prime_rescue(reason: str) -> None:
+                """docs/VERDICT_POLICY.md R4' — the reasoning agent's proposal
+                on `direction` is inadmissible and no more retries are coming
+                for this decision. Instead of defaulting straight to
+                inconclusive, pick the STRONGEST ADMISSIBLE basis still
+                standing (fresh search across ALL agents, not just `primary`
+                or reasoning's chosen direction): a destructive claim >=
+                well_formed (not refuted) first, then a constructive
+                artifact >= bounded_pass, only then inconclusive. `failure`
+                stays reserved for technical failures, never for "reasoning
+                argued the wrong side" (precedent: cfl-07/cfl-12 eval
+                live-run ending in `failure 0.0` despite a well_formed
+                destructive proof on record).
+
+                Before picking a single side, R3 is re-checked over this same
+                fresh, all-agents search (not over `primary`, which may be
+                refuted or simply not the strongest artifact on its side):
+                the earlier R3 check above only ever compared `primary` — a
+                specific agent the reasoning agent named — against the best
+                opposing evidence, so a `primary` that is `refuted` (case A)
+                or weaker than another agent on its own side (case B) let a
+                real bounded_pass-vs-well_formed contradiction slip through
+                as a one-sided rescue (reviewer finding: non_dcfl/dcfl at
+                0.60 with contradiction=False when a bounded_pass
+                constructive artifact and a well_formed destructive one
+                coexisted). Recomputing over `_best_evidence` for both
+                directions here catches that regardless of which side
+                reasoning happened to name.
+                """
+                nonlocal action, verdict, cap, contradiction
+                action = "done"
+                d_name, d_trust = _best_evidence(agent_results, oracle_verification, "destructive")
+                c_name, c_trust = _best_evidence(agent_results, oracle_verification, "constructive")
+
+                if (
+                    c_trust is not None
+                    and d_trust is not None
+                    and trust_rank(c_trust) >= trust_rank("bounded_pass")
+                    and trust_rank(d_trust) >= trust_rank("well_formed")
+                ):
+                    # R3, recomputed over the strongest evidence on each side
+                    # rather than over `primary` alone (see docstring above).
+                    contradiction = True
+                    if c_trust == "verified" and d_trust != "verified":
+                        verdict = "dcfl"
+                        cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
+                    elif d_trust == "verified" and c_trust != "verified":
+                        verdict = "non_dcfl"
+                        cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
+                    else:
+                        verdict = None
+                        cap = min(cap, CONTRADICTION_CONFIDENCE_CAP)
+                    basis.append({"agent": c_name, "trust": c_trust})
+                    basis.append({"agent": d_name, "trust": d_trust})
+                    downgrades.append(
+                        f"{reason} -> retry budget exhausted -> R3 contradiction recomputed over "
+                        f"best evidence: constructive={c_name}({c_trust}) vs "
+                        f"destructive={d_name}({d_trust}) -> verdict={verdict!r}, confidence<={cap} (R3/R4')"
+                    )
+                    return
+
+                if d_trust is not None and trust_at_least(d_trust, "well_formed"):
+                    verdict = "non_dcfl"
+                    cap = confidence_cap_for(d_trust)
+                    basis.append({"agent": d_name, "trust": d_trust})
+                    downgrades.append(
+                        f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                        f"destructive claim ({d_name}, trust={d_trust}) -> non_dcfl"
+                    )
+                    return
+                if c_trust is not None and trust_at_least(c_trust, "bounded_pass"):
+                    verdict = "dcfl"
+                    cap = confidence_cap_for(c_trust)
+                    basis.append({"agent": c_name, "trust": c_trust})
+                    downgrades.append(
+                        f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                        f"constructive artifact ({c_name}, trust={c_trust}) -> dcfl"
+                    )
+                    return
+                verdict, cap = None, 0.40
                 downgrades.append(
+                    f"{reason} -> retry budget exhausted -> strongest admissible basis: inconclusive"
+                )
+
+            if primary_trust == "refuted":
+                reason = (
                     f"reasoning proposed done/{verdict} on '{primary}' but its artifact "
-                    "is refuted by the oracle (R2) -> retry/inconclusive"
+                    "is refuted by the oracle (R2)"
                 )
                 if retry_count < max_retries:
+                    downgrades.append(f"{reason} -> retry/inconclusive -> retry")
                     action, verdict, cap = "retry", None, 0.25
                 else:
-                    action, verdict, cap = "done", None, 0.40
+                    _r4prime_rescue(reason)
             elif primary_trust is None or not trust_at_least(primary_trust, required_trust):
-                downgrades.append(
+                reason = (
                     f"reasoning proposed done/{verdict} with no {required_trust}+ {direction} "
-                    f"artifact (basis: constructive_failure_only, R1/R2) -> inconclusive"
+                    "artifact (basis: constructive_failure_only, R1/R2)"
                 )
-                action, verdict, cap = "done", None, 0.40
+                _r4prime_rescue(reason)
             else:
                 basis.append({"agent": primary, "trust": primary_trust})
                 cap = confidence_cap_for(primary_trust)

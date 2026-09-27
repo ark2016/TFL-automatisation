@@ -124,10 +124,16 @@ def _check_pumping_word_instances(
     Expects evidence["word_instances"] = {"3": "<instantiated word>", "4": "..."}
     (concrete words, p already substituted). For each p in {3, 4} present:
       1. z must be in L (oracle).
-      2. Every split z=uvwxy with |vwx|<=p, |vx|>=1 must have some i in {0,2}
-         with the pumped word NOT in L.
+      2. Every split z=uvwxy with |vwx|<=p, |vx|>=1 must have some i in
+         {0, 2, 3} with the pumped word NOT in L.
     All closed -> "bounded_pass". Any violation -> "refuted". No oracle or no
     usable entries -> None (leave trust at well_formed).
+
+    A split is refuted only if the pumped word is in L for ALL of i=0, i=2
+    AND i=3 (reviewer finding, docs/VERDICT_POLICY.md §4): a correct proof is
+    free to rely on i=3 rather than i=2 to disqualify a split, so finding
+    i=0/i=2 both in L is not by itself proof the split fails — checking only
+    those two i values would refute an otherwise-valid proof.
 
     `oracle`, when given, overrides the oracle built from `ir` (used by
     closure_reduction's nested check, which must test membership in L ∩ R,
@@ -173,11 +179,19 @@ def _check_pumping_word_instances(
             except Exception:
                 continue
             if in0 and in2:
-                issues.append(
-                    f"word_instances[p={p}] = '{word}': split v='{v}' x='{x}' is not "
-                    f"disqualified by any i in {{0,2}} — uv^0wx^0y and uv^2wx^2y are both in L"
-                )
-                return "refuted", witnesses
+                try:
+                    in3 = bool(oracle(_pump(u, v, w, x, y, 3)))
+                except Exception:
+                    in3 = False  # can't confirm i=3 stays in L -> don't refute on it
+                if in3:
+                    issues.append(
+                        f"word_instances[p={p}] = '{word}': split v='{v}' x='{x}' is not "
+                        f"disqualified by any i in {{0,2,3}} — uv^iwx^iy is in L for "
+                        f"i=0,2,3"
+                    )
+                    return "refuted", witnesses
+                add_witness(_pump(u, v, w, x, y, 3), False, f"pumping p={p} split v={v!r} x={x!r} i=3")
+                continue
             if not in0:
                 add_witness(_pump(u, v, w, x, y, 0), False, f"pumping p={p} split v={v!r} x={x!r} i=0")
             if not in2:
@@ -222,16 +236,21 @@ def _check_ogden_word_instances(
 
     Expects evidence["word_instances"] (as for plain pumping) AND
     evidence["marked_positions"] = {"3": [i0, i1, ...], "4": [...]} — the
-    0-indexed positions in the instantiated word that the proof marks (per
-    Ogden's lemma, at least p symbols must be marked; here we trust the
-    proof's own choice of which positions are marked and only check the
-    consequence). Without `marked_positions` for a given p, that p's
-    semantic check is skipped entirely (never falls back to the plain
-    length-bounded enumeration, which is unsound for Ogden's lemma) —
-    trust stays at `well_formed` for that instance.
+    0-indexed positions in the instantiated word that the proof marks. Per
+    Ogden's lemma, a decomposition with the required guarantees exists only
+    when AT LEAST p symbols are marked; fewer than that and the split search
+    below (`_enumerate_ogden_splits`) is too narrow — it can miss the split
+    the real proof needs and wrongly certify an incorrect non-CFL proof as
+    `bounded_pass` (reviewer finding, docs/VERDICT_POLICY.md §4). So a given
+    p is skipped entirely (not checked, not refuted) whenever fewer than p
+    positions are marked for it. Without `marked_positions` for a given p,
+    that p's semantic check is likewise skipped entirely (never falls back
+    to the plain length-bounded enumeration, which is unsound for Ogden's
+    lemma) — trust stays at `well_formed` for that instance.
 
     Returns (trust_or_None, witnesses) — see `_check_pumping_word_instances`
-    for the witness format (docs/VERDICT_POLICY.md R3').
+    for the witness format (docs/VERDICT_POLICY.md R3'), including the same
+    "refuted only if i=0, i=2 AND i=3 are all in L" rule.
     """
     raw = evidence.get("word_instances")
     witnesses, add_witness = _witness_collector()
@@ -258,6 +277,12 @@ def _check_ogden_word_instances(
         marked_positions = {m for m in marks if isinstance(m, int) and 0 <= m < len(word)}
         if not marked_positions:
             continue
+        if len(marked_positions) < p:
+            issues.append(
+                f"word_instances[p={p}] = '{word}': only {len(marked_positions)} position(s) "
+                f"marked, need >= {p} per Ogden's lemma — semantic check skipped for this p"
+            )
+            continue
         try:
             in_l = bool(oracle(word))
         except Exception:
@@ -277,12 +302,19 @@ def _check_ogden_word_instances(
             except Exception:
                 continue
             if in0 and in2:
-                issues.append(
-                    f"word_instances[p={p}] = '{word}': marked split v='{v}' x='{x}' is "
-                    f"not disqualified by any i in {{0,2}} — uv^0wx^0y and uv^2wx^2y are "
-                    f"both in L"
-                )
-                return "refuted", witnesses
+                try:
+                    in3 = bool(oracle(_pump(u, v, w, x, y, 3)))
+                except Exception:
+                    in3 = False  # can't confirm i=3 stays in L -> don't refute on it
+                if in3:
+                    issues.append(
+                        f"word_instances[p={p}] = '{word}': marked split v='{v}' x='{x}' is "
+                        f"not disqualified by any i in {{0,2,3}} — uv^iwx^iy is in L for "
+                        f"i=0,2,3"
+                    )
+                    return "refuted", witnesses
+                add_witness(_pump(u, v, w, x, y, 3), False, f"ogden p={p} split v={v!r} x={x!r} i=3")
+                continue
             if not in0:
                 add_witness(_pump(u, v, w, x, y, 0), False, f"ogden p={p} split v={v!r} x={x!r} i=0")
             if not in2:

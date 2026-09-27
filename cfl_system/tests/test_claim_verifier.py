@@ -11,6 +11,8 @@ from cfl_system.lib.claim_verifier import (
     verify_parikh_claim,
     verify_pumping_claim,
     _enumerate_ogden_splits,
+    _enumerate_vwx_splits,
+    _pump,
 )
 
 # ---------------------------------------------------------------------------
@@ -493,6 +495,111 @@ class TestVerifyAgentClaims:
         assert result["verification_status"] == "well_formed"
         assert result["trust"] == "bounded_pass"
 
+    # -----------------------------------------------------------------
+    # cfl-12 (docs/EVAL_SET.md) -- {a^i b^j c^k d^l | i=0 or j=k=l}, the
+    # exact "b-block marking" proof from cfl_ogden.md's solved Example 1
+    # (docs/VERDICT_POLICY.md fix: the contract didn't require
+    # word_instances/marked_positions at all, so this proof's semantic
+    # check never ran in a live run and stayed well_formed forever, even
+    # though an oracle was available).
+    #
+    # The oracle here MUST enforce the a*b*c*d* block order (not just the
+    # symbol counts) -- a "predicate"-only oracle that checks counts alone
+    # would wrongly accept a pumped word whose blocks got interleaved by a
+    # cross-boundary split, which never happens with the real language.
+    # grammar_filter's grammar component (a*b*c*d*, a trivial regular CFG)
+    # provides that order check; the filter checks i=0 or j=k=l.
+    # -----------------------------------------------------------------
+
+    _CFL12_GRAMMAR = {
+        "nonterminals": ["S", "B", "C", "D"],
+        "terminals": ["a", "b", "c", "d"],
+        "start": "S",
+        "rules": [
+            {"lhs": "S", "rhs": ["a", "S"]},
+            {"lhs": "S", "rhs": ["B"]},
+            {"lhs": "B", "rhs": ["b", "B"]},
+            {"lhs": "B", "rhs": ["C"]},
+            {"lhs": "C", "rhs": ["c", "C"]},
+            {"lhs": "C", "rhs": ["D"]},
+            {"lhs": "D", "rhs": ["d", "D"]},
+            {"lhs": "D", "rhs": []},
+        ],
+    }
+    _CFL12_FILTER = {
+        "op": "or",
+        "operands": [
+            {"op": "eq",
+             "left": {"kind": "count_symbol", "in_var": "w", "symbol": "a"},
+             "right": {"kind": "constant", "value": 0}},
+            {"op": "and", "operands": [
+                {"op": "eq",
+                 "left": {"kind": "count_symbol", "in_var": "w", "symbol": "b"},
+                 "right": {"kind": "count_symbol", "in_var": "w", "symbol": "c"}},
+                {"op": "eq",
+                 "left": {"kind": "count_symbol", "in_var": "w", "symbol": "c"},
+                 "right": {"kind": "count_symbol", "in_var": "w", "symbol": "d"}},
+            ]},
+        ],
+    }
+    _IR_CFL12 = {
+        "language_spec": {
+            "kind": "grammar_filter",
+            "grammar": _CFL12_GRAMMAR,
+            "filter": _CFL12_FILTER,
+        },
+    }
+
+    def _cfl12_ogden_output(self, marked_positions: dict) -> dict:
+        return {
+            "agent": "ogden",
+            "status": "success",
+            "evidence": {
+                "word_chosen": "a b^p c^p d^p",
+                "cases": [{"case": "vwx in b-block", "why_not_in_L": "j > k = l"}],
+                "all_cases_covered": True,
+                "word_instances": {"3": "abbbcccddd", "4": "abbbbccccdddd"},
+                "marked_positions": marked_positions,
+            },
+        }
+
+    def test_cfl12_ogden_b_block_marking_bounded_pass(self):
+        """cfl_ogden.md Example 1's own marking (mark the b-block, exactly p
+        positions) closes the automatic check -> bounded_pass, once the
+        contract's word_instances/marked_positions fields are actually
+        populated."""
+        agent_output = self._cfl12_ogden_output({
+            "description": "b-block (positions 1..p, 0-indexed)",
+            "3": [1, 2, 3],
+            "4": [1, 2, 3, 4],
+        })
+        result = verify_agent_claims(agent_output, self._IR_CFL12)
+        assert result["agent"] == "ogden"
+        assert result["verification_status"] == "well_formed"
+        assert result["trust"] == "bounded_pass"
+        assert result["issues"] == []
+
+    def test_cfl12_ogden_undermarked_stays_well_formed(self):
+        """docs/VERDICT_POLICY.md §4 (reviewer finding): Ogden's lemma only
+        guarantees a productive decomposition when AT LEAST p positions are
+        marked. A marking of just the single 'a' (1 position) at p=3/p=4 is
+        below that threshold, so the semantic check must be SKIPPED for
+        both p's rather than treated as a real (dis)proof -- it must not
+        come out `bounded_pass` (that would be a false-positive "proof
+        confirmed" on an under-specified marking, the actual bug reported)
+        and, since nothing conclusive was actually checked, it must not
+        come out `refuted` either. Trust stays `well_formed`."""
+        agent_output = self._cfl12_ogden_output({
+            "description": "ложная разметка: только единственная 'a'",
+            "3": [0],
+            "4": [0],
+        })
+        result = verify_agent_claims(agent_output, self._IR_CFL12)
+        assert result["agent"] == "ogden"
+        assert result["verification_status"] == "well_formed"
+        assert result["trust"] == "well_formed"
+        assert any("need >=" in issue for issue in result["issues"])
+
     def test_pumping_word_instances_refutes_bad_witness(self):
         """A word for which some split can never be disqualified (i in {0,2})
         is not a valid pumping witness — must be refuted, not well_formed."""
@@ -526,3 +633,73 @@ class TestVerifyAgentClaims:
         result = verify_agent_claims(agent_output, ir_astar_bstar)
         assert result["verification_status"] == "refuted"
         assert result["trust"] == "refuted"
+
+    def test_pumping_word_instances_not_refuted_when_i3_leaves_l(self):
+        """docs/VERDICT_POLICY.md §4 (reviewer finding): a split is only
+        refuted if the pumped word stays in L for ALL of i=0, i=2 AND i=3.
+        A correct proof is free to rely on i=3 rather than i=2 to
+        disqualify a split, so finding i=0/i=2 both in L must not by
+        itself refute the whole proof -- it must first check i=3 and,
+        if that pumped word is NOT in L, treat the split as closed
+        (witness, not refutation).
+
+        Built with a synthetic oracle (not a real language) so every split
+        this enumerates is deliberately "in L at i=0/i=2, out at i=3" --
+        the old code would hit the very first such split and return
+        `refuted` immediately; the fixed code must instead close every
+        split via i=3 and return `bounded_pass`.
+        """
+        word = "abcdef"
+        p = 3
+        forbidden = {
+            _pump(u, v, w, x, y, 3)
+            for (u, v, w, x, y) in _enumerate_vwx_splits(word, p)
+        }
+        assert word not in forbidden  # sanity: z itself must stay in L
+
+        def oracle(w: str) -> bool:
+            return w not in forbidden
+
+        agent_output = {
+            "agent": "pumping_cfl",
+            "status": "success",
+            "evidence": {
+                "word_chosen": "",  # skip the unrelated structural check-1
+                "cases": [{"case": "c", "why_not_in_L": "r"}],
+                "all_cases_covered": True,
+                "word_instances": {"3": word},
+            },
+        }
+        result = verify_pumping_claim(agent_output["evidence"], {}, oracle=oracle)
+        assert result["verification_status"] != "refuted"
+        assert result["trust"] == "bounded_pass"
+
+    def test_ogden_word_instances_not_refuted_when_i3_leaves_l(self):
+        """Same fix as test_pumping_word_instances_not_refuted_when_i3_leaves_l,
+        for the Ogden path (_check_ogden_word_instances)."""
+        word = "abcdefgh"
+        p = 3
+        marked = set(range(len(word)))  # every position marked, >= p
+        forbidden = {
+            _pump(u, v, w, x, y, 3)
+            for (u, v, w, x, y) in _enumerate_ogden_splits(word, marked, p)
+        }
+        assert word not in forbidden
+
+        def oracle(w: str) -> bool:
+            return w not in forbidden
+
+        agent_output = {
+            "agent": "ogden",
+            "status": "success",
+            "evidence": {
+                "word_chosen": "",
+                "cases": [{"case": "c", "why_not_in_L": "r"}],
+                "all_cases_covered": True,
+                "word_instances": {"3": word},
+                "marked_positions": {"3": sorted(marked)},
+            },
+        }
+        result = verify_pumping_claim(agent_output["evidence"], {}, agent="ogden", oracle=oracle)
+        assert result["verification_status"] != "refuted"
+        assert result["trust"] == "bounded_pass"

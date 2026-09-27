@@ -93,6 +93,25 @@
 - §7: **tfl-eval** — пакет `tfl_eval/` (манифест на 73 задачи из `docs/EVAL_SET.md`, `runners.py`/`metrics.py`/`cli.py`),
   IR-файлы для eval-набора под `*/examples/eval/`, метрики (точность общая/по системе/на ловушках, Brier, доля
   inconclusive, "уверенно неверно"); `--live` реализован, но ни разу не прогонялся (см. открытый пункт).
+- live-прогон 24 ловушек на Haiku (2026-09-27, до раунда C2) — 19/19 решённых верно, 0 ложно-уверенных ошибок;
+  результаты и диагнозы см. `docs/EVAL_RESULTS.md`; закрыл на deferred-инфраструктуре (полный прогон 73 задач
+  и перепрогон ловушек после C2 — остаются открытыми, см. §7);
+- раунд C2: **сертификат DCFL** (R2′, `docs/VERDICT_POLICY.md`) — `stack_strategy` обязан выдавать исполняемый
+  `dpda` (`dcfl_system/lib/dpda.py`: синтаксическая проверка детерминированности), иначе `not_applicable`/`uncertain`,
+  не голая прозаическая «стратегия» (`dcfl_system/prompts/stack_strategy.md`, `dcfl_system/tz_dcfl_agent_system.md` §5.2/§6.1.1);
+- раунд C2: **R4′** («ретрай-бюджет исчерпан → гейт берёт сильнейшее допустимое основание среди уже собранных
+  доказательств») реализован в вердикт-гейтах всех четырёх пайплайнов (`cfl/dcfl/ll_system/orchestrator.py`,
+  `agent_system/graph.py`), заменяя прежний безусловный откат в `inconclusive`/`failure`;
+- раунд C2: **баг structured outputs** — `build_agent_output_schema` строил пустые `{}`-подсхемы, API их отклонял,
+  а клиент запоминал модель как «отклонившую схему» на весь процесс, из-за чего первый же вызов на модель отравлял
+  все последующие (объясняет `structured_output_calls = 0` в прогоне выше); исправлено — реальные посвойственные
+  подсхемы (`schema_string`/`schema_number`/`schema_boolean`/`schema_null`/`schema_array`/`schema_object`/`nullable`
+  в `agent_system/lib/llm_client.py`) и переписанные `*/lib/agent_output_schema.py` во всех четырёх системах;
+- раунд C2: **Ogden semantic check контракт** — `cfl_system/prompts/cfl_ogden.md` теперь требует `word_instances`
+  и `marked_positions` (индексированные по `p`), без которых `verify_agent_claims` не мог поднять доверие выше
+  `well_formed` (проверялось на реальных предикате/`grammar_filter` оракулах, `cfl_system/tests/test_claim_verifier.py`);
+- цены/usage за прогон — `UsageTracker.as_dict()` подключён к top-level result JSON и CLI `--verbose`
+  во всех четырёх системах (`agent_system/tests/test_usage_block.py` и аналоги в cfl/dcfl/ll);
 
 Легенда: 🔴 high · 🟠 medium · ⚪ low; объём: S ≤ 30 мин · M ≤ день · L > дня.
 
@@ -150,9 +169,6 @@
 
 - [ ] ⚪ **S** **Prompt caching** (`cache_control`) для больших повторных промптов (`cfl_reasoning`, `cfl_pumping`, `ll_reasoning_agent`, 15–20 KB);
   `student_notes` — отдельным блоком. Проверять по `usage.cache_read_input_tokens`.
-- [ ] ⚪ **S** Учёт токенов и стоимости за прогон (сейчас `usage` печатается только в verbose-режиме) — `UsageTracker.as_dict()`
-  ещё не подключён в top-level result JSON пайплайнов и в CLI `--verbose`; сам трекер готов
-  (`agent_system/lib/llm_client.py`), нужно только связать его в `run_pipeline`/CLI каждой системы.
 - [ ] ⚪ **S** `agent_system/lib/llm_client.py`: `student_notes` дублируются в system prompt и в user JSON.
 - [ ] ⚪ **S** `agent_system`: при refusal JSON-ретрай делает лишний второй вызов (`run_agent` не отличает refusal от невалидного JSON).
 - [ ] ⚪ **—** После миграции перемерить стоимость и время на 1–2 задачах (на Haiku через `TFL_MODEL_OVERRIDE`, затем выборочно на Opus)
@@ -191,11 +207,33 @@
 
 ## 7. Стратегия
 
-- [ ] **M** **`tfl-eval`: живой прогон.** Скелет реализован (`tfl_eval/` — манифест на 73 задачи из
-  `docs/EVAL_SET.md`, `runners.py`/`metrics.py`/`cli.py`, IR-файлы под `*/examples/eval/`, метрики: точность
-  общая/по системе/на ловушках, Brier, доля inconclusive, «уверенно неверно»); `--live` реализован, но никогда
-  не запускался (задача прямо запрещала вызовы API) — нужен первый прогон на Haiku
-  (`TFL_MODEL_OVERRIDE=claude-haiku-4-5`, только по запросу), затем выборочно на Opus для калибровки потолков (см. §1).
+- [x] **M** **`tfl-eval`: первый живой прогон.** 24 ловушки (не все 73) прогнаны на Haiku 2026-09-27 —
+  19/19 решённых верно, 0 ложно-уверенных ошибок; результаты, диагнозы и что уже исправлено — `docs/EVAL_RESULTS.md`.
+- [ ] 🟠 **M** **Живой прогон полного eval-набора (73 задачи) после раунда C2.** Прогонялись только 24 ловушки
+  (`docs/EVAL_RESULTS.md`), и это было **до** C2 (сертификат DCFL, R4′, structured outputs, Ogden-контракт) —
+  нужно перепрогнать те же 24 ловушки, чтобы подтвердить, что `cfl-07/12` теперь дают `non_cfl` вместо
+  `failure`, и что `structured_output_calls > 0`; затем прогнать оставшиеся ~49 нетравматичных задач
+  из `docs/EVAL_SET.md`, которых этот прогон не покрывал. `dcfl-04/15/17` **не** ожидается закрыть этим
+  перепрогоном — см. следующий пункт.
+- [ ] 🟠 **M** **R2′ не закрывает `dcfl-04/15/17`: нет оракула членства для их IR-формы.**
+  `build_set_builder_membership_oracle` (`dcfl_system/lib/word_sampler.py`) требует
+  `input_format == "set_builder"` и `word_pattern` как чистую конкатенацию именованных
+  `variables`; `dcfl-04`/`dcfl-15` (`docs/EVAL_SET.md`) заданы `variables: []` с
+  `word_pattern` в виде экспоненциальной строки (`"{a^n b^n c^m | ...}"`), `dcfl-17` задан
+  `input_format: "grammar"` — во всех трёх случаях оракул возвращает `None`, `_verify_stack_strategy_dpda`
+  максимум даёт `well_formed`, и R2/R2′ по-прежнему запрещают вердикт `dcfl` (нужен `bounded_pass`+).
+  Варианты: (a) парсер экспоненциальных `word_pattern`-строк вида `aⁿbⁿcᵐ` в `word_sampler.py`;
+  (b) CYK-оракул по грамматике задачи для `input_format: "grammar"`; без одного из них эти три
+  задачи останутся `inconclusive` — см. `docs/EVAL_RESULTS.md`.
+- [ ] ⚪ **M** **Калибровка потолков confidence на Opus.** См. §1 — только по явному запросу (реальные деньги).
+- [ ] 🟠 **M** **Статус `task_grammar_aSSb` (exam_04, dcfl) не установлен** — см. §1, нужна теория, не только код.
+- [ ] ⚪ **S** **Lean 4 в CI не выполняет реальную компиляцию** — см. §5 (3 skipped-теста нужен Docker `tfl-lean4`,
+  CI-джоба неблокирующая).
+- [ ] 🟠 **M** **Мост word-оракула для Format 2/3 (`ll_system`)** — см. §1: Format 1 (`set_builder`) закрыт
+  (`ll_system/lib/word_oracle.py`), явно заданная грамматика (Format 2/3) по-прежнему без семантической проверки шага 2.
+- [ ] 🟠 **M** **R3′ (исполняемый конструктивный артефакт) для dcfl/ll помимо уже сделанного ДМПА** — R2′ дал
+  dcfl исполняемый сертификат (`dpda.py`); `ll_system` и остальные конструктивные заявления dcfl (кроме
+  `stack_strategy`) пока не имеют аналогичного исполняемого артефакта — оценить, где R3′ применимо дальше.
   Также: ll-04 использует моки, не авторизованные под свой конкретный IR (нужна ревизия), а Format-3 LL-задачи
   (`is_ll_k`/`is_sll_k`) пока не сведены в отдельную per-k метрику.
 - [ ] **L** Общая библиотека оракулов (CYK/Earley, PDA-симулятор, валидатор грамматик, `is_grammar_equivalent_sample`),

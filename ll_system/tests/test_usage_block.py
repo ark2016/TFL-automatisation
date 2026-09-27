@@ -39,17 +39,33 @@ def test_usage_block_present_and_zero_without_agent_runner():
     assert usage["per_agent"] == {}
 
 
+_MARKER_ANALYZER_PROOF_SKETCH = (
+    '{"method": "marker_detection", "marker_found": true, "marker_symbol": "c", '
+    '"marker_type": "explicit", "marker_position": "after prefix", '
+    '"marker_description": "...", "ll_usage": "...", "suggested_k": 1}'
+)
+_MARKER_ANALYZER_ARTIFACTS = (
+    '{"counterexample_words": [], "first_follow_table": null, "ll_grammar": null}'
+)
+
+
 def test_usage_tracker_consistent_with_calls_made():
+    # `marker_analyzer` has a real `_FIELD_SCHEMAS` entry
+    # (agent_output_schema.py) -- unlike `ll_grammar_builder`, which is
+    # `_DYNAMIC_KEY_EXEMPT` (its `artifacts.first_follow_table` is keyed by
+    # the grammar's own nonterminal symbols, which `output_config.format`
+    # can't express) and so never gets structured outputs at all.
     runner = LiveRunner(api_key="sk-ant-test-not-used")
     runner.client = FakeAnthropic([
         text_turn(
-            '{"agent_name": "ll_grammar_builder", "verdict": "ll", "confidence": 0.8, '
-            '"proof_sketch": {}, "artifacts": {}, "errors": []}',
+            '{"agent_name": "marker_analyzer", "verdict": "ll", "confidence": 0.8, '
+            f'"proof_sketch": {_MARKER_ANALYZER_PROOF_SKETCH}, '
+            f'"artifacts": {_MARKER_ANALYZER_ARTIFACTS}, "errors": []}}',
             input_tokens=150, output_tokens=60,
         ),
     ])
 
-    out = runner.run_agent("ll_grammar_builder", {"x": 1})
+    out = runner.run_agent("marker_analyzer", {"x": 1})
     assert out is not None
 
     usage = runner.usage_tracker.as_dict()
@@ -59,7 +75,7 @@ def test_usage_tracker_consistent_with_calls_made():
     assert usage["total_tokens"] == 210
     assert usage["structured_output_calls"] == 1
     assert usage["extraction_fallback_calls"] == 0
-    assert usage["per_agent"]["ll_grammar_builder"]["calls"] == 1
+    assert usage["per_agent"]["marker_analyzer"]["calls"] == 1
     assert usage["by_model"]["claude-sonnet-5"]["calls"] == 1
 
 
@@ -68,17 +84,18 @@ def test_usage_tracker_counts_haiku_repair_as_fallback():
     runner.client = FakeAnthropic([
         text_turn("not valid json at all"),
         text_turn(
-            '{"agent_name": "ll_grammar_builder", "verdict": "ll", "confidence": 0.8, '
-            '"proof_sketch": {}, "artifacts": {}, "errors": []}',
+            '{"agent_name": "marker_analyzer", "verdict": "ll", "confidence": 0.8, '
+            f'"proof_sketch": {_MARKER_ANALYZER_PROOF_SKETCH}, '
+            f'"artifacts": {_MARKER_ANALYZER_ARTIFACTS}, "errors": []}}',
             model="claude-haiku-4-5",
         ),
     ])
 
-    out = runner.run_agent("ll_grammar_builder", {"x": 1})
+    out = runner.run_agent("marker_analyzer", {"x": 1})
     assert out is not None
 
     usage = runner.usage_tracker.as_dict()
     assert usage["calls"] == 2
     assert usage["structured_output_calls"] == 1
     assert usage["extraction_fallback_calls"] == 1
-    assert usage["per_agent"]["ll_grammar_builder"]["calls"] == 2
+    assert usage["per_agent"]["marker_analyzer"]["calls"] == 2

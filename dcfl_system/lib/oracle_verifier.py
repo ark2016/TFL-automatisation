@@ -31,6 +31,12 @@ from dcfl_system.lib.word_sampler import (
     build_set_builder_membership_oracle,
     instantiate_exponent_pattern,
 )
+from dcfl_system.lib.dpda import (
+    DPDAFormatError,
+    check_determinism,
+    dpda_accepts,
+    to_cfl_pda,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +63,13 @@ CONFIDENCE_CAPS: dict[str, float] = {
 # Cap that applies whenever R3's contradiction condition holds, regardless of
 # which side "wins" the trust comparison.
 CONTRADICTION_CONFIDENCE_CAP = 0.50
+
+# stack_strategy / dpda (docs/VERDICT_POLICY.md R2'): the minimum number of
+# decisively-oracled words (up to this length) a simulation check must cover
+# before it can earn `bounded_pass` -- below this, coverage is treated as
+# incomplete and trust stays at `well_formed`.
+_DPDA_MIN_WORDS = 30
+_DPDA_MAX_WORD_LEN = 10
 
 
 def trust_rank(trust: str | None) -> int:
@@ -211,11 +224,140 @@ def _verify_stack_strategy(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
                        checks_run, passed, issues)
 
     n_passed = sum(1 for p in passed if p)
-    if not checks_run:
+    has_dpda = isinstance(proof_sketch.get("dpda"), dict)
+
+    if not checks_run and not has_dpda:
         return _make_result("not_verified", checks_run, 0,
                             ["no verifiable fields found in proof_sketch"])
-    status = "well_formed" if n_passed == len(checks_run) else "not_verified"
-    return _make_result(status, checks_run, n_passed, issues if issues else None)
+
+    status = "well_formed" if (not checks_run or n_passed == len(checks_run)) else "not_verified"
+
+    if not has_dpda:
+        # docs/VERDICT_POLICY.md R2': no executable DPDA artifact -> trust
+        # caps at well_formed regardless of how many word-strategy fields
+        # were present and internally consistent (a prose "стратегия
+        # словами" is not a certificate).
+        return _make_result(status, checks_run, n_passed, issues if issues else None)
+
+    # R2' -- a `dpda` artifact IS present: (a) syntactic determinism check
+    # (complete -> refuted on any violation), then (b) bounded simulation
+    # against the task's own language oracle (bounded_pass / refuted /
+    # well_formed if no oracle or insufficient coverage).
+    dpda_status, dpda_check, dpda_issue, dpda_details = _verify_stack_strategy_dpda(
+        proof_sketch["dpda"], task_ir,
+    )
+    checks_run.append(dpda_check)
+    if dpda_issue:
+        issues.append(dpda_issue)
+
+    if dpda_status == "refuted":
+        return _make_result("refuted", checks_run, n_passed, issues)
+
+    if dpda_status is not None:
+        status = dpda_status
+        n_passed += 1
+
+    result = _make_result(status, checks_run, n_passed, issues if issues else None)
+    if dpda_details:
+        result["details"] = dpda_details
+    return result
+
+
+def _verify_stack_strategy_dpda(
+    dpda: Any, task_ir: dict,
+) -> tuple[str | None, str, str, dict[str, Any] | None]:
+    """R2' (docs/VERDICT_POLICY.md): verify a stack_strategy proof's `dpda`
+    artifact.
+
+    (a) Syntactic determinism (``dpda.check_determinism``) -- a COMPLETE
+        check, so a violation is a genuine, deterministic counterexample:
+        ``refuted``, with the conflicting transitions named.
+    (b) Simulation: convert the DPDA (``dcfl_system.lib.dpda.to_cfl_pda``,
+        which reuses ``cfl_system.lib.pda_simulator`` -- it already supports
+        epsilon transitions and both `final_state`/`empty_stack` acceptance
+        modes, so no second simulator is written here) and run it on words
+        sampled by ``word_sampler`` (positive and negative, length <=
+        ``_DPDA_MAX_WORD_LEN``) against the task's OWN language oracle
+        (``build_set_builder_membership_oracle`` on ``task_ir`` -- never the
+        proof's own claims). All of at least ``_DPDA_MIN_WORDS`` decisively-
+        oracled words agree -> ``bounded_pass`` (details:
+        ``determinism: "verified"``); any disagreement -> ``refuted`` with
+        the counterexample(s). No membership oracle available for this task,
+        or fewer than ``_DPDA_MIN_WORDS`` words could be decided -> trust
+        stays ``well_formed`` (the DPDA is syntactically valid and
+        deterministic, just not checked against the language).
+    """
+    check_name = "dpda_determinism_and_simulation"
+    if not isinstance(dpda, dict):
+        return "refuted", check_name, "dpda must be an object", None
+
+    conflicts = check_determinism(dpda)
+    if conflicts:
+        return "refuted", check_name, (
+            "dpda is not deterministic: " + "; ".join(conflicts)
+        ), {"determinism": "violated", "conflicts": conflicts}
+
+    try:
+        to_cfl_pda(dpda)
+    except DPDAFormatError as exc:
+        return "refuted", check_name, f"dpda is structurally invalid: {exc}", {
+            "determinism": "verified", "structure": "invalid",
+        }
+
+    input_format = task_ir.get("input_format", "")
+    if input_format != "set_builder":
+        return "well_formed", check_name, "", {"determinism": "verified"}
+    spec = task_ir.get("language_spec", {})
+    alphabet = task_ir.get("alphabet", [])
+    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    if oracle is None:
+        return "well_formed", check_name, "", {"determinism": "verified"}
+
+    try:
+        samples = sample_words(task_ir, count=60, max_len=_DPDA_MAX_WORD_LEN)
+    except Exception as exc:
+        return "well_formed", check_name, (
+            f"could not sample words for simulation: {exc}"
+        ), {"determinism": "verified"}
+
+    candidates = sorted(
+        {s["word"] for s in samples
+         if isinstance(s.get("word"), str) and len(s["word"]) <= _DPDA_MAX_WORD_LEN}
+    )
+
+    checked = 0
+    mismatches: list[str] = []
+    for word in candidates:
+        expected = oracle(word)
+        if expected is None:
+            continue
+        try:
+            actual = dpda_accepts(dpda, word)
+        except TimeoutError:
+            continue
+        checked += 1
+        if actual != expected:
+            mismatches.append(
+                f"word={word!r}: oracle says in_L={expected}, dpda says accepted={actual}"
+            )
+        if len(mismatches) >= 5:
+            break
+
+    if mismatches:
+        return "refuted", check_name, (
+            "dpda simulation disagrees with the task's language oracle: "
+            + "; ".join(mismatches)
+        ), {"determinism": "verified", "counterexamples": mismatches, "words_checked": checked}
+
+    if checked < _DPDA_MIN_WORDS:
+        return "well_formed", check_name, (
+            f"only {checked} words could be decisively checked (< {_DPDA_MIN_WORDS}) "
+            "-- coverage incomplete, trust stays well_formed"
+        ), {"determinism": "verified", "words_checked": checked}
+
+    return "bounded_pass", check_name, "", {
+        "determinism": "verified", "words_checked": checked,
+    }
 
 
 # ---------------------------------------------------------------------------
