@@ -4,7 +4,7 @@
   "verdict": "non_dcfl",
   "proof_sketch": {
     "kind": "dcfl_pumping",
-    "pumping_length": "p — произвольная константа, n выбирается как n > p + 2",
+    "pumping_length": "p — произвольная константа, n выбирается как n > p + 2 (THEORY.md §1.6); word_instances ниже инстанцируют это отдельно при конкретном n = p + 2",
     "word_w": "w = xy = W1 = (ab)^n aa (ba)^n ∈ L",
     "word_w_prime": "w' = xz = W2 = (ab)^n aab (ab)^n aa (ba)^n baa (ba)^n ∈ L",
     "common_prefix_x": "x = W1 без последней буквы = (ab)^n aa (ba)^{n-1} b, |x| = 4n + 1 > p",
@@ -15,14 +15,14 @@
     "condition2_argument": "x2 лежит в последних p символах x, т.е. внутри хвоста (ba)^{n-1}b, y2 в {ε,a}. При i!=1 длина хвоста перестаёт быть равна 2n, а единственное 'aa' в x стоит на фиксированной позиции 2n+1 сразу после (ab)^n — палиндром с центром именно там требует хвост длины ровно 2n; при i=0 хвост короче 2n и центр смещается внутрь чередующегося блока (ab)^n, где подстроки 'aa' нет. Значит W1^(i) не в L при i!=1 — условие (2) не выполняется.",
     "word_instances": {
       "2": {
-        "w": "abababaabababa",
-        "w_prime": "abababaababababaababababaabababa",
-        "x_length": 13
-      },
-      "3": {
         "w": "ababababaababababa",
         "w_prime": "ababababaabababababaabababababaababababa",
         "x_length": 17
+      },
+      "3": {
+        "w": "abababababaabababababa",
+        "w_prime": "abababababaababababababaababababababaabababababa",
+        "x_length": 21
       }
     }
   },

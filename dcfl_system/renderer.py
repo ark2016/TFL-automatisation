@@ -197,7 +197,7 @@ def _render_proof_sketch_md(sketch: dict | None, method: str | None) -> str:
                 parts.append(f"**Суффиксы:** {suffixes}\n")
         word_instances = sketch.get("word_instances")
         if isinstance(word_instances, dict) and word_instances:
-            parts.append("**Конкретные инстансы (n = p + 1, docs/VERDICT_POLICY.md §4):**\n")
+            parts.append("**Конкретные инстансы (n = p + 2, docs/VERDICT_POLICY.md §4):**\n")
             for p_key in ("2", "3"):
                 entry = word_instances.get(p_key)
                 if isinstance(entry, dict):

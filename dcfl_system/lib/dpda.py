@@ -242,12 +242,66 @@ def normalize_epsilon_accept_sinks(dpda: dict) -> tuple[dict, list[str]]:
 # (b) Syntactic determinism check
 # ---------------------------------------------------------------------------
 
+def _transition_signature(t: dict) -> tuple[Any, tuple[Any, ...]]:
+    """Full behavioral identity of a transition, beyond the ``(from, top,
+    read)`` key already used to group it: the target state and the exact
+    (topmost-first) ``push`` replacement. Two transitions in the same group
+    that agree on this signature are the SAME transition written twice
+    (e.g. duplicated by a merge or a copy-paste in the proof_sketch), not a
+    nondeterministic conflict -- see ``check_determinism``."""
+    push = t.get("push") or []
+    return (t.get("to"), tuple(push))
+
+
+def _group_by_pair(transitions: list) -> dict[tuple[Any, Any], dict[Any, list[dict]]]:
+    """Group ``transitions`` by ``(from, top)`` and then by normalized
+    ``read``, deduplicating exact duplicates (same ``_transition_signature``,
+    i.e. same ``to`` + ``push``) within each ``(from, top, read)`` bucket as
+    they are inserted.
+
+    This is the ONE place both ``check_determinism`` and ``dpda_run`` build
+    their ``(state, top) -> read -> [transitions]`` index, so an exact
+    duplicate transition (a proof_sketch's redundant copy-paste) is invisible
+    to both in the same way: ``check_determinism`` must not flag it as a
+    conflict, and -- the reviewer finding this fixes -- ``dpda_run`` must not
+    treat the (state, top, read) pair as having "zero or more than one"
+    transition defined (its ``len(...) == 1`` / ``len(...) != 1`` checks)
+    just because the same transition happens to be listed twice. Before this
+    helper existed, ``check_determinism`` deduplicated by signature but
+    ``dpda_run`` built its own ``by_pair`` straight from ``transitions``
+    without deduplicating, so a DPDA with an exact duplicate transition could
+    be reported deterministic (``check_determinism(dpda) == []``) while
+    ``dpda_run`` silently behaved as if NO transition were defined there
+    (neither the single-letter-match nor the single-epsilon-match condition
+    held), rejecting words the same DPDA without the duplicate would accept.
+    """
+    by_pair: dict[tuple[Any, Any], dict[Any, list[dict]]] = {}
+    for t in transitions:
+        if not isinstance(t, dict):
+            continue
+        key = (t.get("from"), t.get("top"))
+        bucket = by_pair.setdefault(key, {}).setdefault(_normalize_read(t.get("read")), [])
+        sig = _transition_signature(t)
+        if any(_transition_signature(existing) == sig for existing in bucket):
+            continue
+        bucket.append(t)
+    return by_pair
+
+
 def check_determinism(dpda: dict) -> list[str]:
     """Purely syntactic DPDA determinism check (docs/VERDICT_POLICY.md R2'):
     for every (state, stack_top) pair seen among ``dpda["transitions"]``, at
     most one transition per input letter, and an epsilon transition (``read``
     normalizing to ``None`` -- see ``_normalize_read``) never coexists with a
     letter transition for the same (state, stack_top).
+
+    Before transitions sharing a ``(state, top, read)`` key are counted,
+    exact duplicates -- transitions that also agree on ``to`` and ``push``
+    (see ``_transition_signature``) -- are collapsed to one: an identical
+    transition listed twice is redundant bookkeeping, not a genuine
+    nondeterministic choice between two different continuations. Only
+    transitions that disagree on where they go or what they push still
+    count as a conflict.
 
     Returns a list of human-readable conflict descriptions (empty list means
     deterministic). This is independent of structural well-formedness
@@ -260,12 +314,7 @@ def check_determinism(dpda: dict) -> list[str]:
     conflict, same as any other.
     """
     transitions = dpda.get("transitions") or []
-    by_pair: dict[tuple[Any, Any], dict[Any, list[dict]]] = {}
-    for t in transitions:
-        if not isinstance(t, dict):
-            continue
-        key = (t.get("from"), t.get("top"))
-        by_pair.setdefault(key, {}).setdefault(_normalize_read(t.get("read")), []).append(t)
+    by_pair = _group_by_pair(transitions)
 
     conflicts: list[str] = []
     for (state, top), by_read in by_pair.items():
@@ -277,11 +326,11 @@ def check_determinism(dpda: dict) -> list[str]:
                 f"(q={state!r}, top={top!r}): epsilon transition coexists with "
                 f"letter transition(s) on {letters!r} -- not deterministic"
             )
-        for read, ts in by_read.items():
-            if len(ts) > 1:
-                targets = [tt.get("to") for tt in ts]
+        for read, unique_ts in by_read.items():
+            if len(unique_ts) > 1:
+                targets = [tt.get("to") for tt in unique_ts]
                 conflicts.append(
-                    f"(q={state!r}, top={top!r}, read={read!r}): {len(ts)} transitions "
+                    f"(q={state!r}, top={top!r}, read={read!r}): {len(unique_ts)} transitions "
                     f"defined (to {targets!r}) -- at most one is allowed"
                 )
     return conflicts
@@ -312,7 +361,14 @@ def dpda_run(dpda: dict, word: str) -> bool | None:
     next_char)`` if input remains and one is defined; otherwise take the
     epsilon transition for ``(state, stack_top)`` if that is the ONLY one
     defined there (zero or more-than-one -> no epsilon move is taken here).
-    Once input is exhausted, the configuration is accepting if:
+    "Defined" is counted after ``_group_by_pair``'s deduplication by
+    ``_transition_signature`` -- an exact duplicate transition (same ``to``
+    and ``push`` as another one already listed for the same (state, top,
+    read)) is collapsed to a single entry first, the same way
+    ``check_determinism`` sees it, so a duplicated transition is simulated
+    exactly as if it had been written once, not treated as "more than one"
+    (which would wrongly block both the letter and the epsilon move). Once
+    input is exhausted, the configuration is accepting if:
 
     - ``accept_mode == "empty_stack"``: the stack is empty (unchanged,
       pre-existing semantics -- ``accept_states``/``accept_configs`` are
@@ -362,12 +418,7 @@ def dpda_run(dpda: dict, word: str) -> bool | None:
             "(or accept_mode 'empty_stack')"
         )
 
-    by_pair: dict[tuple[Any, Any], dict[Any, list[dict]]] = {}
-    for t in transitions:
-        if not isinstance(t, dict):
-            continue
-        key = (t.get("from"), t.get("top"))
-        by_pair.setdefault(key, {}).setdefault(_normalize_read(t.get("read")), []).append(t)
+    by_pair = _group_by_pair(transitions)
 
     def accepting(state: Any, stack: list) -> bool:
         if empty_stack_mode:

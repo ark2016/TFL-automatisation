@@ -623,7 +623,7 @@ def _verify_dcfl_pumping(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         )
 
     # word_instances (docs/VERDICT_POLICY.md §4 dcfl/dcfl_pumping): concrete
-    # word_w = x + y, word_w_prime = x + z instantiated at n = p + 1 for
+    # word_w = x + y, word_w_prime = x + z instantiated at n = p + 2 for
     # p in {2, 3}, REQUIRED -- "без word_instances trust не выше
     # not_verified" (not well_formed!): a structurally-correct proof whose
     # words are only ever described in prose (like "aⁿbⁿ⁻¹") but never
@@ -637,7 +637,7 @@ def _verify_dcfl_pumping(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         "word_instances_present",
         isinstance(word_instances, dict) and "2" in word_instances and "3" in word_instances,
         "word_instances must be a closed object {'2': {...}, '3': {...}} giving the "
-        "concrete word_w/word_w_prime instantiated at n = p + 1 for p in {2, 3} "
+        "concrete word_w/word_w_prime instantiated at n = p + 2 for p in {2, 3} "
         "(docs/VERDICT_POLICY.md §4: without it, trust cannot exceed not_verified)",
         checks_run, passed, issues,
     )

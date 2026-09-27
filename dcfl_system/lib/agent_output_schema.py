@@ -127,7 +127,7 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
         # language, is not a proof). A CLOSED object keyed by the two
         # tested pumping lengths ("2", "3" -- JSON object keys are always
         # strings): each entry is the concrete word_w = x + y and
-        # word_w_prime = x + z instantiated at n = p + 1, plus the common
+        # word_w_prime = x + z instantiated at n = p + 2, plus the common
         # prefix's own length so oracle_verifier never has to re-derive x
         # from scratch (`_xyz_from_common_prefix`'s backoff-by-one heuristic
         # is a fallback for prose it can't parse, not the primary path any

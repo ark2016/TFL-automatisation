@@ -8,6 +8,7 @@ from dcfl_system.lib.dpda import (
     DPDAFormatError,
     check_determinism,
     dpda_accepts,
+    dpda_run,
     normalize_epsilon_accept_sinks,
     to_cfl_pda,
 )
@@ -105,6 +106,77 @@ class TestCheckDeterminismInvalid:
         conflicts = check_determinism(dpda)
         assert conflicts
         assert any("q_c" in c and "2 transitions" in c for c in conflicts)
+
+    def test_exact_duplicate_transition_is_not_a_conflict(self):
+        """Two transitions for the same (state, top, read) that also agree
+        on `to` and `push` are the SAME transition listed twice -- e.g. from
+        a merge or a copy-paste in the proof_sketch -- not a genuine choice
+        between two different continuations, so this must NOT be reported
+        as non-determinism."""
+        dpda = {
+            **ANBNCM_DPDA,
+            "transitions": [
+                *ANBNCM_DPDA["transitions"],
+                # exact duplicate of the existing q_push/a/Z0 transition
+                {"from": "q_push", "read": "a", "top": "Z0", "to": "q_push", "push": ["A", "Z0"]},
+            ],
+        }
+        assert check_determinism(dpda) == []
+
+    def test_duplicate_epsilon_spelling_of_identical_transition_is_not_a_conflict(self):
+        """The same transition duplicated with a different (but equivalent)
+        epsilon spelling is still the same transition, not a conflict. Uses
+        a fresh (state, top) pair with no other transitions, so this
+        exercises only the duplicate-epsilon case, not the (unrelated)
+        epsilon-coexists-with-letter rule."""
+        dpda = {
+            **ANBNCM_DPDA,
+            "transitions": [
+                *ANBNCM_DPDA["transitions"],
+                {"from": "q_new", "read": None, "top": "Z0", "to": "q_pop", "push": ["Z0"]},
+                {"from": "q_new", "read": "eps", "top": "Z0", "to": "q_pop", "push": ["Z0"]},
+            ],
+        }
+        assert check_determinism(dpda) == []
+
+    def test_exact_duplicate_transition_does_not_break_dpda_run(self):
+        """Reviewer finding: check_determinism collapses an exact duplicate
+        transition to one and reports no conflict, but dpda_run used to build
+        its own, non-deduplicating `by_pair` index, so `len(letter_ts) == 1`
+        (and eps_step's `len(eps_ts) != 1`) saw 2 entries for the duplicated
+        (state, top, read) and behaved as if NO transition were defined there
+        -- silently rejecting words the original (non-duplicated) DPDA
+        accepts. dpda_run on a DPDA with an exact duplicate must match
+        dpda_run on the same DPDA without it, for every word, and must still
+        agree with check_determinism (== []) that the automaton is
+        deterministic."""
+        duplicated = {
+            **ANBNCM_DPDA,
+            "transitions": [
+                *ANBNCM_DPDA["transitions"],
+                # exact duplicate of the existing q_push/a/Z0 transition
+                {"from": "q_push", "read": "a", "top": "Z0", "to": "q_push", "push": ["A", "Z0"]},
+            ],
+        }
+        assert check_determinism(duplicated) == []
+        for word in ("abc", "aabbcc", "aaabbbccc", "", "bbcc", "aabb", "aabbb"):
+            assert dpda_run(duplicated, word) == dpda_run(ANBNCM_DPDA, word)
+
+    def test_duplicate_plus_genuinely_different_transition_still_conflicts(self):
+        """Deduplication must not hide a genuine conflict: alongside an
+        exact duplicate, a third transition for the same (state, top, read)
+        that goes somewhere else is still non-determinism."""
+        dpda = {
+            **ANBNCM_DPDA,
+            "transitions": [
+                *ANBNCM_DPDA["transitions"],
+                {"from": "q_push", "read": "a", "top": "Z0", "to": "q_push", "push": ["A", "Z0"]},
+                {"from": "q_push", "read": "a", "top": "Z0", "to": "q_c", "push": []},
+            ],
+        }
+        conflicts = check_determinism(dpda)
+        assert conflicts
+        assert any("q_push" in c and "read='a'" in c and "2 transitions" in c for c in conflicts)
 
 
 # ---------------------------------------------------------------------------
