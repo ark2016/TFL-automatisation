@@ -51,3 +51,72 @@ def test_verify_claims_alphabet_from_ir_flows_through():
 
     result_ab = verify_claims(evidence, oracle, alphabet=["a", "b"])
     assert result_ab["total_claims"] == 0
+
+
+# ---------------------------------------------------------------------------
+# verify_claims: trust taxonomy over the disproved/verified breakdown
+# (docs/VERDICT_POLICY.md §1: a structural pass over free-text claims is
+# well_formed at best, never `verified`; an oracle-contradicted claim is
+# `refuted`; no claims at all is `not_verified`).
+# ---------------------------------------------------------------------------
+
+def test_verify_claims_disproved_claim_is_refuted_with_error_message():
+    evidence = {
+        "pumping": {"evidence": {"proof": "the word aabb in L holds"}},
+    }
+    oracle = lambda w: False  # noqa: E731 -- oracle disagrees with the claim
+
+    result = verify_claims(evidence, oracle, alphabet=["a", "b"])
+
+    assert result["trust"] == "refuted"
+    assert result["total_claims"] == 1
+    assert result["disproved"] == 1
+    assert result["verified"] == 0
+    assert any("aabb" in e for e in result["errors"])
+    assert result["disproved_claims"][0]["word"] == "aabb"
+
+
+def test_verify_claims_all_correct_is_well_formed_not_verified_label():
+    """Even when every claim checks out, this is still just a structural
+    pass over free text -- it must never claim the full `verified` trust
+    reserved for deterministic checks (VERDICT_POLICY.md §1)."""
+    evidence = {
+        "pumping": {"evidence": {"proof": "the word aabb in L holds"}},
+    }
+    oracle = lambda w: True  # noqa: E731 -- oracle agrees with the claim
+
+    result = verify_claims(evidence, oracle, alphabet=["a", "b"])
+
+    assert result["trust"] == "well_formed"
+    assert result["disproved"] == 0
+    assert result["verified"] == 1
+
+
+def test_verify_claims_no_claims_found_is_not_verified():
+    evidence = {"pumping": {"evidence": {"proof": "a purely qualitative argument"}}}
+    oracle = lambda w: True  # noqa: E731
+
+    result = verify_claims(evidence, oracle, alphabet=["a", "b"])
+
+    assert result["trust"] == "not_verified"
+    assert result["total_claims"] == 0
+
+
+def test_verify_claims_scans_every_known_specialist_agent():
+    """Claims are pulled from every specialist output present in evidence
+    (pumping, nerode, closure, re_builder, dfa_builder, grammar_analyzer,
+    reasoning), tagged with which agent made them -- not just the first one
+    found."""
+    evidence = {
+        "pumping": {"evidence": {"proof": "aabb in L"}},
+        "nerode": {"evidence": {"proof": "aaab not in L"}},
+    }
+    oracle = lambda w: w == "aabb"  # noqa: E731 -- aabb in L, aaab not in L
+
+    result = verify_claims(evidence, oracle, alphabet=["a", "b"])
+
+    assert result["total_claims"] == 2
+    assert result["verified"] == 2
+    assert result["disproved"] == 0
+    agents = {c["agent"] for c in result["verified_claims"]}
+    assert agents == {"pumping", "nerode"}

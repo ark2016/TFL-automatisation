@@ -407,79 +407,285 @@ def _verify_dcfl_pumping(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
     if status == "well_formed":
         semantic_status, semantic_check, semantic_issue = _semantic_check_dcfl_pumping(
             word_w, word_w_prime, task_ir,
+            common_prefix_x=common_prefix_x, suffix_y=suffix_y, suffix_z=suffix_z,
         )
         if semantic_status is not None:
             status = semantic_status
             checks_run.append(semantic_check)
-            if semantic_status == "refuted":
+            if semantic_issue:
                 issues.append(semantic_issue)
-            else:
+            if semantic_status != "refuted":
                 n_passed += 1
 
     return _make_result(status, checks_run, n_passed, issues if issues else None)
 
 
-def _yu_condition2_check(
-    w: str, w_prime: str, p: int, oracle: Callable[[str], bool | None],
-) -> tuple[bool | None, str | None]:
-    """Bounded check of THEORY.md §1.1 condition (2) of Yu's DCFL pumping
-    lemma for one concrete instantiated pair (w, w') at bound p: some
-    non-empty x2 within the last p symbols of the common prefix x, pumped
-    synchronously into both words, must break membership of at least one of
-    them (docs/VERDICT_POLICY.md §4).
+def _pump_outcome(
+    oracle: Callable[[str], bool | None],
+    pump: Callable[[int], tuple[str, str]],
+) -> str:
+    """Given ``pump(i) -> (pumped_w, pumped_w_prime)`` for one concrete
+    decomposition, decide whether the decomposition is:
 
-    Returns (ok, counterexample):
-      - (None, None)  — the common prefix is too short (<= p) to exercise
-        condition (2) at all; this pair provides no evidence either way.
-      - (True, None)  — every tested x2 broke at least one word (evidence
-        FOR the claim on this pair).
-      - (False, msg)  — some x2 kept both w and w' in L (a genuine
-        counterexample to condition (2) on this pair).
+    - ``"closed"``      — some i in {0, 2} (or, if both of those keep both
+      words in L, i = 3 as a tie-breaker — VERDICT_POLICY.md §4) breaks
+      membership of at least one pumped word: this decomposition does NOT
+      refute the claim that the lemma's condition fails everywhere.
+    - ``"refuted"``      — i = 0, 2 AND 3 all keep BOTH pumped words in L: a
+      genuine counterexample (the condition actually holds here).
+    - ``"inconclusive"`` — the oracle could not decide enough of the
+      required i's to tell either way.
+    """
+    saw_inconclusive = False
+    for i in (0, 2):
+        w_i, wp_i = pump(i)
+        in_w = oracle(w_i)
+        in_wp = oracle(wp_i)
+        if in_w is False or in_wp is False:
+            return "closed"
+        if in_w is None or in_wp is None:
+            saw_inconclusive = True
+    if saw_inconclusive:
+        return "inconclusive"
+    w3, wp3 = pump(3)
+    in_w3 = oracle(w3)
+    in_wp3 = oracle(wp3)
+    if in_w3 is False or in_wp3 is False:
+        return "closed"
+    if in_w3 is None or in_wp3 is None:
+        return "inconclusive"
+    return "refuted"
+
+
+_COND1_MAX_DECOMPOSITIONS = 600
+_COND2_MAX_DECOMPOSITIONS = 3000
+_COND2_MAX_SUFFIX_FACTOR_LEN = 4
+
+
+def _check_condition1(
+    x: str, y: str, z: str, p: int, oracle: Callable[[str], bool | None],
+    max_decompositions: int = _COND1_MAX_DECOMPOSITIONS,
+) -> tuple[str, str | None]:
+    """THEORY.md §1.1 condition (1): brute-force every pair (x2, x4) — in any
+    position within x, with x = x1 x2 x3 x4 x5, |x2 x4| >= 1, |x2 x3 x4| <= p
+    — and check that pumping i in {0, 2, (3)} breaks membership of at least
+    one of xy, xz for EVERY such pair (docs/VERDICT_POLICY.md §4).
+
+    Returns (status, message): status is one of "closed" (every pair tried
+    failed to survive pumping), "refuted" (some pair survives i=0,2,3 — a
+    genuine counterexample, message describes it), "no_evidence" (x too
+    short to yield any candidate pair), or "limit" (the brute force exceeded
+    its decomposition budget before finishing — coverage incomplete).
+    """
+    n = len(x)
+    tested = 0
+    any_closed = False
+    for start in range(n):
+        for length in range(1, p + 1):
+            end = start + length
+            if end > n:
+                break
+            window = x[start:end]
+            wl = len(window)
+            for a in range(wl + 1):
+                for b in range(a, wl + 1):
+                    if a == 0 and b == wl:
+                        continue  # x2 == x4 == "" excluded: |x2 x4| >= 1
+                    tested += 1
+                    if tested > max_decompositions:
+                        return "limit", None
+                    x2, x3, x4 = window[:a], window[a:b], window[b:]
+
+                    def pump(i: int, x2=x2, x3=x3, x4=x4, start=start, end=end):
+                        core = x2 * i + x3 + x4 * i
+                        prefix = x[:start] + core + x[end:]
+                        return prefix + y, prefix + z
+
+                    outcome = _pump_outcome(oracle, pump)
+                    if outcome == "refuted":
+                        return "refuted", (
+                            f"condition (1) p={p}: window x[{start}:{end}]={window!r}, "
+                            f"split x2={x2!r}/x3={x3!r}/x4={x4!r} keeps both pumped "
+                            f"words in L at i=0,2,3"
+                        )
+                    if outcome == "closed":
+                        any_closed = True
+    return ("closed" if any_closed else "no_evidence"), None
+
+
+def _bounded_factorizations(
+    s: str, max_mid_len: int,
+) -> list[tuple[str, str, str]]:
+    """All (s1, s2, s3) with s = s1 + s2 + s3 and 0 <= len(s2) <= max_mid_len.
+
+    The trivial "no pumping in this component" factorization (s2 = "") is
+    included exactly once (position doesn't matter when s2 is empty).
+    Bounding |s2| keeps condition (2)'s y/z-factorization search tractable
+    (docs/VERDICT_POLICY.md §4: "лимит по числу разбиений") — this is a
+    deliberate approximation, not the literal unbounded "all factorizations".
+    """
+    out: list[tuple[str, str, str]] = [("", "", s)]
+    n = len(s)
+    for start in range(n + 1):
+        max_len = min(max_mid_len, n - start)
+        for length in range(1, max_len + 1):
+            end = start + length
+            out.append((s[:start], s[start:end], s[end:]))
+    return out
+
+
+def _check_condition2(
+    x: str, y: str, z: str, p: int, oracle: Callable[[str], bool | None],
+    max_decompositions: int = _COND2_MAX_DECOMPOSITIONS,
+    max_suffix_factor_len: int = _COND2_MAX_SUFFIX_FACTOR_LEN,
+) -> tuple[str, str | None]:
+    """THEORY.md §1.1 condition (2): brute-force every x2 within the last p
+    symbols of x (x = x1 x2 x3, |x2| >= 1, |x2 x3| <= p), synchronised with
+    every (bounded) factorization of y = y1 y2 y3 and z = z1 z2 z3, and check
+    that pumping i in {0, 2, (3)} breaks membership of at least one of
+    x1 x2^i x3 y1 y2^i y3, x1 x2^i x3 z1 z2^i z3 for EVERY such triple
+    (docs/VERDICT_POLICY.md §4). Same return convention as
+    ``_check_condition1``.
+    """
+    n = len(x)
+    tested = 0
+    any_closed = False
+    max_tail = min(p, n)
+    y_factorizations = _bounded_factorizations(y, max_suffix_factor_len)
+    z_factorizations = _bounded_factorizations(z, max_suffix_factor_len)
+    for tail_len in range(1, max_tail + 1):
+        pos = n - tail_len
+        tail = x[pos:]
+        for k in range(1, tail_len + 1):
+            x2, x3 = tail[:k], tail[k:]
+            for y1, y2, y3 in y_factorizations:
+                for z1, z2, z3 in z_factorizations:
+                    tested += 1
+                    if tested > max_decompositions:
+                        return "limit", None
+
+                    def pump(i: int, x2=x2, x3=x3, pos=pos,
+                             y1=y1, y2=y2, y3=y3, z1=z1, z2=z2, z3=z3):
+                        prefix = x[:pos] + x2 * i + x3
+                        return (
+                            prefix + y1 + y2 * i + y3,
+                            prefix + z1 + z2 * i + z3,
+                        )
+
+                    outcome = _pump_outcome(oracle, pump)
+                    if outcome == "refuted":
+                        return "refuted", (
+                            f"condition (2) p={p}: x2={x2!r} in tail x[{pos}:{n}], "
+                            f"y=({y1!r}+{y2!r}+{y3!r}), z=({z1!r}+{z2!r}+{z3!r}) "
+                            f"keeps both pumped words in L at i=0,2,3"
+                        )
+                    if outcome == "closed":
+                        any_closed = True
+    return ("closed" if any_closed else "no_evidence"), None
+
+
+def _xyz_from_proof_decomposition(
+    common_prefix_x: Any, suffix_y: Any, suffix_z: Any,
+    n: int, alphabet_set: set[str], w: str, w_prime: str,
+) -> tuple[str, str, str] | None:
+    """Instantiate the proof's OWN claimed ``common_prefix_x``/``suffix_y``/
+    ``suffix_z`` at the same ``n`` used for word_w/word_w_prime, when they
+    are given in the same pure exponent notation (not a free-form prose/dict
+    description, which ``instantiate_exponent_pattern`` can't parse).
+
+    Returns (x, y, z) only if this reconstructs the already-checked
+    ``w``/``w_prime`` exactly (``w == x + y``, ``w_prime == x + z``) — i.e.
+    the proof's decomposition is actually consistent with the words it
+    claims are in L at this instantiation. ``None`` otherwise (caller falls
+    back to ``_xyz_from_common_prefix``).
+    """
+    if not (
+        isinstance(common_prefix_x, str)
+        and isinstance(suffix_y, str)
+        and isinstance(suffix_z, str)
+    ):
+        return None
+    x = instantiate_exponent_pattern(common_prefix_x, n, alphabet_set)
+    y = instantiate_exponent_pattern(suffix_y, n, alphabet_set)
+    z = instantiate_exponent_pattern(suffix_z, n, alphabet_set)
+    if x is None or y is None or z is None:
+        return None
+    if w != x + y or w_prime != x + z:
+        return None
+    return x, y, z
+
+
+def _xyz_from_common_prefix(w: str, w_prime: str) -> tuple[str, str, str] | None:
+    """Fall back to a prefix of ``w``/``w_prime``'s own longest common run,
+    backed off by exactly one character from the FULL common run so that
+    the lemma's own precondition (THEORY.md §1.1: y, z non-empty and
+    ``⁽¹⁾y = ⁽¹⁾z``) holds automatically: dropping the last shared character
+    from x turns it into the shared first character of both y and z, and
+    since it was still shared (index common_len - 1 is inside the run),
+    ``y[0] == z[0]`` is guaranteed. Using the FULL common run instead (the
+    previous, buggy behaviour) always left y or z empty or starting on the
+    first point of disagreement, so the lemma's precondition never held and
+    every checked pair was one the lemma doesn't even apply to.
+
+    Returns None if the common run is too short to back off from (length 0)
+    or backing off still leaves y or z empty (w == w_prime, or one is a
+    prefix of the other with nothing past the back-off point).
     """
     common_len = 0
     for a, b in zip(w, w_prime):
         if a != b:
             break
         common_len += 1
-    if common_len <= p:
-        return None, None
-
-    window_start = max(0, common_len - p)
-    window = w[window_start:common_len]
-    for i in range(len(window)):
-        for j in range(i + 1, len(window) + 1):
-            x2 = window[i:j]
-            pos = window_start + i
-            pumped_w = w[:pos] + x2 + w[pos:]
-            pumped_wp = w_prime[:pos] + x2 + w_prime[pos:]
-            in_w = oracle(pumped_w)
-            in_wp = oracle(pumped_wp)
-            if in_w is None or in_wp is None:
-                continue
-            if in_w and in_wp:
-                return False, (
-                    f"p={p}: x2={x2!r} at pos {pos} — pumping keeps BOTH words in L "
-                    f"(pumped word_w={pumped_w!r}, pumped word_w_prime={pumped_wp!r})"
-                )
-    return True, None
+    if common_len < 1:
+        return None
+    x_len = common_len - 1
+    x, y, z = w[:x_len], w[x_len:], w_prime[x_len:]
+    if not y or not z or y[0] != z[0]:
+        return None
+    return x, y, z
 
 
 def _semantic_check_dcfl_pumping(
     word_w: Any, word_w_prime: Any, task_ir: dict,
+    common_prefix_x: Any = None, suffix_y: Any = None, suffix_z: Any = None,
 ) -> tuple[str | None, str, str]:
     """Step 2 for dcfl_pumping (VERDICT_POLICY.md §4).
 
     Instantiate ``word_w``/``word_w_prime`` at n = p + 1 for p in {2, 3},
-    check w, w' in L with a real membership oracle, AND exercise condition
-    (2) of Yu's lemma (THEORY.md §1.1: some x2 in the last p symbols of the
-    common prefix must break the pumping) by brute-force over all such x2 —
-    membership alone is necessary but not sufficient evidence for the claim.
-    Returns (status_or_None, check_name, issue). ``status`` is None when
-    neither the pattern nor a membership oracle could be used, and stays
-    None (leaving trust at ``well_formed``) when membership holds but
-    condition (2) could not be exercised on either p (common prefix too
-    short) — that is membership-only evidence, which is not enough to earn
-    ``bounded_pass``.
+    check w, w' in L with a real membership oracle, AND brute-force BOTH
+    condition (1) (pair (x2, x4) anywhere in x, |x2 x3 x4| <= p) and
+    condition (2) (x2 in the last p symbols of x, synchronised with every
+    bounded factorization of y and z) of Yu's two-word pumping lemma
+    (THEORY.md §1.1) — membership alone is necessary but not sufficient
+    evidence for the claim that the lemma's disjunction fails everywhere.
+
+    The x/y/z decomposition tested is the proof's own ``common_prefix_x`` /
+    ``suffix_y`` / ``suffix_z`` when those instantiate cleanly
+    (``_xyz_from_proof_decomposition``), else a constructive fallback
+    (``_xyz_from_common_prefix``) — either way the lemma's own precondition
+    (y, z non-empty, same first letter) is checked, never skipped: a
+    decomposition that doesn't satisfy it is not a valid instance of the
+    lemma, so it is treated the same as "x too short" (skipped for that p),
+    not as evidence either way.
+
+    Returns (status_or_None, check_name, issue):
+    - ``"refuted"`` — either a word isn't actually in L, or some
+      decomposition under condition (1) or (2) survives pumping at
+      i = 0, 2 AND 3 (a genuine counterexample to the "no pumping works"
+      claim).
+    - ``"bounded_pass"`` — membership holds, and for at least one tested p
+      BOTH conditions were closed for THAT SAME p (every decomposition
+      tried at that p broke membership at some i, within this module's
+      bounded search — see ``_check_condition1``/``_check_condition2`` for
+      the exact decomposition/factorization-length limits), with no
+      decomposition-budget limit hit and no inconclusive/skipped p among
+      the ones tested.
+    - ``"well_formed"`` (with a note) — the brute force hit its size limit
+      before finishing, or some tested p had no valid decomposition to
+      exercise the conditions with, so coverage is incomplete.
+    - ``None`` — neither the pattern nor a membership oracle could be used,
+      or there just wasn't enough to test (no p yielded a valid
+      decomposition at all); trust stays at ``well_formed`` with no note.
     """
     check_name = "semantic_word_membership[p=2,3]"
     if not isinstance(word_w, str) or not isinstance(word_w_prime, str):
@@ -521,26 +727,58 @@ def _semantic_check_dcfl_pumping(
             "oracle check failed for instantiated word(s): " + "; ".join(bad)
         )
 
-    # Membership alone confirmed; now exercise condition (2) (THEORY.md
-    # §1.1) — the check that actually distinguishes a real pumping argument
-    # from two arbitrary words that both happen to be in L.
-    check_name = "semantic_word_membership_and_condition2[p=2,3]"
-    condition2_evidence = False
+    # Membership alone confirmed; now exercise conditions (1) and (2)
+    # (THEORY.md §1.1) — the checks that actually distinguish a real
+    # pumping argument from two arbitrary words that both happen to be in L.
+    check_name = "semantic_word_membership_and_conditions[p=2,3]"
+    any_p_fully_closed = False
+    limit_hit = False
+    inconclusive_p: list[int] = []
     for p, w, w_prime in instances:
-        ok, msg = _yu_condition2_check(w, w_prime, p, oracle)
-        if ok is False:
-            return "refuted", check_name, (
-                "condition (2) counterexample: " + msg
-            )
-        if ok is True:
-            condition2_evidence = True
+        n = p + 1
+        xyz = _xyz_from_proof_decomposition(
+            common_prefix_x, suffix_y, suffix_z, n, alphabet_set, w, w_prime,
+        )
+        if xyz is None:
+            xyz = _xyz_from_common_prefix(w, w_prime)
+        if xyz is None:
+            # No decomposition satisfying the lemma's own precondition
+            # (y, z non-empty, same first letter) — nothing usable to test
+            # at this p.
+            inconclusive_p.append(p)
+            continue
+        x, y, z = xyz
 
-    if not condition2_evidence:
-        # Only membership was actually checkable — per VERDICT_POLICY.md §4,
-        # that is not enough to earn bounded_pass on its own.
-        return None, check_name, ""
+        status1, msg1 = _check_condition1(x, y, z, p, oracle)
+        if status1 == "refuted":
+            return "refuted", check_name, msg1
 
-    return "bounded_pass", check_name, ""
+        status2, msg2 = _check_condition2(x, y, z, p, oracle)
+        if status2 == "refuted":
+            return "refuted", check_name, msg2
+
+        if status1 == "closed" and status2 == "closed":
+            any_p_fully_closed = True
+        elif status1 == "limit" or status2 == "limit":
+            limit_hit = True
+        else:
+            # "no_evidence" on either condition (no candidate decomposition
+            # to test at all) -- not the same as "closed", and per
+            # VERDICT_POLICY.md §4 not enough to count this p as evidence.
+            inconclusive_p.append(p)
+
+    if any_p_fully_closed and not limit_hit and not inconclusive_p:
+        return "bounded_pass", check_name, ""
+    if limit_hit or inconclusive_p:
+        return "well_formed", check_name, (
+            "condition (1)/(2) check did not fully close for every tested p "
+            "(decomposition-budget limit hit, and/or no decomposition "
+            "satisfying the lemma's y/z precondition at some p) — coverage "
+            "incomplete, trust stays well_formed (docs/VERDICT_POLICY.md §4)"
+        )
+    # Only membership was actually checkable — per VERDICT_POLICY.md §4,
+    # that is not enough to earn bounded_pass on its own.
+    return None, check_name, ""
 
 
 # ---------------------------------------------------------------------------
@@ -636,81 +874,117 @@ def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
                 issues.append(semantic_issue)
             if semantic_status != "refuted":
                 n_passed += 1
+    elif status == "well_formed" and technique == "prefix_continuation":
+        semantic_status, semantic_check, semantic_issue = (
+            _semantic_check_shallit_prefix_continuation(proof_sketch, task_ir)
+        )
+        if semantic_status is not None:
+            status = semantic_status
+            checks_run.append(semantic_check)
+            if semantic_issue:
+                issues.append(semantic_issue)
+            if semantic_status != "refuted":
+                n_passed += 1
 
     return _make_result(status, checks_run, n_passed, issues if issues else None)
 
 
-def _continuable(oracle, word: str, alphabet: list[str], max_extra: int = 4) -> bool | None:
-    """Whether some extension of `word` (up to `max_extra` more symbols) is in L.
+class _SearchBudgetExceeded(Exception):
+    """Internal: the bounded continuability search exceeded its node budget."""
 
-    Breadth-first over extension length so the shortest witness is found
-    first. Returns True/False, or None if the oracle never answered
-    definitively within the search bound (search inconclusive — the caller
-    must not treat that as evidence of an infinite dead class).
+
+def _continuable(
+    oracle, word: str, alphabet: list[str],
+    max_extra: int = 6, node_budget: int = 20_000,
+) -> bool | None:
+    """Whether some extension of `word` (up to `max_extra` more symbols) is
+    in L, decided by an EXHAUSTIVE depth-first search over that bound (every
+    node up to depth ``max_extra`` is visited unless the search is cut short
+    by ``node_budget`` or an inconclusive oracle answer).
+
+    Returns True (a continuation into L was found), False (the exhaustive
+    search visited every extension up to the bound and found none — a
+    decisive negative WITHIN this bound, per docs/VERDICT_POLICY.md §4), or
+    None (the search could not be completed — either the oracle couldn't
+    decide some word, or the node budget ran out — genuinely inconclusive,
+    the caller must not treat this as evidence either way).
     """
     if not alphabet:
         return None
-    frontier = [word]
-    saw_definite_answer = False
-    for _ in range(max_extra + 1):
-        next_frontier: list[str] = []
-        for w in frontier:
-            verdict_w = oracle(w)
-            if verdict_w is not None:
-                saw_definite_answer = True
-                if verdict_w:
-                    return True
-            for ch in alphabet:
-                next_frontier.append(w + ch)
-        # Cap the branching to keep this a "bounded, approximate check"
-        # (VERDICT_POLICY.md §4), not a real BFS over an exponential tree.
-        frontier = next_frontier[:64]
-    return False if saw_definite_answer else None
+    budget = [node_budget]
+
+    def dfs(w: str, depth: int) -> bool:
+        budget[0] -= 1
+        if budget[0] <= 0:
+            raise _SearchBudgetExceeded()
+        verdict = oracle(w)
+        if verdict is None:
+            raise _SearchBudgetExceeded()
+        if verdict:
+            return True
+        if depth >= max_extra:
+            return False
+        return any(dfs(w + ch, depth + 1) for ch in alphabet)
+
+    try:
+        return dfs(word, 0)
+    except _SearchBudgetExceeded:
+        return None
 
 
-def _check_dead_class_finite(task_ir: dict) -> tuple[bool | None, list[str]]:
-    """Step 2, dead-class part (VERDICT_POLICY.md §4): sample short words
-    (<=6) and check each is continuable into L within a bounded search.
+def _check_dead_class_finite(
+    task_ir: dict,
+) -> tuple[bool | None, str | None, list[str]]:
+    """Step 2, dead-class part (VERDICT_POLICY.md §4): sample words of
+    length <= 4 and check each is continuable into L within a bounded,
+    EXHAUSTIVE search of up to 6 more symbols.
 
-    This is necessarily approximate (failing to find a continuation in a
-    bounded search is not proof that none exists), so a failure here is
-    reported as an *issue* but never turns a `well_formed` result into
-    `refuted` on its own — only a real, unbounded contradiction (from the
-    proof's own instances) may do that.
+    Because ``_continuable`` only returns False after visiting every
+    extension within the bound (not a truncated heuristic), a False result
+    here is treated as a genuine (if bounded) counterexample: a proof that
+    claims ``dead_class_finite`` (typically that D is empty) is refuted by a
+    short word with provably no continuation within this search.
+
+    Returns (all_ok, counterexample, issues):
+    - (None, None, [])   — no oracle / no testable short words.
+    - (True, None, [])   — every testable short word continues into L.
+    - (False, word, [msg]) — ``word`` has no continuation within the bound.
     """
     input_format = task_ir.get("input_format", "")
     if input_format != "set_builder":
-        return None, []
+        return None, None, []
     spec = task_ir.get("language_spec", {})
     alphabet = task_ir.get("alphabet", [])
     oracle = build_set_builder_membership_oracle(spec, alphabet)
     if oracle is None:
-        return None, []
+        return None, None, []
     try:
-        samples = sample_words(task_ir, count=10, max_len=6)
+        samples = sample_words(task_ir, count=10, max_len=4)
     except Exception:
-        return None, []
-    short_words = [
-        s.get("word") for s in samples
-        if isinstance(s.get("word"), str) and len(s.get("word")) <= 6
-    ]
+        return None, None, []
+    short_words = sorted(
+        {
+            s.get("word") for s in samples
+            if isinstance(s.get("word"), str) and len(s.get("word")) <= 4
+        },
+        key=len,
+    )
     if not short_words:
-        return None, []
-    issues: list[str] = []
+        return None, None, []
     checked = 0
-    for w in short_words[:6]:
-        cont = _continuable(oracle, w, alphabet)
+    for w in short_words[:8]:
+        cont = _continuable(oracle, w, alphabet, max_extra=6)
         if cont is None:
             continue
         checked += 1
         if not cont:
-            issues.append(
-                f"dead_class_finite check: no continuation of {w!r} into L found "
-                f"within a bounded search (not conclusive on its own, but worth a retry hint)"
-            )
+            return False, w, [
+                f"dead_class_finite check: {w!r} has NO continuation into L "
+                f"within an exhaustive bounded search (up to 6 more symbols)"
+            ]
     if checked == 0:
-        return None, []
-    return (len(issues) == 0), issues
+        return None, None, []
+    return True, None, []
 
 
 def _semantic_check_shallit_nerode(
@@ -761,7 +1035,12 @@ def _semantic_check_shallit_nerode(
 
     # Representative pairs supplied by the proof itself (its general
     # argument, instantiated at a concrete n) — the only thing that can
-    # refute the claim.
+    # refute the claim. Structured `representative_pairs` field takes
+    # priority; failing that, best-effort literal-word extraction from the
+    # proof's own prose (distinguishing_suffix / separation_argument /
+    # argument) supplies 3-5 concrete u != v pairs when the proof happens to
+    # name concrete examples (VERDICT_POLICY.md §4: "брать u, v из
+    # distinguishing_suffix/separation_argument, если там есть примеры").
     raw_pairs = proof_sketch.get("representative_pairs")
     checked_pairs: list[tuple[str, str]] = []
     if isinstance(raw_pairs, list):
@@ -774,6 +1053,13 @@ def _semantic_check_shallit_nerode(
             if any(ch not in alphabet_set for ch in u + v):
                 continue
             checked_pairs.append((u, v))
+
+    if not checked_pairs:
+        prose = " ".join(
+            str(proof_sketch.get(f, ""))
+            for f in ("distinguishing_suffix", "separation_argument", "argument")
+        )
+        checked_pairs = _extract_literal_word_pairs(prose, alphabet_set, limit=5)
 
     bad: list[str] = []
     n_definite = 0
@@ -795,8 +1081,11 @@ def _semantic_check_shallit_nerode(
         status = "bounded_pass"
 
     if status is None:
-        # No usable representative pairs — fall back to random samples,
-        # but ONLY to look for supporting evidence (never to refute).
+        # No usable representative pairs — fall back to short words that
+        # are themselves continuable into L (real class representatives,
+        # not arbitrary junk strings), and look for a supporting separating
+        # pair ONLY (never to refute — a suffix failing to separate
+        # unrelated random words says nothing about the proof's own claim).
         try:
             samples = sample_words(task_ir, count=10, max_len=12)
         except Exception:
@@ -805,6 +1094,10 @@ def _semantic_check_shallit_nerode(
             {s.get("word") for s in samples if isinstance(s.get("word"), str)},
             key=len,
         )
+        candidate_words = [
+            w for w in candidate_words
+            if _continuable(oracle, w, alphabet) is not False
+        ]
         in_bucket: list[str] = []
         out_bucket: list[str] = []
         for w in candidate_words:
@@ -813,7 +1106,7 @@ def _semantic_check_shallit_nerode(
                 continue
             (in_bucket if verdict_w else out_bucket).append(w)
         if in_bucket and out_bucket:
-            n_pairs = min(3, len(in_bucket) * len(out_bucket))
+            n_pairs = min(5, len(in_bucket) * len(out_bucket))
             pairs = [(in_bucket[i % len(in_bucket)], out_bucket[i % len(out_bucket)])
                      for i in range(n_pairs)]
             seen_pairs: set[tuple[str, str]] = set()
@@ -829,16 +1122,114 @@ def _semantic_check_shallit_nerode(
         # NOT evidence against the proof (VERDICT_POLICY.md §4 fix) — leave
         # status None so trust stays at well_formed.
 
-    if status == "bounded_pass":
-        dead_ok, dead_issues = _check_dead_class_finite(task_ir)
-        if dead_ok is False:
-            issue = "; ".join(dead_issues)
-            check_name = check_name + " + dead_class_finite"
-            # Approximate, bounded check — never downgrades past well_formed
-            # on its own (docs/VERDICT_POLICY.md §4: not conclusive).
-            status = "bounded_pass"
+    # Dead-class check runs regardless of the separation-pair outcome above:
+    # a proof that claims dead_class_finite is refuted by a real (bounded,
+    # exhaustive) counterexample, independent of whether a separating pair
+    # was also found (VERDICT_POLICY.md §4).
+    dead_ok, dead_word, dead_issues = _check_dead_class_finite(task_ir)
+    if dead_ok is False:
+        return "refuted", check_name + " + dead_class_finite", (
+            "; ".join(dead_issues)
+            + f" — proof claims dead_class_finite but {dead_word!r} has no "
+              "continuation into L"
+        )
 
     return status, check_name, issue
+
+
+_LITERAL_WORD_RE_CACHE: dict[frozenset, re.Pattern] = {}
+
+
+def _extract_literal_word_pairs(
+    text: str, alphabet_set: set[str], limit: int = 5,
+) -> list[tuple[str, str]]:
+    """Best-effort extraction of concrete u != v literal words (runs of >= 2
+    alphabet characters) from free-form proof prose, per VERDICT_POLICY.md
+    §4 ("брать u, v из distinguishing_suffix/separation_argument, если там
+    есть примеры"). Purely textual and safe: prose with no literal
+    alphabet-only runs (the common case for genuinely general arguments)
+    yields no pairs, leaving the caller's other fallbacks in charge.
+    """
+    if not text or not alphabet_set:
+        return []
+    key = frozenset(alphabet_set)
+    pattern = _LITERAL_WORD_RE_CACHE.get(key)
+    if pattern is None:
+        chars = "".join(sorted(re.escape(ch) for ch in alphabet_set))
+        pattern = re.compile(f"[{chars}]{{2,}}")
+        _LITERAL_WORD_RE_CACHE[key] = pattern
+    seen: list[str] = []
+    for tok in pattern.findall(text):
+        if tok not in seen:
+            seen.append(tok)
+    pairs: list[tuple[str, str]] = []
+    for i in range(len(seen)):
+        for j in range(i + 1, len(seen)):
+            if seen[i] != seen[j]:
+                pairs.append((seen[i], seen[j]))
+            if len(pairs) >= limit:
+                return pairs
+    return pairs
+
+
+def _semantic_check_shallit_prefix_continuation(
+    proof_sketch: dict, task_ir: dict,
+) -> tuple[str | None, str, str]:
+    """Step 2 for shallit/prefix_continuation (VERDICT_POLICY.md §4):
+    instantiate 5-10 concrete ``x$y`` words from ``derived_language`` (when
+    it is pure exponent notation either side of a literal ``$``) and check
+    x ∈ L, xy ∈ L with the task's own membership oracle — the necessary
+    precondition for x$y to genuinely belong to L_$ = {x$y | x∈L, xy∈L}.
+
+    This does not verify the deeper claim (that the derived language ∩ R is
+    not context-free) — that stays an LLM/reasoning claim — only that the
+    proof's own worked instances are not simply mis-described.
+    """
+    check_name = "semantic_prefix_continuation[x$y]"
+    derived = proof_sketch.get("derived_language")
+    if not isinstance(derived, str) or "$" not in derived:
+        return None, check_name, ""
+
+    input_format = task_ir.get("input_format", "")
+    if input_format != "set_builder":
+        return None, check_name, ""
+
+    alphabet = task_ir.get("alphabet", [])
+    alphabet_set = set(alphabet)
+    spec = task_ir.get("language_spec", {})
+    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    if oracle is None:
+        return None, check_name, ""
+
+    left, _, right = derived.partition("$")
+    left, right = left.strip(), right.strip()
+
+    bad: list[str] = []
+    checked = 0
+    for n in range(1, 9):
+        x = instantiate_exponent_pattern(left, n, alphabet_set)
+        y = instantiate_exponent_pattern(right, n, alphabet_set)
+        if x is None or y is None:
+            # Not pure exponent notation on both sides (prose, "∩ R"
+            # filters, etc.) — bail out entirely rather than guess.
+            return None, check_name, ""
+        in_x = oracle(x)
+        in_xy = oracle(x + y)
+        if in_x is None or in_xy is None:
+            continue
+        checked += 1
+        if not (in_x and in_xy):
+            bad.append(f"n={n}: x={x!r} in L={in_x}, xy={(x + y)!r} in L={in_xy}")
+        if checked >= 8:
+            break
+
+    if bad:
+        return "refuted", check_name, (
+            "derived_language instance(s) fail x ∈ L, xy ∈ L: " + "; ".join(bad)
+        )
+    if checked == 0:
+        return None, check_name, ""
+    return "bounded_pass", check_name, ""
 
 
 # ---------------------------------------------------------------------------

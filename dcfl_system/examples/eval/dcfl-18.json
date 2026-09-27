@@ -1,0 +1,17 @@
+{
+  "task_id": "dcfl-18",
+  "source_text": "{a^n b^n | n >= 1} union {a^n b^m c^n | n,m >= 1}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{a^n b^n | n >= 1} union {a^n b^m c^n | n,m >= 1}",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": [
+    "a",
+    "b",
+    "c"
+  ]
+}

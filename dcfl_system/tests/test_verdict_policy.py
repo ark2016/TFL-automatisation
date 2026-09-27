@@ -101,12 +101,50 @@ def _pumping_proof(word_w: str, word_w_prime: str) -> dict:
     }
 
 
-def test_dcfl_pumping_semantic_check_bounded_pass_when_words_are_real_members():
+def test_dcfl_pumping_semantic_check_refuted_when_membership_holds_but_both_pumps_survive():
     # word_w = a^n b^n, word_w_prime = a^{n+1} b^{n+1}: both instantiate to
-    # words that ARE in L = {a^n b^n} at n = p+1 for p in {2, 3}.
+    # words that ARE in L = {a^n b^n} at n = p+1 for p in {2, 3} — membership
+    # alone would look fine — but a^n b^n really IS DCFL, so a genuine
+    # counterexample decomposition exists (e.g. pumping one 'a' together
+    # with one 'b' from the tail of x synchronously into y and z keeps both
+    # words balanced at i = 0, 2 AND 3): this concrete "non_dcfl via Yu's
+    # lemma" proof is simply WRONG for this pair, and the brute-force
+    # condition (1)/(2) search (VERDICT_POLICY.md §4) must catch it, not
+    # just rubber-stamp membership.
     proof = _pumping_proof("aⁿbⁿ", "aⁿ⁺¹bⁿ⁺¹")
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, ANBN_TASK_IR)
+    entry = result["dcfl_pumping"]
+    assert entry["verification_status"] == "refuted"
+    assert entry["trust"] == "refuted"
+    assert entry["issues"], "refuted result must carry the concrete counterexample"
+
+
+def _anbn_union_anb2n_oracle(word: str) -> bool:
+    """L = {a^n b^n} u {a^n b^2n | n >= 1} (docs/THEORY.md §1.1 worked example)."""
+    if not word or any(ch not in ("a", "b") for ch in word):
+        return False
+    a_count = len(word) - len(word.lstrip("a"))
+    rest = word[a_count:]
+    if a_count == 0 or any(ch != "b" for ch in rest):
+        return False
+    b_count = len(rest)
+    return b_count == a_count or b_count == 2 * a_count
+
+
+def test_dcfl_pumping_semantic_check_bounded_pass_theory_worked_example(monkeypatch):
+    # docs/THEORY.md §1.1 worked example: L = {a^n b^n} u {a^n b^2n}, n>=1.
+    # x = a^n b^{n-1}, y = b, z = b^{n+1} (xy = a^n b^n, xz = a^n b^2n): a
+    # genuine, hand-verified non-DCFL proof — both condition (1) and (2)
+    # must close for every decomposition the brute force tries.
+    monkeypatch.setattr(
+        ov, "build_set_builder_membership_oracle",
+        lambda spec, alphabet: _anbn_union_anb2n_oracle,
+    )
+    proof = _pumping_proof("aⁿbⁿ", "aⁿb²ⁿ")
+    agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    task_ir = {"input_format": "set_builder", "alphabet": ["a", "b"], "language_spec": {}}
+    result = verify_agent_results(agent_results, task_ir)
     entry = result["dcfl_pumping"]
     assert entry["verification_status"] == "bounded_pass"
     assert entry["trust"] == "bounded_pass"
@@ -230,6 +268,239 @@ def test_shallit_nerode_semantic_check_skipped_for_parametric_suffix():
     agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, ANBN_TASK_IR)
     assert result["shallit"]["verification_status"] == "well_formed"
+
+
+def test_shallit_nerode_semantic_check_refuted_when_dead_class_finite_is_false(monkeypatch):
+    # The proof CLAIMS dead_class_finite ("D is empty"), but for a^n b^n the
+    # dead class is actually infinite ('ba' and every word outside a*b* can
+    # never be continued into L) -- the bounded, exhaustive dead-class
+    # search (VERDICT_POLICY.md §4) must catch this and refute the whole
+    # nerode_classes proof, even though the separating pair it also supplies
+    # is perfectly real.
+    proof = _nerode_proof("b")
+    proof["dead_class_finite"] = "D is empty (FALSE for a^n b^n -- e.g. 'ba' is dead)"
+    proof["representative_pairs"] = [{"u": "ab", "v": "aab"}]
+    agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    result = verify_agent_results(agent_results, ANBN_TASK_IR)
+    entry = result["shallit"]
+    assert entry["verification_status"] == "refuted"
+    assert entry["trust"] == "refuted"
+    assert "dead_class_finite" in entry["issues"][0]
+    assert "'ba'" in entry["issues"][0]
+
+
+# ---------------------------------------------------------------------------
+# §4 step 2: shallit / prefix_continuation semantic oracle check (x$y)
+# ---------------------------------------------------------------------------
+
+def _prefix_continuation_proof(derived_language: str) -> dict:
+    return {
+        "kind": "shallit",
+        "technique": "prefix_continuation",
+        "derived_language": derived_language,
+        "regular_filter": "a*b*$b+",
+        "non_cfl_argument": "pumping on the derived language",
+        "argument": "L_$ ∩ a*b*$b+ is not context-free ⇒ L not DCFL",
+    }
+
+
+def test_shallit_prefix_continuation_bounded_pass(monkeypatch):
+    # docs/THEORY.md §1.1 example: L = {a^n b^n} u {a^n b^2n}.
+    # L_$ ∩ a*b*$b+ = {a^n b^n $ b^n} -- x = a^n b^n (in L, branch 1),
+    # xy = a^n b^2n (in L, branch 2): the necessary precondition for this
+    # to be a real L_$ instance holds for every sampled n.
+    monkeypatch.setattr(
+        ov, "build_set_builder_membership_oracle",
+        lambda spec, alphabet: _anbn_union_anb2n_oracle,
+    )
+    proof = _prefix_continuation_proof("aⁿbⁿ$bⁿ")
+    agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    task_ir = {"input_format": "set_builder", "alphabet": ["a", "b"], "language_spec": {}}
+    result = verify_agent_results(agent_results, task_ir)
+    entry = result["shallit"]
+    assert entry["verification_status"] == "bounded_pass"
+    assert entry["trust"] == "bounded_pass"
+
+
+def test_shallit_prefix_continuation_refuted_when_continuation_word_is_wrong(monkeypatch):
+    # Same language, but the proof's own worked instance is wrong: xy =
+    # a^n b^n a^n is not of the shape a^m b^m or a^m b^2m for any m, so it
+    # is never in L -- a factual error in the proof's derived_language,
+    # caught mechanically rather than trusted at face value.
+    monkeypatch.setattr(
+        ov, "build_set_builder_membership_oracle",
+        lambda spec, alphabet: _anbn_union_anb2n_oracle,
+    )
+    proof = _prefix_continuation_proof("aⁿbⁿ$aⁿ")
+    agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    task_ir = {"input_format": "set_builder", "alphabet": ["a", "b"], "language_spec": {}}
+    result = verify_agent_results(agent_results, task_ir)
+    entry = result["shallit"]
+    assert entry["verification_status"] == "refuted"
+    assert entry["issues"]
+
+
+# ---------------------------------------------------------------------------
+# §4 step 2 end-to-end: exam_01 / exam_02 / exam_03-style languages.
+#
+# These reconstruct the mathematical content behind
+# dcfl_system/examples/mock/dcfl_exam_0{1,2,3}_*.json (whose prose uses
+# grouped exponent notation like "(ab)^n" that instantiate_exponent_pattern
+# does not parse) as directly oracle-checkable fixtures, so the genuine
+# proofs get bounded_pass and deliberately-wrong variants get refuted.
+# ---------------------------------------------------------------------------
+
+def test_dcfl_pumping_exam01_style_reversal_language_bounded_pass():
+    # exam_01: L = {x aa x^R | x in (a+b)*ab(ab|aa)*} (THEORY.md §1.6-ish
+    # palindrome-with-marker language). x = (ab)^n, W1 = xy = x aa x^R.
+    # Real DSL oracle: word_pattern "HaaH^R" with H's domain restricted to
+    # the same regular set as the proof's X.
+    task_ir = {
+        "input_format": "set_builder",
+        "alphabet": ["a", "b"],
+        "language_spec": {
+            "word_pattern": "HaaH^R",
+            "variables": [{"name": "H", "domain": "(a+b)*ab(ab|aa)*"}],
+            "constraints": [],
+        },
+    }
+    n = 4
+    h = "ab" * n
+    w1 = h + "aa" + h[::-1]
+    x_part = ("ab" * n) + "aa" + ("ba" * (n - 1)) + "b"
+    z_part = "a" + "b" + "aa" + ("ba" * n) + "baa" + ("ba" * n)
+    w2 = x_part + z_part
+    proof = _pumping_proof(w1, w2)
+    agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    result = verify_agent_results(agent_results, task_ir)
+    entry = result["dcfl_pumping"]
+    assert entry["verification_status"] == "bounded_pass"
+    assert entry["trust"] == "bounded_pass"
+
+
+def _in_exam03_language(word: str) -> bool:
+    """L = {a^n b^m c^n a c^l} u {a^n b^{m+n} a c^l}, n>=1, m,l>=0
+    (docs/THEORY.md §1.8 / dcfl_system/tests/test_theory_contract.py)."""
+    i = 0
+    n = 0
+    while i < len(word) and word[i] == "a":
+        i += 1
+        n += 1
+    if n == 0:
+        return False
+    a_end = i
+    j = i
+    while j < len(word) and word[j] == "b":
+        j += 1
+    m_total = j - a_end
+    k = j
+    c1 = 0
+    while k < len(word) and word[k] == "c":
+        k += 1
+        c1 += 1
+    if c1 == n and k < len(word) and word[k] == "a" and all(ch == "c" for ch in word[k + 1:]):
+        return True
+    if m_total >= n and j < len(word) and word[j] == "a" and all(ch == "c" for ch in word[j + 1:]):
+        return True
+    return False
+
+
+def test_dcfl_pumping_exam03_style_two_branch_language_bounded_pass(monkeypatch):
+    # exam_03: word_w = a^n b^n c^n a (branch c^n), word_w_prime = a^n b^n a
+    # (branch b^n, m=0) -- the fixed §1.8 proof from dcfl_pumping.md.
+    monkeypatch.setattr(
+        ov, "build_set_builder_membership_oracle",
+        lambda spec, alphabet: _in_exam03_language,
+    )
+    proof = _pumping_proof("aⁿbⁿcⁿa", "aⁿbⁿa")
+    agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    task_ir = {"input_format": "set_builder", "alphabet": ["a", "b", "c"], "language_spec": {}}
+    result = verify_agent_results(agent_results, task_ir)
+    entry = result["dcfl_pumping"]
+    assert entry["verification_status"] == "bounded_pass"
+    assert entry["trust"] == "bounded_pass"
+
+
+def test_dcfl_pumping_exam03_style_two_branch_language_refuted_for_wrong_pair(monkeypatch):
+    # Both words are still genuinely in L (branch b^n with m=0 vs m=1), but
+    # this particular pair is a BAD choice for the pumping argument: a
+    # decomposition survives pumping at i=0,2,3 (the extra 'b' in
+    # word_w_prime lines up with a pumpable window in the shared a/b
+    # prefix), so this concrete proof is wrong even though the underlying
+    # theorem (L not DCFL) is true.
+    monkeypatch.setattr(
+        ov, "build_set_builder_membership_oracle",
+        lambda spec, alphabet: _in_exam03_language,
+    )
+    proof = _pumping_proof("aⁿbⁿa", "aⁿbⁿ⁺¹a")
+    agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    task_ir = {"input_format": "set_builder", "alphabet": ["a", "b", "c"], "language_spec": {}}
+    result = verify_agent_results(agent_results, task_ir)
+    entry = result["dcfl_pumping"]
+    assert entry["verification_status"] == "refuted"
+    assert entry["issues"]
+
+
+def _in_exam02_style_language(word: str) -> bool:
+    """L2 = {u3 a u4 | |u3| >= |u4|}, read via the word's LAST 'a' (so u4 is
+    the trailing run of b's, u3 = v as in the exam_02 mock's "v a b^r"
+    shape) -- dcfl_system/examples/mock/dcfl_exam_02_shallit.json."""
+    if "a" not in word:
+        return False
+    last_a = word.rfind("a")
+    tail = word[last_a + 1:]
+    if any(ch != "b" for ch in tail):
+        return False
+    return last_a >= len(tail)
+
+
+def test_shallit_nerode_exam02_style_language_bounded_pass(monkeypatch):
+    # exam_02: dead class D is empty (appending one more 'a' to ANY word
+    # always lands in L2, since the new 'a' is trivially the last one with
+    # an empty b-tail); u='a', v='aa' are separated by suffix 'b'
+    # (u+'b'='ab' not in L2, v+'b'='aab' in L2) — a real class separation.
+    monkeypatch.setattr(
+        ov, "build_set_builder_membership_oracle",
+        lambda spec, alphabet: _in_exam02_style_language,
+    )
+    monkeypatch.setattr(
+        ov, "sample_words",
+        lambda ir, count=10, max_len=30: [
+            {"word": w, "in_language": _in_exam02_style_language(w)}
+            for w in ("", "a", "b", "aa", "ab", "ba", "bb")
+            if len(w) <= max_len
+        ],
+    )
+    task_ir = {"input_format": "set_builder", "alphabet": ["a", "b"], "language_spec": {}}
+    proof = _nerode_proof("b")
+    proof["dead_class_finite"] = (
+        "any word extends into L2 by appending one more 'a' "
+        "(v a b^r -> v a b^r a), so D is empty"
+    )
+    proof["representative_pairs"] = [{"u": "a", "v": "aa"}]
+    agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    result = verify_agent_results(agent_results, task_ir)
+    entry = result["shallit"]
+    assert entry["verification_status"] == "bounded_pass"
+    assert entry["trust"] == "bounded_pass"
+
+
+def test_shallit_nerode_exam02_style_language_refuted_for_wrong_separating_pair(monkeypatch):
+    # u='a', v='ab' with suffix 'b': u+'b'='ab' not in L2, v+'b'='abb' is
+    # ALSO not in L2 -- 'b' does not separate this pair, so the proof's own
+    # representative_pairs claim is refuted.
+    monkeypatch.setattr(
+        ov, "build_set_builder_membership_oracle",
+        lambda spec, alphabet: _in_exam02_style_language,
+    )
+    task_ir = {"input_format": "set_builder", "alphabet": ["a", "b"], "language_spec": {}}
+    proof = _nerode_proof("b")
+    proof["representative_pairs"] = [{"u": "a", "v": "ab"}]
+    agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
+    result = verify_agent_results(agent_results, task_ir)
+    entry = result["shallit"]
+    assert entry["verification_status"] == "refuted"
+    assert entry["issues"]
 
 
 # ---------------------------------------------------------------------------

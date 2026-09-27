@@ -1,0 +1,25 @@
+{
+  "task_id": "dcfl-15",
+  "source_text": "{u1 a u2 | |u1| <= |u2|}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{u1 a u2 | |u1| <= |u2|}",
+    "variables": [],
+    "constraints": [
+      {
+        "kind": "length_cmp",
+        "args": {
+          "left": "u1",
+          "op": "<=",
+          "right": "u2"
+        }
+      }
+    ]
+  },
+  "alphabet": [
+    "a",
+    "b"
+  ]
+}

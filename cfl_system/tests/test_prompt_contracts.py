@@ -30,44 +30,14 @@ from pathlib import Path
 import pytest
 
 from cfl_system.config import PROMPT_FILES
+from cfl_system.lib.agent_output_schema import REQUIRED_KEYS, _NO_FIXED_CONTRACT
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
-# Required keys per agent's own output contract, taken from each prompt's
-# "## Output Format" section. Every specialist shares the same shape.
-_SPECIALIST_KEYS = {"agent", "status", "verdict", "evidence", "confidence", "errors"}
-
-REQUIRED_KEYS: dict[str, set[str]] = {
-    "cfg_builder": _SPECIALIST_KEYS,
-    "pda_builder": _SPECIALIST_KEYS,
-    "decomposition": _SPECIALIST_KEYS,
-    "parikh": _SPECIALIST_KEYS,
-    "pumping_cfl": _SPECIALIST_KEYS,
-    "ogden": _SPECIALIST_KEYS,
-    "closure_reduction": _SPECIALIST_KEYS,
-    "interchange": _SPECIALIST_KEYS,
-    "morphism": _SPECIALIST_KEYS,
-    "classifier": {"verdict", "confidence", "reasoning"},
-    "reasoning": {
-        "agent", "decision", "verdict", "confidence", "primary_evidence",
-        "supporting_evidence", "contradictions", "summary",
-        "primary_justification", "retry_plan", "hints_for_human", "errors",
-    },
-    "retry_planner": {
-        "agent", "agents_to_retry", "skip_agents", "hints",
-        "max_retries_remaining", "should_invert_hypothesis", "reasoning",
-    },
-    "proof_checker": {
-        "agent", "status", "checks", "verified_proofs", "issues",
-        "overall_assessment", "errors",
-    },
-    "formalizer": {"agent", "status", "proof_document", "confidence", "errors"},
-}
-
-# input_parser's output shape depends on the IR "kind" (grammar / regex /
-# set_builder / predicate / bounded / ...) — no single fixed key set, so it
-# is exempt from rule (2) but still covered by rule (1) below.
-_NO_FIXED_CONTRACT = {"input_parser"}
+# REQUIRED_KEYS / _NO_FIXED_CONTRACT now live in cfl_system.lib.agent_output_schema
+# (TODO.md §3 M) — the same exhaustive per-agent contract also builds the
+# output_config.format JSON schema each LiveRunner call sends, so this test
+# and the live request stay in sync by construction instead of by hand.
 
 
 def _iter_json_blocks(path: Path) -> list[tuple[str, str]]:

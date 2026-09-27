@@ -23,11 +23,18 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
   (Opus 5.5 for reasoning agents, Sonnet 5 for parsing/classification, Haiku 4.5 for JSON repair).
   Change them in all four projects together.
 - Theory statements used by prompts: `docs/THEORY.md` — change lemma formulations there first, then in prompts.
-- Request building: `_build_request_kwargs` in each `LiveRunner` / `agent_system/lib/llm_client.py`
-  (adaptive thinking + effort; `temperature` only for legacy models).
+- Shared LLM client: `agent_system/lib/llm_client.py` (`AnthropicClient`) — request kwargs (adaptive thinking +
+  effort; `temperature` only for legacy models), typed API errors (`FatalAPIError`/`RetryableAPIError`) with
+  backoff, the cross-pipeline concurrency semaphore (`TFL_MAX_CONCURRENCY`), and `UsageTracker`. `cfl_system` /
+  `dcfl_system` / `ll_system`'s `LiveRunner` are thin wrappers around it — change request-building kwargs there,
+  not in each `LiveRunner` separately. Structured outputs (`output_config.format`, per-agent JSON schema) are the
+  primary response-parsing path; `agent_output_schema.py` in each project builds the schema, with automatic
+  fallback to the legacy brace/fence extraction.
 - Live test runs use Haiku only: `TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`. Opus runs cost real money — only on request.
 - `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables `agent_system`'s `formalizer` agent by default for every
   run, without passing `--formalize` each time; unset/other values keep it opt-in per `--formalize`.
+- Eval set: `docs/EVAL_SET.md` (73 tasks, expected verdicts) is run by `tfl-eval` (`tfl_eval/`), which reports
+  accuracy/calibration metrics — see `README.md` and `TODO.md` §7. Mock mode by default; `--live` only on request.
 
 ## Commands
 ```bash

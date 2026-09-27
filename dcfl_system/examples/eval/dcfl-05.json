@@ -1,0 +1,16 @@
+{
+  "task_id": "dcfl-05",
+  "source_text": "{a^n b^n | n >= 0} union {a^n b^(2n) | n >= 0}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{a^n b^n | n >= 0} union {a^n b^(2n) | n >= 0}",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": [
+    "a",
+    "b"
+  ]
+}

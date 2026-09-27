@@ -1,0 +1,12 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "{a^n b^n | n >= 0} union {a^n b^(2n) | n >= 0}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b"
+    ],
+    "description": "{a^n b^n | n >= 0} union {a^n b^(2n) | n >= 0}"
+  }
+}

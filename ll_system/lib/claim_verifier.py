@@ -81,18 +81,32 @@ def _validate_grammar_structure(grammar: Any) -> list[str]:
 def _try_word_oracle(ir: dict):
     """Best-effort membership oracle for the task's language, from `ir`.
 
-    Returns a Callable[[str], bool] or None if no oracle can be built (e.g.
-    the IR's language_spec kind has no automated oracle — this is the case
-    for `set_builder` today: docs/VERDICT_POLICY.md §4 "до появления общей
-    библиотеки оракулов … trust остаётся well_formed"). Best-effort: the
-    structural checks never depend on it succeeding.
+    Returns a Callable[[str], bool] or None if no oracle can be built.
+    Tries `cfl_system`'s oracle first (it handles every CFL `language_spec`
+    kind, including `grammar`/`predicate` when Format 2/3 IRs reuse them),
+    then falls back to `ll_system.lib.word_oracle.oracle_from_ll_ir` for the
+    `set_builder` (Format 1) kind it doesn't know
+    (docs/VERDICT_POLICY.md §4). Best-effort: the structural checks never
+    depend on either succeeding.
     """
     try:
         from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
     except ImportError:
+        cfl_oracle_from_ir = None
+    if cfl_oracle_from_ir is not None:
+        try:
+            oracle = cfl_oracle_from_ir(ir)
+        except Exception:
+            oracle = None
+        if oracle is not None:
+            return oracle
+
+    try:
+        from ll_system.lib.word_oracle import oracle_from_ll_ir
+    except ImportError:
         return None
     try:
-        return cfl_oracle_from_ir(ir)
+        return oracle_from_ll_ir(ir)
     except Exception:
         return None
 
@@ -449,6 +463,228 @@ def _verify_branch_words_by_oracle(bw: dict, ir: dict) -> tuple[str | None, dict
     if data_count == 2 and confirmed_count == 2 and template_depends_on_n:
         return "bounded_pass", {"checked": checked}
     return None, {"checked": checked}
+
+
+# ---------------------------------------------------------------------------
+# Step 2 for the prefix_classes method (docs/VERDICT_POLICY.md §4 "ll /
+# prefix_classes. Как shallit nerode_classes"): mirrors
+# dcfl_system.lib.oracle_verifier's nerode_classes semantic check — instantiate
+# the claimed distinguishing_suffix against concrete class representatives
+# (the proof's own `representative_pairs`, if given, else random samples from
+# the task language via the word oracle) and check it separates them; and
+# sample short words to check the dead class isn't obviously infinite. Only
+# runs for `set_builder` IRs with a word oracle available; otherwise trust
+# stays at well_formed, same fallback as everywhere else in this module.
+# ---------------------------------------------------------------------------
+
+class _SearchBudgetExceededLL(Exception):
+    """Internal signal: `_continuable_ll`'s search ran out of budget or hit
+    an inconclusive oracle answer -- caller must treat the result as None,
+    never as evidence either way."""
+
+
+def _continuable_ll(
+    oracle, word: str, alphabet: list[str],
+    max_extra: int = 6, node_budget: int = 20_000,
+) -> bool | None:
+    """Whether some extension of `word` (up to `max_extra` more symbols) is
+    in L, decided by an EXHAUSTIVE depth-first search over that bound (mirrors
+    dcfl_system.lib.oracle_verifier._continuable: every node up to depth
+    `max_extra` is visited unless cut short by `node_budget` or an
+    inconclusive oracle answer).
+
+    Returns True (a continuation into L was found), False (the exhaustive
+    search visited every extension up to the bound and found none -- a
+    decisive negative WITHIN this bound, per docs/VERDICT_POLICY.md §4), or
+    None (the search could not be completed -- genuinely inconclusive, never
+    treated as evidence of an infinite dead class)."""
+    if not alphabet:
+        return None
+    budget = [node_budget]
+
+    def dfs(w: str, depth: int) -> bool:
+        budget[0] -= 1
+        if budget[0] <= 0:
+            raise _SearchBudgetExceededLL()
+        try:
+            verdict = oracle(w)
+        except Exception:
+            verdict = None
+        if verdict is None:
+            raise _SearchBudgetExceededLL()
+        if verdict:
+            return True
+        if depth >= max_extra:
+            return False
+        return any(dfs(w + ch, depth + 1) for ch in alphabet)
+
+    try:
+        return dfs(word, 0)
+    except _SearchBudgetExceededLL:
+        return None
+
+
+def _all_words_ll(alphabet: list[str], max_len: int) -> list[str]:
+    """All words over `alphabet` of length 0..max_len, shortest first --
+    NOT filtered through the task's own oracle (unlike `generate_words`,
+    which only returns words already IN L, and would therefore make every
+    dead-class check trivially pass via the empty extension)."""
+    words = [""]
+    for length in range(1, max_len + 1):
+        words.extend("".join(t) for t in itertools.product(alphabet, repeat=length))
+    return words
+
+
+def _check_dead_class_finite_ll(ir: dict) -> tuple[bool | None, list[str]]:
+    """Dead-class part of the prefix_classes step 2 (mirrors
+    dcfl_system.lib.oracle_verifier._check_dead_class_finite): enumerate ALL
+    words over the task's alphabet up to length 4 -- not just words the task
+    language itself generates, which are already in L and so always
+    "continue" via the empty extension -- and check each is continuable into
+    L within an EXHAUSTIVE bounded search (up to 6 more symbols).
+
+    A failure here (a word with provably no continuation within the bound)
+    means the dead class is not finite as claimed, so the caller must cap
+    trust at well_formed rather than bounded_pass -- Theorem 4.7.4 is vacuous
+    once the dead class is infinite (docs/VERDICT_POLICY.md §4)."""
+    spec = ir.get("language_spec")
+    if not isinstance(spec, dict) or spec.get("kind") != "set_builder":
+        return None, []
+    alphabet = spec.get("alphabet")
+    if not isinstance(alphabet, list) or not alphabet:
+        return None, []
+    oracle = _try_word_oracle(ir)
+    if oracle is None:
+        return None, []
+    short_words = _all_words_ll(alphabet, 4)
+    if not short_words:
+        return None, []
+    issues: list[str] = []
+    checked = 0
+    for w in short_words[:200]:
+        cont = _continuable_ll(oracle, w, alphabet)
+        if cont is None:
+            continue
+        checked += 1
+        if not cont:
+            issues.append(
+                f"dead_class_finite check: {w!r} has NO continuation into L "
+                "within an exhaustive bounded search (up to 6 more symbols)"
+            )
+    if checked == 0:
+        return None, []
+    return (len(issues) == 0), issues
+
+
+def _semantic_check_prefix_classes(proof_sketch: dict, ir: dict) -> tuple[str | None, dict]:
+    """Returns (trust, details); trust in {"bounded_pass", "refuted", None}.
+
+    None means insufficient data (no oracle, non-literal suffix, or IR isn't
+    set_builder) — caller keeps well_formed.
+    """
+    distinguishing_suffix = proof_sketch.get("distinguishing_suffix")
+    if not isinstance(distinguishing_suffix, str) or not distinguishing_suffix:
+        return None, {}
+
+    spec = ir.get("language_spec")
+    if not isinstance(spec, dict) or spec.get("kind") != "set_builder":
+        return None, {}
+    alphabet = spec.get("alphabet")
+    if not isinstance(alphabet, list) or not alphabet:
+        return None, {}
+    alphabet_set = set(alphabet)
+    if any(ch not in alphabet_set for ch in distinguishing_suffix):
+        # Contains variables/prose (e.g. "b a^N b"), not a literal we can
+        # instantiate mechanically.
+        return None, {}
+
+    oracle = _try_word_oracle(ir)
+    if oracle is None:
+        return None, {}
+
+    details: dict = {}
+    status: str | None = None
+
+    # Representative pairs supplied by the proof itself (its general
+    # separation argument, instantiated at concrete words) — the only thing
+    # that can refute the claim.
+    raw_pairs = proof_sketch.get("representative_pairs")
+    checked_pairs: list[tuple[str, str]] = []
+    if isinstance(raw_pairs, list):
+        for item in raw_pairs[:5]:
+            if not isinstance(item, dict):
+                continue
+            u, v = item.get("u"), item.get("v")
+            if not (isinstance(u, str) and isinstance(v, str) and u != v):
+                continue
+            if any(ch not in alphabet_set for ch in u + v):
+                continue
+            checked_pairs.append((u, v))
+
+    bad: list[str] = []
+    n_definite = 0
+    for u, v in checked_pairs:
+        try:
+            in_u, in_v = bool(oracle(u + distinguishing_suffix)), bool(oracle(v + distinguishing_suffix))
+        except Exception:
+            continue
+        n_definite += 1
+        if not ((in_u and not in_v) or (in_v and not in_u)):
+            bad.append(f"u={u!r}, v={v!r}: uw in L={in_u}, vw in L={in_v} (same class)")
+
+    if bad:
+        return "refuted", {
+            "representative_pairs_checked": checked_pairs,
+            "issue": (
+                "distinguishing_suffix does not separate the proof's own "
+                "representative pair(s): " + "; ".join(bad)
+            ),
+        }
+    if n_definite > 0:
+        status = "bounded_pass"
+        details["representative_pairs_checked"] = checked_pairs
+
+    if status is None:
+        # No usable representative pairs — fall back to samples from the
+        # task language itself, but ONLY to look for supporting evidence
+        # (never to refute: a suffix failing to separate arbitrary unrelated
+        # strings says nothing about the proof's actual classes).
+        try:
+            from ll_system.lib.word_oracle import generate_words
+            candidate_words = generate_words(ir, 10)
+        except Exception:
+            candidate_words = []
+        in_bucket: list[str] = []
+        out_bucket: list[str] = []
+        for w in sorted(candidate_words, key=len):
+            try:
+                verdict_w = oracle(w + distinguishing_suffix)
+            except Exception:
+                continue
+            (in_bucket if verdict_w else out_bucket).append(w)
+        if in_bucket and out_bucket:
+            status = "bounded_pass"
+            n_pairs = min(3, len(in_bucket) * len(out_bucket))
+            details["sampled_pairs"] = [
+                (in_bucket[i % len(in_bucket)], out_bucket[i % len(out_bucket)])
+                for i in range(n_pairs)
+            ]
+
+    if status == "bounded_pass":
+        dead_ok, dead_issues = _check_dead_class_finite_ll(ir)
+        if dead_ok is False:
+            details["dead_class_finite_issues"] = dead_issues
+            # An EXHAUSTIVE bounded search found a word that provably cannot
+            # be continued into L within it: the proof's "dead class is
+            # finite" premise is false, so Theorem 4.7.4 is vacuous
+            # (docs/VERDICT_POLICY.md §4) and the caller must not report a
+            # deterministic oracle pass on it. Cap at well_formed rather than
+            # refuted -- this only falsifies the dead-class premise, not
+            # necessarily the distinguishing_suffix/representative_pairs
+            # argument checked above.
+            status = "well_formed"
+
+    return status, details
 
 
 # ---------------------------------------------------------------------------
@@ -1066,10 +1302,27 @@ def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append("Missing or empty 'proof_explanation'")
 
-    # No mechanical semantic check for prefix_classes yet (docs/VERDICT_POLICY.md
-    # scopes step 2 to ll_grammar_builder/grammar_transformer/substitution) — a
-    # structural pass is well_formed, not verified/bounded_pass.
     trust = "well_formed" if not issues else "not_verified"
+
+    # Step 2 (docs/VERDICT_POLICY.md §4 "ll / prefix_classes. Как shallit
+    # nerode_classes"): instantiate distinguishing_suffix against class
+    # representatives via the task's word oracle (set_builder only).
+    if trust == "well_formed":
+        sem_status, sem_details = _semantic_check_prefix_classes(proof_sketch, ir)
+        if sem_details:
+            details["distinguishing_suffix_check"] = sem_details
+            checks_total += 1
+            if sem_status == "refuted":
+                issues.append(
+                    "distinguishing_suffix does not separate the proof's class "
+                    "representatives (word-oracle check, docs/VERDICT_POLICY.md §4)"
+                )
+                trust = "refuted"
+            else:
+                checks_passed += 1
+                if sem_status == "bounded_pass":
+                    trust = "bounded_pass"
+
     return _make_result(
         agent=agent,
         trust=trust,

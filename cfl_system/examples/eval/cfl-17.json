@@ -1,0 +1,40 @@
+{
+  "task_type": "grammar_filter_cfl",
+  "source_text": "S -> aSb | eps, filtered by |w| = 0 (mod 4)",
+  "language_spec": {
+    "kind": "grammar_filter",
+    "grammar": {
+      "kind": "grammar",
+      "terminals": [
+        "a",
+        "b"
+      ],
+      "nonterminals": [
+        "S"
+      ],
+      "start": "S",
+      "rules": [
+        {
+          "lhs": "S",
+          "rhs": [
+            "a",
+            "S",
+            "b"
+          ]
+        },
+        {
+          "lhs": "S",
+          "rhs": []
+        }
+      ]
+    },
+    "filter": {
+      "expr": {
+        "kind": "length",
+        "of_var": "w"
+      },
+      "modulus": 4,
+      "remainder": 0
+    }
+  }
+}

@@ -1,8 +1,12 @@
 """Tests for graph edge cases: closure verification, escalate action,
 formalization node, and decide_retry routing."""
 
+import subprocess
+import sys
+import textwrap
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from agent_system.graph import (
@@ -131,6 +135,41 @@ class TestClosureVerification(unittest.TestCase):
         self.assertEqual(result["status"], "plausible")
         self.assertEqual(result["confidence"], 0.75)
         self.assertEqual(oracle_calls, ["ab", "a"])
+
+    def test_process_exits_promptly_after_timeout(self):
+        """Regression test for the `ThreadPoolExecutor`-backed version of
+        `_estimate_index_with_timeout`: its non-daemon pool threads are
+        joined by Python at interpreter exit, so a computation that outlives
+        `timeout` kept the WHOLE PROCESS alive until it finished (TODO.md
+        §2) -- a daemon thread must not. Run in a subprocess since that is
+        the only way to observe "does the process exit", with a background
+        computation (30s) far longer than the outer `subprocess.run` timeout
+        (10s) -- this fails with a `TimeoutExpired` under the old pool-based
+        implementation."""
+        script = textwrap.dedent("""
+            import time
+            from unittest.mock import patch
+            from agent_system.graph import _estimate_index_with_timeout
+
+            def never_returns_in_time(*_a, **_kw):
+                time.sleep(30)
+                return {"estimated_index": "infinite", "confidence": 1.0}
+
+            with patch("agent_system.lib.congruence.estimate_index", never_returns_in_time):
+                result = _estimate_index_with_timeout(
+                    lambda _w: True, ["a", "b"], max_depth=4, timeout=0.05,
+                )
+            assert result["estimated_index"] == "unknown", result
+            print("OK")
+        """)
+        repo_root = Path(__file__).resolve().parents[2]
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(repo_root),
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("OK", proc.stdout)
 
 
 # ── escalate action ────────────────────────────────────────────────────────

@@ -1,0 +1,32 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "S -> aSb | ab",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "a",
+      "b"
+    ],
+    "nonterminals": [
+      "S"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "S",
+          "b"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "b"
+        ]
+      }
+    ]
+  }
+}

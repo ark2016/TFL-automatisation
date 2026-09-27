@@ -1,0 +1,17 @@
+{
+  "task_id": "dcfl-02",
+  "source_text": "{w c reverse(w) | w in {a,b}*}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{w c reverse(w) | w in {a,b}*}",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": [
+    "a",
+    "b",
+    "c"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "{a^i b^j c^k | i = j or j = k}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b",
+      "c"
+    ],
+    "description": "{a^i b^j c^k | i = j or j = k}"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "{w in {a,b}* | w = reverse(w)}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b"
+    ],
+    "description": "{w in {a,b}* | w = reverse(w)}"
+  }
+}

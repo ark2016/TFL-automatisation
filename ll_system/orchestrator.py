@@ -34,6 +34,22 @@ from ll_system.lib.preprocess import compute_preprocess_hints
 from ll_system.lib.ll_table_builder import check_ll_k, find_min_ll_k
 from ll_system.lib.claim_verifier import verify_ll_claim
 
+# Shared Anthropic call machinery (TODO.md §3): kwargs building, streaming +
+# retry/backoff, typed errors, concurrency semaphore, usage tracking. See
+# agent_system/lib/llm_client.py -- LiveRunner below is a thin wrapper.
+from agent_system.lib.llm_client import (
+    AnthropicClient,
+    FatalAPIError,
+    RetryableAPIError,
+    UsageTracker,
+    _is_adaptive_model as _shared_is_adaptive_model,
+    estimate_cost_usd,
+    extract_json as _extract_json,
+    extract_json_with_error as _extract_json_with_error,
+    get_concurrency_semaphore,
+)
+from ll_system.lib.agent_output_schema import schema_for as _output_schema_for
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -153,7 +169,14 @@ class MockRunner:
 
 
 class LiveRunner:
-    """Run agents via Anthropic API using prompts from prompts/ directory."""
+    """Run agents via Anthropic API using prompts from prompts/ directory.
+
+    Thin wrapper (TODO.md §3): prompts/contracts/JSON-parsing/Haiku-repair
+    stay pipeline-specific; the actual model call goes through the shared
+    ``agent_system.lib.llm_client.AnthropicClient`` — kwargs building,
+    stream-and-collect, typed retry/backoff, the process-wide concurrency
+    semaphore, and usage tracking all live there now, not here.
+    """
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from ll_system.config import (
@@ -198,6 +221,15 @@ class LiveRunner:
         # conversion — ideal for turning "Opus wrote prose around its JSON"
         # into pure JSON.
         self._json_repair_model = "claude-haiku-4-5"
+        # Shared call machinery (TODO.md §3): kwargs building, streaming,
+        # retry/backoff, usage tracking. Not the SDK client itself — `self.
+        # client` stays the mutable attribute (tests swap it for a mock).
+        self.usage_tracker = UsageTracker()
+        self._shared = AnthropicClient(
+            default_effort=self.default_effort,
+            refusal_fallback=self.refusal_fallback,
+            usage_tracker=self.usage_tracker,
+        )
 
     # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
     # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
@@ -211,7 +243,7 @@ class LiveRunner:
     @classmethod
     def _is_adaptive_model(cls, model: str) -> bool:
         """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
-        return bool(model) and not cls._LEGACY_MODEL_RE.search(model)
+        return _shared_is_adaptive_model(model)
 
     def _build_request_kwargs(self, model: str, max_tokens: int,
                               temperature: float, system_prompt: str,
@@ -220,30 +252,23 @@ class LiveRunner:
 
         Thinking models get `thinking: adaptive` + an explicit effort level
         (Opus 5.5 would silently default to "medium"); legacy models get
-        `temperature` instead.
+        `temperature` instead. Delegates to the shared AnthropicClient so
+        every pipeline builds kwargs the same way (TODO.md §3).
         """
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_msg}],
-        }
-        if self._is_adaptive_model(model):
-            kwargs["thinking"] = {"type": "adaptive"}
-            kwargs["output_config"] = {"effort": effort or self.default_effort}
-            if self.refusal_fallback and model.startswith(self._FALLBACK_MODEL_PREFIXES):
-                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
-                kwargs["extra_body"] = {"fallbacks": "default"}
-        else:
-            kwargs["temperature"] = temperature
-        return kwargs
+        return self._shared.build_request_kwargs(
+            model, max_tokens, system_prompt, user_msg,
+            effort=effort, temperature=temperature,
+        )
 
     @staticmethod
-    def _refusal_error(agent_name: str, final_msg: Any) -> dict:
-        """agent_error dict for a safety-classifier decline (stop_reason="refusal")."""
-        details = getattr(final_msg, "stop_details", None)
-        category = getattr(details, "category", None) if details else None
-        explanation = getattr(details, "explanation", None) if details else None
+    def _refusal_error(agent_name: str, result: Any) -> dict:
+        """agent_error dict for a safety-classifier decline (stop_reason="refusal").
+
+        `result` is a ``llm_client.CallResult`` (or anything exposing the
+        same ``refusal_category`` / ``refusal_explanation`` attributes).
+        """
+        category = getattr(result, "refusal_category", None)
+        explanation = getattr(result, "refusal_explanation", None)
         msg = f"Model refused (stop_reason=refusal, category={category})"
         if explanation:
             msg += f": {explanation}"
@@ -289,12 +314,14 @@ class LiveRunner:
         )
 
         t0 = _time.monotonic()
+        request_kwargs = self._build_request_kwargs(
+            model=self._json_repair_model,
+            max_tokens=min(len(raw_text) // 2 + 2000, 8000),
+            temperature=0.0, system_prompt=system, user_msg=user_msg,
+        )
         try:
-            response = self.client.messages.create(**self._build_request_kwargs(
-                model=self._json_repair_model,
-                max_tokens=min(len(raw_text) // 2 + 2000, 8000),
-                temperature=0.0, system_prompt=system, user_msg=user_msg,
-            ))
+            with get_concurrency_semaphore():
+                response = self.client.messages.create(**request_kwargs)
         except Exception as exc:
             logger.warning("[%s] JSON repair (Haiku) failed: %s", agent_name, exc)
             return None
@@ -305,8 +332,9 @@ class LiveRunner:
             if hasattr(block, "text"):
                 repaired_text += block.text
 
+        usage = getattr(response, "usage", None)
+        self.usage_tracker.record(getattr(response, "model", self._json_repair_model), usage)
         if self.verbose:
-            usage = response.usage
             t_in = usage.input_tokens if usage else 0
             t_out = usage.output_tokens if usage else 0
             print(
@@ -387,22 +415,43 @@ class LiveRunner:
             # when max_tokens x projected latency exceeds 10 minutes; streaming
             # lifts that cap and handles long proofs reliably.
             # Thinking models get adaptive thinking + this agent's effort;
-            # temperature is only sent to legacy models (Haiku 4.5).
-            request_kwargs = self._build_request_kwargs(
-                model=model, max_tokens=max_tokens,
-                temperature=temperature, system_prompt=system_prompt,
-                user_msg=user_msg, effort=effort,
-            )
+            # temperature is only sent to legacy models (Haiku 4.5). The
+            # shared client also retries a retryable error (429/5xx/network/
+            # broken stream) with backoff before giving up, and never
+            # retries a fatal one (400/401/403/404) — TODO.md §2/§3.
+            # output_schema (TODO.md §3 M): agents with a closed contract
+            # (`ll_system.lib.agent_output_schema.REQUIRED_KEYS`) get
+            # structured outputs instead of "extract JSON from prose";
+            # unavailable falls back to a plain call automatically.
             try:
-                with self.client.messages.stream(**request_kwargs) as stream:
-                    for chunk in stream.text_stream:
-                        raw_text += chunk
-                    final_msg = stream.get_final_message()
-                if final_msg.usage is not None:
-                    tokens_in = final_msg.usage.input_tokens
-                    tokens_out = final_msg.usage.output_tokens
-                stop_reason = getattr(final_msg, "stop_reason", None)
-            except Exception as exc:
+                result = self._shared.call(
+                    self.client, model=model, max_tokens=max_tokens,
+                    system=system_prompt, user=user_msg,
+                    effort=effort, temperature=temperature,
+                    output_schema=_output_schema_for(agent_name),
+                )
+            except FatalAPIError as exc:
+                if exc.status_code == 400:
+                    # A 400 that isn't a schema rejection AnthropicClient.call
+                    # could itself recover from is a malformed *request* for
+                    # this one agent (prompt too long, ...), not a dead key
+                    # or missing model access -- report as this agent's
+                    # agent_error instead of aborting the whole pipeline run.
+                    elapsed = _time.monotonic() - t0
+                    logger.error("[%s] 400 BadRequest after %.1fs: %s", agent_name, elapsed, exc)
+                    return {
+                        "agent": agent_name,
+                        "status": "agent_error",
+                        "verdict": None,
+                        "confidence": 0.0,
+                        "errors": [f"API error: {exc}"],
+                    }
+                # 401/403/404: a dead key, no access to the model, or an
+                # unknown model ID -- fail fast, re-raised as the original
+                # SDK exception type for backward compatibility.
+                logger.error("[%s] fatal API error: %s", agent_name, exc)
+                raise (exc.original if exc.original is not None else exc)
+            except RetryableAPIError as exc:
                 elapsed = _time.monotonic() - t0
                 logger.error("[%s] API error after %.1fs: %s", agent_name, elapsed, exc)
                 return {
@@ -413,6 +462,12 @@ class LiveRunner:
                     "errors": [f"API error: {exc}"],
                 }
 
+            raw_text = result.text
+            stop_reason = result.stop_reason
+            if result.usage is not None:
+                tokens_in = result.usage.input_tokens
+                tokens_out = result.usage.output_tokens
+
             elapsed = _time.monotonic() - t0
 
             if self.verbose:
@@ -421,17 +476,19 @@ class LiveRunner:
                     if stop_reason and stop_reason != "end_turn"
                     else ""
                 )
+                cost = estimate_cost_usd(result.model or model, result.usage)
+                cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
                 print(
-                    f"[{agent_name}] model={final_msg.model} effort={effort} "
+                    f"[{agent_name}] model={result.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
-                    f"time={elapsed:.1f}s max={max_tokens}{extra}",
+                    f"time={elapsed:.1f}s max={max_tokens}{extra}{cost_str}",
                     file=sys.stderr, flush=True,
                 )
 
             # A safety-classifier decline is not a parse problem: retrying or
             # JSON-repairing the (empty/partial) text cannot help.
             if stop_reason == "refusal":
-                return self._refusal_error(agent_name, final_msg)
+                return self._refusal_error(agent_name, result)
 
             parsed, parse_error = _extract_json_with_error(raw_text)
             if parsed is not None:
@@ -487,93 +544,10 @@ class LiveRunner:
         }
 
 
-# ---------------------------------------------------------------------------
-# JSON extraction helpers
-# ---------------------------------------------------------------------------
-
-def _extract_json(text: str) -> dict | None:
-    """Extract JSON object from LLM response text (back-compat wrapper)."""
-    parsed, _ = _extract_json_with_error(text)
-    return parsed
-
-
-def _extract_json_with_error(text: str) -> tuple[dict | None, str | None]:
-    """Extract JSON object and return (parsed, error_detail).
-
-    error_detail is None on success, otherwise a human-readable string
-    describing what went wrong at which position. Tries three strategies:
-      1) whole text as JSON
-      2) content of a ```json fenced block
-      3) substring between first '{' and last '}'
-    """
-    text = text.strip()
-    if not text:
-        return None, "response was empty"
-
-    last_err: json.JSONDecodeError | None = None
-    last_strategy: str = ""
-    fence_match = None
-    first_brace = -1
-    last_brace = -1
-
-    # Strategy 1: whole text
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return obj, None
-        return None, f"parsed as JSON but top-level is {type(obj).__name__}, not object"
-    except json.JSONDecodeError as e:
-        last_err, last_strategy = e, "whole text"
-
-    # Strategy 2: fenced code block
-    fence_match = _re.search(r"```(?:json)?\s*\n(.*?)\n```", text, _re.DOTALL)
-    if fence_match:
-        try:
-            obj = json.loads(fence_match.group(1))
-            if isinstance(obj, dict):
-                return obj, None
-            return None, f"fenced block parsed but top-level is {type(obj).__name__}"
-        except json.JSONDecodeError as e:
-            last_err, last_strategy = e, "fenced block"
-
-    # Strategy 3: first-brace to last-brace
-    first_brace = text.find("{")
-    last_brace = text.rfind("}")
-    if first_brace != -1 and last_brace > first_brace:
-        substring = text[first_brace:last_brace + 1]
-        try:
-            obj = json.loads(substring)
-            if isinstance(obj, dict):
-                return obj, None
-            return None, f"brace-substring parsed but top-level is {type(obj).__name__}"
-        except json.JSONDecodeError as e:
-            last_err, last_strategy = e, "brace substring"
-
-    if last_err is not None:
-        msg = last_err.msg
-        line = last_err.lineno
-        col = last_err.colno
-        pos = last_err.pos
-
-        src = text
-        if last_strategy == "fenced block" and fence_match:
-            src = fence_match.group(1)
-        elif last_strategy == "brace substring" and first_brace != -1:
-            src = text[first_brace:last_brace + 1]
-
-        start = max(0, pos - 30)
-        end = min(len(src), pos + 30)
-        context = src[start:end].replace("\n", "\\n")
-        pointer_offset = pos - start
-        pointer = " " * pointer_offset + "^"
-
-        return None, (
-            f"{msg} at line {line} column {col} (char {pos}) "
-            f"— tried strategy: {last_strategy}. "
-            f"Context around failure:\n  {context}\n  {pointer}"
-        )
-
-    return None, "no JSON object found in response (no '{' / '}' delimiters)"
+# _extract_json / _extract_json_with_error now come from
+# agent_system.lib.llm_client (TODO.md §3 — shared across every pipeline so
+# the JSON-retry error message stays uniform: position + ±40 chars of
+# context, not a bare "length=N" like dcfl's old copy had drifted to).
 
 
 # ---------------------------------------------------------------------------

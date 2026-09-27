@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from agent_system.config import EFFORT, MODELS
+from agent_system.lib import llm_client
 from agent_system.lib.llm_client import LLMRunner, _is_adaptive_model
 
 
@@ -59,6 +60,24 @@ def test_request_params(runner):
     assert kw["temperature"] == 0.0 and "output_config" not in kw
 
 
+def test_request_params_with_output_schema(runner):
+    """output_schema (TODO.md §3 M) adds output_config.format on both
+    adaptive and legacy models, without disturbing the rest of the kwargs."""
+    schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+
+    kw = runner._shared.build_request_kwargs(
+        "claude-opus-5-5", 64000, "sys", "u", effort="high", output_schema=schema,
+    )
+    assert kw["output_config"]["effort"] == "high"
+    assert kw["output_config"]["format"] == {"type": "json_schema", "schema": schema}
+
+    kw = runner._shared.build_request_kwargs(
+        "claude-haiku-4-5", 256, "sys", "u", effort="low", temperature=0.0, output_schema=schema,
+    )
+    assert kw["temperature"] == 0.0
+    assert kw["output_config"] == {"format": {"type": "json_schema", "schema": schema}}
+
+
 def test_json_read_past_thinking_block(runner):
     message = SimpleNamespace(
         stop_reason="end_turn",
@@ -73,7 +92,10 @@ def test_json_read_past_thinking_block(runner):
 
     assert out["evidence"]["verdict"] == "regular"
     kwargs = runner._client.messages.stream.call_args.kwargs
-    assert kwargs["output_config"] == {"effort": EFFORT["classifier"]}
+    # Structured outputs (TODO.md §3 M): classifier has a closed contract,
+    # so every call also carries output_config.format alongside effort.
+    assert kwargs["output_config"]["effort"] == EFFORT["classifier"]
+    assert kwargs["output_config"]["format"]["type"] == "json_schema"
     assert "temperature" not in kwargs
 
 
@@ -96,11 +118,14 @@ def test_refusal_returns_agent_error_with_one_call(runner):
     assert runner._client.messages.stream.call_count == 1
 
 
-def test_api_error_returns_agent_error_with_one_call(runner):
-    """A transient API error (network, overloaded, ...) becomes an
-    agent_error dict recorded in state["errors"] by graph.py, instead of
-    None disappearing silently -- and is not retried with a JSON-only
-    instruction, since the problem isn't the JSON (TODO.md §2)."""
+def test_api_error_returns_agent_error_after_retries_exhausted(runner, monkeypatch):
+    """A transient API error (network, overloaded, ...) is retried by the
+    shared client's backoff loop (TODO.md §3) and, once that budget is
+    exhausted, becomes an agent_error dict recorded in state["errors"] by
+    graph.py -- instead of None disappearing silently (TODO.md §2) -- and
+    is not retried with a JSON-only instruction, since the problem isn't
+    the JSON."""
+    monkeypatch.setattr(llm_client.time, "sleep", lambda _seconds: None)
     runner._client = MagicMock()
     runner._client.messages.stream.side_effect = RuntimeError("connection reset")
 
@@ -108,7 +133,10 @@ def test_api_error_returns_agent_error_with_one_call(runner):
 
     assert out["status"] == "agent_error"
     assert "connection reset" in out["errors"][0]
-    assert runner._client.messages.stream.call_count == 1
+    # The shared client's backoff loop retries a non-fatal error up to its
+    # max_retries budget (default 3) before giving up -- exactly one logical
+    # run_agent call, but several underlying stream() attempts.
+    assert runner._client.messages.stream.call_count == 3
 
 
 @pytest.mark.parametrize("exc_cls, status", [

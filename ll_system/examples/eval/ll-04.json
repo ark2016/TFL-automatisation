@@ -1,0 +1,13 @@
+{
+  "task_type": "ll_check_language",
+  "source_text": "{w b c reverse(w) | w in {a,b}*}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b",
+      "c"
+    ],
+    "description": "{w b c reverse(w) | w in {a,b}*}"
+  }
+}

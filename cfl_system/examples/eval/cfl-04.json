@@ -1,0 +1,37 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "S -> aSa | bSb | eps  ({w w^R | w in {a,b}*})",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "a",
+      "b"
+    ],
+    "nonterminals": [
+      "S"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "S",
+          "a"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "b",
+          "S",
+          "b"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": []
+      }
+    ]
+  }
+}

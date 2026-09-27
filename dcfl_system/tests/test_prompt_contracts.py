@@ -31,15 +31,60 @@ from dcfl_system.orchestrator import (
     _build_specialist_input,
     _VALID_ACTIONS,
 )
+from dcfl_system.lib.agent_output_schema import REQUIRED_KEYS, _SPECIALISTS
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 JSON_BLOCK_RE = re.compile(r"```json\n(.*?)\n```", re.S)
 
-REQUIRED_OUTPUT_KEYS = {
-    "agent_name", "status", "verdict", "proof_sketch", "evidence",
-    "confidence", "errors",
-}
+# REQUIRED_OUTPUT_KEYS now lives in dcfl_system.lib.agent_output_schema
+# (TODO.md §3 M) — the same exhaustive contract also builds the
+# output_config.format JSON schema each LiveRunner call sends.
+REQUIRED_OUTPUT_KEYS = REQUIRED_KEYS["stack_strategy"]
 VALID_STATUSES = {"success", "fail", "not_applicable", "uncertain"}
+
+
+def test_agent_output_schema_specialists_match_orchestrator():
+    """dcfl_system.lib.agent_output_schema hardcodes the specialist name
+    list (to avoid a circular import with orchestrator.py) -- keep it in
+    sync with the real DCFL_SPECIALIST_NAMES."""
+    assert set(_SPECIALISTS) == set(DCFL_SPECIALIST_NAMES)
+
+
+_STRING_UNION_RE = re.compile(
+    r'("(?:[^"\\]|\\.)*")(?:\s*\|\s*(?:"(?:[^"\\]|\\.)*"|null))+'
+)
+_BRACKET_OR_NULL_RE = re.compile(r'([}\]])\s*\|\s*null\b')
+
+
+def _loads_pseudo_union_schema(block: str) -> object:
+    """Parse a "## Output format" block that uses this repo's pseudo-union
+    convention for a type sketch (``"dcfl" | "non_dcfl" | null``, ``{ ... }
+    | null``) by collapsing each union to its first alternative, then
+    ``json.loads`` the result -- these aren't meant to be valid JSON on
+    their own, just close enough to read the key set off of."""
+    collapsed = _STRING_UNION_RE.sub(r"\1", block)
+    collapsed = _BRACKET_OR_NULL_RE.sub(r"\1", collapsed)
+    return json.loads(collapsed)
+
+
+@pytest.mark.parametrize("agent_name,filename", [
+    ("classifier", "classifier.md"),
+    ("reasoning", "reasoning_agent.md"),
+])
+def test_agent_output_schema_matches_prompt_output_format_exactly(agent_name, filename):
+    """classifier/reasoning have a closed output_config.format schema too
+    (agent_output_schema.REQUIRED_KEYS) -- unlike the specialists' shared
+    shape, these aren't covered by the worked-example check above, so
+    check them directly against the prompt's own "## Output format" block.
+    A closed schema constrains generation, so this must be an exact match,
+    not just a superset."""
+    path = PROMPTS_DIR / filename
+    text = path.read_text(encoding="utf-8")
+    m = re.search(r"## Output format.*?```json\n(.*?)\n```", text, re.S)
+    assert m, f"{filename}: no '## Output format' ```json block found"
+    obj = _loads_pseudo_union_schema(m.group(1))
+    assert isinstance(obj, dict)
+    assert set(obj.keys()) == set(REQUIRED_KEYS[agent_name])
 
 
 def _json_blocks(path: Path) -> list[dict]:

@@ -180,6 +180,23 @@ Opus response → _extract_json (3 strategies: whole / fenced / braces)
 - **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-4-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
 - **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`).
 
+**Shared client (`agent_system/lib/llm_client.py`).** `cfl_system`/`dcfl_system`/`ll_system`'s `LiveRunner` are now
+thin wrappers around one `AnthropicClient`: `build_request_kwargs()` builds the thinking/effort/temperature kwargs
+described above, and `call()` does one streamed request and returns a typed `CallResult` (text, `stop_reason`,
+model, usage, refusal info). API errors are typed — `FatalAPIError` (400/401/403/404, never retried) vs
+`RetryableAPIError` (429/5xx/overloaded/a broken stream, retried with jittered backoff) — and concurrent calls
+across all four pipelines share one process-wide semaphore, sized by the `TFL_MAX_CONCURRENCY` env var. A
+`UsageTracker` accumulates tokens/cache-hit/cost per run (`as_dict()`); it is not yet wired into each pipeline's
+top-level result JSON or CLI `--verbose` output (`TODO.md` §3).
+
+**Structured outputs.** Agent responses are parsed primarily via the Messages API's `output_config.format`
+(a closed per-agent JSON schema built by `build_agent_output_schema()` / `agent_output_schema.py` in each
+system), which sidesteps the old "first `{` to last `}`" heuristic breaking on set-builder notation like
+`{aⁿbⁿ | n≥0}` in prose. If the API rejects `output_config` itself (schema too large/unsupported), the call
+transparently falls back to the legacy brace/fence extraction + Haiku repair path described above. Agents whose
+output shape isn't a single fixed object (`input_parser`, `formalizer`, `ll_input_parser`) intentionally keep the
+legacy prose-extraction path only.
+
 ---
 
 ## The four pipelines
@@ -275,6 +292,12 @@ flowchart LR
 - **Closure.** LL languages are **not** closed under union or under intersection with a regular language: {aⁿbⁿ} and {aⁿcⁿ} are each LL(1), but their union is not LL(k) for any k (proved via the "branch" argument, §3.3); {aⁿw | w ∈ {b,c}ⁿ} is LL(1), yet intersecting it with the regular `a*b* ∪ a*c*` gives {aⁿbⁿ} ∪ {aⁿcⁿ}, which is not LL.
 - **Grammar transformations.** Left-recursion elimination, left-factoring — makes a non-LL(1) grammar potentially LL(1), detected by `ll_grammar_transformer`.
 - **First/Follow oracle.** Pure-function FIRST_k / FOLLOW_k computation used both for verification and as an independent source of truth against the LLM-proposed sets.
+- **Word oracle for `set_builder` IRs.** `ll_system/lib/word_oracle.py` (`oracle_from_ll_ir`/`generate_words`) turns a
+  `set_builder`-format language description (`nat`/`enum`/`word` variable domains, `rev(...)`, shared-variable
+  constraints) into a membership predicate and a word generator, so the `prefix_classes` claim-verifier step can
+  check membership semantically (`docs/VERDICT_POLICY.md` §4 step 2) instead of leaving trust at `well_formed`.
+  Only Format 1 (`set_builder`) is covered this way; Format 2/3 (grammar given explicitly) still has no semantic
+  check (`TODO.md` §1).
 
 ---
 
@@ -370,6 +393,27 @@ Pure-function modules have pytest coverage; LLM-driven layers are covered by moc
 The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-lean4` image.
 
 > Run pytest with these explicit paths. A bare `pytest` from the repo root also collects the legacy `pumping_lemma/tests`, which **call the real API** with the key from `.env`.
+
+---
+
+## `tfl-eval` — accuracy and calibration over an eval set
+
+`tfl_eval/` runs the eval set described in [`docs/EVAL_SET.md`](docs/EVAL_SET.md) (73 tasks across all four
+pipelines, `agent_system|cfl_system|dcfl_system|ll_system/examples/eval/*.json` plus a handful of existing
+example IRs, indexed by `tfl_eval/manifest.json`) and reports how well each pipeline's verdict matches the
+expected one.
+
+```bash
+tfl-eval --systems cfl,ll                       # mock mode (default): free, no API calls
+tfl-eval --systems cfl,ll --ids cfl-01,cfl-02    # narrow to specific eval-set ids
+tfl-eval --live                                  # real API calls — only on request; forces Haiku unless overridden
+```
+
+Without `--live`, a task runs through its pipeline's `MockRunner` when the manifest names an existing mock
+fixture; otherwise it is reported `skipped` rather than guessed at. Metrics (`tfl_eval/metrics.py`): overall /
+per-system / trap-task accuracy, a Brier score for confidence calibration, the inconclusive rate, and the
+"false confident wrong" rate (confidence ≥ 0.6 but incorrect verdict). Results land under `.tfl_lab_runs/evals/`.
+This is what lets a prompt or model change be measured rather than eyeballed (`TODO.md` §7).
 
 ---
 

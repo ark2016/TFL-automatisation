@@ -42,6 +42,22 @@ from dcfl_system.lib.oracle_verifier import (
 )
 from dcfl_system.lib.retry_logic import build_retry_plan
 
+# Shared Anthropic call machinery (TODO.md §3): kwargs building, streaming +
+# retry/backoff, typed errors, concurrency semaphore, usage tracking. See
+# agent_system/lib/llm_client.py -- LiveRunner below is a thin wrapper.
+from agent_system.lib.llm_client import (
+    AnthropicClient,
+    FatalAPIError,
+    RetryableAPIError,
+    UsageTracker,
+    _is_adaptive_model as _shared_is_adaptive_model,
+    estimate_cost_usd,
+    extract_json as _extract_json,
+    extract_json_with_error as _extract_json_with_error,
+    get_concurrency_semaphore,
+)
+from dcfl_system.lib.agent_output_schema import schema_for as _output_schema_for
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -110,43 +126,11 @@ class MockRunner:
         return None
 
 
-# ---------------------------------------------------------------------------
-# JSON extraction helper
-# ---------------------------------------------------------------------------
-
-def _extract_json(text: str) -> dict | None:
-    """Extract JSON object from LLM response text."""
-    import re as _re
-    text = text.strip()
-    if not text:
-        return None
-    # Strategy 1: whole text
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
-    # Strategy 2: fenced code block
-    fence_match = _re.search(r"```(?:json)?\s*\n(.*?)\n```", text, _re.DOTALL)
-    if fence_match:
-        try:
-            obj = json.loads(fence_match.group(1))
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-    # Strategy 3: first { to last }
-    first = text.find("{")
-    last = text.rfind("}")
-    if first != -1 and last > first:
-        try:
-            obj = json.loads(text[first:last + 1])
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-    return None
+# _extract_json / _extract_json_with_error now come from
+# agent_system.lib.llm_client (TODO.md §3 — shared across every pipeline).
+# dcfl's own copy used to give only "JSON parse failed (length=N)" on
+# retry, with no position or context, unlike cfl/ll — this brings it in
+# line with them (position + ±40 chars of context).
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +138,14 @@ def _extract_json(text: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 class LiveRunner:
-    """Run agents via Anthropic API using prompts from prompts/ directory."""
+    """Run agents via Anthropic API using prompts from prompts/ directory.
+
+    Thin wrapper (TODO.md §3): prompts/contracts/JSON-parsing/Haiku-repair
+    stay pipeline-specific; the actual model call goes through the shared
+    ``agent_system.lib.llm_client.AnthropicClient`` — kwargs building,
+    stream-and-collect, typed retry/backoff, the process-wide concurrency
+    semaphore, and usage tracking all live there now, not here.
+    """
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from dcfl_system.config import (
@@ -194,6 +185,15 @@ class LiveRunner:
         self.verbose = verbose
         self._prompt_cache: dict[str, str] = {}
         self._json_repair_model = "claude-haiku-4-5"
+        # Shared call machinery (TODO.md §3): kwargs building, streaming,
+        # retry/backoff, usage tracking. Not the SDK client itself — `self.
+        # client` stays the mutable attribute (tests swap it for a mock).
+        self.usage_tracker = UsageTracker()
+        self._shared = AnthropicClient(
+            default_effort=self.default_effort,
+            refusal_fallback=self.refusal_fallback,
+            usage_tracker=self.usage_tracker,
+        )
 
     def _load_prompt(self, agent_name: str) -> str:
         if agent_name in self._prompt_cache:
@@ -220,7 +220,7 @@ class LiveRunner:
     @classmethod
     def _is_adaptive_model(cls, model: str) -> bool:
         """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
-        return bool(model) and not cls._LEGACY_MODEL_RE.search(model)
+        return _shared_is_adaptive_model(model)
 
     def _build_request_kwargs(self, model: str, max_tokens: int,
                               temperature: float, system_prompt: str,
@@ -229,30 +229,23 @@ class LiveRunner:
 
         Thinking models get `thinking: adaptive` + an explicit effort level
         (Opus 5.5 would silently default to "medium"); legacy models get
-        `temperature` instead.
+        `temperature` instead. Delegates to the shared AnthropicClient so
+        every pipeline builds kwargs the same way (TODO.md §3).
         """
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_msg}],
-        }
-        if self._is_adaptive_model(model):
-            kwargs["thinking"] = {"type": "adaptive"}
-            kwargs["output_config"] = {"effort": effort or self.default_effort}
-            if self.refusal_fallback and model.startswith(self._FALLBACK_MODEL_PREFIXES):
-                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
-                kwargs["extra_body"] = {"fallbacks": "default"}
-        else:
-            kwargs["temperature"] = temperature
-        return kwargs
+        return self._shared.build_request_kwargs(
+            model, max_tokens, system_prompt, user_msg,
+            effort=effort, temperature=temperature,
+        )
 
     @staticmethod
-    def _refusal_error(agent_name: str, final_msg: Any) -> dict:
-        """agent_error dict for a safety-classifier decline (stop_reason="refusal")."""
-        details = getattr(final_msg, "stop_details", None)
-        category = getattr(details, "category", None) if details else None
-        explanation = getattr(details, "explanation", None) if details else None
+    def _refusal_error(agent_name: str, result: Any) -> dict:
+        """agent_error dict for a safety-classifier decline (stop_reason="refusal").
+
+        `result` is a ``llm_client.CallResult`` (or anything exposing the
+        same ``refusal_category`` / ``refusal_explanation`` attributes).
+        """
+        category = getattr(result, "refusal_category", None)
+        explanation = getattr(result, "refusal_explanation", None)
         msg = f"Model refused (stop_reason=refusal, category={category})"
         if explanation:
             msg += f": {explanation}"
@@ -275,15 +268,18 @@ class LiveRunner:
             "Return ONLY valid JSON, nothing else."
         )
         user_msg = f"Agent: {agent_name}\nRepair this:{truncation_note}\n```\n{raw_text}\n```"
+        request_kwargs = self._build_request_kwargs(
+            model=self._json_repair_model,
+            max_tokens=min(len(raw_text) // 2 + 2000, 8000),
+            temperature=0.0, system_prompt=system, user_msg=user_msg,
+        )
         try:
-            response = self.client.messages.create(**self._build_request_kwargs(
-                model=self._json_repair_model,
-                max_tokens=min(len(raw_text) // 2 + 2000, 8000),
-                temperature=0.0, system_prompt=system, user_msg=user_msg,
-            ))
+            with get_concurrency_semaphore():
+                response = self.client.messages.create(**request_kwargs)
         except Exception:
             return None
         repaired = "".join(b.text for b in response.content if hasattr(b, "text"))
+        self.usage_tracker.record(getattr(response, "model", self._json_repair_model), getattr(response, "usage", None))
         return _extract_json(repaired)
 
     def run_agent(self, agent_name: str, input_data: dict | None = None) -> dict | None:
@@ -316,38 +312,62 @@ class LiveRunner:
             raw_text = ""
             stop_reason = None
             # Thinking models get adaptive thinking + this agent's effort;
-            # temperature is only sent to legacy models (Haiku 4.5).
-            request_kwargs = self._build_request_kwargs(
-                model=model, max_tokens=max_tokens,
-                temperature=temperature, system_prompt=system_prompt,
-                user_msg=user_msg, effort=effort,
-            )
+            # temperature is only sent to legacy models (Haiku 4.5). The
+            # shared client also retries a retryable error (429/5xx/network/
+            # broken stream) with backoff before giving up, and never
+            # retries a fatal one (400/401/403/404) — TODO.md §2/§3.
+            # output_schema (TODO.md §3 M): agents with a closed contract
+            # (`dcfl_system.lib.agent_output_schema.REQUIRED_KEYS`) get
+            # structured outputs instead of "extract JSON from prose";
+            # unavailable falls back to a plain call automatically.
             try:
-                with self.client.messages.stream(**request_kwargs) as stream:
-                    for chunk in stream.text_stream:
-                        raw_text += chunk
-                    final_msg = stream.get_final_message()
-                stop_reason = getattr(final_msg, "stop_reason", None)
-                tokens_in = final_msg.usage.input_tokens if final_msg.usage else 0
-                tokens_out = final_msg.usage.output_tokens if final_msg.usage else 0
-            except Exception as exc:
+                result = self._shared.call(
+                    self.client, model=model, max_tokens=max_tokens,
+                    system=system_prompt, user=user_msg,
+                    effort=effort, temperature=temperature,
+                    output_schema=_output_schema_for(agent_name),
+                )
+            except FatalAPIError as exc:
+                if exc.status_code == 400:
+                    # A 400 that isn't a schema rejection AnthropicClient.call
+                    # could itself recover from is a malformed *request* for
+                    # this one agent (prompt too long, ...), not a dead key
+                    # or missing model access -- report as this agent's
+                    # agent_error instead of aborting the whole pipeline run.
+                    elapsed = _time.monotonic() - t0
+                    logger.error("[%s] 400 BadRequest after %.1fs: %s", agent_name, elapsed, exc)
+                    return {"agent": agent_name, "status": "agent_error", "verdict": None,
+                            "confidence": 0.0, "evidence": {}, "errors": [f"API error: {exc}"]}
+                # 401/403/404: a dead key, no access to the model, or an
+                # unknown model ID -- fail fast, re-raised as the original
+                # SDK exception type for backward compatibility.
+                logger.error("[%s] fatal API error: %s", agent_name, exc)
+                raise (exc.original if exc.original is not None else exc)
+            except RetryableAPIError as exc:
                 elapsed = _time.monotonic() - t0
                 logger.error("[%s] API error after %.1fs: %s", agent_name, elapsed, exc)
                 return {"agent": agent_name, "status": "agent_error", "verdict": None,
                         "confidence": 0.0, "evidence": {}, "errors": [f"API error: {exc}"]}
 
+            raw_text = result.text
+            stop_reason = result.stop_reason
+            tokens_in = result.usage.input_tokens if result.usage else 0
+            tokens_out = result.usage.output_tokens if result.usage else 0
+
             elapsed = _time.monotonic() - t0
             if self.verbose:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
-                print(f"[{agent_name}] model={final_msg.model} effort={effort} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}",
+                cost = estimate_cost_usd(result.model or model, result.usage)
+                cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
+                print(f"[{agent_name}] model={result.model} effort={effort} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}{cost_str}",
                       file=sys.stderr, flush=True)
 
             # A safety-classifier decline is not a parse problem: retrying or
             # JSON-repairing the (empty/partial) text cannot help.
             if stop_reason == "refusal":
-                return self._refusal_error(agent_name, final_msg)
+                return self._refusal_error(agent_name, result)
 
-            parsed = _extract_json(raw_text)
+            parsed, parse_error = _extract_json_with_error(raw_text)
             if parsed is not None:
                 return parsed
 
@@ -369,8 +389,16 @@ class LiveRunner:
                 return repaired
 
             if was_truncated:
+                last_error = (
+                    f"Response was truncated at max_tokens={max_tokens} "
+                    f"(tokens_out={tokens_out}); Haiku repair also failed. "
+                    f"Parse error: {parse_error}"
+                )
+                logger.error("[%s] attempt %d: %s", agent_name, attempt + 1, last_error)
                 break
-            last_error = f"JSON parse failed (length={len(raw_text)})"
+            # Position + ±40 chars of context, fed back to the model on
+            # retry (TODO.md §3 — this used to be a bare "length=N").
+            last_error = f"{parse_error} [response length={len(raw_text)}, Haiku repair also failed]"
             logger.warning("[%s] attempt %d: %s", agent_name, attempt + 1, last_error)
 
         return {"agent": agent_name, "status": "agent_error", "verdict": None,

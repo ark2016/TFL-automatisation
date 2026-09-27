@@ -1,0 +1,13 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "{a^(6n) b^(6n) c^(6n) | n >= 0}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b",
+      "c"
+    ],
+    "description": "{a^(6n) b^(6n) c^(6n) | n >= 0}"
+  }
+}

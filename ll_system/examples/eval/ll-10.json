@@ -1,0 +1,39 @@
+{
+  "task_type": "ll_check_grammar",
+  "source_text": "Format 3: E -> E + T | T, T -> i (left recursion). Is this grammar LL(k) for any k?",
+  "grammar": {
+    "terminals": [
+      "+",
+      "i"
+    ],
+    "nonterminals": [
+      "E",
+      "T"
+    ],
+    "start": "E",
+    "rules": [
+      {
+        "lhs": "E",
+        "rhs": [
+          "E",
+          "+",
+          "T"
+        ]
+      },
+      {
+        "lhs": "E",
+        "rhs": [
+          "T"
+        ]
+      },
+      {
+        "lhs": "T",
+        "rhs": [
+          "i"
+        ]
+      }
+    ]
+  },
+  "question": "is_ll_k",
+  "k": null
+}

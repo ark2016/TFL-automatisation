@@ -89,5 +89,6 @@ jobs:
           import dcfl_system.orchestrator
           import ll_system.orchestrator
           import ui_server.server
+          import tfl_eval.cli
           print('smoke import OK')
           "

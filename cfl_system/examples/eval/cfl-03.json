@@ -1,0 +1,12 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "{ww | w in {a,b}*}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b"
+    ],
+    "description": "{ww | w in {a,b}*}"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "Dyck language over {(, )}: S -> (S)S | eps",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "(",
+      ")"
+    ],
+    "nonterminals": [
+      "S"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "(",
+          "S",
+          ")",
+          "S"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": []
+      }
+    ]
+  }
+}

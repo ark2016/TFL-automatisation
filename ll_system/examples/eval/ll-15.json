@@ -1,0 +1,53 @@
+{
+  "task_type": "ll_check_grammar",
+  "source_text": "Format 3: S -> a^11 b | a^11 c. Is this grammar LL(11)? LL(12)?",
+  "grammar": {
+    "terminals": [
+      "a",
+      "b",
+      "c"
+    ],
+    "nonterminals": [
+      "S"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "b"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "a",
+          "c"
+        ]
+      }
+    ]
+  },
+  "question": "is_ll_k",
+  "k": 12
+}

@@ -181,3 +181,53 @@ def test_every_prompt_file_is_covered() -> None:
     covered = set(_REQUIRED_OUTPUT_KEYS) & set(_ORCHESTRATOR_INPUT_KEYS)
     present = {p.stem for p in _prompt_files()}
     assert present == covered, present ^ covered
+
+
+# ---------------------------------------------------------------------------
+# ll_system.lib.agent_output_schema (TODO.md §3 M): a separate, *exhaustive*
+# per-agent contract (keyed by the orchestrator's own agent_name, not the
+# prompt file stem above) builds the output_config.format JSON schema each
+# LiveRunner call sends. A closed schema constrains generation, so this one
+# must match the prompt's Output Format example exactly, not just contain
+# the minimal subset _REQUIRED_OUTPUT_KEYS checks.
+# ---------------------------------------------------------------------------
+
+from ll_system.config import PROMPT_FILES  # noqa: E402
+from ll_system.lib.agent_output_schema import (  # noqa: E402
+    REQUIRED_KEYS as _SCHEMA_REQUIRED_KEYS, _NO_FIXED_CONTRACT as _SCHEMA_NO_FIXED_CONTRACT,
+)
+
+# agent_name -> prompt file stem, reusing PROMPT_FILES (the orchestrator's
+# own agent_name -> filename map) so this never drifts from run_agent().
+_AGENT_NAME_TO_STEM = {
+    agent: Path(fname).stem for agent, fname in PROMPT_FILES.items()
+}
+
+
+@pytest.mark.parametrize("agent_name", sorted(_SCHEMA_REQUIRED_KEYS))
+def test_schema_required_keys_match_prompt_output_format_exactly(agent_name):
+    stem = _AGENT_NAME_TO_STEM[agent_name]
+    path = PROMPTS_DIR / f"{stem}.md"
+    blocks = _section_blocks(path, "## Output Format")
+    complete = []
+    for block in blocks:
+        try:
+            data = _loads_lenient(block)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            complete.append(data)
+    assert complete, f"{path.name}: no parseable JSON example under '## Output Format'"
+    for data in complete:
+        actual = set(data.keys())
+        expected = set(_SCHEMA_REQUIRED_KEYS[agent_name])
+        assert actual == expected, (
+            f"{path.name}: agent_output_schema.REQUIRED_KEYS[{agent_name!r}] "
+            f"{expected} != prompt's own Output Format keys {actual}"
+        )
+
+
+def test_schema_agent_names_cover_every_orchestrator_agent():
+    all_agents = set(PROMPT_FILES)
+    covered = set(_SCHEMA_REQUIRED_KEYS) | set(_SCHEMA_NO_FIXED_CONTRACT)
+    assert all_agents == covered, all_agents ^ covered

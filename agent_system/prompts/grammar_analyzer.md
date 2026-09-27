@@ -72,7 +72,7 @@ If the grammar appears non-regular, identify the pumping word and sketch a pumpi
 }
 ```
 
-`grammar_facts` is precomputed pure-fn evidence (zero LLM cost) for every grammar-kind task: it already ran Steps 1-2 above (linearity check, word generation up to length 10) before you were called — use it as a starting point rather than re-deriving it from scratch. `student_notes` (the student's own comments/hypotheses) and `retry_context` (previous round's issues/counterexamples plus an `agent_feedback` entry for this agent) are included when applicable.
+`grammar_facts` is precomputed pure-fn evidence (zero LLM cost) for every grammar-kind task: it already ran Steps 1-2 above (linearity check, word generation up to length 10) before you were called — use it as a starting point rather than re-deriving it from scratch. `student_notes` (the student's own comments/hypotheses) and `retry_context` (previous round's issues/counterexamples, an `agent_feedback` entry for this agent, and a `previous_output` field — YOUR OWN full output from the last round — so you can see exactly what you claimed before instead of re-deriving it blind) are included when applicable.
 
 ## Output Format
 

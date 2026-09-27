@@ -48,7 +48,7 @@ Sent only when applicable:
 
 - `grammar_facts`: for grammar-kind tasks, facts precomputed by the grammar preprocessor (`is_linear`, `has_nested_recursion`, generated words, `summary`, ...).
 - `student_notes`: the student's own comments/hypotheses, when the task provides them.
-- `retry_context`: on a retry round (e.g. after an oracle counterexample to a previous regex), the previous round's issues/counterexamples plus an `agent_feedback` entry targeted at this agent.
+- `retry_context`: on a retry round (e.g. after an oracle counterexample to a previous regex), the previous round's issues/counterexamples plus an `agent_feedback` entry targeted at this agent and a `previous_output` field — YOUR OWN full output from the last round (the regex you built) — so you can see exactly what you built before instead of re-deriving it blind.
 
 ## Output Format
 

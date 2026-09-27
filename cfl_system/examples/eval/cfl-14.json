@@ -1,0 +1,43 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "S -> aS | T, T -> aTb | eps  ({a^n b^m | n >= m})",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "a",
+      "b"
+    ],
+    "nonterminals": [
+      "S",
+      "T"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "S"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "T"
+        ]
+      },
+      {
+        "lhs": "T",
+        "rhs": [
+          "a",
+          "T",
+          "b"
+        ]
+      },
+      {
+        "lhs": "T",
+        "rhs": []
+      }
+    ]
+  }
+}

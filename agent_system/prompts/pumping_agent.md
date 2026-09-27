@@ -51,7 +51,7 @@ Sent only when applicable:
 
 - `grammar_facts`: for grammar-kind tasks, facts precomputed by the grammar preprocessor (`is_linear`, `has_nested_recursion`, generated words, `summary`, ...).
 - `student_notes`: the student's own comments/hypotheses, when the task provides them.
-- `retry_context`: on a retry round, the previous round's issues/counterexamples, plus an `agent_feedback` entry targeted at this agent.
+- `retry_context`: on a retry round, the previous round's issues/counterexamples, plus an `agent_feedback` entry targeted at this agent and a `previous_output` field — YOUR OWN full output from the last round (the proof you gave) — so you can see exactly what you claimed before instead of re-deriving it blind.
 
 ## Solved Example
 

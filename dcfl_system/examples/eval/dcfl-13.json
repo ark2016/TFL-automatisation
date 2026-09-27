@@ -1,0 +1,36 @@
+{
+  "task_id": "dcfl-13",
+  "source_text": "Dyck language: S -> (S)S | eps",
+  "input_format": "grammar",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "(",
+      ")"
+    ],
+    "nonterminals": [
+      "S"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "(",
+          "S",
+          ")",
+          "S"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": []
+      }
+    ]
+  },
+  "alphabet": [
+    "(",
+    ")"
+  ]
+}

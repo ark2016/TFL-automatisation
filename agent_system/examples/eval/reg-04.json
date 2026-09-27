@@ -1,0 +1,13 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "(ab)*a | b",
+  "language_spec": {
+    "kind": "regex",
+    "alphabet": [
+      "a",
+      "b"
+    ],
+    "pattern": "(ab)*a|b",
+    "has_backreferences": false
+  }
+}

@@ -27,6 +27,7 @@ tfl-cfl = "cfl_system.orchestrator:main"
 tfl-dcfl = "dcfl_system.orchestrator:main"
 tfl-ll = "ll_system.orchestrator:main"
 tfl-lab = "ui_server.server:main"
+tfl-eval = "tfl_eval.cli:main"
 
 [tool.setuptools.packages.find]
 include = [
@@ -37,6 +38,7 @@ include = [
     "dcfl_system*",
     "ll_system*",
     "ui_server*",
+    "tfl_eval*",
 ]
 exclude = [
     "*.tests",
@@ -51,6 +53,7 @@ cfl_system = ["prompts/*.md", "examples/**/*.json"]
 dcfl_system = ["prompts/*.md", "examples/**/*.json"]
 ll_system = ["prompts/*.md", "examples/**/*.json"]
 ui_server = ["static/**/*"]
+tfl_eval = ["manifest.json"]
 
 [tool.pytest.ini_options]
 testpaths = [

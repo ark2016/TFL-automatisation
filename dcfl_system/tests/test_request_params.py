@@ -90,7 +90,12 @@ def test_model_override_env_forces_haiku(monkeypatch):
 
     kwargs = runner.client.messages.stream.call_args.kwargs
     assert kwargs["model"] == "claude-haiku-4-5"
-    assert "temperature" in kwargs and "output_config" not in kwargs
+    # Legacy models still get `temperature`; `output_config` is present too
+    # now, but only carries `format` (structured outputs, TODO.md §3 M) —
+    # classifier has a closed contract, no `effort` key belongs on Haiku.
+    assert "temperature" in kwargs
+    assert "effort" not in kwargs["output_config"]
+    assert kwargs["output_config"]["format"]["type"] == "json_schema"
 
 
 # ---------------------------------------------------------------------------

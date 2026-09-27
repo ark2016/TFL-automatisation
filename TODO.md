@@ -65,7 +65,34 @@
   `advisory_only` больше не пишется агентами (остаётся только в старых example-фикстурах);
 - §5/упаковка: `pyproject.toml` — console scripts `tfl-reg`/`tfl-cfl`/`tfl-dcfl`/`tfl-ll`/`tfl-lab`,
   `package-data` для `prompts/*.md`/`examples/`/`templates/`/`static/`, тесты исключены из wheel;
-  `.github/workflows/tests.yml` обновлён (см. дифф).
+  `.github/workflows/tests.yml` обновлён (см. дифф);
+- §2 (раунд B): `agent_system/graph.py` — стейтфул-ретраи (`previous_output` полностью в retry_context агента,
+  краткое summary в `specialist_results` для planner'а), Level-1 retry — ограниченный цикл (`MAX_LEVEL1_RETRIES=2`,
+  §5.2) с повторным оракульным тестом после **каждой** попытки, включая ретрай только `re_builder`;
+- §3: **общий LLM-клиент** — `agent_system/lib/llm_client.py` (`AnthropicClient.build_request_kwargs()`/`.call()`,
+  типизированные `FatalAPIError`/`RetryableAPIError`, backoff с джиттером, семафор конкурентности через
+  `TFL_MAX_CONCURRENCY`, `UsageTracker`/`as_dict()`); `cfl/dcfl/ll_system/orchestrator.py`'s `LiveRunner` — тонкие
+  обёртки вокруг него;
+- §3: **structured outputs** (`output_config.format`, GA, без beta-заголовка) — основной путь парсинга ответов
+  агентов во всех четырёх системах (`agent_system/lib/agent_output_schema.py` + копии в cfl/dcfl/ll_system),
+  с автоматическим фолбэком на старую эвристику извлечения JSON при отказе API от схемы (`_looks_like_schema_rejection`);
+  `input_parser`/`formalizer`/`ll_input_parser` намеренно оставлены на старом пути (не фиксированная форма вывода);
+- §5: общий scripted-двойник `agent_system/lib/testing/fake_anthropic.py` (thinking-блок, `max_tokens`, `refusal`,
+  обрыв стрима, фатальные/повторяемые ошибки) + тесты путей `run_agent`/`LiveRunner`/`LLMRunner`
+  (`*/tests/test_run_agent_paths.py`) во всех четырёх системах; `agent_system/tests`: добавлены тесты retry/invert/
+  Level-1 (`test_retry_flow.py`), `_extract_json` (`test_extract_json.py`), `grammar_preprocessor`
+  (`test_grammar_preprocessor.py`), `claim_verifier` расширен;
+- §1: **мост word-оракула для `ll_system` `set_builder`** — `ll_system/lib/word_oracle.py`
+  (`oracle_from_ll_ir`/`generate_words`: домены `nat`/`enum`/`word`, `rev(...)`, связанные переменные),
+  подключён в `claim_verifier.py` шаг 2 (`prefix_classes` для `set_builder`-IR теперь проверяется семантически,
+  как dcfl `nerode_classes`); Format 2/3 (грамматика) по-прежнему без семантической проверки — пункт закрыт частично,
+  см. открытый список ниже;
+- §1: семантическая проверка (шаг 2, §4) для `dcfl_system/lib/oracle_verifier.py` — `dcfl_pumping` (лемма Ю)
+  теперь брутфорсит оба условия (1)/(2) на нескольких `p`, включая `i=3` как tie-breaker, с бюджетом на число
+  разложений (см. открытый пункт про калибровку бюджета ниже);
+- §7: **tfl-eval** — пакет `tfl_eval/` (манифест на 73 задачи из `docs/EVAL_SET.md`, `runners.py`/`metrics.py`/`cli.py`),
+  IR-файлы для eval-набора под `*/examples/eval/`, метрики (точность общая/по системе/на ловушках, Brier, доля
+  inconclusive, "уверенно неверно"); `--live` реализован, но ни разу не прогонялся (см. открытый пункт).
 
 Легенда: 🔴 high · 🟠 medium · ⚪ low; объём: S ≤ 30 мин · M ≤ день · L > дня.
 
@@ -81,11 +108,10 @@
 
 Остаётся открытым:
 
-- [ ] 🟠 **M** **`ll_system`: мост word-оракула для `set_builder`.** Шаг 2 (детерминированная семантическая проверка,
-  `docs/VERDICT_POLICY.md` §4) поднимает trust с `well_formed` до `bounded_pass`/`refuted` только там, где оракул
-  уже есть (cfl: CYK/grammar_filter; dcfl: `word_sampler`+шаблоны; reg: regex/DFA). Для LL-задач в формате
-  `set_builder` общего word-оракула по-прежнему нет (открытый пункт из отчёта раунда 1) — без него trust остаётся
-  `well_formed`, потолок confidence 0.60.
+- [ ] 🟠 **S** **`ll_system`: мост word-оракула для `set_builder` — только Format 1.** Реализован в
+  `ll_system/lib/word_oracle.py` (`oracle_from_ll_ir`/`generate_words`) и подключён в `claim_verifier.py` шаг 2
+  для `set_builder`-IR. Format 2/3 (грамматика задана явно) по-прежнему без семантической проверки шага 2 (там
+  `prefix_classes`/`constructive` не проверяются оракулом) — остаётся открытым.
 - [ ] 🟠 **M** **Полная семантическая проверка доказательств.** Шаг 2 из `docs/VERDICT_POLICY.md` §4 покрывает
   cfl (pumping/ogden/closure_reduction), dcfl (pumping/Shallit), ll (constructive/substitution/prefix_classes),
   reg (pumping/Nerode) там, где оракул есть; это остаётся частичной, а не полной верификацией содержания
@@ -112,31 +138,21 @@
 
 - [ ] 🟠 **S** Лимит Haiku-repair 8000 токенов не позволяет починить большие обрезанные ответы (`_truncated`-флаг
   уже проставляется, см. «Уже исправлено»; сам лимит не увеличен).
-- [ ] 🟠 **M** `agent_system/graph.py`: ретраи без состояния — агенту говорят «твой DFA/regex неверен», но не показывают его;
-  planner видит только status/verdict → передавать `previous_output` (номера строк устарели, сверить с текущим файлом).
-- [ ] 🟠 **M** `agent_system/graph.py`: Level-1 retry перезапускает `re_builder`, но новый regex не перетестируется; 1 попытка вместо 2 (§5.2).
-- [ ] 🟠 **M** `agent_system/graph.py`: planner не может добавить агента; пустой `agents_to_retry` → полный re-dispatch;
-  `should_invert_hypothesis` никто не читает.
+- [ ] 🟠 **M** `agent_system/graph.py`: planner не может добавить агента, которого сам не ретраил; пустой
+  `agents_to_retry` → полный re-dispatch; `should_invert_hypothesis` никто не читает.
 - [ ] 🟠 **M** `agent_system/graph.py`: опровержение closure-claim подогнано под aⁿbⁿ (считает литералы `a`/`b`);
   по таймауту 120 с остаётся брошенный поток; проверка повторяется каждый раунд.
-- [ ] 🟠 **M** Нет разделения ошибок API на фатальные (400/401/403/404) и повторяемые (429/529/overloaded, обрыв стрима);
-  ошибки посреди стрима не ретраятся; fan-out без ограничения конкурентности (`dcfl_system/orchestrator.py` и копии).
 - [ ] ⚪ **S** `dcfl_system/orchestrator.py`: `agent_error` при ретрае затирает валидный результат прошлого раунда.
 - [ ] ⚪ **S** `dcfl_system/lib/closure_table.py` / `oracle_verifier.py`: словари направлений не согласованы
   (`both` против `constructive/destructive`).
 
 ## 3. LLM-интеграция (архитектура)
 
-- [ ] 🟠 **L** **Общий LLM-клиент** вместо 4 копий (`agent_system/lib/llm_client.py`, `cfl/dcfl/ll_system/orchestrator.py: LiveRunner`).
-  Копии уже разошлись: dcfl при ретрае отдаёт только `JSON parse failed (length=N)`, без позиции и контекста.
-  Одно место для kwargs (thinking/effort), stream-and-collect, `stop_reason`, типизированных ошибок и backoff,
-  семафора конкурентности и `UsageTracker` (токены / cache-hit / стоимость → блок `usage` в result JSON и в TFL Lab).
-- [ ] 🟠 **M** **Structured outputs** (`output_config.format`) вместо «от первой `{` до последней `}`»: эвристика ломается на
-  нотации множеств `{aⁿbⁿ | n≥0}` в прозе; в `agent_system/lib/llm_client.py` литерал `{}` из прозы становится всем выводом.
-  Общий конверт `AgentOutput` (status, verdict, confidence, errors); `_extract_json`, Haiku-repair и алиасы — только fallback.
 - [ ] ⚪ **S** **Prompt caching** (`cache_control`) для больших повторных промптов (`cfl_reasoning`, `cfl_pumping`, `ll_reasoning_agent`, 15–20 KB);
   `student_notes` — отдельным блоком. Проверять по `usage.cache_read_input_tokens`.
-- [ ] ⚪ **S** Учёт токенов и стоимости за прогон (сейчас `usage` печатается только в verbose-режиме).
+- [ ] ⚪ **S** Учёт токенов и стоимости за прогон (сейчас `usage` печатается только в verbose-режиме) — `UsageTracker.as_dict()`
+  ещё не подключён в top-level result JSON пайплайнов и в CLI `--verbose`; сам трекер готов
+  (`agent_system/lib/llm_client.py`), нужно только связать его в `run_pipeline`/CLI каждой системы.
 - [ ] ⚪ **S** `agent_system/lib/llm_client.py`: `student_notes` дублируются в system prompt и в user JSON.
 - [ ] ⚪ **S** `agent_system`: при refusal JSON-ретрай делает лишний второй вызов (`run_agent` не отличает refusal от невалидного JSON).
 - [ ] ⚪ **—** После миграции перемерить стоимость и время на 1–2 задачах (на Haiku через `TFL_MODEL_OVERRIDE`, затем выборочно на Opus)
@@ -144,20 +160,13 @@
 
 ## 4. TFL Lab и корень репозитория
 
-- [ ] 🟠 **M** `pumping_len.py:335-404, 91`: неверное определение p_min (для `a*|bbbb` выдаёт 2 вместо 5), `ε` разбирается как литерал,
-  конечные языки бросают исключение, CLI нет, тестов нет. README рекламирует файл как готовый инструмент.
 - [ ] ⚪ **S** `agent_system/orchestrator.py`: мёртвые копии `_run_formalizer`, `_verify_closure_claim` (сверить с
   текущим файлом — номера строк устарели).
 
 ## 5. Тесты, CI, упаковка
 
-- [ ] 🟠 **M** Ветки `run_agent` (retry, Haiku-repair, `max_tokens`, исключения API) не покрыты ни в одной системе →
-  общий `FakeAnthropic` (thinking-блок перед текстом, `max_tokens`, `refusal`, обрыв стрима) и `ScriptedRunner`
-  (список ответов на агента, запись входов) для тестов retry/invert/Level-1.
 - [ ] 🟠 **M** `dcfl_system/examples/mock/*_reasoning.json`: в моках нет `action`, поэтому все E2E идут через `_fallback_reasoning`;
   LLM-путь reasoning, collect/fan-in и `_verify_*` не тестируются.
-- [ ] 🟠 **M** `agent_system/tests`: нет тестов retry/invert/Level-1, `claim_verifier`, `grammar_preprocessor`, `_extract_json`;
-  `MockRunner` игнорирует вход.
 - [ ] ⚪ **S** Contract-тесты промптов: каждый ```json-блок парсится и содержит обязательные ключи; все ключи, которые формирует
   builder входа, упомянуты в промпте (по образцу `cfl_system/tests/test_pda_contract.py`).
 - [ ] ⚪ **S** `agent_system/tests/test_phase3.py`: шаблоны Lean никогда не компилируются в CI (Lean-задача в CI неблокирующая, а не
@@ -171,8 +180,9 @@
 - [ ] ⚪ **S** `agent_system/prompts/reasoning_agent.md`, `pumping_agent.md`: инструкция требует русский текст, а примеры на английском.
 - [ ] ⚪ **S** Ключи входа (`grammar_facts`, `retry_context`, `ir`/`classifier_hint`) не совпадают с разделом Input Format в промптах
   (`agent_system/graph.py`, `dcfl_system/orchestrator.py`).
-- [ ] ⚪ **M** Контракты вывода — pseudo-JSON, различаются по системам (`module`/`agent`/`agent_name`, разные наборы status);
-  парсеры латают расхождения алиасами (решается structured outputs, см. раздел 3).
+- [ ] ⚪ **M** Контракты вывода — pseudo-JSON в промптах всё ещё различаются по системам (`module`/`agent`/`agent_name`,
+  разные наборы status); structured outputs (`output_config.format`, см. «Уже исправлено») закрывают парсинг
+  через закрытую JSON-схему для каждого агента, но сами промпты/примеры пока не унифицированы по именованию полей.
 - [ ] ⚪ **S** `agent_system/orchestrator.py`: `input_parser` настроен, но нигде не вызывается (шаг parse из спецификации
   отсутствует) → реализовать `--text` или пометить как deferred. (`ll_system` уже реализовал `--text`
   через `input_parser` — см. «Уже исправлено»; остаётся только `agent_system`.)
@@ -181,10 +191,13 @@
 
 ## 7. Стратегия
 
-- [ ] **L** **Eval-набор** из 30–50 задач с эталонными вердиктами, включая ловушки: {a^6n b^6n c^6n}, LL(2)-не-SLL(2),
-  левая рекурсия, неоднозначная грамматика DCFL-языка. Отдельная команда `tfl-eval --systems cfl,ll --live`
-  (по умолчанию на Haiku), метрики: точность вердикта, калибровка confidence, стоимость, токены, время → `.tfl_lab_runs/evals/`.
-  Без этого нельзя измерить эффект миграции на Opus 5.5 и правок промптов.
+- [ ] **M** **`tfl-eval`: живой прогон.** Скелет реализован (`tfl_eval/` — манифест на 73 задачи из
+  `docs/EVAL_SET.md`, `runners.py`/`metrics.py`/`cli.py`, IR-файлы под `*/examples/eval/`, метрики: точность
+  общая/по системе/на ловушках, Brier, доля inconclusive, «уверенно неверно»); `--live` реализован, но никогда
+  не запускался (задача прямо запрещала вызовы API) — нужен первый прогон на Haiku
+  (`TFL_MODEL_OVERRIDE=claude-haiku-4-5`, только по запросу), затем выборочно на Opus для калибровки потолков (см. §1).
+  Также: ll-04 использует моки, не авторизованные под свой конкретный IR (нужна ревизия), а Format-3 LL-задачи
+  (`is_ll_k`/`is_sll_k`) пока не сведены в отдельную per-k метрику.
 - [ ] **L** Общая библиотека оракулов (CYK/Earley, PDA-симулятор, валидатор грамматик, `is_grammar_equivalent_sample`),
   чтобы dcfl и ll проверяли членство слов так же, как cfl.
 - [ ] **M** Один источник правды для документации: таблица возможностей пайплайнов генерируется или проверяется тестом.
