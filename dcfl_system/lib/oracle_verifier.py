@@ -29,6 +29,7 @@ from dcfl_system.lib.word_sampler import (
     check_constraints,
     sample_words,
     build_set_builder_membership_oracle,
+    build_grammar_membership_oracle,
     instantiate_exponent_pattern,
 )
 from dcfl_system.lib.dpda import (
@@ -278,11 +279,14 @@ def _verify_stack_strategy_dpda(
         modes, so no second simulator is written here) and run it on words
         sampled by ``word_sampler`` (positive and negative, length <=
         ``_DPDA_MAX_WORD_LEN``) against the task's OWN language oracle
-        (``build_set_builder_membership_oracle`` on ``task_ir`` -- never the
+        (``build_set_builder_membership_oracle`` for ``set_builder`` tasks,
+        ``build_grammar_membership_oracle`` -- CYK on the grammar's CNF form,
+        via ``cfl_system.lib.cfl_oracle`` -- for ``grammar`` tasks; never the
         proof's own claims). All of at least ``_DPDA_MIN_WORDS`` decisively-
         oracled words agree -> ``bounded_pass`` (details:
         ``determinism: "verified"``); any disagreement -> ``refuted`` with
-        the counterexample(s). No membership oracle available for this task,
+        the counterexample(s). No membership oracle available for this task
+        (unsupported ``input_format``, or the spec doesn't parse into one),
         or fewer than ``_DPDA_MIN_WORDS`` words could be decided -> trust
         stays ``well_formed`` (the DPDA is syntactically valid and
         deterministic, just not checked against the language).
@@ -305,11 +309,14 @@ def _verify_stack_strategy_dpda(
         }
 
     input_format = task_ir.get("input_format", "")
-    if input_format != "set_builder":
-        return "well_formed", check_name, "", {"determinism": "verified"}
     spec = task_ir.get("language_spec", {})
     alphabet = task_ir.get("alphabet", [])
-    oracle = build_set_builder_membership_oracle(spec, alphabet)
+    if input_format == "set_builder":
+        oracle = build_set_builder_membership_oracle(spec, alphabet)
+    elif input_format == "grammar":
+        oracle = build_grammar_membership_oracle(spec, alphabet)
+    else:
+        oracle = None
     if oracle is None:
         return "well_formed", check_name, "", {"determinism": "verified"}
 

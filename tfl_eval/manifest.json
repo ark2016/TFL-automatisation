@@ -406,6 +406,17 @@
     "source": "docs/EVAL_SET.md#dcfl complement intersect a*b*c* = {a^n b^n c^n} not in CFL"
   },
   {
+    "id": "dcfl-21",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/task_grammar_aSSb.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.10 (profile NPDA + height-determinism, [NS, Thm 4]) [trap: grammar is ambiguous and not LR(k) -- tempting to conclude non_dcfl] (exam_04)",
+    "mock_task": "dcfl_exam_04"
+  },
+  {
     "id": "ll-01",
     "system": "ll",
     "path": "ll_system/examples/eval/ll-01.json",

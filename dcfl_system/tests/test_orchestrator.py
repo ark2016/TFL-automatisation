@@ -63,15 +63,32 @@ TASKS = [
     ("task_wvaavRwR", "non_dcfl", 0.60),
     ("task_u1au2_u3au4", "non_dcfl", 0.60),
     ("task_anb_cnbn", "non_dcfl", 0.60),
-    # task_grammar_aSSb (§1.9/exam_04): its stack_strategy mock is
-    # status="uncertain" with proof_sketch=None — no artifact at all, so
-    # oracle trust is `not_verified`, not `well_formed`. Per VERDICT_POLICY.md
-    # §2, `not_verified` trust admits only inconclusive/uncertain verdicts,
-    # never a confident "dcfl" (R2) — the old "dcfl 0.55" here was exactly
-    # the kind of unverified-but-confident claim this policy exists to catch
-    # (the task_grammar_filter_49 precedent in R1). Fixed to the honest
-    # outcome rather than kept to preserve the old number.
-    ("task_grammar_aSSb", "inconclusive", 0.40),
+    # task_grammar_aSSb (dcfl_exam_04, docs/THEORY.md §1.10): the language IS
+    # DCFL (status established by direct construction, not just an
+    # unverified word-level "стратегия") — a profile NPDA is proven
+    # height-deterministic (rhpda, [NS, Def. 2]) and determinized via [NS,
+    # Thm 4], giving a machine-built DPDA certificate (345 states, 5835
+    # transitions, dcfl_system/examples/certificates/grammar_aSSb_dpda.json)
+    # inlined into the stack_strategy mock's `proof_sketch.dpda` (R2':
+    # "конструктивный сертификат для DCFL"). oracle_verifier checks it in two
+    # steps: (a) `check_determinism` -- a complete syntactic check, clean on
+    # this certificate; (b) simulation (`dpda_accepts`, via
+    # cfl_system.lib.pda_simulator) against the TASK's OWN grammar oracle
+    # (`build_grammar_membership_oracle`, CYK on the grammar's CNF form --
+    # word_sampler.sample_from_grammar already supports `input_format:
+    # "grammar"`, generating ~59 distinct words up to length 10 for this
+    # task's BFS-derivable language) on >= 30 words -> trust `bounded_pass`,
+    # confidence capped at 0.85 (VERDICT_POLICY.md §2), not the 0.55 the old
+    # (pre-§1.10, pre-certificate) mock used to get away with on a bare
+    # word-level claim. The other four specialists are correctly
+    # not_applicable here (§1.10 "Замечания": Yu's pumping lemma can't find a
+    # counterexample, Shallit's theorem needs a finite dead class but this
+    # language's dead class is infinite, grammar ambiguity says nothing
+    # about the language's own (un)ambiguity, and no closure-property
+    # reduction was needed) -- stack_strategy is the sole dominant
+    # specialist, on both the reasoning-mock and the `_fallback_reasoning`
+    # path (see TASKS below).
+    ("task_grammar_aSSb", "dcfl", 0.85),
 ]
 
 
@@ -119,7 +136,7 @@ class _NoReasoningMockRunner(MockRunner):
 
 @pytest.mark.parametrize(
     "task_filename,expected_verdict,expected_confidence",
-    TASKS[:3],  # only the three non-DCFL exam tasks; task_grammar_aSSb has no single dominant specialist
+    TASKS,  # all four exam tasks now have a single dominant specialist mock
 )
 def test_fallback_reasoning_matches_specialist_mocks(
     task_filename, expected_verdict, expected_confidence

@@ -18,6 +18,8 @@ from collections import deque
 from random import Random
 from typing import Any
 
+from cfl_system.lib.cfl_oracle import grammar_oracle
+
 # ---------------------------------------------------------------------------
 # Internal RNG (deterministic seed for reproducibility)
 # ---------------------------------------------------------------------------
@@ -298,6 +300,39 @@ def build_set_builder_membership_oracle(
         try:
             return _match_segments(word, segments, 0, 0, {}, constraints, domain_map, budget)
         except _BudgetExceeded:
+            return None
+
+    return oracle
+
+
+def build_grammar_membership_oracle(
+    spec: dict,
+    alphabet: list[str],
+    max_word_len: int = 60,
+) -> Any:
+    """Build a membership oracle ``word -> bool | None`` for a ``grammar``
+    ``language_spec`` (docs/VERDICT_POLICY.md R2'/§4 "оракул грамматики"),
+    via CYK on the grammar's CNF form: ``cfl_system.lib.cfl_oracle
+    .grammar_oracle`` (dcfl_system MAY import from cfl_system, root
+    CLAUDE.md). Mirrors ``build_set_builder_membership_oracle``'s contract:
+    ``None`` (never a guess) when the spec has no usable rules/start symbol,
+    when CNF conversion fails (malformed grammar), or when the word exceeds
+    ``max_word_len`` -- CYK is O(n^3 * |rules|), so the cap keeps per-word
+    cost bounded for callers that only ever query short simulation words.
+    """
+    if not spec.get("rules") or not spec.get("start"):
+        return None
+    try:
+        cyk_oracle = grammar_oracle(spec)
+    except Exception:
+        return None
+
+    def oracle(word: str) -> bool | None:
+        if not isinstance(word, str) or len(word) > max_word_len:
+            return None
+        try:
+            return cyk_oracle(word)
+        except Exception:
             return None
 
     return oracle

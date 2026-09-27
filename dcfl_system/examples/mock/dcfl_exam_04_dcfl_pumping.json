@@ -1,11 +1,11 @@
 {
   "agent_name": "dcfl_pumping",
-  "status": "fail",
+  "status": "not_applicable",
   "verdict": null,
   "proof_sketch": null,
   "evidence": [
-    "Attempted pumping argument but could not find valid decomposition"
+    "Лемма Ю (§1.1) не может дать контрпример здесь: L ∈ DCFL (THEORY.md §1.10, доказано конструкцией — детерминизация профильного НМПА), поэтому необходимое условие леммы Ю выполнено для любых пар xy, xz ∈ L, и контрпример невозможен."
   ],
-  "confidence": 0.2,
+  "confidence": 0.0,
   "errors": []
 }

@@ -3,7 +3,9 @@
   "status": "not_applicable",
   "verdict": null,
   "proof_sketch": null,
-  "evidence": [],
+  "evidence": [
+    "Грамматика G неоднозначна (aabaabbabb — два разбора), но существенная неоднозначность языка отсюда не следует и исключена по построению: если L DCFL, то L однозначен (DCFL ⇒ unambiguous CFL), а неоднозначность конкретной грамматики G — это свойство грамматики, а не языка."
+  ],
   "confidence": 0.0,
   "errors": []
 }

@@ -75,6 +75,7 @@
 | dcfl-18 | {aⁿbⁿ} ∪ {aⁿbᵐcⁿ}, n,m ≥ 1 | non_dcfl | haspref(L) = {aⁿbᵐcⁿ \| m ≥ n} ∉ CFL (THEORY.md §1.3) |
 | dcfl-19 | {w ∈ {a,b}* \| w ≠ xx} | non_dcfl | дополнение ∩ … = {xx} ∉ CFL (Sh Ex. 4.7.2) |
 | dcfl-20 | {aⁱbʲcᵏ \| i ≠ j ∨ j ≠ k} | non_dcfl | дополнение ∩ a*b*c* = {aⁿbⁿcⁿ} ∉ CFL |
+| dcfl-21 | грамматика S → aSSb \| ba \| Ab, A → aAb \| a (exam_04) | dcfl | THEORY.md §1.10 (профильный НМПА + height-determinism, [NS, Thm 4]) **[trap: грамматика неоднозначна и не LR(k) — соблазн заключить не DCFL]** |
 
 ## LL (`ll_system`): `ll` (с минимальным k) / `not_ll`; Format 3 — свойство грамматики
 

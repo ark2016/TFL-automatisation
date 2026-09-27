@@ -1,10 +1,11 @@
 # EVAL_RESULTS — live-прогон ловушек на Haiku (2026-09-27, до раунда C2)
 
-Контекст: `docs/EVAL_SET.md` определяет 73 задачи; этот прогон покрывает 24 «ловушки»
-(`trap: yes` в манифесте `tfl_eval/manifest.json`) по всем четырём системам, каждая
-через `tfl-eval --live` с `TFL_MODEL_OVERRIDE=claude-haiku-4-5` (Haiku, не Opus — см.
-`CLAUDE.md`). Полный прогон всех 73 задач ещё не проводился (см. открытый пункт ниже и
-`TODO.md` §7).
+Контекст: на момент этого прогона `docs/EVAL_SET.md` определял 73 задачи (сейчас 74 —
+`dcfl-21`/`task_grammar_aSSb`, THEORY.md §1.10, добавлена позже, этим прогоном не
+покрыта); этот прогон покрывает 24 «ловушки» (`trap: yes` в манифесте
+`tfl_eval/manifest.json`) по всем четырём системам, каждая через `tfl-eval --live` с
+`TFL_MODEL_OVERRIDE=claude-haiku-4-5` (Haiku, не Opus — см. `CLAUDE.md`). Полный прогон
+всех 74 задач ещё не проводился (см. открытый пункт ниже и `TODO.md` §7).
 
 Раунд правок C2 (структурированный вывод, сертификат DCFL `dpda.py`, R4′) внесён
 **после** этого прогона; часть находок ниже (`structured_output_calls = 0`, `cfl-07`/
@@ -109,17 +110,21 @@ cfl-07/cfl-12 закончились `failure` (ретраи исчерпаны)
   должен закрыть `cfl-07`/`cfl-12`.
 - **R2′ (конструктивный сертификат DCFL)** — `stack_strategy` теперь обязан выдавать
   исполняемый `dpda` (детерминированность проверяется `dcfl_system/lib/dpda.py`), и
-  `_verify_stack_strategy_dpda` может поднять его до `bounded_pass` — **но только когда
-  `build_set_builder_membership_oracle` возвращает не `None`**, т. е. `input_format ==
-  "set_builder"` **и** `language_spec.word_pattern` — чистая конкатенация именованных
+  `_verify_stack_strategy_dpda` может поднять его до `bounded_pass` — изначально **только
+  когда `build_set_builder_membership_oracle` возвращает не `None`**, т. е. `input_format
+  == "set_builder"` **и** `language_spec.word_pattern` — чистая конкатенация именованных
   `variables` (см. `dcfl_system/lib/word_sampler.py`). Проверено на живых IR eval-задач:
   `dcfl-04`/`dcfl-15` заданы `set_builder` с `variables: []` и `word_pattern` строкой
-  экспоненциальной нотации (`"{a^n b^n c^m | ...}"`), а `dcfl-17` задан
-  `input_format: "grammar"` — во всех трёх случаях оракул возвращает `None`, DPDA-проверка
-  не поднимается выше `well_formed`, и R2′/R2 **по-прежнему** не допускают `dcfl` (нужен
-  `bounded_pass`+). Эти три задачи останутся `inconclusive` и после раунда C2, пока для
-  их IR-формы не появится оракул (CYK по грамматике для `dcfl-17`, либо парсер
-  `word_pattern`-строк вида `aⁿbⁿcᵐ` для `dcfl-04/15`) — см. `TODO.md` §7.
+  экспоненциальной нотации (`"{a^n b^n c^m | ...}"`) — оракул возвращает `None`,
+  DPDA-проверка не поднимается выше `well_formed`, и R2′/R2 **по-прежнему** не допускают
+  `dcfl` (нужен `bounded_pass`+); эти две задачи останутся `inconclusive` до появления
+  парсера `word_pattern`-строк вида `aⁿbⁿcᵐ` — см. `TODO.md` §7. `dcfl-17`
+  (`input_format: "grammar"`) и `task_grammar_aSSb`/`dcfl-21` (`docs/THEORY.md` §1.10,
+  грамматика S → aSSb | ba | Ab) — тот же изначальный gap, но теперь закрыт:
+  `build_grammar_membership_oracle` (CYK по грамматике задачи через
+  `cfl_system.lib.cfl_oracle`) даёт `bounded_pass` и для `input_format: "grammar"`;
+  `dcfl_system/tests/test_orchestrator.py` подтверждает это на `task_grammar_aSSb`
+  (`dcfl 0.85`, `sample_words`/`CYK` укладываются в доли секунды на ~60 слов длины ≤ 10).
 - Цены/usage — `UsageTracker` подключён к top-level result (см. `TODO.md` §3, README).
 - Ogden semantic check — контракт `cfl_ogden.md` дополнен `word_instances`/
   `marked_positions`, что должно поднять доверие `well_formed → verified` на задачах,
@@ -129,10 +134,18 @@ cfl-07/cfl-12 закончились `failure` (ретраи исчерпаны)
 
 - Полный live-прогон всех 24 ловушек на Haiku **после** C2 — не проводился (см.
   `TODO.md` §7): не подтверждено, что `cfl-07/12` теперь дают `non_cfl` вместо `failure`
-  и что `structured_output_calls` на самом деле стал > 0. `dcfl-04/15/17` ожидаемо
+  и что `structured_output_calls` на самом деле стал > 0. `dcfl-04/15` ожидаемо
   **останутся** `inconclusive` даже после перепрогона — см. разбор выше (нет оракула
   для их IR-формы, не баг R2′).
-- Живой прогон полного eval-набора (73 задачи, `docs/EVAL_SET.md`) на Haiku ни разу не
+- `dcfl-21` (`task_grammar_aSSb`, THEORY.md §1.10) — новая ловушка, ни разу не
+  прогонялась вживую. Мок-прогон (`dcfl_system/tests/test_orchestrator.py`) даёт
+  `dcfl 0.85` через машинно построенный сертификат-ДМПА (345 состояний, 5835 переходов,
+  `dcfl_system/examples/certificates/grammar_aSSb_dpda.json`); живой прогон на Haiku
+  **ожидаемо не воспроизведёт** эту детерминизацию за один вызов (`stack_strategy`
+  вернёт `uncertain`/`not_applicable` без `dpda`, как и раньше) — это известное
+  ограничение текущего LLM-агента (нет инструмента для запуска детерминизации height-
+  deterministic PDA), а не ошибка теории или сертификата; см. `TODO.md` §7.
+- Живой прогон полного eval-набора (74 задачи, `docs/EVAL_SET.md`) на Haiku ни разу не
   проводился — только 24 ловушки выше.
 - Калибровка потолков confidence (`docs/VERDICT_POLICY.md` §2: 0.98/0.85/0.60/0.40/0.50)
   сделана по опыту с Haiku; повторная калибровка на Opus 5.5 — только по явному запросу

@@ -406,7 +406,7 @@ The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-le
 
 ## `tfl-eval` — accuracy and calibration over an eval set
 
-`tfl_eval/` runs the eval set described in [`docs/EVAL_SET.md`](docs/EVAL_SET.md) (73 tasks across all four
+`tfl_eval/` runs the eval set described in [`docs/EVAL_SET.md`](docs/EVAL_SET.md) (74 tasks across all four
 pipelines, `agent_system|cfl_system|dcfl_system|ll_system/examples/eval/*.json` plus a handful of existing
 example IRs, indexed by `tfl_eval/manifest.json`) and reports how well each pipeline's verdict matches the
 expected one.
@@ -426,7 +426,7 @@ This is what lets a prompt or model change be measured rather than eyeballed (`T
 The first `--live` run (24 trap tasks, Haiku, 2026-09-27) is written up in
 [`docs/EVAL_RESULTS.md`](docs/EVAL_RESULTS.md): 19/19 solved tasks correct, 0 false-confident-wrong, with
 per-task tables, per-pipeline token/cost usage, and the diagnoses that fed the DCFL certificate, R4′ and the
-structured-output fixes below. A full-73-task run and a re-run after those fixes are still open (`TODO.md` §7).
+structured-output fixes below. A full-74-task run and a re-run after those fixes are still open (`TODO.md` §7).
 
 ---
 
