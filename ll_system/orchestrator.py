@@ -333,7 +333,10 @@ class LiveRunner:
                 repaired_text += block.text
 
         usage = getattr(response, "usage", None)
-        self.usage_tracker.record(getattr(response, "model", self._json_repair_model), usage)
+        self.usage_tracker.record(
+            getattr(response, "model", self._json_repair_model), usage,
+            agent=agent_name, used_structured_output=False,
+        )
         if self.verbose:
             t_in = usage.input_tokens if usage else 0
             t_out = usage.output_tokens if usage else 0
@@ -429,6 +432,7 @@ class LiveRunner:
                     system=system_prompt, user=user_msg,
                     effort=effort, temperature=temperature,
                     output_schema=_output_schema_for(agent_name),
+                    agent=agent_name,
                 )
             except FatalAPIError as exc:
                 if exc.status_code == 400:
@@ -478,10 +482,11 @@ class LiveRunner:
                 )
                 cost = estimate_cost_usd(result.model or model, result.usage)
                 cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
+                so_str = " so=yes" if result.used_structured_output else " so=no"
                 print(
                     f"[{agent_name}] model={result.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
-                    f"time={elapsed:.1f}s max={max_tokens}{extra}{cost_str}",
+                    f"time={elapsed:.1f}s max={max_tokens}{extra}{cost_str}{so_str}",
                     file=sys.stderr, flush=True,
                 )
 
@@ -1397,19 +1402,29 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     # exclusive with the downgrade branches above in practice (those only
     # fire when has_constructive/has_destructive is False for the claimed
     # side), so it never fights with an already-decided retry.
+    #
+    # docs/VERDICT_POLICY.md R3 (post-R3' revision): "bounded_pass vs
+    # well_formed" no longer settles this by rank comparison alone (fix
+    # precedent: wwvvR on Haiku 2026-09-27 in cfl_system, where a sample-
+    # based bounded_pass grammar outranked a correct well_formed destructive
+    # proof and won the dispute wrongly) -- only a `verified` side wins an
+    # unresolved contradiction, capped at 0.85 (not the normal 0.98 ceiling);
+    # otherwise it stays `uncertain`, capped at 0.50.
     contradiction = has_constructive and has_destructive
     if contradiction:
-        if _trust_rank(constructive_trust) > _trust_rank(destructive_trust):
+        if constructive_trust == "verified" and destructive_trust != "verified":
             verdict = "ll"
-        elif _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
+            confidence_cap = 0.85
+        elif destructive_trust == "verified" and constructive_trust != "verified":
             verdict = "not_ll"
+            confidence_cap = 0.85
         else:
             verdict = "uncertain"
-        confidence_cap = 0.50
+            confidence_cap = 0.50
         downgrades.append(
             f"contradiction: constructive={constructive_agent}({constructive_trust}) vs "
             f"destructive={destructive_agent}({destructive_trust}) -> {verdict}, "
-            "confidence <= 0.50 (docs/VERDICT_POLICY.md R3)"
+            f"confidence <= {confidence_cap} (docs/VERDICT_POLICY.md R3)"
         )
         basis = [
             {"agent": constructive_agent, "trust": constructive_trust},
@@ -2083,6 +2098,12 @@ def run_pipeline(
             "retries": 0,
         }
 
+    # Usage/cost block (TODO.md §3) -- additive, present even without a live
+    # agent_runner (an all-zero UsageTracker) so callers can rely on
+    # result["usage"] always existing.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+
     # Optionally render outputs
     if output_dir and result:
         try:
@@ -2199,6 +2220,8 @@ def main() -> None:
         output_dir=args.out,
         task_name=task_name,
     )
+    if args.verbose and agent_runner is not None:
+        print(agent_runner.usage_tracker.summary_line(), file=sys.stderr)
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print(json.dumps(result, ensure_ascii=False, indent=2))

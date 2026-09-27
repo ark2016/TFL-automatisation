@@ -619,35 +619,27 @@ def test_refuted_primary_artifact_terminal_inconclusive_when_budget_exhausted():
 
 
 # ---------------------------------------------------------------------------
-# §3 R3 -- contradiction: a bounded_pass destructive claim coexists with a
-# well_formed constructive claim -> contradiction: true, confidence <= 0.50,
-# regardless of which side wins the trust comparison (bounded_pass wins
-# here, so verdict flips from the reasoning's proposed 'dcfl' to 'non_dcfl').
+# §3 R3 (post-R3' revision, reviewer finding fix) -- a contradiction now
+# requires the CONSTRUCTIVE side to be >= bounded_pass AND the destructive
+# side >= well_formed; it is NOT symmetric. A merely well_formed
+# stack_strategy does not block a genuine non_dcfl backed by a bounded_pass+
+# destructive proof -- a well_formed constructive claim already fails R2 on
+# its own and was never going to carry a "dcfl" verdict either way, so
+# flagging a contradiction there only threw away real evidence sitting on
+# the destructive side. A GENUINE contradiction (constructive >= bounded_pass
+# AND destructive >= well_formed) still falls back to inconclusive unless one
+# side is `verified` (docs/VERDICT_POLICY.md R3 fix, precedent: wwvvR on
+# Haiku 2026-09-27 in cfl_system) -- DCFL has no executable artifact to run
+# R3' cross-check against yet (dcfl_system/CLAUDE.md "Formal verification NOT
+# implemented"), so an unresolved contradiction with neither side `verified`
+# always falls back to inconclusive, regardless of which side has higher rank.
 # ---------------------------------------------------------------------------
 
-def test_r3_contradiction_caps_confidence_at_050_and_picks_stronger_side():
-    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
-                 "primary_evidence": "stack_strategy"}
-    agent_results = {
-        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {}},
-        "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": {"kind": "dcfl_pumping"}},
-    }
-    oracle_verification = {
-        "stack_strategy": {"trust": "well_formed"},
-        "dcfl_pumping": {"trust": "bounded_pass"},
-    }
-    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
-                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
-    assert gated["verdict_gate"]["contradiction"] is True
-    assert gated["confidence"] <= 0.50
-    # dcfl_pumping (bounded_pass) outranks stack_strategy (well_formed) -> non_dcfl wins.
-    assert gated["verdict"] == "non_dcfl"
-
-
-def test_r3_contradiction_never_exceeds_050_even_when_original_side_wins():
-    # Same setup but reasoning already proposed the WINNING side (non_dcfl);
-    # confidence must still be capped at 0.50, not upgraded to bounded_pass's
-    # own 0.85 ceiling, because R3 requires resolving the contradiction first.
+def test_well_formed_constructive_does_not_block_non_dcfl():
+    """A well_formed stack_strategy sitting next to a bounded_pass
+    dcfl_pumping is NOT a contradiction — the constructive side never clears
+    the bounded_pass threshold R3 now requires, so a correctly-proposed
+    non_dcfl resolves cleanly instead of being nulled out to 'inconclusive'."""
     reasoning = {"action": "done", "verdict": "non_dcfl", "confidence": 0.9,
                  "primary_evidence": "dcfl_pumping"}
     agent_results = {
@@ -660,9 +652,76 @@ def test_r3_contradiction_never_exceeds_050_even_when_original_side_wins():
     }
     gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
                                  retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
+    assert gated["verdict_gate"]["contradiction"] is False
+    assert gated["verdict"] == "non_dcfl"
+    assert gated["confidence"] <= 0.85
+
+
+def test_well_formed_constructive_alone_still_fails_r2_for_dcfl():
+    """The flip side: a well_formed stack_strategy is still not enough, on
+    its own, to carry a "dcfl" verdict (R2) — regardless of what stands on
+    the destructive side, and regardless of whether reasoning proposed the
+    constructive side. This is R1/R2, not R3 — no contradiction is even
+    considered because "dcfl" itself is unearned."""
+    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
+                 "primary_evidence": "stack_strategy"}
+    agent_results = {
+        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {}},
+        "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": {"kind": "dcfl_pumping"}},
+    }
+    oracle_verification = {
+        "stack_strategy": {"trust": "well_formed"},
+        "dcfl_pumping": {"trust": "bounded_pass"},
+    }
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
+    assert gated["verdict_gate"]["contradiction"] is False
+    assert gated["verdict"] is None
+    assert gated["confidence"] <= 0.40
+
+
+def test_r3_genuine_contradiction_stays_inconclusive_when_neither_side_verified():
+    """A GENUINE contradiction: the constructive side now actually clears
+    bounded_pass (not just well_formed) while the destructive side is only
+    well_formed. Neither side is `verified`, so it stays inconclusive."""
+    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.9,
+                 "primary_evidence": "stack_strategy"}
+    agent_results = {
+        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {}},
+        "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": {"kind": "dcfl_pumping"}},
+    }
+    oracle_verification = {
+        "stack_strategy": {"trust": "bounded_pass"},
+        "dcfl_pumping": {"trust": "well_formed"},
+    }
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
     assert gated["verdict_gate"]["contradiction"] is True
     assert gated["confidence"] <= 0.50
+    assert gated["verdict"] is None
+
+
+def test_r3_contradiction_verified_side_wins_capped_at_085():
+    # A hypothetical `verified` destructive claim (DCFL has no exhaustive
+    # checker yet, but the gate logic must still honor `verified` correctly
+    # whenever one eventually exists) still wins a genuine unresolved
+    # contradiction (constructive >= bounded_pass here too), but capped at
+    # 0.85, not the normal 0.98 `verified` ceiling.
+    reasoning = {"action": "done", "verdict": "dcfl", "confidence": 0.99,
+                 "primary_evidence": "stack_strategy"}
+    agent_results = {
+        "stack_strategy": {"status": "success", "verdict": "dcfl", "proof_sketch": {}},
+        "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": {"kind": "dcfl_pumping"}},
+    }
+    oracle_verification = {
+        "stack_strategy": {"trust": "bounded_pass"},
+        "dcfl_pumping": {"trust": "verified"},
+    }
+    gated = _apply_verdict_gate(reasoning, agent_results, oracle_verification,
+                                 retry_count=MAX_RETRIES, max_retries=MAX_RETRIES)
+    assert gated["verdict_gate"]["contradiction"] is True
     assert gated["verdict"] == "non_dcfl"
+    assert gated["confidence"] == 0.85
 
 
 # ---------------------------------------------------------------------------

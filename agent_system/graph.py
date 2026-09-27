@@ -36,6 +36,7 @@ from .lib.oracle_test import oracle_test as run_oracle_test
 from .lib.dfa_runner import validate_dfa, run_dfa
 from .lib.hypothesis_module import analyze_hypothesis
 from .lib.type_check import check_lean
+from .lib.llm_client import UsageTracker
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +105,7 @@ class PipelineState(TypedDict):
     closure_verification: dict
     claim_verification: dict
     test_result: dict
+    dfa: dict | None                                     # DFA behind test_result (R3' cross-check)
 
     # -- Reasoning & retry --
     reasoning_output: dict
@@ -972,6 +974,9 @@ def oracle_test_node(state: PipelineState) -> dict:
         "test_result": test_result,
         "evidence": evidence,
         "dfa_builder_output": dfa_builder_output,
+        # R3' cross-check (assemble_result_node): needs the actual DFA dict
+        # tested against test_result, not just the pass/fail summary.
+        "dfa": dfa,
     }
     if errors:
         updates["errors"] = errors
@@ -1526,6 +1531,107 @@ def formalize_node(state: PipelineState) -> dict:
     return {"evidence": evidence}
 
 
+def _set_reasoning_verdict(evidence: dict, verdict: str | None) -> None:
+    """Overwrite the verdict inside `evidence['reasoning']` (both the flat
+    shape and the nested `reasoning['evidence']` shape reasoning prompts
+    also use) so downstream readers of the top-level result (`orchestrator.
+    _result_verdict`, `tfl_eval.runners.extract('reg')`) see the verdict
+    gate's own decision, not whatever the reasoning agent originally
+    proposed before R1-R3/R3' were applied. Mutates a copy, never the
+    dict `state["reasoning_output"]` still holds."""
+    reasoning_copy = dict(evidence.get("reasoning") or {})
+    inner = reasoning_copy.get("evidence")
+    if isinstance(inner, dict):
+        inner = dict(inner)
+        inner["verdict"] = verdict
+        reasoning_copy["evidence"] = inner
+    reasoning_copy["verdict"] = verdict
+    evidence["reasoning"] = reasoning_copy
+
+
+def _cross_check_r3prime_reg(
+    state: PipelineState,
+    dfa: dict | None,
+    destructive_witnesses: list[dict],
+) -> dict[str, Any]:
+    """docs/VERDICT_POLICY.md R3' for REG — deterministic cross-check tried
+    before falling back to an unresolved R3 contradiction.
+
+    Mirrors cfl_system.orchestrator._cross_check_r3prime, simplified to
+    REG's single constructive-artifact channel (the DFA behind
+    `test_result` — there is no separate "which agent produced it" choice
+    the way CFL has cfg_builder vs pda_builder): runs the destructive
+    proof's own witness words (already instantiated by `verify_pumping_
+    claim`/`verify_nerode_claim`'s step-2 checks — reused via
+    `evidence["pumping_verification"|"nerode_verification"]["witnesses"]`,
+    never re-derived) through both the task's language oracle and the DFA:
+      (a) a witness the destructive proof claims is NOT in L, but the DFA
+          accepts (or claims IN L, but the DFA rejects) -> the DFA
+          (constructive side) is `refuted`.
+      (b) a witness whose claimed membership disagrees with what the
+          oracle itself says -> the destructive proof is `refuted`.
+    Never raises; missing evidence (no witnesses, no oracle, no DFA) just
+    leaves `performed=False` and nothing gets refuted.
+    """
+    result: dict[str, Any] = {
+        "performed": False,
+        "constructive_refuted": False,
+        "destructive_refuted": False,
+        "constructive_reason": None,
+        "destructive_reason": None,
+        "counterexamples": [],
+    }
+    if not destructive_witnesses or dfa is None:
+        return result
+    oracle_fn = state.get("oracle_fn")
+    if oracle_fn is None:
+        return result
+
+    result["performed"] = True
+
+    for w in destructive_witnesses:
+        if not isinstance(w, dict):
+            continue
+        word = w.get("word")
+        expected_in_l = w.get("expected_in_l")
+        if not isinstance(word, str) or not word or not isinstance(expected_in_l, bool):
+            continue
+        try:
+            oracle_says = bool(oracle_fn(word))
+        except Exception:
+            continue
+
+        if not result["destructive_refuted"] and oracle_says != expected_in_l:
+            result["destructive_refuted"] = True
+            result["destructive_reason"] = (
+                f"witness '{word}' (source: {w.get('source')}) claimed "
+                f"{'in L' if expected_in_l else 'NOT in L'}, but the oracle says "
+                f"{'in L' if oracle_says else 'NOT in L'}"
+            )
+            result["counterexamples"].append({"word": word, "issue": result["destructive_reason"]})
+
+        if not result["constructive_refuted"] and oracle_says == expected_in_l:
+            # Only test the DFA against a witness the oracle itself just
+            # confirmed -- an oracle-refuted witness says nothing about it.
+            try:
+                dfa_says = bool(run_dfa(dfa, word))
+            except Exception:
+                continue
+            if dfa_says != expected_in_l:
+                result["constructive_refuted"] = True
+                verb = "rejects" if expected_in_l else "accepts"
+                result["constructive_reason"] = (
+                    f"DFA {verb} '{word}' (source: {w.get('source')}), which the "
+                    f"oracle says is {'in L' if expected_in_l else 'NOT in L'}"
+                )
+                result["counterexamples"].append({"word": word, "issue": result["constructive_reason"]})
+
+        if result["constructive_refuted"] and result["destructive_refuted"]:
+            break
+
+    return result
+
+
 def assemble_result_node(state: PipelineState) -> dict:
     """Step 9: assemble the final result dict.
 
@@ -1601,7 +1707,37 @@ def assemble_result_node(state: PipelineState) -> dict:
         destructive_trust = destructive["trust"]
         destructive_ok = destructive_trust not in (None, "refuted", "not_verified")
 
-        if lean_verified:
+        # docs/VERDICT_POLICY.md R3: a Lean-verified proof formalizes whatever
+        # `reasoning_verdict` claimed, so it only counts as the "verified"
+        # side of a contradiction check when that claim actually opposes a
+        # standing artifact on the other side (a Lean-verified `non_regular`
+        # next to a passing oracle_test, or vice versa) -- otherwise it is
+        # uncontested and reaches the full 0.98 ceiling as before.
+        lean_contradicts_constructive = (
+            lean_verified and reasoning_verdict == "non_regular"
+            and constructive_trust == "bounded_pass"
+        )
+        lean_contradicts_destructive = (
+            lean_verified and reasoning_verdict == "regular" and destructive_ok
+        )
+
+        if lean_contradicts_constructive or lean_contradicts_destructive:
+            # R3' has no cross-check to run here (Lean already IS the
+            # deterministic proof) -- a `verified` side still wins an
+            # unresolved contradiction, but capped at 0.85, not the normal
+            # 0.98 `verified` ceiling (docs/VERDICT_POLICY.md R3).
+            contradiction = True
+            status = "success"
+            confidence = _bounded(reasoning_confidence, 0.85)
+            basis.append({"agent": "formalizer", "trust": "verified"})
+            opposing = "oracle_test (bounded_pass)" if lean_contradicts_constructive else f"a destructive proof ({destructive_trust})"
+            downgrades.append(
+                f"contradiction: Lean-verified {reasoning_verdict} vs {opposing} also "
+                "standing -> verified side wins, confidence capped at 0.85 "
+                "(VERDICT_POLICY.md R3)"
+            )
+
+        elif lean_verified:
             # R6: Lean without `sorry` -> verified, 0.98.
             status = "success"
             confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["verified"])
@@ -1609,16 +1745,66 @@ def assemble_result_node(state: PipelineState) -> dict:
 
         elif constructive_trust == "bounded_pass" and destructive_ok:
             # R3: a passing constructive artifact AND a standing destructive
-            # proof cannot both be right — flag the contradiction instead of
-            # silently picking one.
-            contradiction = True
-            status = "partial"
-            confidence = _bounded(reasoning_confidence, 0.50)
-            downgrades.append(
-                "contradiction: oracle_test passed (constructive bounded_pass) "
-                f"while a destructive proof ({destructive_trust}) also stands "
-                "-> confidence capped at 0.50 (VERDICT_POLICY.md R3)"
-            )
+            # proof cannot both be right. R3' first: try to resolve it
+            # deterministically by running the destructive proof's own
+            # witness words (reused from claim_verifier's step-2 checks,
+            # never re-derived) through the language oracle AND the DFA
+            # behind test_result.
+            destructive_witnesses: list[dict] = []
+            for agent_info in destructive["agents"]:
+                det = agent_info.get("details") or {}
+                w = det.get("witnesses")
+                if isinstance(w, list):
+                    destructive_witnesses.extend(w)
+            cross_check = _cross_check_r3prime_reg(state, state.get("dfa"), destructive_witnesses)
+
+            if cross_check["destructive_refuted"] and not cross_check["constructive_refuted"]:
+                # R3' resolved it: the DFA survives, the destructive proof
+                # itself doesn't -> regular, capped at its own bounded_pass
+                # ceiling (not the 0.50 unresolved-contradiction cap).
+                # `contradiction` stays False -- it was raised and resolved
+                # deterministically, not left standing (mirrors
+                # cfl_system.orchestrator.apply_verdict_gate's R3' branch).
+                status = "success"
+                confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
+                basis.append({"agent": "r3prime_cross_check", "trust": "bounded_pass"})
+                downgrades.append(
+                    "R3' cross-check refuted destructive claim: "
+                    f"{cross_check['destructive_reason']} -> regular "
+                    "(VERDICT_POLICY.md R3')"
+                )
+                _set_reasoning_verdict(evidence, "regular")
+            elif cross_check["constructive_refuted"] and not cross_check["destructive_refuted"]:
+                # R3' resolved it the other way: the DFA itself is wrong ->
+                # non_regular, capped at the destructive proof's own ceiling.
+                # `contradiction` stays False (see comment above).
+                status = "success"
+                confidence = _bounded(reasoning_confidence, _cap(destructive_trust))
+                basis.append({"agent": "r3prime_cross_check", "trust": destructive_trust})
+                downgrades.append(
+                    "R3' cross-check refuted constructive artifact (DFA): "
+                    f"{cross_check['constructive_reason']} -> non_regular "
+                    "(VERDICT_POLICY.md R3')"
+                )
+                _set_reasoning_verdict(evidence, "non_regular")
+            else:
+                # Unresolved (neither refuted, both refuted, or the
+                # cross-check couldn't run at all) -- stays inconclusive.
+                # Neither side is `verified` here (that case is handled
+                # above), so rank never settles this (docs/VERDICT_POLICY.md
+                # R3 fix: "bounded_pass vs well_formed" is never resolved by
+                # rank). The reasoning agent's own proposed verdict must not
+                # leak through as if it were confirmed (reviewer finding).
+                contradiction = True
+                status = "partial"
+                confidence = _bounded(reasoning_confidence, 0.50)
+                downgrades.append(
+                    "contradiction: oracle_test passed (constructive bounded_pass) "
+                    f"while a destructive proof ({destructive_trust}) also stands, "
+                    "unresolved by R3' cross-check -> confidence capped at 0.50 "
+                    "(VERDICT_POLICY.md R3)"
+                )
+                _set_reasoning_verdict(evidence, None)
 
         elif reasoning_verdict == "non_regular":
             # docs/VERDICT_POLICY.md R1/R2 fix (reviewer finding): the gate
@@ -1902,6 +2088,7 @@ def run_pipeline(
         "closure_verification": {},
         "claim_verification": {},
         "test_result": None,
+        "dfa": None,
         "reasoning_output": None,
         "proof_checker_output": None,
         "retry_round": 0,
@@ -1915,4 +2102,10 @@ def run_pipeline(
     }
 
     final_state = graph.invoke(initial_state)
-    return final_state.get("result", _make_result("failure", errors=["Graph produced no result"]))
+    result = final_state.get("result", _make_result("failure", errors=["Graph produced no result"]))
+    # Usage/cost block (TODO.md §3) -- additive: never replaces existing
+    # result keys. Present even without a live agent_runner (an all-zero
+    # UsageTracker) so callers can rely on result["usage"] always existing.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+    return result

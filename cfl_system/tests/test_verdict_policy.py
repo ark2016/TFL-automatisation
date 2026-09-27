@@ -51,7 +51,13 @@ class TestScenario1ConstructiveFailureOnly:
     def test_downgrades_to_inconclusive_when_budget_exhausted(self):
         state = _base_state(
             retry_round=MAX_RETRIES,  # no budget left -> must resolve now
-            agent_results={"cfg_builder": {"status": "failure", "evidence": None}},
+            # cfg_builder DID run (status=success) and produced a grammar —
+            # it's the oracle_test that found that grammar wrong
+            # (grammar_incorrect/refuted). A reviewer-finding fix means
+            # oracle_test trust is only ever attributed to an agent that
+            # actually ran to success with a usable artifact, so the
+            # fixture must reflect that (not just "any agent present").
+            agent_results={"cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}}},
             oracle_test_result={"status": "grammar_incorrect", "trust": "refuted"},
             claim_verification={},  # no destructive agent produced anything
             reasoning_output={"action": "done", "verdict": "non_cfl", "confidence": 0.92},
@@ -71,7 +77,7 @@ class TestScenario1ConstructiveFailureOnly:
         than committing to an unearned verdict."""
         state = _base_state(
             retry_round=0,
-            agent_results={"cfg_builder": {"status": "failure", "evidence": None}},
+            agent_results={"cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}}},
             oracle_test_result={"status": "grammar_incorrect", "trust": "refuted"},
             claim_verification={},
             reasoning_output={"action": "done", "verdict": "non_cfl", "confidence": 0.92},
@@ -108,10 +114,15 @@ class TestScenario2Contradiction:
         # claim_verification's structural trust, or the contradiction is
         # never even considered (see cfl_system.orchestrator
         # ._destructive_agent_argues_non_cfl).
+        #
+        # docs/VERDICT_POLICY.md R3 (post-R3' revision): "bounded_pass vs
+        # well_formed" no longer resolves the dispute by rank — with no
+        # witness words to cross-check (pumping_cfl's evidence has none),
+        # R3' cannot run either, so this stays inconclusive.
         state = _base_state(
             retry_round=0,
             agent_results={
-                "cfg_builder": {"grammar": {"start": "S", "rules": []}},
+                "cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}},
                 "pumping_cfl": {"status": "success", "verdict": "non_cfl", "evidence": {}},
             },
             oracle_test_result={"status": "pass", "trust": "bounded_pass"},
@@ -124,8 +135,11 @@ class TestScenario2Contradiction:
         vg = gate["verdict_gate"]
         assert vg["contradiction"] is True
         assert gate["reasoning_output"]["confidence"] <= 0.50
-        # Verdict resolves to the stronger side (constructive: bounded_pass > well_formed)
-        assert gate["reasoning_output"]["verdict"] == "cfl"
+        # No longer resolved by rank comparison — bounded_pass no longer
+        # automatically beats well_formed (docs/VERDICT_POLICY.md R3 fix).
+        assert gate["reasoning_output"]["verdict"] is None
+        assert vg["contradiction_details"]["constructive"]["trust"] == "bounded_pass"
+        assert vg["contradiction_details"]["destructive"]["trust"] == "well_formed"
 
     def test_contradiction_inconclusive_when_trust_tied(self):
         """R3: at equal trust, contradiction resolves to inconclusive, not a
@@ -135,7 +149,7 @@ class TestScenario2Contradiction:
         state = _base_state(
             retry_round=0,
             agent_results={
-                "cfg_builder": {"grammar": {"start": "S", "rules": []}},
+                "cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}},
                 "pumping_cfl": {"status": "success", "verdict": "non_cfl", "evidence": {}},
             },
             oracle_test_result={"status": "pass", "trust": "bounded_pass"},
@@ -159,7 +173,7 @@ class TestScenario3BoundedPassCeiling:
     def test_confidence_capped_at_0_85_not_higher(self):
         state = _base_state(
             retry_round=0,
-            agent_results={"cfg_builder": {"grammar": {"start": "S", "rules": []}}},
+            agent_results={"cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}}},
             oracle_test_result={"status": "pass", "trust": "bounded_pass"},
             claim_verification={},
             reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.99},
@@ -179,7 +193,7 @@ class TestScenario3BoundedPassCeiling:
         только понизить [confidence]'."""
         state = _base_state(
             retry_round=0,
-            agent_results={"cfg_builder": {"grammar": {"start": "S", "rules": []}}},
+            agent_results={"cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}}},
             oracle_test_result={"status": "pass", "trust": "bounded_pass"},
             claim_verification={},
             reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.5},
@@ -227,7 +241,7 @@ class TestR1DecompositionDoesNotCountAsDestructive:
         state = _base_state(
             retry_round=MAX_RETRIES,  # no budget left -> must resolve now
             agent_results={
-                "cfg_builder": {"status": "failure", "evidence": None},
+                "cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}},
                 "decomposition": {
                     "status": "success", "verdict": "cfl",
                     "evidence": {
@@ -255,7 +269,7 @@ class TestR1DecompositionDoesNotCountAsDestructive:
         state = _base_state(
             retry_round=0,
             agent_results={
-                "cfg_builder": {"grammar": {"start": "S", "rules": []}},
+                "cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}},
                 "decomposition": {
                     "status": "success", "verdict": "cfl",
                     "evidence": {
@@ -310,6 +324,171 @@ class TestRefutedAgentDoesNotVetoOthers:
 # R7: retry planner input carries trust (docs/VERDICT_POLICY.md R7)
 # ---------------------------------------------------------------------------
 
+class TestR3PrimeCrossCheck:
+    """docs/VERDICT_POLICY.md R3' — the deterministic cross-check attempted
+    before an unresolved R3 contradiction: destructive witness words
+    (reused from claim_verifier's step-2 checks, not re-derived) run
+    through the language oracle AND the constructive artifact."""
+
+    # a^n b^n c^n via a counting predicate — genuinely not CFL (same fixture
+    # style as cfl_system/tests/test_claim_verifier.py).
+    _IR_ANBNCN = {
+        "language_spec": {
+            "kind": "predicate",
+            "alphabet": ["a", "b", "c"],
+            "variable": "w",
+            "predicate": {
+                "op": "and",
+                "operands": [
+                    {
+                        "op": "eq",
+                        "left": {"kind": "count_symbol", "in_var": "w", "symbol": "a"},
+                        "right": {"kind": "count_symbol", "in_var": "w", "symbol": "b"},
+                    },
+                    {
+                        "op": "eq",
+                        "left": {"kind": "count_symbol", "in_var": "w", "symbol": "b"},
+                        "right": {"kind": "count_symbol", "in_var": "w", "symbol": "c"},
+                    },
+                ],
+            },
+        },
+    }
+
+    # Wrong grammar: a*b*c* (regular, definitely CFL, but over-generates —
+    # it accepts every word count-mismatched, not just a^n b^n c^n). A
+    # small sample-based oracle_test can easily miss this (bounded_pass).
+    _WRONG_GRAMMAR = {
+        "start": "S",
+        "nonterminals": ["S", "A", "B", "C"],
+        "terminals": ["a", "b", "c"],
+        "rules": [
+            {"lhs": "S", "rhs": ["A", "B", "C"]},
+            {"lhs": "A", "rhs": ["a", "A"]},
+            {"lhs": "A", "rhs": []},
+            {"lhs": "B", "rhs": ["b", "B"]},
+            {"lhs": "B", "rhs": []},
+            {"lhs": "C", "rhs": ["c", "C"]},
+            {"lhs": "C", "rhs": []},
+        ],
+    }
+
+    @staticmethod
+    def _exact_word_grammar(word: str) -> dict:
+        """A CFG generating exactly {word} (a single unbranching chain) —
+        used where the test only needs the artifact to agree with the
+        oracle on the handful of witness words actually cross-checked."""
+        nonterminals = ["S"] + [f"A{i}" for i in range(1, len(word))]
+        rules = []
+        for i, ch in enumerate(word):
+            lhs = nonterminals[i]
+            if i + 1 < len(nonterminals):
+                rules.append({"lhs": lhs, "rhs": [ch, nonterminals[i + 1]]})
+            else:
+                rules.append({"lhs": lhs, "rhs": [ch]})
+        return {
+            "start": "S",
+            "nonterminals": nonterminals,
+            "terminals": sorted(set(word)),
+            "rules": rules,
+        }
+
+    _OGDEN_WITNESSES = [
+        {"word": "aaabbbccc", "expected_in_l": True, "source": "word_instances[p=3]"},
+        {"word": "aabbbccc", "expected_in_l": False, "source": "ogden p=3 split v='a' x='' i=0"},
+    ]
+
+    def test_wwvvR_style_cross_check_refutes_bad_grammar(self):
+        """The live-run precedent this rule fixes (docs/VERDICT_POLICY.md R3,
+        'wwvvR on Haiku 2026-09-27'): a sample-based bounded_pass grammar and
+        a well_formed destructive proof used to resolve by rank (bounded_pass
+        wins) — wrongly, when the grammar over-generates. R3' catches it:
+        ogden's own witness word (∉ L per the oracle) is accepted by the
+        grammar -> the artifact is refuted -> non_cfl, not cfl."""
+        state = _base_state(
+            retry_round=0,
+            ir=self._IR_ANBNCN,
+            agent_results={
+                "cfg_builder": {"status": "success", "grammar": self._WRONG_GRAMMAR, "evidence": {}},
+                "ogden": {"status": "success", "verdict": "non_cfl", "evidence": {}},
+            },
+            oracle_test_result={"status": "pass", "trust": "bounded_pass"},
+            claim_verification={
+                "ogden": {
+                    "trust": "well_formed",
+                    "verification_status": "well_formed",
+                    "details": {"destructive_witnesses": self._OGDEN_WITNESSES},
+                },
+            },
+            reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.9},
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        cc = vg["contradiction_details"]["cross_check"]
+        assert cc["performed"] is True
+        assert cc["constructive_refuted_agents"] == ["cfg_builder"]
+        assert cc["destructive_refuted"] is False
+        assert vg["contradiction"] is False
+        assert gate["reasoning_output"]["verdict"] == "non_cfl"
+        assert gate["reasoning_output"]["confidence"] <= 0.60
+        assert gate["trust"]["cfg_builder"] == "refuted"
+
+    def test_both_sides_survive_cross_check_stays_inconclusive(self):
+        """R3' runs and finds no counterexample on either side (a grammar
+        that happens to agree with the oracle on these specific witnesses) —
+        the contradiction is NOT resolved. docs/VERDICT_POLICY.md R3 (post-
+        R3' revision): 'bounded_pass vs well_formed' no longer settles this
+        by rank -> stays inconclusive, confidence <= 0.50."""
+        state = _base_state(
+            retry_round=0,
+            ir=self._IR_ANBNCN,
+            agent_results={
+                "cfg_builder": {"status": "success", "grammar": self._exact_word_grammar("aaabbbccc"), "evidence": {}},
+                "ogden": {"status": "success", "verdict": "non_cfl", "evidence": {}},
+            },
+            oracle_test_result={"status": "pass", "trust": "bounded_pass"},
+            claim_verification={
+                "ogden": {
+                    "trust": "well_formed",
+                    "verification_status": "well_formed",
+                    "details": {"destructive_witnesses": self._OGDEN_WITNESSES},
+                },
+            },
+            reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.9},
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        cc = vg["contradiction_details"]["cross_check"]
+        assert cc["performed"] is True
+        assert cc["constructive_refuted_agents"] == []
+        assert cc["destructive_refuted"] is False
+        assert vg["contradiction"] is True
+        assert gate["reasoning_output"]["verdict"] is None
+        assert gate["reasoning_output"]["confidence"] <= 0.50
+
+    def test_verified_side_wins_unresolved_contradiction(self):
+        """No witnesses at all -> R3' cannot run -> falls back to the plain
+        R3 rule: only a `verified` side wins an unresolved contradiction,
+        capped at 0.85 (not the normal 0.98 'verified' ceiling)."""
+        state = _base_state(
+            retry_round=0,
+            agent_results={
+                "cfg_builder": {"status": "success", "grammar": {"start": "S", "rules": []}, "evidence": {}},
+                "pumping_cfl": {"status": "success", "verdict": "non_cfl", "evidence": {}},
+            },
+            oracle_test_result={"status": "pass", "trust": "bounded_pass"},
+            claim_verification={
+                "pumping_cfl": {"trust": "verified"},
+            },
+            reasoning_output={"action": "done", "verdict": "non_cfl", "confidence": 0.99},
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert vg["contradiction"] is True
+        assert gate["reasoning_output"]["verdict"] == "non_cfl"
+        assert gate["reasoning_output"]["confidence"] == 0.85
+
+
 class TestRetryPlannerReceivesTrust:
     def test_run_retry_planner_node_forwards_trust(self):
         from cfl_system.orchestrator import run_retry_planner_node
@@ -334,3 +513,147 @@ class TestRetryPlannerReceivesTrust:
             "pumping_cfl": "refuted",
             "cfg_builder": "not_verified",
         }
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding (blocker): verify_closure_claim's nested pumping/Ogden
+# witnesses were computed against the L ∩ R oracle, so `expected_in_l=False`
+# really meant "not in L ∩ R" — not "not in L". _cross_check_r3prime then
+# tested them against the plain L oracle, so a pumped word that had left R
+# but was still in L would look like a false claim by a CORRECT destructive
+# proof and get it wrongly refuted, handing the verdict to an over-generating
+# grammar. End-to-end regression: real verify_agent_claims output on a
+# closure_reduction proof, then apply_verdict_gate, on the exact language
+# from the reviewer's repro (L = (Σ* \ a*b*c*) ∪ {a^n b^n c^n}, R = a*b*c*).
+# ---------------------------------------------------------------------------
+
+import re as _re
+from unittest.mock import patch
+
+from cfl_system.lib.claim_verifier import verify_agent_claims
+
+
+def _anbncn_union_oracle(word: str) -> bool:
+    """L = (Sigma* minus a*b*c*) union {a^n b^n c^n} — reviewer's repro language."""
+    m = _re.fullmatch(r"(a*)(b*)(c*)", word)
+    if m is None:
+        return True  # doesn't even match a*b*c* -> outside R -> in L
+    na, nb, nc = len(m.group(1)), len(m.group(2)), len(m.group(3))
+    return na == nb == nc
+
+
+# An over-generating "wrong but sample-passing" grammar: pure a*b*c* with no
+# constraint that the three counts agree (accepts e.g. "aabbbccc", which is
+# NOT in the target language). Exactly the failure mode described in
+# docs/VERDICT_POLICY.md R3 (bounded_pass grammar, over-generates).
+_OVERGENERATING_ANBNCN_GRAMMAR = {
+    "start": "S",
+    "nonterminals": ["S", "A", "B", "C"],
+    "terminals": ["a", "b", "c"],
+    "rules": [
+        {"lhs": "S", "rhs": ["A", "B", "C"]},
+        {"lhs": "A", "rhs": ["a", "A"]}, {"lhs": "A", "rhs": []},
+        {"lhs": "B", "rhs": ["b", "B"]}, {"lhs": "B", "rhs": []},
+        {"lhs": "C", "rhs": ["c", "C"]}, {"lhs": "C", "rhs": []},
+    ],
+}
+
+_ANBNCN_CLOSURE_EVIDENCE = {
+    "regular_language_regex": "a*b*c*",
+    "intersection_description": "L ∩ R = {a^n b^n c^n} (the equal-count branch of L already lies in R).",
+    "intersection_examples": ["aaabbbccc", "abc", "aabbcc"],
+    "intersection_non_examples": ["aabbbccc", "aaabbccc"],
+    "intersection_not_cfl_proof": {
+        "method": "pumping",
+        "word_chosen": "a^(3p) b^(3p) c^(3p)",
+        "word_instances": {"3": "aaabbbccc"},
+        "cases": [{"case": "standard a^n b^n c^n pumping", "why_not_in_L": "breaks n=n=n"}],
+        "all_cases_covered": True,
+    },
+}
+
+
+class TestR3PrimeNestedWitnessLeavingRNoLongerFalseRefutes:
+    """docs/VERDICT_POLICY.md R3'/closure_reduction fix (reviewer finding)."""
+
+    def _run(self, extra_agent_results: dict | None = None) -> dict:
+        agent_output = {
+            "agent": "closure_reduction", "status": "success",
+            "evidence": _ANBNCN_CLOSURE_EVIDENCE,
+        }
+        # The custom union-language oracle isn't expressible in the IR
+        # predicate mini-language (no "not regex" combinator), so both the
+        # claim_verifier's oracle build and the orchestrator's cross-check
+        # oracle build are pointed at the same hand-written oracle — the
+        # real `verify_agent_claims` -> `apply_verdict_gate` code paths
+        # still run unmodified, only the membership function is supplied
+        # directly instead of parsed from a language_spec kind.
+        with patch(
+            "cfl_system.lib.claim_verifier._get_oracle", return_value=_anbncn_union_oracle,
+        ), patch(
+            "cfl_system.orchestrator.cfl_oracle_from_ir", return_value=_anbncn_union_oracle,
+        ):
+            claim_verification = {"closure_reduction": verify_agent_claims(agent_output, {})}
+            agent_results = {
+                "cfg_builder": {
+                    "status": "success", "grammar": _OVERGENERATING_ANBNCN_GRAMMAR, "evidence": {},
+                },
+                "closure_reduction": {
+                    "status": "success", "verdict": "non_cfl", "evidence": _ANBNCN_CLOSURE_EVIDENCE,
+                },
+            }
+            if extra_agent_results:
+                agent_results.update(extra_agent_results)
+            state = _base_state(
+                retry_round=0,
+                ir={},
+                agent_results=agent_results,
+                oracle_test_result={"status": "pass", "trust": "bounded_pass"},
+                claim_verification=claim_verification,
+                # The wrong grammar's sample pass convinced reasoning to
+                # propose "cfl" at high confidence — the live-run precedent
+                # this rule fixes (docs/VERDICT_POLICY.md R3).
+                reasoning_output={"action": "done", "verdict": "cfl", "confidence": 0.85},
+            )
+            return apply_verdict_gate(state)
+
+    def test_witnesses_leaving_R_are_filtered_not_reused(self):
+        """Finding-1 fix, checked directly: no destructive witness reused by
+        the cross-check should claim a membership fact about a word outside
+        R — those were exactly the ones computed against L ∩ R, not L."""
+        agent_output = {
+            "agent": "closure_reduction", "status": "success",
+            "evidence": _ANBNCN_CLOSURE_EVIDENCE,
+        }
+        with patch(
+            "cfl_system.lib.claim_verifier._get_oracle", return_value=_anbncn_union_oracle,
+        ):
+            result = verify_agent_claims(agent_output, {})
+        witnesses = result["details"]["destructive_witnesses"]
+        assert witnesses  # the fixture does produce witnesses
+        r_pattern = _re.compile("a*b*c*")
+        assert all(r_pattern.fullmatch(w["word"]) for w in witnesses)
+
+    def test_overgenerating_grammar_refuted_verdict_stays_non_cfl(self):
+        gate = self._run()
+        vg = gate["verdict_gate"]
+        cc = vg["contradiction_details"]["cross_check"]
+        assert cc["performed"] is True
+        assert cc["constructive_refuted_agents"] == ["cfg_builder"]
+        assert cc["destructive_refuted"] is False
+        assert vg["contradiction"] is False
+        assert gate["reasoning_output"]["verdict"] == "non_cfl"
+        assert gate["trust"]["cfg_builder"] == "refuted"
+
+    def test_with_failed_pda_builder_present_still_resolves(self):
+        """docs/VERDICT_POLICY.md R3'/_collect_agent_trust fix (reviewer
+        finding): a pda_builder that errored out must not borrow cfg_builder's
+        oracle_test trust and must not block the contradiction from
+        resolving once cfg_builder is refuted by the cross-check."""
+        gate = self._run(extra_agent_results={
+            "pda_builder": {"status": "agent_error", "errors": ["PDA build failed"]},
+        })
+        vg = gate["verdict_gate"]
+        assert vg["contradiction"] is False
+        assert gate["reasoning_output"]["verdict"] == "non_cfl"
+        assert "pda_builder" not in gate["trust"]

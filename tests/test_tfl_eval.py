@@ -243,6 +243,64 @@ class TestRunEntryKCorrectness:
 
 
 # ---------------------------------------------------------------------------
+# 3c. `_run_entry` must report a per-entry usage DELTA, not the shared
+# `live_runner_cache` runner's cumulative running total (reviewer finding).
+# ---------------------------------------------------------------------------
+
+class _CumulativeUsageRunner:
+    """Stub agent runner whose usage_tracker.as_dict() returns an
+    ever-growing cumulative snapshot, exactly like the real UsageTracker
+    (TODO.md §3) — used to exercise the shared-`live_runner_cache` usage
+    delta across several `_run_entry` calls."""
+
+    def __init__(self) -> None:
+        self._calls = 0
+        self.usage_tracker = self
+
+    def as_dict(self) -> dict:
+        return {
+            "calls": self._calls,
+            "total_tokens": self._calls * 10,
+            "estimated_cost_usd": round(self._calls * 0.01, 6),
+        }
+
+
+class TestRunEntryUsageDelta:
+    def test_reports_per_entry_delta_not_cumulative_total(self, monkeypatch):
+        """3 entries x 10 calls each, sharing one cached runner, must each
+        report usage=10 calls -- not the cumulative 10/20/30 that summing
+        `result['usage']` verbatim used to produce."""
+        runner = _CumulativeUsageRunner()
+        monkeypatch.setattr(cli_mod, "validate", lambda system, ir: [])
+        monkeypatch.setattr(cli_mod, "make_live_runner", lambda system: runner)
+
+        def _fake_run_pipeline(system, ir, mock_runner=None, agent_runner=None):
+            agent_runner.usage_tracker._calls += 10  # 10 LLM calls this round
+            return {"verdict": None, "confidence": None, "usage": agent_runner.usage_tracker.as_dict()}
+
+        monkeypatch.setattr(cli_mod, "run_pipeline", _fake_run_pipeline)
+        monkeypatch.setattr(
+            cli_mod, "extract",
+            lambda system, result: {
+                "verdict": None, "confidence": None, "k": None,
+                "basis_trust": [], "verdict_gate": {},
+            },
+        )
+
+        entry = {
+            "id": "usage-delta-fake", "system": "reg", "trap": False, "expected": {},
+            "path": "agent_system/examples/task1_palindrome_prefix_suffix.json",
+        }
+        cache: dict = {}
+        records = [cli_mod._run_entry(entry, live=True, live_runner_cache=cache) for _ in range(3)]
+
+        assert [r["usage"]["calls"] for r in records] == [10, 10, 10]
+        assert [r["usage"]["total_tokens"] for r in records] == [100, 100, 100]
+        # The runner itself is genuinely shared (same cache entry reused).
+        assert runner._calls == 30
+
+
+# ---------------------------------------------------------------------------
 # 4. CLI end-to-end, mocked (no --live, no network)
 # ---------------------------------------------------------------------------
 
@@ -293,3 +351,45 @@ class TestCLIMocked:
         report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
         assert all(r["system"] == "cfl" for r in report["records"])
         assert len(report["records"]) > 0
+
+
+class TestUsageAggregation:
+    """``_aggregate_usage`` (TODO.md §3): pure aggregation of each
+    record's ``usage`` block (mock runs never populate one -- MockRunner
+    has no ``usage_tracker`` -- so these use synthetic records)."""
+
+    def test_empty_when_no_record_has_usage(self):
+        agg = cli_mod._aggregate_usage([{"id": "a"}, {"id": "b", "usage": None}])
+        assert agg["records_with_usage"] == 0
+        assert agg["calls"] == 0
+        assert agg["estimated_cost_usd"] is None
+
+    def test_sums_across_records(self):
+        records = [
+            {"id": "a", "usage": {
+                "calls": 3, "input_tokens": 100, "output_tokens": 40,
+                "total_tokens": 140, "structured_output_calls": 2,
+                "extraction_fallback_calls": 1, "estimated_cost_usd": 0.01,
+            }},
+            {"id": "b", "usage": {
+                "calls": 2, "input_tokens": 50, "output_tokens": 20,
+                "total_tokens": 70, "structured_output_calls": 2,
+                "extraction_fallback_calls": 0, "estimated_cost_usd": 0.005,
+            }},
+            {"id": "c"},  # skipped task, no usage at all
+        ]
+        agg = cli_mod._aggregate_usage(records)
+        assert agg["records_with_usage"] == 2
+        assert agg["calls"] == 5
+        assert agg["total_tokens"] == 210
+        assert agg["structured_output_calls"] == 4
+        assert agg["extraction_fallback_calls"] == 1
+        assert agg["estimated_cost_usd"] == 0.015
+
+    def test_cost_unknown_if_any_contributing_record_is_unknown(self):
+        records = [
+            {"id": "a", "usage": {"calls": 1, "estimated_cost_usd": 0.01}},
+            {"id": "b", "usage": {"calls": 1, "estimated_cost_usd": None}},
+        ]
+        agg = cli_mod._aggregate_usage(records)
+        assert agg["estimated_cost_usd"] is None

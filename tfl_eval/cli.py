@@ -49,6 +49,40 @@ def _load_ir(entry: dict) -> dict:
     return json.loads(ir_path.read_text(encoding="utf-8"))
 
 
+def _usage_delta(after: dict | None, before: dict | None) -> dict | None:
+    """Return *after* minus *before*, recursively, over the shape of
+    ``UsageTracker.as_dict()`` (TODO.md §3 / reviewer finding).
+
+    ``_run_entry`` shares one ``LiveRunner``/``LLMRunner`` (and its
+    ``UsageTracker``) across every manifest entry for a system via
+    ``live_runner_cache``, so ``run_pipeline``'s ``result["usage"]`` is a
+    *cumulative* snapshot as of that call, not what this one entry alone
+    used. Summing those cumulative snapshots (as ``_aggregate_usage`` does)
+    silently multiplies out every earlier entry's usage into every later
+    one (3 tasks x 10 calls each -> per-record 10/20/30, total 60 instead
+    of 30). Subtracting the before/after snapshot per entry gives the
+    actual per-entry delta; a missing/unknown side of a leaf (e.g. cost
+    when no model in the tracker yet has a known price) is treated as 0 so
+    the delta still comes out as the other side's real value.
+    """
+    if after is None:
+        return None
+    if before is None:
+        return after
+
+    def _sub(a: Any, b: Any) -> Any:
+        if isinstance(a, dict) or isinstance(b, dict):
+            a = a if isinstance(a, dict) else {}
+            b = b if isinstance(b, dict) else {}
+            return {k: _sub(a.get(k), b.get(k)) for k in (set(a) | set(b))}
+        if isinstance(a, (int, float)) and not isinstance(a, bool):
+            b_num = b if isinstance(b, (int, float)) and not isinstance(b, bool) else 0
+            return a - b_num
+        return a
+
+    return _sub(after, before)
+
+
 def _run_entry(entry: dict, live: bool, live_runner_cache: dict[str, Any]) -> dict:
     """Run one manifest entry and return its result record (never raises)."""
     record: dict[str, Any] = {
@@ -84,6 +118,12 @@ def _run_entry(entry: dict, live: bool, live_runner_cache: dict[str, Any]) -> di
             return record
         mock_runner = make_mock_runner(system, mock_task)
 
+    # Snapshot the (possibly shared, cached-across-entries) usage tracker
+    # before this entry's run, so its contribution can be isolated as a
+    # delta afterwards instead of reported as the tracker's running total.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    usage_before = tracker.as_dict() if tracker is not None else None
+
     start = time.perf_counter()
     try:
         result = run_pipeline(system, ir, mock_runner=mock_runner, agent_runner=agent_runner)
@@ -116,7 +156,7 @@ def _run_entry(entry: dict, live: bool, live_runner_cache: dict[str, Any]) -> di
         k=extracted["k"],
         basis_trust=extracted["basis_trust"],
         verdict_gate=extracted["verdict_gate"],
-        usage=result.get("usage"),
+        usage=_usage_delta(result.get("usage"), usage_before),
         elapsed_s=elapsed,
         correct=correct,
         k_correct=k_correct,
@@ -124,7 +164,54 @@ def _run_entry(entry: dict, live: bool, live_runner_cache: dict[str, Any]) -> di
     return record
 
 
+def _aggregate_usage(records: list[dict]) -> dict:
+    """Sum ``record["usage"]`` (a pipeline's ``UsageTracker.as_dict()``,
+    TODO.md §3) across every record that ran with one -- pure aggregation,
+    no new accounting: totals for calls/tokens/structured-output counters,
+    and estimated cost when every contributing record's cost is known."""
+    total_calls = 0
+    input_tokens = output_tokens = 0
+    total_tokens = 0
+    structured_output_calls = 0
+    extraction_fallback_calls = 0
+    total_cost = 0.0
+    cost_known = True
+    n_with_usage = 0
+
+    for r in records:
+        usage = r.get("usage")
+        if not usage:
+            continue
+        n_with_usage += 1
+        total_calls += usage.get("calls", 0) or 0
+        input_tokens += usage.get("input_tokens", 0) or 0
+        output_tokens += usage.get("output_tokens", 0) or 0
+        total_tokens += usage.get("total_tokens", 0) or 0
+        structured_output_calls += usage.get("structured_output_calls", 0) or 0
+        extraction_fallback_calls += usage.get("extraction_fallback_calls", 0) or 0
+        cost = usage.get("estimated_cost_usd")
+        if cost is None:
+            cost_known = False
+        else:
+            total_cost += cost
+    cost_known = cost_known and n_with_usage > 0
+
+    return {
+        "records_with_usage": n_with_usage,
+        "calls": total_calls,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "structured_output_calls": structured_output_calls,
+        "extraction_fallback_calls": extraction_fallback_calls,
+        "estimated_cost_usd": round(total_cost, 6) if cost_known else None,
+    }
+
+
 def _render_markdown(records: list[dict], report: dict, meta: dict) -> str:
+    usage = _aggregate_usage(records)
+    cost = usage["estimated_cost_usd"]
+    cost_str = f"${cost:.4f}" if cost is not None else "n/a"
     lines = [
         "# tfl-eval report",
         "",
@@ -132,6 +219,13 @@ def _render_markdown(records: list[dict], report: dict, meta: dict) -> str:
         f"- Systems: {', '.join(meta['systems'])}",
         f"- Live: {meta['live']} (model: {meta.get('model') or 'n/a'})",
         f"- Entries: {len(records)}",
+    ]
+    if usage["records_with_usage"]:
+        lines.append(
+            f"- Usage: {usage['calls']} calls, {usage['total_tokens']} tokens, "
+            f"estimated cost ≈ {cost_str}"
+        )
+    lines += [
         "",
         "## Summary",
         "",
@@ -236,7 +330,8 @@ def main(argv: list[str] | None = None) -> int:
         "manifest": str(manifest_path),
     }
 
-    report_json = {"meta": meta, "metrics": report, "records": records}
+    usage_summary = _aggregate_usage(records)
+    report_json = {"meta": meta, "metrics": report, "usage": usage_summary, "records": records}
     (out_dir / "report.json").write_text(
         json.dumps(report_json, ensure_ascii=False, indent=2, default=str), encoding="utf-8",
     )
@@ -248,6 +343,13 @@ def main(argv: list[str] | None = None) -> int:
     acc = report["overall"]["accuracy"]["accuracy"]
     print(f"tfl-eval: {len(records)} tasks -> ran={n_ran} skipped={n_skipped} error={n_error}")
     print(f"overall accuracy: {acc if acc is not None else 'n/a'}")
+    if usage_summary["records_with_usage"]:
+        cost = usage_summary["estimated_cost_usd"]
+        cost_str = f"${cost:.4f}" if cost is not None else "n/a"
+        print(
+            f"usage: calls={usage_summary['calls']} total_tokens={usage_summary['total_tokens']} "
+            f"estimated_cost≈{cost_str}"
+        )
     print(f"report written to {out_dir}")
     return 0
 

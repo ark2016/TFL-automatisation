@@ -133,15 +133,23 @@ def extract(system: str, result: dict) -> dict:
     """
     if system == "reg":
         evidence = result.get("evidence", {}) or {}
-        reasoning = evidence.get("reasoning", {}) or {}
-        r_ev = reasoning.get("evidence", reasoning) if isinstance(reasoning, dict) else {}
-        verdict = (
-            r_ev.get("verdict")
-            or reasoning.get("verdict")
-            or (evidence.get("hypothesis") or {}).get("hypothesis")
-        )
-        confidence = result.get("confidence")
         gate = evidence.get("verdict_gate") or result.get("verdict_gate") or {}
+        # docs/VERDICT_POLICY.md R3/R1 (reviewer finding): an unresolved
+        # contradiction (status=="partial", verdict_gate.contradiction=True)
+        # must not surface the reasoning agent's own proposed regular/
+        # non_regular verdict as if it were confirmed — see the matching
+        # guard in agent_system.orchestrator._result_verdict.
+        if result.get("status") == "partial" and gate.get("contradiction"):
+            verdict = None
+        else:
+            reasoning = evidence.get("reasoning", {}) or {}
+            r_ev = reasoning.get("evidence", reasoning) if isinstance(reasoning, dict) else {}
+            verdict = (
+                r_ev.get("verdict")
+                or reasoning.get("verdict")
+                or (evidence.get("hypothesis") or {}).get("hypothesis")
+            )
+        confidence = result.get("confidence")
         k = None
     else:
         verdict = result.get("verdict")

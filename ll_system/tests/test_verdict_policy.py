@@ -101,7 +101,10 @@ class TestScenario1ConstructiveFailureIsNotDestructiveEvidence:
 
 class TestScenario2Contradiction:
     """Constructive bounded_pass + destructive well_formed at the same time ->
-    contradiction: true, confidence <= 0.50, verdict goes to the stronger side."""
+    contradiction: true, confidence <= 0.50. docs/VERDICT_POLICY.md R3 (post-
+    R3' revision): "bounded_pass vs well_formed" no longer settles this by
+    rank -- only a `verified` side wins (see TestScenario2VerifiedWins
+    below); otherwise it stays `uncertain`."""
 
     def test_contradiction_detected_and_capped(self):
         state = _state(
@@ -134,8 +137,48 @@ class TestScenario2Contradiction:
         gate = result["verdict_gate"]
         assert gate["contradiction"] is True
         assert result["confidence"] <= 0.50
-        # bounded_pass (rank 2) outranks well_formed (rank 1) -> constructive side wins
-        assert result["verdict"] == "ll"
+        # No longer resolved by rank -- neither side is `verified`, so this
+        # stays `uncertain` (docs/VERDICT_POLICY.md R3 fix).
+        assert result["verdict"] == "uncertain"
+
+
+class TestScenario2VerifiedWins:
+    """A `verified` side still wins an unresolved contradiction, but capped
+    at 0.85, not the normal 0.98 `verified` ceiling (docs/VERDICT_POLICY.md
+    R3)."""
+
+    def test_verified_destructive_side_wins_capped_at_085(self):
+        state = _state(
+            agent_results={
+                "ll_grammar_builder": {
+                    "verdict": "ll",
+                    "confidence": 0.9,
+                    "proof_sketch": {"method": "ll_grammar_construction", "k": 1, "grammar": {}},
+                },
+                "substitution_agent": {
+                    "verdict": "not_ll",
+                    "confidence": 0.85,
+                    "proof_sketch": {"method": "substitution", "for_all_k": True},
+                },
+            },
+            claim_verification={
+                "ll_grammar_builder": {"trust": "bounded_pass", "verification_status": "bounded_pass"},
+                "substitution_agent": {"trust": "verified", "verification_status": "verified"},
+            },
+            reasoning_output={
+                "action": "done",
+                "verdict": "ll",
+                "confidence": 0.99,
+                "primary_agent": "ll_grammar_builder",
+                "summary": "test",
+            },
+        )
+        out = assemble_result_node(state)
+        result = out["result"]
+        gate = result["verdict_gate"]
+        assert gate["contradiction"] is True
+        assert result["verdict"] == "not_ll"
+        assert result["confidence"] == 0.85
 
     def test_contradiction_tie_is_uncertain(self):
         state = _state(

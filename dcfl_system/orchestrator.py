@@ -66,6 +66,12 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
 
+# docs/VERDICT_POLICY.md R3: when a contradiction is not resolved (R3' has
+# no executable DCFL artifact to cross-check against, per dcfl_system/CLAUDE.md
+# "Formal verification NOT implemented" -- falls back to the plain rule), a
+# `verified` side still wins, but capped at 0.85, not the normal 0.98 ceiling.
+_CONTRADICTION_VERIFIED_CAP = 0.85
+
 DCFL_SPECIALIST_NAMES = (
     "stack_strategy", "closure_reduction", "dcfl_pumping", "shallit", "inh_ambiguity",
 )
@@ -279,7 +285,10 @@ class LiveRunner:
         except Exception:
             return None
         repaired = "".join(b.text for b in response.content if hasattr(b, "text"))
-        self.usage_tracker.record(getattr(response, "model", self._json_repair_model), getattr(response, "usage", None))
+        self.usage_tracker.record(
+            getattr(response, "model", self._json_repair_model), getattr(response, "usage", None),
+            agent=agent_name, used_structured_output=False,
+        )
         return _extract_json(repaired)
 
     def run_agent(self, agent_name: str, input_data: dict | None = None) -> dict | None:
@@ -326,6 +335,7 @@ class LiveRunner:
                     system=system_prompt, user=user_msg,
                     effort=effort, temperature=temperature,
                     output_schema=_output_schema_for(agent_name),
+                    agent=agent_name,
                 )
             except FatalAPIError as exc:
                 if exc.status_code == 400:
@@ -359,7 +369,8 @@ class LiveRunner:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
                 cost = estimate_cost_usd(result.model or model, result.usage)
                 cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
-                print(f"[{agent_name}] model={result.model} effort={effort} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}{cost_str}",
+                so_str = " so=yes" if result.used_structured_output else " so=no"
+                print(f"[{agent_name}] model={result.model} effort={effort} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}{cost_str}{so_str}",
                       file=sys.stderr, flush=True)
 
             # A safety-classifier decline is not a parse problem: retrying or
@@ -588,38 +599,61 @@ def _apply_verdict_gate(
         # runs BEFORE the R1/R2 threshold check below (using the trust the
         # reasoning agent's own proposal actually has, not a post-R2 nulled
         # verdict) — a below-threshold constructive claim (e.g. stack_strategy
-        # at well_formed) contradicted by a real destructive artifact (e.g.
-        # dcfl_pumping at bounded_pass) must still resolve to the stronger
-        # (destructive) side, not fall through to a bare "inconclusive" that
-        # throws away real evidence sitting right there on the other side.
+        # at well_formed) next to a real destructive artifact (e.g.
+        # dcfl_pumping at bounded_pass) is NOT a contradiction at all: it
+        # resolves directly to the destructive side below, not through this
+        # branch (see the asymmetric threshold check just below — a
+        # well_formed constructive claim already fails R2 on its own, so it
+        # must never be treated as strong enough to contest anything).
         opp_direction = "destructive" if direction == "constructive" else "constructive"
         opp_name, opp_trust = _best_evidence(agent_results, oracle_verification, opp_direction)
         if opp_trust is not None:
-            own_rank = trust_rank(primary_trust)
-            opp_rank = trust_rank(opp_trust)
-            own_strong = own_rank >= trust_rank("bounded_pass")
-            opp_strong = opp_rank >= trust_rank("well_formed")
-            # symmetric: also fires if the OTHER side is the strong (>=bounded_pass) one
-            if (own_strong and opp_strong) or (
-                opp_rank >= trust_rank("bounded_pass") and own_rank >= trust_rank("well_formed")
+            if direction == "constructive":
+                constructive_name, constructive_trust_val = primary, primary_trust
+                destructive_name, destructive_trust_val = opp_name, opp_trust
+            else:
+                destructive_name, destructive_trust_val = primary, primary_trust
+                constructive_name, constructive_trust_val = opp_name, opp_trust
+
+            # docs/VERDICT_POLICY.md R3: a contradiction requires the
+            # CONSTRUCTIVE side to be at least bounded_pass AND the
+            # DESTRUCTIVE side at least well_formed -- this is NOT symmetric
+            # in "own"/"opp" (reviewer finding: the old symmetric check also
+            # fired when the constructive side was only well_formed and the
+            # destructive side bounded_pass+, throwing away a legitimate
+            # non_dcfl backed by a bounded_pass destructive proof just
+            # because a well_formed stack_strategy happened to sit on the
+            # other side -- a well_formed constructive claim never blocks
+            # non_dcfl on its own, it already fails R2).
+            if (
+                trust_rank(constructive_trust_val) >= trust_rank("bounded_pass")
+                and trust_rank(destructive_trust_val) >= trust_rank("well_formed")
             ):
                 contradiction = True
-                cap = min(cap, CONTRADICTION_CONFIDENCE_CAP)
-                if own_rank > opp_rank:
-                    winner_verdict = verdict
-                elif opp_rank > own_rank:
-                    winner_verdict = "non_dcfl" if direction == "constructive" else "dcfl"
+                # docs/VERDICT_POLICY.md R3 (post-R3' revision): "bounded_pass
+                # vs well_formed" no longer settles this by rank -- only a
+                # `verified` side wins (capped at 0.85, not 0.98); otherwise
+                # it stays inconclusive (R3': no executable DCFL artifact
+                # exists yet to cross-check against, so this falls back to
+                # the plain inconclusive rule rather than a real R3' check).
+                if constructive_trust_val == "verified" and destructive_trust_val != "verified":
+                    winner_verdict = "dcfl"
+                    cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
+                elif destructive_trust_val == "verified" and constructive_trust_val != "verified":
+                    winner_verdict = "non_dcfl"
+                    cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
                 else:
                     winner_verdict = None
+                    cap = min(cap, CONTRADICTION_CONFIDENCE_CAP)
                 downgrades.append(
-                    f"contradiction: '{primary}' ({primary_trust}) argues {verdict} "
-                    f"while '{opp_name}' ({opp_trust}) argues the opposite -> "
-                    f"verdict={winner_verdict!r}, confidence<=0.50 (R3)"
+                    f"contradiction: constructive={constructive_name}({constructive_trust_val}) "
+                    f"vs destructive={destructive_name}({destructive_trust_val}) -> "
+                    f"verdict={winner_verdict!r}, confidence<={cap} (R3)"
                 )
                 verdict = winner_verdict
                 action = "retry" if retry_count < max_retries else "done"
-                basis.append({"agent": primary, "trust": primary_trust})
-                basis.append({"agent": opp_name, "trust": opp_trust})
+                basis.append({"agent": constructive_name, "trust": constructive_trust_val})
+                basis.append({"agent": destructive_name, "trust": destructive_trust_val})
 
         if not contradiction:
             # docs/VERDICT_POLICY.md R2: a CONSTRUCTIVE verdict ("dcfl") needs
@@ -1346,7 +1380,7 @@ def run_pipeline(
     final_state = graph.invoke(initial_state)
     result = final_state.get("result")
     if not result:
-        return {
+        result = {
             "task": ir.get("task_type"),
             "source_text": ir.get("source_text"),
             "verdict": "failure",
@@ -1355,6 +1389,11 @@ def run_pipeline(
             "retries": 0,
             "errors": ["Graph produced no result"],
         }
+    # Usage/cost block (TODO.md §3) -- additive, present even without a live
+    # agent_runner (an all-zero UsageTracker) so callers can rely on
+    # result["usage"] always existing.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
     return result
 
 
@@ -1405,6 +1444,8 @@ def main() -> None:
         agent_runner=agent,
         verbose=args.verbose,
     )
+    if args.verbose and agent is not None:
+        print(agent.usage_tracker.summary_line(), file=sys.stderr)
 
     # Determine output directory
     output_dir = Path(args.save or args.output_dir or "examples/output")

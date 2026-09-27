@@ -111,6 +111,31 @@ class TestScenario2Contradiction(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# §6 scenario 2b — contradiction where one side is `verified`: a Lean-checked
+# non_regular proof (no `sorry`) next to a constructive artifact that still
+# passes its (sample-based, bounded_pass) oracle_test. docs/VERDICT_POLICY.md
+# R3: the `verified` side still wins, but capped at 0.85, not the normal 0.98
+# `verified` ceiling.
+# ---------------------------------------------------------------------------
+
+class TestScenario2VerifiedWins(unittest.TestCase):
+
+    def test_lean_verified_destructive_wins_over_bounded_pass_capped_at_085(self):
+        state = _state(
+            test_result={"status": "pass", "tested": 200},
+            evidence={
+                "formalization": {"status": "valid", "sorry_count": 0, "lean_verified": True},
+            },
+            reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.99}},
+        )
+        result = assemble_result_node(state)["result"]
+
+        self.assertTrue(result["verdict_gate"]["contradiction"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["confidence"], 0.85)
+
+
+# ---------------------------------------------------------------------------
 # §6 scenario 3 — Lean verified (status=="valid" and sorry_count==0)
 # ---------------------------------------------------------------------------
 
@@ -606,6 +631,136 @@ class TestNerodeContextSharedVariable(unittest.TestCase):
         }
         result = verify_nerode_claim(proof, oracle=lambda w: True)
         self.assertEqual(result["trust"], "well_formed")
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding fix: an unresolved contradiction must not leak the
+# reasoning agent's own proposed regular/non_regular verdict through as if
+# it were the pipeline's actual verdict -- only its confidence used to be
+# capped; the verdict field itself was left untouched in evidence.reasoning,
+# and orchestrator._result_verdict / tfl_eval.runners.extract('reg') both
+# read straight through to it.
+# ---------------------------------------------------------------------------
+
+class TestContradictionDoesNotLeakReasoningVerdict(unittest.TestCase):
+
+    def test_unresolved_contradiction_nulls_reasoning_verdict(self):
+        state = _state(
+            test_result={"status": "pass", "tested": 200},
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "well_formed", "reason": "no oracle"},
+                "reasoning": {"verdict": "regular", "confidence": 0.9},
+            },
+            reasoning_output={"verdict": "regular", "confidence": 0.9},
+        )
+        result = assemble_result_node(state)["result"]
+
+        self.assertTrue(result["verdict_gate"]["contradiction"])
+        self.assertEqual(result["status"], "partial")
+        self.assertLessEqual(result["confidence"], 0.50)
+        # The gate must null the verdict it just refused to confirm -- not
+        # just cap confidence and leave "regular" sitting in evidence.reasoning.
+        self.assertIsNone(result["evidence"]["reasoning"]["verdict"])
+
+
+# ---------------------------------------------------------------------------
+# docs/VERDICT_POLICY.md R3' for REG (reviewer finding): the destructive
+# proof's own witness words (reused from claim_verifier's step-2 checks) run
+# through the language oracle AND the DFA behind test_result before falling
+# back to an unresolved R3 contradiction.
+# ---------------------------------------------------------------------------
+
+_ACCEPT_ALL_DFA = {
+    "states": ["q0"], "alphabet": ["a", "b"],
+    "transitions": {"q0": {"a": "q0", "b": "q0"}},
+    "start": "q0", "accept": ["q0"],
+}
+
+
+class TestR3PrimeCrossCheckReg(unittest.TestCase):
+
+    def test_cross_check_refutes_overgenerating_dfa_resolves_non_regular(self):
+        """The DFA (accept-everything) over-generates: it wrongly accepts
+        'aaabb', which the destructive proof's own witness correctly claims
+        is NOT in L (oracle-confirmed) -> the DFA is refuted, not the proof."""
+        witnesses = [
+            {"word": "aabb", "expected_in_l": True, "source": "word_family p=2"},
+            {"word": "aaabb", "expected_in_l": False, "source": "reg pumping p=2 x='a' i=2"},
+        ]
+        state = _state(
+            oracle_fn=_anbn_oracle,
+            dfa=_ACCEPT_ALL_DFA,
+            test_result={"status": "pass", "tested": 50},
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "bounded_pass", "witnesses": witnesses},
+            },
+            reasoning_output={"verdict": "regular", "confidence": 0.9},
+        )
+        result = assemble_result_node(state)["result"]
+        vg = result["verdict_gate"]
+
+        # Resolved deterministically, not left standing (mirrors
+        # cfl_system.orchestrator's R3' convention).
+        self.assertFalse(vg["contradiction"])
+        self.assertEqual(result["status"], "success")
+        self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["bounded_pass"])
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "non_regular")
+        self.assertTrue(
+            any("R3' cross-check refuted constructive artifact" in d for d in vg["downgrades"])
+        )
+
+    def test_cross_check_refutes_wrong_destructive_witness_resolves_regular(self):
+        """The reverse: the destructive proof's own witness claim disagrees
+        with the real oracle -> the proof itself is refuted, and the DFA
+        (which never gets contradicted) wins instead."""
+        witnesses = [
+            # 'aaabb' is NOT in L = {a^n b^n} per the real oracle, but this
+            # (synthetically wrong) proof claims it IS.
+            {"word": "aaabb", "expected_in_l": True, "source": "synthetic bad witness"},
+        ]
+        state = _state(
+            oracle_fn=_anbn_oracle,
+            dfa=_ACCEPT_ALL_DFA,
+            test_result={"status": "pass", "tested": 50},
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "bounded_pass", "witnesses": witnesses},
+            },
+            reasoning_output={"verdict": "non_regular", "confidence": 0.9},
+        )
+        result = assemble_result_node(state)["result"]
+        vg = result["verdict_gate"]
+
+        self.assertFalse(vg["contradiction"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "regular")
+        self.assertTrue(
+            any("R3' cross-check refuted destructive claim" in d for d in vg["downgrades"])
+        )
+
+    def test_no_witnesses_falls_back_to_unresolved_contradiction(self):
+        """Without witnesses (e.g. an older well_formed-only check that never
+        ran step-2), R3' cannot run at all -- falls back to the plain R3
+        rule: unresolved, verdict nulled, confidence <= 0.50."""
+        state = _state(
+            oracle_fn=_anbn_oracle,
+            dfa=_ACCEPT_ALL_DFA,
+            test_result={"status": "pass", "tested": 50},
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "bounded_pass"},  # no "witnesses" key
+            },
+            reasoning_output={"verdict": "regular", "confidence": 0.9},
+        )
+        result = assemble_result_node(state)["result"]
+        vg = result["verdict_gate"]
+
+        self.assertTrue(vg["contradiction"])
+        self.assertEqual(result["status"], "partial")
+        self.assertLessEqual(result["confidence"], 0.50)
+        self.assertIsNone(result["evidence"]["reasoning"]["verdict"])
 
 
 if __name__ == "__main__":

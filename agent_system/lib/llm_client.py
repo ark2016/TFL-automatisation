@@ -479,11 +479,31 @@ class UsageTotals:
     calls: int = 0
 
 
+def _totals_to_dict(model: str, t: "UsageTotals") -> dict:
+    return {
+        "calls": t.calls,
+        "input_tokens": t.input_tokens,
+        "output_tokens": t.output_tokens,
+        "cache_read_input_tokens": t.cache_read_input_tokens,
+        "cache_creation_input_tokens": t.cache_creation_input_tokens,
+        "estimated_cost_usd": estimate_cost_usd(model, t),
+    }
+
+
 class UsageTracker:
     """Accumulates token usage (and, where :data:`MODEL_PRICING` has
     confirmed prices, estimated cost) across every LLM call made by one
     pipeline run — feeds the ``usage`` block of the result JSON and the
     ``--verbose`` summary line (TODO.md §3).
+
+    Also tracks, per agent name, the same token/cost breakdown
+    (``per_agent`` in :meth:`as_dict`), and how many calls actually went
+    out with structured outputs (``output_config.format``) versus fell
+    back to the legacy "extract JSON from prose" / Haiku-repair path
+    (``structured_output_calls`` / ``extraction_fallback_calls``) — a
+    caller passes ``used_structured_output=True/False`` to :meth:`record`
+    when it knows which; ``None`` (the default) means "not applicable /
+    not tracked for this call" and is not counted either way.
 
     Thread-safe: LangGraph's ``Send`` fan-out can run several specialist
     agents' calls concurrently, so :meth:`record` takes a lock.
@@ -492,53 +512,126 @@ class UsageTracker:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._by_model: dict[str, UsageTotals] = {}
+        self._by_agent: dict[str, dict[str, UsageTotals]] = {}
+        self._structured_output_calls = 0
+        self._extraction_fallback_calls = 0
 
-    def record(self, model: str | None, usage: Any) -> None:
+    def record(
+        self, model: str | None, usage: Any, *,
+        agent: str | None = None, used_structured_output: bool | None = None,
+    ) -> None:
         """Add one call's `usage` (an SDK ``Usage`` object) to the totals
-        for `model`. A no-op when `usage` is ``None`` (e.g. a call that
-        errored before any usage was billed)."""
+        for `model` (and, when given, for `agent`). A no-op when `usage`
+        is ``None`` (e.g. a call that errored before any usage was
+        billed). ``used_structured_output`` (TODO.md §3): pass ``True``/
+        ``False`` when the caller knows whether this call actually used
+        structured outputs, to feed ``structured_output_calls`` /
+        ``extraction_fallback_calls``; leave it ``None`` (default) for a
+        call where that distinction does not apply (e.g. the quick
+        validator)."""
         if usage is None:
             return
         input_tokens = getattr(usage, "input_tokens", 0) or 0
         output_tokens = getattr(usage, "output_tokens", 0) or 0
         cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
         cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        model_key = model or "unknown"
+        agent_key = agent or "unknown"
         with self._lock:
-            totals = self._by_model.setdefault(model or "unknown", UsageTotals())
+            totals = self._by_model.setdefault(model_key, UsageTotals())
             totals.input_tokens += input_tokens
             totals.output_tokens += output_tokens
             totals.cache_read_input_tokens += cache_read
             totals.cache_creation_input_tokens += cache_creation
             totals.calls += 1
 
+            agent_totals = self._by_agent.setdefault(agent_key, {}).setdefault(
+                model_key, UsageTotals(),
+            )
+            agent_totals.input_tokens += input_tokens
+            agent_totals.output_tokens += output_tokens
+            agent_totals.cache_read_input_tokens += cache_read
+            agent_totals.cache_creation_input_tokens += cache_creation
+            agent_totals.calls += 1
+
+            if used_structured_output is True:
+                self._structured_output_calls += 1
+            elif used_structured_output is False:
+                self._extraction_fallback_calls += 1
+
     def as_dict(self) -> dict:
-        """JSON-serializable summary — the pipeline result's ``usage`` block."""
+        """JSON-serializable summary — the pipeline result's ``usage`` block.
+
+        Additive over the original shape: ``by_model``/``total_tokens``/
+        ``estimated_cost_usd`` are unchanged; ``calls``, the four raw
+        token buckets, ``per_agent`` and the structured-output counters
+        are new top-level fields.
+        """
         with self._lock:
             snapshot = {model: dataclasses.replace(t) for model, t in self._by_model.items()}
+            agent_snapshot = {
+                agent: {model: dataclasses.replace(t) for model, t in models.items()}
+                for agent, models in self._by_agent.items()
+            }
+            structured_output_calls = self._structured_output_calls
+            extraction_fallback_calls = self._extraction_fallback_calls
 
         by_model: dict[str, dict] = {}
+        input_tokens = output_tokens = 0
+        cache_read_input_tokens = cache_creation_input_tokens = 0
+        total_calls = 0
         total_tokens = 0
         total_cost = 0.0
         cost_known = bool(snapshot)
         for model, t in snapshot.items():
-            cost = estimate_cost_usd(model, t)
-            by_model[model] = {
-                "calls": t.calls,
-                "input_tokens": t.input_tokens,
-                "output_tokens": t.output_tokens,
-                "cache_read_input_tokens": t.cache_read_input_tokens,
-                "cache_creation_input_tokens": t.cache_creation_input_tokens,
-                "estimated_cost_usd": cost,
-            }
+            by_model[model] = _totals_to_dict(model, t)
+            input_tokens += t.input_tokens
+            output_tokens += t.output_tokens
+            cache_read_input_tokens += t.cache_read_input_tokens
+            cache_creation_input_tokens += t.cache_creation_input_tokens
+            total_calls += t.calls
             total_tokens += t.input_tokens + t.output_tokens
+            cost = by_model[model]["estimated_cost_usd"]
             if cost is None:
                 cost_known = False
             else:
                 total_cost += cost
+
+        per_agent: dict[str, dict] = {}
+        for agent, models in agent_snapshot.items():
+            agent_by_model: dict[str, dict] = {}
+            agent_calls = 0
+            agent_total_tokens = 0
+            agent_cost = 0.0
+            agent_cost_known = bool(models)
+            for model, t in models.items():
+                agent_by_model[model] = _totals_to_dict(model, t)
+                agent_calls += t.calls
+                agent_total_tokens += t.input_tokens + t.output_tokens
+                cost = agent_by_model[model]["estimated_cost_usd"]
+                if cost is None:
+                    agent_cost_known = False
+                else:
+                    agent_cost += cost
+            per_agent[agent] = {
+                "calls": agent_calls,
+                "total_tokens": agent_total_tokens,
+                "estimated_cost_usd": round(agent_cost, 6) if agent_cost_known else None,
+                "by_model": agent_by_model,
+            }
+
         return {
             "by_model": by_model,
             "total_tokens": total_tokens,
             "estimated_cost_usd": round(total_cost, 6) if cost_known else None,
+            "calls": total_calls,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+            "per_agent": per_agent,
+            "structured_output_calls": structured_output_calls,
+            "extraction_fallback_calls": extraction_fallback_calls,
         }
 
     def summary_line(self) -> str:
@@ -549,7 +642,15 @@ class UsageTracker:
             f"${cost:.4f}" if cost is not None
             else "unknown (pricing not confirmed for one or more models)"
         )
-        return f"[usage] total_tokens={d['total_tokens']} estimated_cost≈{cost_str}"
+        so_total = d["structured_output_calls"] + d["extraction_fallback_calls"]
+        so_str = (
+            f" structured_output={d['structured_output_calls']}/{so_total}"
+            if so_total else ""
+        )
+        return (
+            f"[usage] calls={d['calls']} total_tokens={d['total_tokens']} "
+            f"estimated_cost≈{cost_str}{so_str}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -655,7 +756,7 @@ class AnthropicClient:
     def call(
         self, client: Any, *, model: str, max_tokens: int, system: str, user: str,
         effort: str | None = None, temperature: float | None = None,
-        output_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None, agent: str | None = None,
     ) -> CallResult:
         """Make one logical (possibly retried) streamed call through `client`.
 
@@ -687,6 +788,7 @@ class AnthropicClient:
             return self._call_once(
                 client, model=model, max_tokens=max_tokens, system=system, user=user,
                 effort=effort, temperature=temperature, output_schema=output_schema,
+                agent=agent,
             )
         except FatalAPIError as exc:
             if output_schema is not None and _looks_like_schema_rejection(exc):
@@ -694,13 +796,14 @@ class AnthropicClient:
                 return self._call_once(
                     client, model=model, max_tokens=max_tokens, system=system, user=user,
                     effort=effort, temperature=temperature, output_schema=None,
+                    agent=agent,
                 )
             raise
 
     def _call_once(
         self, client: Any, *, model: str, max_tokens: int, system: str, user: str,
         effort: str | None = None, temperature: float | None = None,
-        output_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None, agent: str | None = None,
     ) -> CallResult:
         """One logical (possibly retried-on-transient-error) streamed call —
         no structured-output fallback here, :meth:`call` owns that."""
@@ -726,7 +829,10 @@ class AnthropicClient:
 
             usage = getattr(final_msg, "usage", None)
             result_model = getattr(final_msg, "model", None) or model
-            self.usage_tracker.record(result_model, usage)
+            self.usage_tracker.record(
+                result_model, usage, agent=agent,
+                used_structured_output=output_schema is not None,
+            )
 
             stop_reason = getattr(final_msg, "stop_reason", None)
             refusal_category = refusal_explanation = None
@@ -761,8 +867,10 @@ class LLMRunner:
         max_tokens: int | None = None,
         temperature: float | None = None,
         effort_map: dict[str, str] | None = None,
+        verbose: bool = False,
     ) -> None:
         _load_env()
+        self.verbose = verbose
 
         self.prompt_dir = Path(
             prompt_dir
@@ -873,7 +981,7 @@ class LLMRunner:
 
     def _stream_text(
         self, model: str, system: str, user: str, effort: str,
-        output_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None, agent_name: str | None = None,
     ) -> str:
         """Make one streamed API call (through the shared client) and return
         the answer text.
@@ -895,10 +1003,12 @@ class LLMRunner:
                 NotFoundError: propagated as-is (not wrapped) so the caller
                 fails fast instead of retrying a dead key / missing access.
         """
+        t0 = time.monotonic()
         try:
             result = self._shared.call(
                 self._client, model=model, max_tokens=self.max_tokens,
                 system=system, user=user, effort=effort, output_schema=output_schema,
+                agent=agent_name,
             )
         except FatalAPIError as exc:
             if exc.status_code == 400:
@@ -908,6 +1018,17 @@ class LLMRunner:
         except RetryableAPIError as exc:
             print(f"[LLM] API error: {exc}", file=sys.stderr)
             raise _AgentAPIError(str(exc)) from exc
+
+        elapsed = time.monotonic() - t0
+        if self.verbose:
+            tokens_in = result.usage.input_tokens if result.usage else 0
+            tokens_out = result.usage.output_tokens if result.usage else 0
+            so_str = " so=yes" if result.used_structured_output else " so=no"
+            print(
+                f"[{agent_name or 'LLM'}] model={result.model} effort={effort} "
+                f"tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{so_str}",
+                file=sys.stderr, flush=True,
+            )
 
         if result.stop_reason == "refusal":
             print(
@@ -980,7 +1101,7 @@ class LLMRunner:
         # Formalizer: return raw text, not JSON
         if agent_name in self._RAW_TEXT_AGENTS:
             try:
-                raw = self._call_raw(system_prompt, user_msg, model, effort)
+                raw = self._call_raw(system_prompt, user_msg, model, effort, agent_name=agent_name)
             except (_AgentAPIError, _AgentRefusal) as exc:
                 return self._error_output(agent_name, str(exc))
             # Strip markdown fences if present
@@ -1001,7 +1122,9 @@ class LLMRunner:
 
         # Standard JSON agents
         try:
-            parsed = self._call_and_parse(system_prompt, user_msg, model, effort, output_schema)
+            parsed = self._call_and_parse(
+                system_prompt, user_msg, model, effort, output_schema, agent_name=agent_name,
+            )
         except _AgentRefusal as exc:
             # A safety-classifier decline is not a parse problem -- a
             # second call asking for "valid JSON only" cannot un-refuse it.
@@ -1021,7 +1144,9 @@ class LLMRunner:
             "Please respond with ONLY a valid JSON object, no other text."
         )
         try:
-            parsed = self._call_and_parse(system_prompt, retry_msg, model, effort, output_schema)
+            parsed = self._call_and_parse(
+                system_prompt, retry_msg, model, effort, output_schema, agent_name=agent_name,
+            )
         except _AgentRefusal as exc:
             return self._error_output(agent_name, str(exc))
         except _AgentAPIError as exc:
@@ -1033,14 +1158,17 @@ class LLMRunner:
         return self._error_output(agent_name, "response was not valid JSON after one retry")
 
     def _call_raw(
-        self, system: str, user: str, model: str, effort: str | None = None
+        self, system: str, user: str, model: str, effort: str | None = None,
+        agent_name: str | None = None,
     ) -> str:
         """Make one API call and return raw response text."""
-        return self._stream_text(model, system, user, effort or self.default_effort)
+        return self._stream_text(
+            model, system, user, effort or self.default_effort, agent_name=agent_name,
+        )
 
     def _call_and_parse(
         self, system: str, user: str, model: str, effort: str | None = None,
-        output_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None, agent_name: str | None = None,
     ) -> dict | None:
         """Make one API call and try to parse JSON from response.
 
@@ -1050,6 +1178,7 @@ class LLMRunner:
         """
         text = self._stream_text(
             model, system, user, effort or self.default_effort, output_schema,
+            agent_name=agent_name,
         )
         return extract_json(text)
 
@@ -1074,7 +1203,10 @@ class LLMRunner:
             )
             with get_concurrency_semaphore():
                 response = self._client.messages.create(**kwargs)
-            self.usage_tracker.record(getattr(response, "model", model), getattr(response, "usage", None))
+            self.usage_tracker.record(
+                getattr(response, "model", model), getattr(response, "usage", None),
+                agent="validator",
+            )
             return _response_text(response).strip()
         except Exception as exc:
             return f"(validation error: {exc})"

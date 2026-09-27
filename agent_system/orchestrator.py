@@ -466,11 +466,13 @@ def main() -> None:
     elif args.live:
         from .lib.llm_client import LLMRunner
         try:
-            llm = LLMRunner()
+            llm = LLMRunner(verbose=args.verbose)
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
         result = pipeline.run_full_pipeline(ir, agent_runner=llm, formalize=formalize)
+        if args.verbose:
+            print(llm.usage_tracker.summary_line(), file=sys.stderr)
 
     else:
         dfa = None
@@ -582,8 +584,22 @@ def main() -> None:
 
 
 def _result_verdict(result: dict) -> str | None:
-    """Verdict of the reasoning agent (falls back to the hypothesis)."""
+    """Verdict of the reasoning agent (falls back to the hypothesis).
+
+    docs/VERDICT_POLICY.md R3/R1 (reviewer finding): an unresolved
+    contradiction leaves `status == "partial"` with `verdict_gate.
+    contradiction == True` (graph.py's `assemble_result_node`), but that
+    node never clears the reasoning agent's own proposed regular/
+    non_regular verdict field -- only its confidence gets capped. Reading
+    straight through to `reasoning.verdict` here would leak that
+    unconfirmed verdict out as the pipeline's top-level result (and
+    `tfl_eval.runners.extract('reg')` duplicates this same lookup, so it
+    needs the identical guard).
+    """
     evidence = result.get("evidence", {}) or {}
+    gate = evidence.get("verdict_gate") or result.get("verdict_gate") or {}
+    if result.get("status") == "partial" and gate.get("contradiction"):
+        return None
     reasoning = evidence.get("reasoning", {}) or {}
     r_ev = reasoning.get("evidence", reasoning) if isinstance(reasoning, dict) else {}
     return (r_ev.get("verdict")

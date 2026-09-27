@@ -21,6 +21,22 @@ def _esc(text: Any) -> str:
     return html_module.escape(str(text))
 
 
+def _usage_summary_line(result: dict) -> str | None:
+    """One-line usage/cost summary from ``result["usage"]`` (TODO.md §3),
+    or ``None`` when the block is absent/empty (older result, or a run
+    with no agent_runner at all -- nothing to show)."""
+    usage = result.get("usage")
+    if not usage:
+        return None
+    calls = usage.get("calls", 0)
+    if not calls:
+        return None
+    tokens = usage.get("total_tokens", 0)
+    cost = usage.get("estimated_cost_usd")
+    cost_s = f"${cost:.4f}" if cost is not None else "n/a"
+    return f"{calls} calls, {tokens} tokens, estimated cost ≈ {cost_s}"
+
+
 def _verdict_label(verdict: str | None) -> str:
     if verdict == "regular":
         return "regular"
@@ -433,6 +449,11 @@ def render_markdown(result: dict) -> str:
              "деструктивным доказательствами (см. `verdict_gate`).")
     _add()
 
+    usage_line = _usage_summary_line(result)
+    if usage_line:
+        _add(f"**Usage:** {usage_line}")
+        _add()
+
     return "\n".join(lines)
 
 
@@ -802,6 +823,10 @@ def render_html(result: dict) -> str:
     proof_agents = [k for k in ("pumping", "nerode", "closure") if evidence.get(k)]
     if len(proof_agents) > 1:
         footer_items.append(f'<span class="s-pill">{len(proof_agents)} метода согласованы</span>')
+
+    usage_line = _usage_summary_line(result)
+    if usage_line:
+        footer_items.append(f'<span class="s-pill">Usage: {_esc(usage_line)}</span>')
 
     p('<div class="s-footer">')
     for item in footer_items:

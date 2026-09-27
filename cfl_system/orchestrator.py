@@ -32,7 +32,7 @@ from langgraph.types import Send
 from cfl_system.lib.cfl_ir_schema import validate_cfl_ir
 from cfl_system.lib.cfl_hypothesis import analyze_cfl_hypothesis
 from cfl_system.lib.language_preprocess import preprocess_language
-from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
+from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir, grammar_oracle, pda_oracle
 from cfl_system.lib.cfl_oracle_test import normalize_agent_pda, oracle_test
 from cfl_system.lib.claim_verifier import verify_agent_claims
 
@@ -88,6 +88,12 @@ _CONFIDENCE_CAP_BY_TRUST = {
     "not_verified": 0.40,
 }
 _CONTRADICTION_CONFIDENCE_CAP = 0.50
+# docs/VERDICT_POLICY.md R3: when a contradiction survives R3' cross-check,
+# the "verified" side still wins, but capped at 0.85 (not the full 0.98 of
+# an uncontested `verified` basis) -- the fact that a real contradiction was
+# raised at all keeps some doubt alive even when one side is deterministically
+# fully proven.
+_CONTRADICTION_VERIFIED_CAP = 0.85
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +344,10 @@ class LiveRunner:
                 repaired_text += block.text
 
         usage = getattr(response, "usage", None)
-        self.usage_tracker.record(getattr(response, "model", self._json_repair_model), usage)
+        self.usage_tracker.record(
+            getattr(response, "model", self._json_repair_model), usage,
+            agent=agent_name, used_structured_output=False,
+        )
         if self.verbose:
             t_in = usage.input_tokens if usage else 0
             t_out = usage.output_tokens if usage else 0
@@ -447,6 +456,7 @@ class LiveRunner:
                     system=system_prompt, user=user_msg,
                     effort=effort, temperature=temperature,
                     output_schema=_output_schema_for(agent_name),
+                    agent=agent_name,
                 )
             except FatalAPIError as exc:
                 if exc.status_code == 400:
@@ -501,10 +511,11 @@ class LiveRunner:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
                 cost = estimate_cost_usd(result.model or model, result.usage)
                 cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
+                so_str = " so=yes" if result.used_structured_output else " so=no"
                 print(
                     f"[{agent_name}] model={result.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
-                    f"time={elapsed:.1f}s max={max_tokens}{extra}{cost_str}",
+                    f"time={elapsed:.1f}s max={max_tokens}{extra}{cost_str}{so_str}",
                     file=sys.stderr, flush=True,
                 )
 
@@ -854,13 +865,29 @@ def _collect_agent_trust(state: PipelineState) -> dict[str, str]:
     the shared oracle_test trust (there is one oracle_test per round, covering
     whichever of cfg_builder/pda_builder produced an artifact); every other
     agent gets its own claim_verification trust.
+
+    A constructive agent only gets the shared oracle_test trust when it
+    actually contributed the artifact that trust describes: `status ==
+    "success"` AND a usable grammar/PDA is present. Without this guard, a
+    `pda_builder` that errored out (or never produced a PDA) would still be
+    stamped with cfg_builder's `bounded_pass`/`refuted` verdict just because
+    both names are in `agent_results` -- which then lets a refuted
+    cfg_builder hide behind pda_builder's borrowed trust in the R3'
+    cross-check below (reviewer finding: contradiction stuck at `None`/0.5
+    instead of resolving to `non_cfl`).
     """
     trust: dict[str, str] = {}
     agent_results = state.get("agent_results") or {}
     ot_trust = _oracle_trust(state.get("oracle_test_result"))
     for name in _CONSTRUCTIVE_AGENTS:
-        if name in agent_results:
-            trust[name] = ot_trust
+        output = agent_results.get(name)
+        if not isinstance(output, dict) or output.get("status") != "success":
+            continue
+        if name == "cfg_builder" and not _agent_grammar(output):
+            continue
+        if name == "pda_builder" and not _agent_pda(output)[0]:
+            continue
+        trust[name] = ot_trust
     # claim_verification has a generic not_verified fallback entry for ANY
     # dispatched agent without a dedicated verifier (cfg_builder, pda_builder
     # included) — that fallback must never clobber the oracle-derived trust
@@ -932,6 +959,175 @@ def _strongest_destructive_trust(
     return _strongest_trust(trust_map, eligible)
 
 
+def _agent_grammar(output: dict | None) -> dict | None:
+    """cfg_builder's grammar, wherever it landed (flat or evidence-wrapped —
+    same lookup as `assemble_result_node`/`assemble_early_failure`)."""
+    if not isinstance(output, dict):
+        return None
+    return output.get("grammar") or (output.get("evidence") or {}).get("grammar")
+
+
+def _agent_pda(output: dict | None) -> tuple[dict | None, str | None]:
+    """pda_builder's pda + acceptance_mode, wherever they landed."""
+    if not isinstance(output, dict):
+        return None, None
+    evidence = output.get("evidence") or {}
+    pda = output.get("pda") or evidence.get("pda")
+    mode = output.get("acceptance_mode") or evidence.get("acceptance_mode")
+    return pda, mode
+
+
+def _constructive_artifact_oracle(agent_results: dict, agent_name: str):
+    """Build a membership oracle from the constructive artifact `agent_name`
+    actually produced (grammar -> CYK, PDA -> simulator), or None if it isn't
+    usable. Never raises."""
+    output = agent_results.get(agent_name)
+    try:
+        if agent_name == "cfg_builder":
+            grammar = _agent_grammar(output)
+            if not grammar:
+                return None
+            return grammar_oracle(grammar)
+        if agent_name == "pda_builder":
+            pda, mode = _agent_pda(output)
+            if not pda:
+                return None
+            return pda_oracle(normalize_agent_pda(pda, acceptance_mode=mode))
+    except Exception:
+        return None
+    return None
+
+
+def _cross_check_r3prime(
+    state: PipelineState,
+    trust_map: dict[str, str],
+    constructive_trust: str,
+    destructive_trust: str,
+) -> dict[str, Any]:
+    """docs/VERDICT_POLICY.md R3' — deterministic cross-check attempted before
+    falling back to an unresolved R3 contradiction.
+
+    Runs the destructive proof's own witness words (already instantiated by
+    the step-2 semantic checks in claim_verifier.py — reused here via
+    `claim_verification[agent]["details"]["destructive_witnesses"]`, never
+    re-derived) through both the task's language oracle and EVERY
+    constructive artifact still in play (grammar via CYK / PDA via the
+    simulator) — not just the first one found. A shared oracle_test trust
+    can cover more than one constructive agent (cfg_builder AND pda_builder
+    both bounded_pass), and testing only the first by iteration order would
+    let a genuinely-wrong second artifact hide behind the first's refutation
+    instead of being refuted itself (reviewer finding):
+      (a) a witness the destructive proof claims is NOT in L, but a
+          constructive artifact accepts -> THAT artifact is `refuted`;
+          a witness claimed IN L that it rejects -> also `refuted`. Each
+          constructive agent is checked independently.
+      (b) a witness claimed NOT in L that the oracle actually says IS in L
+          (or vice versa) -> the destructive proof itself is `refuted`.
+    Never raises; any missing evidence (no witnesses, no oracle, no usable
+    artifact) just leaves `performed=False` and nothing gets refuted.
+    """
+    result: dict[str, Any] = {
+        "performed": False,
+        "constructive_agents": [],
+        "destructive_agent": None,
+        "constructive_refuted_agents": [],
+        "destructive_refuted": False,
+        "constructive_reasons": {},
+        "destructive_reason": None,
+        "counterexamples": [],
+    }
+
+    # Every constructive agent that currently clears its threshold (not
+    # already refuted) and actually has a usable artifact -- each is tested
+    # on its own merits, not just the first match.
+    constructive_agents = [
+        a for a in _CONSTRUCTIVE_AGENTS
+        if trust_map.get(a) not in (None, "refuted")
+        and _constructive_artifact_oracle(state.get("agent_results") or {}, a) is not None
+    ]
+    destructive_agent = next(
+        (
+            a for a in _DESTRUCTIVE_AGENTS
+            if trust_map.get(a) == destructive_trust and _destructive_agent_argues_non_cfl(state, a)
+        ),
+        None,
+    )
+    result["constructive_agents"] = constructive_agents
+    result["destructive_agent"] = destructive_agent
+    if not constructive_agents or not destructive_agent:
+        return result
+
+    claim_verification = state.get("claim_verification") or {}
+    witnesses = ((claim_verification.get(destructive_agent) or {}).get("details") or {}).get(
+        "destructive_witnesses"
+    )
+    if not isinstance(witnesses, list) or not witnesses:
+        return result
+
+    try:
+        lang_oracle = cfl_oracle_from_ir(state.get("ir") or {})
+    except Exception:
+        return result
+    if getattr(lang_oracle, "is_approximate", False):
+        return result
+
+    artifact_oracles = {
+        a: _constructive_artifact_oracle(state.get("agent_results") or {}, a)
+        for a in constructive_agents
+    }
+    artifact_oracles = {a: o for a, o in artifact_oracles.items() if o is not None}
+    if not artifact_oracles:
+        return result
+
+    result["performed"] = True
+
+    for w in witnesses:
+        if not isinstance(w, dict):
+            continue
+        word = w.get("word")
+        expected_in_l = w.get("expected_in_l")
+        if not isinstance(word, str) or not word or not isinstance(expected_in_l, bool):
+            continue
+        try:
+            oracle_says = bool(lang_oracle(word))
+        except Exception:
+            continue
+
+        if not result["destructive_refuted"] and oracle_says != expected_in_l:
+            result["destructive_refuted"] = True
+            result["destructive_reason"] = (
+                f"witness '{word}' (source: {w.get('source')}) claimed "
+                f"{'in L' if expected_in_l else 'NOT in L'}, but the oracle says "
+                f"{'in L' if oracle_says else 'NOT in L'}"
+            )
+            result["counterexamples"].append({"word": word, "issue": result["destructive_reason"]})
+
+        if oracle_says == expected_in_l:
+            # Only test artifacts against a witness the oracle itself just
+            # confirmed -- an oracle-refuted witness says nothing about them.
+            for agent, artifact_oracle in artifact_oracles.items():
+                if agent in result["constructive_refuted_agents"]:
+                    continue
+                try:
+                    artifact_says = bool(artifact_oracle(word))
+                except Exception:
+                    continue
+                if artifact_says != expected_in_l:
+                    result["constructive_refuted_agents"].append(agent)
+                    verb = "rejects" if expected_in_l else "accepts"
+                    reason = (
+                        f"artifact {verb} '{word}' (source: {w.get('source')}), which the "
+                        f"oracle says is {'in L' if expected_in_l else 'NOT in L'}"
+                    )
+                    result["constructive_reasons"][agent] = reason
+                    result["counterexamples"].append({"word": word, "issue": reason})
+
+        if result["destructive_refuted"] and len(result["constructive_refuted_agents"]) == len(artifact_oracles):
+            break
+
+    return result
+
+
 def apply_verdict_gate(state: PipelineState) -> dict:
     """Deterministic gate applied to the reasoning agent's proposed verdict.
 
@@ -955,9 +1151,6 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     constructive_trust, constructive_refuted = _strongest_trust(trust_map, _CONSTRUCTIVE_AGENTS)
     destructive_trust, destructive_refuted = _strongest_destructive_trust(state, trust_map)
 
-    basis: list[dict] = [
-        {"agent": name, "trust": t} for name, t in sorted(trust_map.items())
-    ]
     downgrades: list[str] = []
     basis_note: str | None = None
 
@@ -997,36 +1190,103 @@ def apply_verdict_gate(state: PipelineState) -> dict:
                 "reasoning proposed done/non_cfl without a >= well_formed destructive claim"
             )
 
-    # R3: contradiction — both sides clear their threshold (destructive_trust/
-    # constructive_trust already exclude any individually-refuted agent, per
-    # _strongest_trust). Flagged regardless of whether one side outranks the
-    # other; confidence stays capped at 0.50 while unresolved.
+    # R3/R3': contradiction — both sides clear their threshold (destructive_
+    # trust/constructive_trust already exclude any individually-refuted
+    # agent, per _strongest_trust).
     contradiction = (
         _trust_rank(constructive_trust) >= _trust_rank("bounded_pass")
         and _trust_rank(destructive_trust) >= _trust_rank("well_formed")
     )
+    contradiction_details: dict[str, Any] | None = None
+    resolved_cap = _CONTRADICTION_CONFIDENCE_CAP
     if contradiction:
+        orig_constructive_trust = constructive_trust
+        orig_destructive_trust = destructive_trust
+
+        # R3' — try to resolve the contradiction deterministically before
+        # falling back to "inconclusive": run the destructive proof's own
+        # witness words (reused from claim_verifier's step-2 checks) through
+        # the language oracle AND the constructive artifact.
+        cross_check = _cross_check_r3prime(state, trust_map, constructive_trust, destructive_trust)
+
+        constructive_any_refuted = bool(cross_check["constructive_refuted_agents"])
+        if constructive_any_refuted:
+            for agent in cross_check["constructive_refuted_agents"]:
+                trust_map[agent] = "refuted"
+                downgrades.append(
+                    f"R3' cross-check refuted constructive artifact "
+                    f"({agent}): {cross_check['constructive_reasons'][agent]}"
+                )
+            constructive_trust, constructive_refuted = _strongest_trust(trust_map, _CONSTRUCTIVE_AGENTS)
+        if cross_check["destructive_refuted"]:
+            trust_map[cross_check["destructive_agent"]] = "refuted"
+            downgrades.append(
+                f"R3' cross-check refuted destructive claim "
+                f"({cross_check['destructive_agent']}): {cross_check['destructive_reason']}"
+            )
+            destructive_trust, destructive_refuted = _strongest_destructive_trust(state, trust_map)
+
+        contradiction_details = {
+            "constructive": {"agent": cross_check["constructive_agents"], "trust": orig_constructive_trust},
+            "destructive": {"agent": cross_check["destructive_agent"], "trust": orig_destructive_trust},
+            "cross_check": {k: v for k, v in cross_check.items()
+                             if k not in ("constructive_agents", "destructive_agent")},
+        }
+
+        contradiction = (
+            _trust_rank(constructive_trust) >= _trust_rank("bounded_pass")
+            and _trust_rank(destructive_trust) >= _trust_rank("well_formed")
+        )
+
+        if not contradiction:
+            # R3' resolved it: the surviving side wins, capped by its OWN
+            # trust tier (not the 0.50 unresolved-contradiction cap).
+            if constructive_any_refuted and not cross_check["destructive_refuted"]:
+                verdict = "non_cfl"
+                basis_note = "r3prime_cross_check"
+            elif cross_check["destructive_refuted"] and not constructive_any_refuted:
+                verdict = "cfl"
+                basis_note = "r3prime_cross_check"
+            else:
+                # Both refuted by cross-check (or cross-check never ran) --
+                # no valid basis left either way.
+                verdict = None
+                basis_note = "r3prime_both_refuted" if cross_check["performed"] else basis_note
+                resolved_cap = _CONFIDENCE_CAP_BY_TRUST["not_verified"]
+            action = "done"
+
+    if contradiction:
+        # docs/VERDICT_POLICY.md R3 (post-R3'): "bounded_pass vs well_formed"
+        # no longer settles the dispute by rank -- only a `verified` side
+        # wins (capped at 0.85, not 0.98), otherwise it stays inconclusive.
         downgrades.append(
             "contradiction: constructive artifact (trust="
             f"{constructive_trust}) and destructive claim (trust="
-            f"{destructive_trust}) both clear their threshold"
+            f"{destructive_trust}) both clear their threshold, unresolved by R3' cross-check"
         )
-        if _trust_rank(constructive_trust) > _trust_rank(destructive_trust):
+        if constructive_trust == "verified" and destructive_trust != "verified":
             verdict = "cfl"
-        elif _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
+            resolved_cap = _CONTRADICTION_VERIFIED_CAP
+        elif destructive_trust == "verified" and constructive_trust != "verified":
             verdict = "non_cfl"
+            resolved_cap = _CONTRADICTION_VERIFIED_CAP
         else:
             verdict = None
             basis_note = basis_note or "contradiction"
-        confidence = min(confidence, _CONTRADICTION_CONFIDENCE_CAP)
+            resolved_cap = _CONTRADICTION_CONFIDENCE_CAP
+        confidence = min(confidence, resolved_cap)
 
     # §2: confidence ceiling by the strongest basis actually behind the
     # (possibly just-adjusted) verdict.
     strongest = constructive_trust if _trust_rank(constructive_trust) >= _trust_rank(destructive_trust) else destructive_trust
     cap = _CONFIDENCE_CAP_BY_TRUST.get(strongest, 0.40)
     if contradiction:
-        cap = min(cap, _CONTRADICTION_CONFIDENCE_CAP)
+        cap = min(cap, resolved_cap)
     confidence = min(confidence, cap)
+
+    basis: list[dict] = [
+        {"agent": name, "trust": t} for name, t in sorted(trust_map.items())
+    ]
 
     # proof_verified must come only from these deterministic trust levels,
     # never from proof_checker's own self-assessment (docs/VERDICT_POLICY.md §3).
@@ -1077,6 +1337,11 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     }
     if basis_note:
         verdict_gate["basis_note"] = basis_note
+    if contradiction_details is not None:
+        # docs/VERDICT_POLICY.md §5/R3': both sides' trust and the R3'
+        # cross-check outcome, so the report always shows both proofs when
+        # a contradiction was raised (whether or not it got resolved).
+        verdict_gate["contradiction_details"] = contradiction_details
 
     return {"reasoning_output": reasoning, "trust": trust_map, "verdict_gate": verdict_gate}
 
@@ -2188,7 +2453,7 @@ def run_pipeline(
     final_state = graph.invoke(initial_state)
     result = final_state.get("result")
     if not result:
-        return {
+        result = {
             "task": ir.get("task_type"),
             "source_text": ir.get("source_text"),
             "verdict": "failure",
@@ -2202,6 +2467,11 @@ def run_pipeline(
             "inversions": 0,
             "errors": ["Graph produced no result"],
         }
+    # Usage/cost block (TODO.md §3) -- additive, present even without a live
+    # agent_runner (an all-zero UsageTracker) so callers can rely on
+    # result["usage"] always existing.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
     return result
 
 
@@ -2248,6 +2518,8 @@ def main() -> None:
         live = LiveRunner(verbose=args.verbose)
 
     result = run_pipeline(ir_data, mock_runner=mock, agent_runner=live, verbose=args.verbose)
+    if args.verbose and live is not None:
+        print(live.usage_tracker.summary_line(), file=sys.stderr)
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print(json.dumps(result, indent=2, ensure_ascii=False))

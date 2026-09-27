@@ -30,6 +30,21 @@ def _esc(text: Any) -> str:
     return html_module.escape(str(text))
 
 
+def _usage_summary_line(result: dict) -> str | None:
+    """One-line usage/cost summary from ``result["usage"]`` (TODO.md §3),
+    or ``None`` when the block is absent/empty."""
+    usage = result.get("usage")
+    if not usage:
+        return None
+    calls = usage.get("calls", 0)
+    if not calls:
+        return None
+    tokens = usage.get("total_tokens", 0)
+    cost = usage.get("estimated_cost_usd")
+    cost_s = f"${cost:.4f}" if cost is not None else "n/a"
+    return f"{calls} calls, {tokens} tokens, estimated cost ≈ {cost_s}"
+
+
 _VERDICT_LABELS: dict[str, str] = {
     "dcfl": "ДКСЯ (детерминированный)",
     "non_dcfl": "не ДКСЯ (недетерминированный)",
@@ -500,6 +515,10 @@ def render_markdown(result: dict) -> str:
             sections.append(f"*Время выполнения: {timing:.2f}s*")
         if retries:
             sections.append(f"*Повторных попыток: {retries}*")
+
+    usage_line = _usage_summary_line(result)
+    if usage_line:
+        sections.append(f"*Usage: {usage_line}*")
 
     return "\n".join(sections)
 
@@ -1045,6 +1064,10 @@ def render_html(result: dict) -> str:
         "{left:'\\\\(',right:'\\\\)',display:false}"
         '],throwOnError:false});"></script>'
     )
+
+    usage_line = _usage_summary_line(result)
+    if usage_line:
+        parts.append(f'<div class="s-meta">Usage: {_esc(usage_line)}</div>')
 
     parts.append("</body></html>")
     return "\n".join(parts)
