@@ -17,7 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=1.0.0"]
 viz = ["graphviz>=0.20"]
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-xdist>=3.5", "ruff>=0.6"]
 all = ["tfl-automatisation[mcp,viz]"]
 
 [project.scripts]
@@ -64,4 +64,7 @@ testpaths = [
     "ui_server/tests",
     "tests",
     "tfl_eval/tests",
+]
+markers = [
+    "slow: exhaustive/brute-force simulations kept for coverage but run in a separate CI job (see .github/workflows/tests.yml)",
 ]

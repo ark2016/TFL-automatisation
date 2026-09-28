@@ -6,6 +6,7 @@ verifying verdicts, confidence, agent results, and edge cases.
 """
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
 
@@ -109,7 +110,13 @@ def _load_ir(task_filename: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@functools.lru_cache(maxsize=None)
 def _run_task(task_filename: str) -> dict:
+    """Run the (deterministic, mock-backed) pipeline once per task and reuse
+    the result across every test that just reads it (read-only in this
+    module -- see the individual tests). task_grammar_aSSb's certificate
+    DPDA (345 states, 5835 transitions) makes a fresh run take ~25-30s, and
+    without this cache ~9 tests below each paid that cost separately."""
     ir = _load_ir(task_filename)
     mock = MockRunner(str(MOCK_DIR), ir["task_id"])
     return run_pipeline(ir, mock_runner=mock)
