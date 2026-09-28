@@ -406,7 +406,39 @@ The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-le
 
 ## Lean 4 + Mathlib in Docker: how to build and check a file
 
-`agent_system/lib/type_check.py` (used by the REG pipeline's `formalizer` agent and by `agent_system/tests/test_phase3.py`)
+### R-Lean architecture
+
+The policy behind this is `docs/VERDICT_POLICY.md`'s **R-Lean** rule — change it there first, this is a summary:
+
+- **Statement is code, proof body is the LLM.** The Lean file's theorem *statement* (alphabet type, language
+  definition, the claim itself) is generated **deterministically from the IR** by
+  `agent_system/lib/lean_ir.py` (and the `cfl_system`/`dcfl_system` wrappers around it) — never by the LLM. The
+  `formalizer` agent only fills in the proof *body* between the statement and its final token. This exists because
+  an LLM asked to write the whole file can "prove" `theorem … : True := by sorry` and have it technically compile;
+  a code-generated statement makes that impossible.
+- **Harness.** `agent_system/lib/type_check.py` composes the file (`compose_lean_file`), runs it inside the
+  `tfl-lean4` Docker image (`check_lean_file`, `lake env lean --json`), and classifies the result:
+  - `proved` — compiles, no errors, no `sorryAx`, and `#print axioms` is a subset of
+    `{propext, Classical.choice, Quot.sound}` (`native_decide`/`ofReduceBool` are rejected) — **only this status
+    raises trust to `verified`** (confidence 0.98) for the proved side of the claim.
+  - `has_sorry`, `error`, `timeout`, `unavailable` — evidence for neither side (R1); the pipeline's verdict falls
+    back to whatever the non-Lean agents established.
+- **What gets formalized.** REG statements are built on **Mathlib** (`Language.IsRegular`, `DFA.pumping_lemma`,
+  Myhill–Nerode via `Mathlib.Computability.{DFA,RegularExpressions,MyhillNerode,ContextFreeGrammar}`). CFL and
+  DCFL statements are built on **[langlib](https://github.com/nielstron/langlib)**
+  (`Classes.{Regular,ContextFree,DeterministicContextFree}`, the pumping lemma, Ogden's lemma, DCFL closure
+  lemmas). **LL(k) is not formalized** — no Lean statement exists for grammar-level LL(k) claims.
+- **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0`, langlib pinned at commit
+  `c5fb8340b42543713f79e1c283a3f6a929cb71e` (its own lakefile requires the same Mathlib tag, no conflict). Image
+  build is checkpoint-layered (`elan default` → `lake update` + `cache get` → build `TflLean.Basic` → build
+  `TflLean.Langlib` → `lake build`); expect on the order of 20–60 minutes and several GB on a normal connection —
+  see the notes below for what changes on a throttled one.
+- **Where each step runs.** Type checking (`docker run ... lake env lean`) is **local, in Docker**, and is part of
+  the normal `--formalize` pipeline run — no API cost. Writing the proof body is an LLM call and, like every other
+  live call in this repo, happens **only on explicit request with an agreed budget**; mock mode (canned proof
+  bodies) is the default everywhere else, including in `tfl-eval` and CI.
+
+
 type-checks Lean 4 code inside the `tfl-lean4` Docker image rather than requiring a local Lean install. The image
 bundles a small pinned lake project, `agent_system/docker/tfl_lean/` (`lakefile.toml`, `lean-toolchain` =
 `leanprover/lean4:v4.33.0`, Mathlib pinned to tag `v4.33.0`, and

@@ -33,7 +33,7 @@ there. Until then the examples inline the same facts as `have`s (see
   `flatten_replicate_two`.
 
 With `TflLean.Lemmas` available, the proof body of
-`Examples/AnBnNotRegular.lean` shrinks to
+`Examples/AnBnNotRegular.lean` shrinks to (Myhill–Nerode)
 
 ```
 apply TflLean.not_isRegular_of_distinguishable (fun i => List.replicate i Sym.a)
@@ -43,6 +43,43 @@ rintro ⟨n, hn, -⟩
 have := TflLean.replicate_append_replicate_inj (by decide) hn
 omega
 ```
+
+or, via the textbook pumping lemma (pump `aᵖbᵖ` down: `y` lies inside the
+`a`-block, so `x z` has fewer `a`'s than `b`'s)
+
+```
+intro h
+obtain ⟨p, hp⟩ := TflLean.IsRegular.pumping h
+obtain ⟨x, y, z, hw, hxy, hy, hpump⟩ :=
+  hp (List.replicate p Sym.a ++ List.replicate p Sym.b) ⟨p, rfl, Nat.zero_le _⟩ (by simp)
+obtain ⟨n, hn, -⟩ := hpump 0
+have hy' : 0 < y.length := List.length_pos_of_ne_nil hy
+simp only [List.length_append] at hxy
+have hta : List.take (x ++ y).length (List.replicate p Sym.a ++ List.replicate p Sym.b) = x ++ y := by
+  rw [hw, List.append_assoc x y z, ← List.append_assoc, List.take_left]
+have hya : y.count Sym.a = y.length := by
+  have h1 : (x ++ y).count Sym.a = (x ++ y).length := by
+    rw [← hta]; simp [List.take_append_eq_append_take, List.take_replicate, List.count_replicate]; omega
+  simp only [List.count_append, List.length_append] at h1
+  have := List.count_le_length (a := Sym.a) (l := x)
+  have := List.count_le_length (a := Sym.a) (l := y); omega
+have ca := congrArg (List.count Sym.a) hw
+have cb := congrArg (List.count Sym.b) hw
+have ca0 := congrArg (List.count Sym.a) hn
+have cb0 := congrArg (List.count Sym.b) hn
+simp [List.count_replicate] at ca cb ca0 cb0
+have hlen : ∀ l : List Sym, l.length = l.count Sym.a + l.count Sym.b := by
+  intro l
+  induction l with
+  | nil => rfl
+  | cons s l ih => cases s <;> simp [List.count_cons, ih] <;> omega
+have := hlen y
+omega
+```
+
+(`agent_system/tests/test_lean_examples.py` compiles both blocks against the
+`Examples/AnBnNotRegular.lean` statement, with this file's declarations
+inlined, so they stay in sync with the lemmas.)
 -/
 
 namespace TflLean

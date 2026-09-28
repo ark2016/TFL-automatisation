@@ -166,7 +166,10 @@ yet; such a check comes back `error` (unknown module `Langlib`) whatever the pro
 - Pattern for `¬ L.IsContextFree`: `intro h; obtain ⟨p, hp⟩ := h.pumping`, pump the witness
   `aᵖbᵖcᵖ` down (`i = 0`) and compare letter counts; the whole argument is
   `agent_system/docker/tfl_lean/TflLean/Examples/AnBnCnNotCF.lean` (its Mathlib-only
-  half, compiled against the current image, is `Examples/AnBnCnPumpingCore.lean`).
+  half, compiled against the current image, is `Examples/AnBnCnPumpingCore.lean`; the
+  full body is also checked against langlib's verbatim `nTimes`/`pumping` signatures).
+  Right after `obtain`, `simp only [nTimes, List.replicate_zero, List.flatten_nil,
+  List.append_nil] at hn` turns the pumped-down word into plain `u ++ x ++ z`.
 
 ### TflLean.Lemmas (`agent_system/docker/tfl_lean/TflLean/Lemmas.lean`)
 
@@ -176,7 +179,10 @@ imports `TflLean.Lemmas` (not yet the case in the current image); if a check rep
 
 - `TflLean.not_isRegular_of_distinguishable {L : Language α} (f : ℕ → List α)
   (h : ∀ i j, i ≠ j → ∃ z, f i ++ z ∈ L ∧ f j ++ z ∉ L) : ¬ L.IsRegular` — easy half of
-  Myhill–Nerode (Example 1 in two lines).
+  Myhill–Nerode. Example 1 becomes: `apply TflLean.not_isRegular_of_distinguishable
+  (fun i => List.replicate i Sym.a)`, `intro i j hij`, `refine ⟨List.replicate i Sym.b,
+  ⟨i, rfl, Nat.zero_le _⟩, ?_⟩`, `rintro ⟨n, hn, -⟩`,
+  `have := TflLean.replicate_append_replicate_inj (by decide) hn`, `omega`.
 - `TflLean.IsRegular.pumping (hL : L.IsRegular) : ∃ p, ∀ w ∈ L, p ≤ w.length → ∃ x y z,
   w = x ++ y ++ z ∧ (x ++ y).length ≤ p ∧ y ≠ [] ∧ ∀ i, x ++ (List.replicate i y).flatten ++ z ∈ L`
 - `TflLean.isRegular_of_dfa {σ : Type} [Fintype σ] (M : DFA α σ)

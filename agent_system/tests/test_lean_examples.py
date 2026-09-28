@@ -21,13 +21,22 @@ Two layers:
   which the current image (Lean/Mathlib v4.18.0) does not have -- it is an
   ``xfail`` until the image is rebuilt from the v4.33.0 + langlib pin, and
   then must be ``proved``. Its Mathlib-only half (refuting the CF pumping
-  property) is ``AnBnCnPumpingCore.lean`` and is checked for real.
+  property) is ``AnBnCnPumpingCore.lean`` and is checked for real. Until then
+  its proof body is also compiled against a stub that declares langlib's
+  ``nTimes``/``^+^`` and ``Language.IsContextFree.pumping`` with their
+  verbatim signatures (pinned commit c5fb834) -- every step elaborates, and
+  the only axiom beyond the kernel's is the stub itself;
+* Docker-conditional: the lemma-based proof bodies quoted in the
+  ``TflLean/Lemmas.lean`` module doc compile against the ``AnBnNotRegular``
+  statement with ``Lemmas.lean``'s declarations inlined (the image does not
+  build ``TflLean.Lemmas`` as a module yet).
 """
 
 from __future__ import annotations
 
 import functools
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -260,3 +269,87 @@ def test_anbncn_not_cf_proved_with_langlib():
         )
     result = check_lean_file(_read("AnBnCnNotCF.lean"), timeout=600)
     _assert_proved(result, "AnBnCnNotCF.lean")
+
+
+# ---------------------------------------------------------------------------
+# Docker: AnBnCnNotCF's proof body against langlib's API, stubbed
+# ---------------------------------------------------------------------------
+
+# Verbatim from langlib @ c5fb8340b42543713f79e1c283a3f6a929cb71ef:
+# src/Langlib/Classes/ContextFree/Pumping/Utils.lean (nTimes, ^+^) and
+# src/Langlib/Classes/ContextFree/Pumping/Pumping.lean
+# (Language.IsContextFree.pumping, stated here as an axiom). If the pin moves,
+# re-copy these signatures.
+_LANGLIB_PUMPING_STUB = """\
+def nTimes {α : Type _} (l : List α) (n : ℕ) : List α :=
+  (List.replicate n l).flatten
+
+infixl:69 " ^+^ " => nTimes
+
+axiom Language.IsContextFree.pumping {T : Type} {L : Language T} (hL : L.IsContextFree) :
+    ∃ p : ℕ, ∀ w ∈ L, w.length ≥ p → ∃ u v x y z : List T,
+      w = u ++ v ++ x ++ y ++ z ∧
+      (v ++ y).length > 0       ∧
+      (v ++ x ++ y).length ≤ p  ∧
+      ∀ i : ℕ, u ++ v^+^i ++ x ++ y^+^i ++ z ∈ L"""
+
+
+@docker
+def test_anbncn_not_cf_body_elaborates_against_langlib_stub():
+    """Not a proof (the stub is an axiom), but it pins down that every tactic
+    step of AnBnCnNotCF.lean's body elaborates against langlib's exact
+    pumping-lemma signature: no errors, no sorry, and the axiom list is the
+    kernel's plus the stub -- nothing else."""
+    base = _statement("AnBnCnNotCF.lean")
+    stub_stmt = LeanStatement(
+        alphabet_decl=_LANGLIB_PUMPING_STUB + "\n\n" + base.alphabet_decl,
+        language_decl=base.language_decl,
+        theorem_decl=base.theorem_decl,
+        imports=[i for i in base.imports if "Langlib" not in i],
+    )
+    text = compose_lean_file(stub_stmt, _proof_body("AnBnCnNotCF.lean"))
+    result = check_lean_file(text, timeout=600)
+    real_errors = [
+        e for e in result["errors"]
+        if "disallowed axioms" not in str(e.get("data", ""))
+    ]
+    assert not real_errors, result
+    assert result["status"] in ("error", "proved"), result
+    assert set(result["axioms"]) <= ALLOWED_AXIOMS | {"Language.IsContextFree.pumping"}, result
+    assert "Language.IsContextFree.pumping" in result["axioms"], result
+
+
+# ---------------------------------------------------------------------------
+# Docker: the lemma-based proof bodies quoted in Lemmas.lean's module doc
+# ---------------------------------------------------------------------------
+
+def _lemmas_doc_blocks() -> list[str]:
+    doc = LEMMAS.read_text(encoding="utf-8").split("-/", 1)[0]
+    blocks = re.findall(r"```\n(.*?)```", doc, flags=re.DOTALL)
+    assert len(blocks) == 2, "expected the Myhill–Nerode and the pumping block"
+    return blocks
+
+
+def _lemmas_code_and_imports() -> tuple[str, list[str]]:
+    text = LEMMAS.read_text(encoding="utf-8")
+    head, code = text.split("-/", 1)
+    imports = [ln for ln in head.splitlines() if ln.startswith("import ")]
+    return code.strip(), imports
+
+
+@docker
+@pytest.mark.parametrize("idx", [0, 1], ids=["myhill_nerode", "pumping"])
+def test_lemmas_doc_proof_bodies_compile(idx):
+    block = _lemmas_doc_blocks()[idx]
+    body = block.strip("\n").replace("\n", "\n  ")
+    code, lemma_imports = _lemmas_code_and_imports()
+    base = _statement("AnBnNotRegular.lean")
+    imports = list(dict.fromkeys([*base.imports, *lemma_imports]))
+    stmt = LeanStatement(
+        alphabet_decl=code + "\n\n" + base.alphabet_decl,
+        language_decl=base.language_decl,
+        theorem_decl=base.theorem_decl,
+        imports=imports,
+    )
+    result = check_lean_file(compose_lean_file(stmt, body), timeout=600)
+    _assert_proved(result, f"Lemmas.lean doc block {idx}")

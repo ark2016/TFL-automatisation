@@ -63,9 +63,12 @@ CFL/DCFL predicate provenance
 Checked directly against the pinned toolchain (``agent_system/docker/tfl_lean``,
 ``leanprover/lean4:v4.33.0`` + Mathlib, ``lake exe cache get`` already warms
 the *whole* Mathlib .olean cache, confirmed via ``docker run tfl-lean4`` while
-writing this module) and against a read-only clone of ``langlib`` (see
-``TFL_LANGLIB_PATH`` handling in ``agent_system/tests/test_lean_ir.py`` for
-where that clone lives; it is reference-only, never imported at runtime):
+writing this module) and against a read-only reference clone of ``langlib``
+(commit ``c5fb8340b42543713f79e1c283a3f6a929cb71ef``, ``lean-toolchain``
+v4.33.0) kept outside the repo for the duration of this work -- it is
+reference-only, never imported at runtime and not wired into any test's
+lookup path; grep it directly (``Langlib/Classes/...``) when re-checking a
+predicate/lemma name below:
 
 - **REG**: Mathlib's own ``Language.IsRegular`` (``Mathlib.Computability.Language``,
   transitively available once ``Mathlib.Computability.RegularExpressions``

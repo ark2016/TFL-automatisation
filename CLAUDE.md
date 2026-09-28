@@ -35,7 +35,12 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
   is requested, use Haiku only (`TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`), state the estimated cost first, and run the
   smallest task set that answers the question. Opus runs cost real money — only on request.
 - `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables `agent_system`'s `formalizer` agent by default for every
-  run, without passing `--formalize` each time; unset/other values keep it opt-in per `--formalize`.
+  run, without passing `--formalize` each time; unset/other values keep it opt-in per `--formalize`. This only
+  turns on the pipeline step; it does not by itself spend API budget. Within that step, Lean **type-checking**
+  (`agent_system/lib/type_check.py`, `docker run ... lake env lean`) runs locally in Docker as ordinary pipeline
+  work, no live-call rule applies to it. Writing the Lean **proof body** is an LLM call and follows the live-run
+  rule above like every other agent call: mock mode by default, live only on explicit request with an agreed
+  budget. See README.md "R-Lean architecture" and `docs/VERDICT_POLICY.md`'s R-Lean rule.
 - Eval set: `docs/EVAL_SET.md` (73 tasks, expected verdicts) is run by `tfl-eval` (`tfl_eval/`), which reports
   accuracy/calibration metrics — see `README.md` and `TODO.md` §7. Mock mode by default; `--live` only on request.
   Live results so far: `docs/EVAL_RESULTS.md` (24 trap tasks on Haiku, 2026-09-27) — read it before claiming a
