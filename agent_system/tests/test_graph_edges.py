@@ -337,7 +337,40 @@ class TestClassifierDispatch(unittest.TestCase):
         self.assertEqual(result, {})
 
 
-# ── formalize_node ────────────────────────────────────────────────────────
+# ── formalize_node (docs/VERDICT_POLICY.md R-Lean) ─────────────────────────
+#
+# lib.lean_ir (render_statement) is a parallel agent's contract and may not
+# exist on disk yet -- these tests never create or import the real module;
+# they inject a fake one into sys.modules so
+# `from .lib.lean_ir import render_statement` inside formalize_node resolves
+# to the fake, exactly like it would resolve to the real module once it
+# lands. See agent_system/tests/test_phase3.py for the compose/check_lean_file
+# and gate-level R-Lean tests.
+
+import sys
+import types
+import unittest.mock as _mock
+
+
+_FAKE_STATEMENT = {
+    # Shaped like the real `lib.lean_ir.LeanStatement` contract: a *bare*
+    # theorem_decl with no `:=` (compose_lean_file's dict-fallback path
+    # appends `:= by\n  <proof_body>` itself) rather than the older
+    # `<PROOF>`-placeholder shape (still supported, see test_phase3.py).
+    "imports": ["import Mathlib.Computability.DFA"],
+    "alphabet_decl": "abbrev Alpha := Fin 2",
+    "language_decl": "def inLang (w : List Alpha) : Prop := True",
+    "theorem_decl": "theorem tfl_main : True",
+    "name": "tfl_main",
+}
+
+
+def _install_fake_lean_ir(render_statement_fn):
+    """Install a fake `agent_system.lib.lean_ir` module for the duration of
+    a test and return the mock.patch.dict context manager for it."""
+    fake_module = types.ModuleType("agent_system.lib.lean_ir")
+    fake_module.render_statement = render_statement_fn
+    return _mock.patch.dict(sys.modules, {"agent_system.lib.lean_ir": fake_module})
 
 
 class TestFormalizeNode(unittest.TestCase):
@@ -374,49 +407,156 @@ class TestFormalizeNode(unittest.TestCase):
         self.assertEqual(result, {})
 
     @patch("agent_system.graph.FORMALIZATION_ENABLED", True)
-    @patch("agent_system.graph.run_agent")
-    @patch("agent_system.graph.check_lean")
-    def test_formalize_happy_path(self, mock_lean, mock_run):
-        """When enabled and formalizer returns code, type check runs."""
-        mock_run.return_value = {
-            "evidence": {"lean_code": "-- valid lean code\nsorry"},
-        }
-        mock_lean.return_value = {"status": "valid", "time_seconds": 1.0}
-
+    def test_not_formalizable_when_lean_ir_missing(self):
+        """No `lib.lean_ir` module at all (parallel agent hasn't landed it
+        yet) -> graceful `not_formalizable`, not a crash."""
         state = _base_state(
             reasoning_output={
-                "evidence": {
-                    "action": "proceed_to_formalizer",
-                    "verdict": "non_regular",
-                    "best_proof": "pumping",
-                    "consolidated_proof": "By pumping lemma...",
-                },
+                "evidence": {"action": "proceed_to_formalizer", "verdict": "regular"},
             },
-            evidence={"pumping": {"evidence": {"proof": "..."}}},
             agent_runner="dummy",
         )
-        result = formalize_node(state)
-        ev = result.get("evidence", {})
-        self.assertEqual(ev.get("formalization", {}).get("status"), "valid")
-        self.assertTrue(ev.get("formalization", {}).get("lean_verified"))
+        with _mock.patch.dict(sys.modules, {"agent_system.lib.lean_ir": None}):
+            result = formalize_node(state)
+        self.assertEqual(result["formalization"]["status"], "not_formalizable")
+        self.assertEqual(result["formalization"]["direction"], "regular")
 
     @patch("agent_system.graph.FORMALIZATION_ENABLED", True)
-    @patch("agent_system.graph.run_agent")
-    def test_formalize_no_output(self, mock_run):
-        """Formalizer returns None — graceful skip."""
-        mock_run.return_value = None
+    def test_not_formalizable_when_render_statement_returns_none(self):
+        state = _base_state(
+            reasoning_output={
+                "evidence": {"action": "proceed_to_formalizer", "verdict": "regular"},
+            },
+            agent_runner="dummy",
+        )
+        with _install_fake_lean_ir(lambda ir, direction: None):
+            result = formalize_node(state)
+        self.assertEqual(result["formalization"]["status"], "not_formalizable")
+
+    @patch("agent_system.graph.FORMALIZATION_ENABLED", True)
+    @patch("agent_system.graph.check_lean_file")
+    def test_formalize_happy_path_proved(self, mock_check):
+        """First formalizer attempt compiles clean -> status proved,
+        axioms echoed from check_lean_file, single attempt logged."""
+        mock_check.return_value = {
+            "status": "proved", "errors": [], "warnings": [],
+            "axioms": ["propext"], "elapsed": 1.5,
+        }
+
+        class _Runner:
+            def run_agent(self, name, input_data):
+                self.last_input = input_data
+                return {"evidence": {"proof_body": "by trivial", "lemmas_used": []}}
+
+        runner = _Runner()
         state = _base_state(
             reasoning_output={
                 "evidence": {
                     "action": "proceed_to_formalizer",
-                    "verdict": "non_regular",
-                    "best_proof": "pumping",
+                    "verdict": "regular",
+                    "consolidated_proof": "Trivially true.",
                 },
             },
-            agent_runner="dummy",
+            agent_runner=runner,
         )
-        result = formalize_node(state)
-        self.assertEqual(result, {})
+        with _install_fake_lean_ir(lambda ir, direction: _FAKE_STATEMENT):
+            result = formalize_node(state)
+
+        formalization = result["formalization"]
+        self.assertEqual(formalization["status"], "proved")
+        self.assertEqual(formalization["direction"], "regular")
+        self.assertEqual(formalization["axioms"], ["propext"])
+        self.assertEqual(formalization["proof_body"], "by trivial")
+        self.assertEqual(len(formalization["attempts"]), 1)
+        # No `errors` key was passed on the first (only) attempt.
+        self.assertNotIn("errors", runner.last_input)
+        mock_check.assert_called_once()
+
+    @patch("agent_system.graph.FORMALIZATION_ENABLED", True)
+    @patch("agent_system.graph.check_lean_file")
+    def test_formalize_retries_with_errors_then_proves(self, mock_check):
+        """First attempt errors, second (fed the errors[]) proves -- the
+        MAX_FORMALIZE_ITERATIONS retry cycle (config.py)."""
+        first_errors = [{"severity": "error", "data": "unknown identifier 'foo'"}]
+        mock_check.side_effect = [
+            {"status": "error", "errors": first_errors,
+             "warnings": [], "axioms": [], "elapsed": 0.5},
+            {"status": "proved", "errors": [], "warnings": [], "axioms": [], "elapsed": 0.7},
+        ]
+
+        calls = []
+
+        class _Runner:
+            def run_agent(self, name, input_data):
+                calls.append(input_data)
+                if "errors" in input_data:
+                    return {"evidence": {"proof_body": "by simp"}}
+                return {"evidence": {"proof_body": "by exact foo"}}
+
+        state = _base_state(
+            reasoning_output={
+                "evidence": {"action": "proceed_to_formalizer", "verdict": "non_regular"},
+            },
+            agent_runner=_Runner(),
+        )
+        with _install_fake_lean_ir(lambda ir, direction: _FAKE_STATEMENT):
+            result = formalize_node(state)
+
+        formalization = result["formalization"]
+        self.assertEqual(formalization["status"], "proved")
+        self.assertEqual(formalization["proof_body"], "by simp")
+        self.assertEqual(len(formalization["attempts"]), 2)
+        self.assertEqual(mock_check.call_count, 2)
+        # The formulation never changes across attempts -- only the proof
+        # body does. The second call carries the first call's errors[] back.
+        self.assertNotIn("errors", calls[0])
+        self.assertIn("errors", calls[1])
+        self.assertEqual(calls[1]["errors"], first_errors)
+
+    @patch("agent_system.graph.FORMALIZATION_ENABLED", True)
+    @patch("agent_system.graph.check_lean_file")
+    def test_has_sorry_stops_without_exhausting_retries(self, mock_check):
+        """`has_sorry` is a dead end (R1: not evidence either way) --
+        formalize_node stops immediately instead of burning the retry
+        budget on a proof body that will just say `sorry` again."""
+        mock_check.return_value = {
+            "status": "has_sorry", "errors": [], "warnings": [{"data": "declaration uses 'sorry'"}],
+            "axioms": [], "elapsed": 0.3,
+        }
+
+        class _Runner:
+            def run_agent(self, name, input_data):
+                return {"evidence": {"proof_body": "by sorry"}}
+
+        state = _base_state(
+            reasoning_output={
+                "evidence": {"action": "proceed_to_formalizer", "verdict": "regular"},
+            },
+            agent_runner=_Runner(),
+        )
+        with _install_fake_lean_ir(lambda ir, direction: _FAKE_STATEMENT):
+            result = formalize_node(state)
+
+        self.assertEqual(result["formalization"]["status"], "has_sorry")
+        self.assertEqual(mock_check.call_count, 1)
+
+    @patch("agent_system.graph.FORMALIZATION_ENABLED", True)
+    def test_formalize_no_output(self):
+        """Formalizer returns None -- graceful `error`, no crash."""
+        class _Runner:
+            def run_agent(self, name, input_data):
+                return None
+
+        state = _base_state(
+            reasoning_output={
+                "evidence": {"action": "proceed_to_formalizer", "verdict": "non_regular"},
+            },
+            agent_runner=_Runner(),
+        )
+        with _install_fake_lean_ir(lambda ir, direction: _FAKE_STATEMENT):
+            result = formalize_node(state)
+        self.assertEqual(result["formalization"]["status"], "error")
+        self.assertEqual(result["formalization"]["proof_body"], None)
 
 
 if __name__ == "__main__":

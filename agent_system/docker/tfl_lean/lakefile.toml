@@ -4,7 +4,18 @@ defaultTargets = ["TflLean"]
 [[require]]
 name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4.git"
-rev = "v4.18.0"
+rev = "v4.33.0"
+
+# langlib -- REG/CFL/DCFL Lean formalizations (regular/context-free/DCFL
+# classes, Ogden's & pumping lemmas, closure properties). Pinned to a
+# specific commit rather than a tag/branch so the image is reproducible;
+# see README's Lean section for how to refresh this pin. langlib's own
+# lakefile requires the same Mathlib tag (v4.33.0), so there is no
+# transitive-Mathlib-revision conflict for `lake` to resolve.
+[[require]]
+name = "langlib"
+git = "https://github.com/nielstron/langlib"
+rev = "c5fb8340b42543713f79e1c283a3f6a929cb71ef"
 
 [[lean_lib]]
 name = "TflLean"

@@ -86,6 +86,13 @@ ORACLE_MAX_EXHAUSTIVE = 7
 LLM_JSON_RETRIES = 1        # retry if LLM returns non-JSON
 FORMALIZER_RETRIES = 2       # retry if Lean type check fails (§5.2 Level 4)
 
+# R-Lean (docs/VERDICT_POLICY.md): max formalizer <-> check_lean_file round
+# trips inside formalize_node for one statement. The formulation never
+# changes across attempts (it is rendered once from the IR by
+# lib.lean_ir.render_statement); only the proof body is retried, fed back
+# the previous attempt's check_lean_file errors[] each time.
+MAX_FORMALIZE_ITERATIONS = 3
+
 # Cost ceiling (TODO.md backlog round C2): the retry planner must never call
 # the same specialist more than this many times for one task -- precedent:
 # live cfl-12 eval run, cfg_builder alone was called 6 times across retries,

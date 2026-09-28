@@ -409,20 +409,28 @@ The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-le
 `agent_system/lib/type_check.py` (used by the REG pipeline's `formalizer` agent and by `agent_system/tests/test_phase3.py`)
 type-checks Lean 4 code inside the `tfl-lean4` Docker image rather than requiring a local Lean install. The image
 bundles a small pinned lake project, `agent_system/docker/tfl_lean/` (`lakefile.toml`, `lean-toolchain` =
-`leanprover/lean4:v4.18.0`, `lake-manifest.json` pinning Mathlib to tag `v4.18.0`, `TflLean.lean` importing
-`Mathlib.Computability.DFA` and `Mathlib.Computability.RegularExpressions` — the two modules the formalizer prompt
-and the LL(k) live-run Lean examples under `ll_system/examples/live_outputs/*.lean` depend on), built with
-`lake exe cache get` + `lake build` so Mathlib's `.olean` cache is baked into the image instead of being recompiled
-on every check.
+`leanprover/lean4:v4.33.0`, Mathlib pinned to tag `v4.33.0`, and
+[langlib](https://github.com/nielstron/langlib) pinned by commit `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — its
+own lakefile requires the same Mathlib tag, so there's no transitive-revision conflict to resolve). `TflLean/Basic.lean`
+imports `Mathlib.Computability.{DFA, RegularExpressions, MyhillNerode, ContextFreeGrammar}` (what the formalizer
+prompt and the LL(k) live-run Lean examples under `ll_system/examples/live_outputs/*.lean` depend on);
+`TflLean/Langlib.lean` imports langlib's `Classes.Regular`/`Classes.ContextFree`/`Classes.DeterministicContextFree`
+definitions, `Classes.ContextFree.Basics.{Pumping,Ogden}` (`CF_pumping`, `Language.IsContextFree.ogdens_lemma`),
+`Classes.DeterministicContextFree.Closure.{Complement,IntersectionRegular}`, and the `AnBnCn` / `AnBn` worked
+examples — what the CFL/DCFL formalizer prompts depend on. Built with `lake exe cache get` (Mathlib's `.olean` cache)
++ `lake build` per module, in checkpoint layers, so Mathlib's cache is baked into the image and langlib's few
+required modules are pre-compiled, instead of either being recompiled on every check.
 
 ```bash
 # Build the image (native on both amd64 and arm64 — e.g. Apple Silicon / Windows-on-ARM under
-# Docker Desktop's WSL2 backend build Lean natively, no emulation). Downloads Mathlib's source
-# (~250 MB) and precompiled .olean cache (~1-2 GB); the resulting image is several GB.
+# Docker Desktop's WSL2 backend build Lean natively, no emulation). Downloads the Lean 4.33 toolchain
+# (~550 MB), Mathlib's source (~250 MB) and precompiled .olean cache (~1-2 GB), plus langlib's source;
+# the resulting image is several GB. On a normal connection this is the ~20-60 min the checkpoint
+# layers below are designed around; on a throttled one, expect proportionally longer (see the note below).
 docker compose -f agent_system/docker/docker-compose.yml build lean4
 # or: agent_system/docker/build.sh (bash) / build.ps1 (PowerShell)
 
-# Check a single file (Mathlib on LEAN_PATH via `lake env`, run from the tfl_lean project dir):
+# Check a single file (Mathlib + langlib on LEAN_PATH via `lake env`, run from the tfl_lean project dir):
 agent_system/docker/run_check.sh path/to/file.lean          # bash
 # PowerShell / Windows Git Bash: pass MSYS_NO_PATHCONV=1 (or run from PowerShell directly) —
 # otherwise Git Bash rewrites /home/lean/... container paths in the docker run arguments.
@@ -434,8 +442,17 @@ Notes:
 - Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
   leading UTF-8 BOM. PowerShell's `Set-Content -Encoding utf8` adds one; use `-Encoding utf8NoBOM` (or write with a
   tool that doesn't add a BOM) instead.
-- To refresh the pinned Mathlib revision: update `rev` in `agent_system/docker/tfl_lean/lakefile.toml`, run
-  `lake update` inside a container built from the *previous* image (or any Lean 4.18-compatible toolchain) to
+- `agent_system/docker/tfl_lean/lake-manifest.json` is **not committed**: `Dockerfile.lean4` runs `lake update`
+  at build time instead, which resolves deterministically from the `rev`-pinned `mathlib`/`langlib` requires in
+  `lakefile.toml` (both pin their own transitive deps at their tagged commit, so nothing floats). It was generated
+  this way — rather than pre-built and committed, as the project's other pinned revisions are — because producing
+  it requires downloading the Lean toolchain first, and the connection this pin was last updated from measured
+  ~50-70 KB/s to both `releases.lean-lang.org` and `github.com` (confirmed host-level, not Docker-specific), making
+  that download alone a multi-hour operation. On a normal connection, run the build once, `docker cp` the
+  resulting container's `tfl_lean/lake-manifest.json` out, commit it, and switch the Dockerfile's first checkpoint
+  back to `COPY` + `lake exe cache get` (no `lake update`) for a faster, fully offline-reproducible rebuild.
+- To refresh the pinned Mathlib or langlib revision: update `rev` in `agent_system/docker/tfl_lean/lakefile.toml`,
+  run `lake update` inside a container built from the *previous* image (or any Lean-4.33-compatible toolchain) to
   regenerate `lake-manifest.json`, commit the new manifest, then rebuild the image.
 
 ---

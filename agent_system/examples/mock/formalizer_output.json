@@ -1,0 +1,8 @@
+{
+  "status": "success",
+  "evidence": {
+    "proof_body": "by\n  intro w\n  constructor\n  · intro h\n    simp_all [myDFA, delta, isAccept]\n  · intro h\n    simp_all [myDFA, delta, isAccept]",
+    "lemmas_used": [],
+    "notes": "Mock formalizer output for MockRunner/agent_system.orchestrator.MockRunner (agent_system/examples/mock/formalizer_output.json) — illustrates the R-Lean contract (agent_system/prompts/formalizer.md): only `proof_body`/`lemmas_used`/`notes`, no formulation. Load with MockRunner(task_dir='agent_system/examples/mock') for a manual dry run of formalize_node; real tests build a Python fake runner instead (agent_system/tests/test_phase3.py) so each retry attempt can return a different body."
+  }
+}

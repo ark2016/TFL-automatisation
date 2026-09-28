@@ -5,29 +5,53 @@ USER lean
 WORKDIR /home/lean
 ENV PATH="/home/lean/.elan/bin:$PATH"
 RUN curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
-RUN elan default leanprover/lean4:v4.18.0
+RUN elan default leanprover/lean4:v4.33.0
 RUN lake --version && lean --version
 
 # ---------------------------------------------------------------------------
-# Mathlib (Computability: DFA, RegularExpressions) — pinned lake project.
+# Mathlib (Computability: DFA, RegularExpressions, MyhillNerode,
+# ContextFreeGrammar) + langlib (Regular/ContextFree/DeterministicContextFree
+# classes, Ogden's & pumping lemmas, closure properties, worked examples) —
+# pinned lake project. See agent_system/docker/tfl_lean/TflLean/Basic.lean
+# and TflLean/Langlib.lean for exactly which imports this warms, and
+# ../tz_tfl_agent_system.md / the formalizer prompt for why.
 #
-# The formalizer prompt (agent_system/prompts/formalizer.md) and live-run
-# Lean examples (ll_system/examples/live_outputs/*.lean) import
-# Mathlib.Computability.DFA / Mathlib.Computability.RegularExpressions.
-# Pre-building this tiny project here warms the Mathlib .olean cache inside
-# the image so agent_system/lib/type_check.py's `lake env lean <file>` calls
-# don't need to compile Mathlib on every check.
+# Both the Mathlib and langlib revisions are pinned by `rev` in lakefile.toml
+# (langlib by commit, since it has no version tags), so `lake update`
+# resolves deterministically: langlib's own lakefile requires the same
+# Mathlib tag we do, and Mathlib's tagged lakefile.lean/manifest pin its own
+# transitive deps (aesop, batteries, Qq, ...), so nothing here floats.
 #
-# lake-manifest.json is committed (see agent_system/docker/tfl_lean/), so the
-# mathlib revision is reproducible; `lake exe cache get` fetches Mathlib's
-# precompiled .olean cache instead of building it from source (which would
-# take hours), then `lake build` finishes the (trivial) TflLean target.
+# NOTE: lake-manifest.json is intentionally NOT committed / COPYed here.
+# `lake update` regenerates it at build time instead — see the README's Lean
+# section for why: producing it ahead of time requires downloading the Lean
+# toolchain, which needs a normal-bandwidth connection this pin was updated
+# from lacked. Once regenerated on a fast connection, `docker cp` the
+# resulting tfl_lean/lake-manifest.json out of a built container, commit it,
+# and change this back to COPY + `lake exe cache get` (no `lake update`) for
+# a fully offline-reproducible, faster rebuild.
+#
+# `lake exe cache get` fetches Mathlib's precompiled .olean cache instead of
+# building it from source (which would take hours). langlib has no such
+# cache — `lake build` only compiles the langlib modules TflLean.Langlib
+# actually imports (transitively), not the whole library.
+#
+# Split into checkpoint layers (update + cache get; build TflLean.Basic;
+# build TflLean.Langlib) so a build that gets interrupted — or fails on a
+# later step — resumes from the last completed layer via BuildKit's cache
+# instead of re-fetching/re-building everything.
 # ---------------------------------------------------------------------------
 WORKDIR /home/lean/tfl_lean
 COPY --chown=lean:lean tfl_lean/lean-toolchain ./lean-toolchain
 COPY --chown=lean:lean tfl_lean/lakefile.toml ./lakefile.toml
-COPY --chown=lean:lean tfl_lean/lake-manifest.json ./lake-manifest.json
-COPY --chown=lean:lean tfl_lean/TflLean.lean ./TflLean.lean
+RUN lake update
 RUN lake exe cache get
+
+COPY --chown=lean:lean tfl_lean/TflLean/Basic.lean ./TflLean/Basic.lean
+RUN lake build TflLean.Basic
+
+COPY --chown=lean:lean tfl_lean/TflLean/Langlib.lean ./TflLean/Langlib.lean
+COPY --chown=lean:lean tfl_lean/TflLean.lean ./TflLean.lean
+RUN lake build TflLean.Langlib
 RUN lake build
 WORKDIR /home/lean

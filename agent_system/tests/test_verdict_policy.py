@@ -121,19 +121,24 @@ class TestScenario2Contradiction(unittest.TestCase):
 
 class TestScenario2VerifiedWins(unittest.TestCase):
 
-    def test_lean_verified_destructive_wins_over_bounded_pass_capped_at_085(self):
+    def test_lean_verified_opposite_direction_flips_verdict_at_098(self):
+        """docs/VERDICT_POLICY.md R-Lean: a Lean `proved` result for the
+        OPPOSITE direction of `reasoning_verdict` outranks a passing (but
+        only sample-based, bounded_pass) oracle_test -- the verdict flips
+        to the proven direction at the full 0.98 `verified` ceiling, not
+        a capped contradiction (superseded R3 wording: a machine-checked
+        proof is never capped below `verified`)."""
         state = _state(
             test_result={"status": "pass", "tested": 200},
-            evidence={
-                "formalization": {"status": "valid", "sorry_count": 0, "lean_verified": True},
-            },
-            reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.99}},
+            formalization={"status": "proved", "direction": "non_regular", "axioms": []},
+            reasoning_output={"evidence": {"verdict": "regular", "confidence": 0.99}},
         )
         result = assemble_result_node(state)["result"]
 
         self.assertTrue(result["verdict_gate"]["contradiction"])
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["confidence"], 0.85)
+        self.assertEqual(result["confidence"], 0.98)
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "non_regular")
 
 
 # ---------------------------------------------------------------------------
@@ -142,11 +147,9 @@ class TestScenario2VerifiedWins(unittest.TestCase):
 
 class TestScenario3LeanVerified(unittest.TestCase):
 
-    def test_lean_no_sorry_reaches_098(self):
+    def test_lean_proved_matching_direction_reaches_098(self):
         state = _state(
-            evidence={
-                "formalization": {"status": "valid", "sorry_count": 0, "lean_verified": True},
-            },
+            formalization={"status": "proved", "direction": "non_regular", "axioms": ["propext"]},
             reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.99}},
         )
         result = assemble_result_node(state)["result"]
@@ -154,16 +157,39 @@ class TestScenario3LeanVerified(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
         self.assertAlmostEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
+        basis_agents = {b["agent"]: b for b in result["verdict_gate"]["basis"]}
+        self.assertEqual(basis_agents["formalizer"]["trust"], "verified")
+        self.assertEqual(basis_agents["formalizer"]["basis"], "lean_proof")
 
     def test_lean_with_sorry_is_not_verified(self):
-        """sorry_count > 0 must NOT reach the `verified` cap (TODO §1 ⚪)."""
+        """`has_sorry` must NOT reach the `verified` cap (TODO §1 ⚪, R1:
+        not evidence either way)."""
         state = _state(
-            evidence={
-                "formalization": {"status": "valid", "sorry_count": 1, "lean_verified": True},
-            },
+            formalization={"status": "has_sorry", "direction": "non_regular", "axioms": []},
         )
         result = assemble_result_node(state)["result"]
 
+        self.assertNotEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
+
+    def test_lean_error_is_not_verified(self):
+        state = _state(
+            formalization={"status": "error", "direction": "non_regular", "errors": ["boom"]},
+        )
+        result = assemble_result_node(state)["result"]
+
+        self.assertNotEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
+
+    def test_lean_not_formalizable_does_not_change_gate(self):
+        """Missing/`not_formalizable` formalization must behave exactly
+        like no formalization at all -- falls through to whatever the
+        rest of the evidence supports (here: nothing -> partial)."""
+        state = _state(
+            formalization={"status": "not_formalizable", "direction": None,
+                            "reason": "no statement for this ir/direction"},
+        )
+        result = assemble_result_node(state)["result"]
+
+        self.assertEqual(result["status"], "partial")
         self.assertNotEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
 
 
