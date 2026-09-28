@@ -5,6 +5,7 @@ dcfl_system/lib/dpda.py is the shared contract checker/simulator it must satisfy
 """
 from __future__ import annotations
 
+import functools
 import itertools
 import json
 import random
@@ -65,6 +66,7 @@ class TestCertificateLoadsAndIsDeterministic:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestDpdaAcceptsMatchesGrammarOracle:
     def test_exhaustive_up_to_length_8(self, cert):
         mismatches = []
@@ -129,14 +131,22 @@ class TestNpdaIsHeightDeterministic:
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=None)
+def _real_raw_and_quotient() -> tuple[RawDPDA, QuotientDPDA]:
+    """determinize(build_npda()) + quotient(...) are deterministic/pure and
+    otherwise get recomputed by every test below that needs the real
+    pipeline -- cache the (non-trivial) build once per process."""
+    raw = determinize(build_npda())
+    return raw, quotient(raw)
+
+
 class TestQuotientReachablePairsStructuralCheck:
     def test_real_pipeline_has_no_violations(self):
-        raw = determinize(build_npda())
-        quot = quotient(raw)
+        raw, quot = _real_raw_and_quotient()
         assert check_quotient_reachable_pairs(raw, quot) == []
 
     def test_reachable_pairs_are_exposed_and_nonempty(self):
-        raw = determinize(build_npda())
+        raw, _quot = _real_raw_and_quotient()
         assert raw.reachable_pairs
         assert all(isinstance(p, tuple) and len(p) == 2 for p in raw.reachable_pairs)
 

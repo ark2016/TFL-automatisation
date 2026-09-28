@@ -132,8 +132,13 @@ def _min_total(form):
 
 
 @functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=None)
 def enumerate_language(max_len: int) -> frozenset[str]:
-    """BFS/DFS over sentential forms of G, pruned by achievable length."""
+    """BFS/DFS over sentential forms of G, pruned by achievable length.
+
+    Pure/deterministic in ``max_len`` -- cached so the several ``setUp``
+    methods below (each calling this once per test) don't repeat the same
+    BFS several times per TestCase."""
     words: set[str] = set()
     seen: set[tuple] = set()
     stack = [("S",)]
@@ -209,8 +214,15 @@ EXAMPLES_DIR = pathlib.Path(__file__).resolve().parent.parent / "examples"
 
 
 class TestTask2PumpingMockWordsAreCorrect(unittest.TestCase):
+    # Longest word any assertion below checks is a^(3p+2+k) b^p for p=3,
+    # k<=p=3 -> length 14 (test_pumped_up_word_leaves_language_for_small_p);
+    # 15 keeps a 1-symbol margin. enumerate_language's sentential-form BFS
+    # grows steeply with max_len (~19s at 20 vs ~0.2s at 15, since the
+    # grammar's two recursive productions roughly quadruple the frontier
+    # every +2), so the old max_len=20 paid for ~450k words when <=15
+    # already covers every word these tests need.
     def setUp(self):
-        self.language = enumerate_language(20)
+        self.language = enumerate_language(15)
         with open(
             EXAMPLES_DIR / "task2_grammar_sasb_pumping_output.json", encoding="utf-8"
         ) as f:

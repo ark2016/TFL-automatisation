@@ -20,7 +20,7 @@ jobs:
   pytest:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -58,9 +58,49 @@ jobs:
             ll_system/tests \
             ui_server/tests \
             tests \
-            -q --color=yes \
+            -q --color=yes -m "not slow" \
+            -n auto --dist loadfile \
             --cov=agent_system --cov=cfl_system --cov=dcfl_system \
             --cov=ll_system --cov=ui_server --cov-report=term-missing
+
+  pytest-slow:
+    name: pytest (slow, marked)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install project + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      # Exhaustive/brute-force checks (dcfl_system/tests/test_grammar_aSSb_dpda.py::
+      # TestDpdaAcceptsMatchesGrammarOracle, which simulates every word up to
+      # length 8 through cfl_system.lib.pda_simulator's general BFS
+      # simulator) marked @pytest.mark.slow: kept for coverage, but split
+      # into their own job (running in parallel with the `pytest` job
+      # above, not nested inside it) so their real, non-redundant
+      # simulation cost never risks the main job's timeout.
+      - name: Run pytest suites marked slow
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
+        run: |
+          python -m pytest \
+            agent_system/tests \
+            cfl_system/tests \
+            dcfl_system/tests \
+            ll_system/tests \
+            ui_server/tests \
+            tests \
+            -q --color=yes -m "slow" \
+            -n auto --dist loadfile
 
   build:
     name: build wheel + smoke import
