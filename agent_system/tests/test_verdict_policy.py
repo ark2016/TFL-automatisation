@@ -115,8 +115,8 @@ class TestScenario2Contradiction(unittest.TestCase):
 # §6 scenario 2b — contradiction where one side is `verified`: a Lean-checked
 # non_regular proof (no `sorry`) next to a constructive artifact that still
 # passes its (sample-based, bounded_pass) oracle_test. docs/VERDICT_POLICY.md
-# R3: the `verified` side still wins, but capped at 0.85, not the normal 0.98
-# `verified` ceiling.
+# R3: the `verified` side still wins, at the full 0.98 `verified` ceiling
+# (superseded R3 wording that capped it below `verified`).
 # ---------------------------------------------------------------------------
 
 class TestScenario2VerifiedWins(unittest.TestCase):
@@ -166,6 +166,40 @@ class TestScenario3LeanVerified(unittest.TestCase):
         # has no way to show what was actually proved.
         self.assertEqual(result["evidence"]["formalization"]["status"], "proved")
         self.assertEqual(result["evidence"]["formalization"]["axioms"], ["propext"])
+
+    def test_lean_proved_matching_direction_low_reasoning_confidence_still_098(self):
+        """R-Lean: `proved` earns the full 0.98 ceiling outright -- it must
+        NOT be further bounded by a low reasoning_confidence (regression for
+        the gate asymmetry where the matching-direction branch used
+        ``min(reasoning_confidence, 0.98)`` while the opposite-direction
+        branch used 0.98 unconditionally; both directions must behave the
+        same, per docs/VERDICT_POLICY.md R-Lean)."""
+        state = _state(
+            formalization={"status": "proved", "direction": "non_regular", "axioms": []},
+            reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.6}},
+        )
+        result = assemble_result_node(state)["result"]
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
+        self.assertAlmostEqual(result["confidence"], 0.98)
+
+    def test_lean_proved_opposite_direction_branch_reachable(self):
+        """The verdict-flip branch (a machine-checked `proved` result for
+        the OPPOSITE direction of `reasoning_verdict`) must be reachable on
+        its own -- not only as a side effect of the constructive/destructive
+        contradiction set up in TestScenario2VerifiedWins. Confidence must
+        reach the full 0.98 ceiling regardless of reasoning_confidence."""
+        state = _state(
+            formalization={"status": "proved", "direction": "regular", "axioms": []},
+            reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.6}},
+        )
+        result = assemble_result_node(state)["result"]
+
+        self.assertTrue(result["verdict_gate"]["contradiction"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "regular")
 
     def test_lean_with_sorry_is_not_verified(self):
         """`has_sorry` must NOT reach the `verified` cap (TODO §1 ⚪, R1:

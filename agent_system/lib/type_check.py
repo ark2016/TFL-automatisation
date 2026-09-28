@@ -547,26 +547,38 @@ def _parse_replay_status(messages: list[dict], expected_line: int | None) -> str
     return None
 
 
-def check_lean_file(text: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
+def check_lean_file(
+    text: str, timeout: int = DEFAULT_TIMEOUT, theorem_name: str | None = None,
+) -> dict:
     """Type-check a composed Lean 4 file via `lake env lean --json` and
     classify the result (docs/VERDICT_POLICY.md R-Lean).
+
+    *theorem_name*, when given, is the trusted name to check axioms/`sorry`
+    for -- callers that composed *text* via `compose_lean_file` should pass
+    the same name the statement itself carries (``lean_ir.LeanStatement.name``,
+    always ``"tfl_main"`` by contract), rather than letting this function
+    infer it by regex-searching *text* for the first ``#print axioms <name>``
+    occurrence. When omitted, falls back to that regex (defaulting to
+    ``"tfl_main"`` if no match at all) for callers that don't have a
+    `LeanStatement` on hand (tests, ad-hoc text).
 
     Returns a dict with keys ``status`` (``proved`` | ``has_sorry`` |
     ``error`` | ``timeout`` | ``unavailable``), ``errors``, ``warnings``,
     ``axioms``, ``elapsed`` and ``message``.
 
     ``proved`` requires: no ``error``-severity message, no ``sorry``
-    warning, and a ``#print axioms`` result (at its own known line -- see
-    ``_parse_axioms``) that is a subset of ``ALLOWED_AXIOMS``. When *text*
-    also carries the independent kernel-replay check `compose_lean_file`
-    appends (i.e. it went through `compose_lean_file` at all -- the one
-    path an LLM-written proof body can reach) that check must additionally
-    report success at its own known line; a trusted, hand-written file
-    checked directly (no replay marker present at all) isn't held to it.
-    Everything else that would stop `proved` -- a compile error, a
-    `sorry`, a disallowed axiom, a replay failure, a timeout, or Docker/the
-    image being unavailable -- yields one of the other statuses, never
-    `proved`.
+    warning positioned inside the theorem's own declaration (see
+    ``_parse_axioms`` and the declaration-span filter below), and a
+    ``#print axioms`` result (at its own known line -- see ``_parse_axioms``)
+    that is a subset of ``ALLOWED_AXIOMS``. When *text* also carries the
+    independent kernel-replay check `compose_lean_file` appends (i.e. it
+    went through `compose_lean_file` at all -- the one path an LLM-written
+    proof body can reach) that check must additionally report success at
+    its own known line; a trusted, hand-written file checked directly (no
+    replay marker present at all) isn't held to it. Everything else that
+    would stop `proved` -- a compile error, a `sorry`, a disallowed axiom,
+    a replay failure, a timeout, or Docker/the image being unavailable --
+    yields one of the other statuses, never `proved`.
 
     If *text* carries `compose_lean_file`'s own
     ``-- TFL_PROOF_BODY_REJECTED: ...`` marker (its proof body tripped
@@ -652,21 +664,70 @@ def check_lean_file(text: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
         elapsed = time.monotonic() - start
         messages = _parse_lean_json_messages(result.stdout)
 
-        errors = [m for m in messages if m.get("severity") == "error"]
-        warnings = [m for m in messages if m.get("severity") == "warning"]
-        sorry_warnings = [
-            w for w in warnings
-            if isinstance(w.get("data"), str) and "sorry" in w["data"].lower()
-        ]
-
-        name_match = _PRINT_AXIOMS_RE.search(text)
-        theorem_name = name_match.group(1) if name_match else "tfl_main"
+        # Theorem name: the caller's trusted `theorem_name` (statement.name,
+        # code review 2026-09-28) when given, else fall back to regex-
+        # searching *text* itself for the first `#print axioms <name>`
+        # occurrence -- only for callers with no `LeanStatement` on hand.
+        if theorem_name:
+            name_match = re.search(
+                r"#print axioms\s+" + re.escape(theorem_name) + r"\b", text,
+            )
+        else:
+            name_match = _PRINT_AXIOMS_RE.search(text)
+            theorem_name = name_match.group(1) if name_match else "tfl_main"
         axioms_line = _line_of(text, name_match.start()) if name_match else None
         axioms = _parse_axioms(messages, theorem_name, axioms_line)
 
         replay_idx = text.find(_REPLAY_MARKER)
         replay_line = _line_of(text, replay_idx) if replay_idx != -1 else None
         replay_status = _parse_replay_status(messages, replay_line)
+
+        # tfl_main declaration span (code review 2026-09-28): starts at the
+        # `theorem <theorem_name>` line and ends right before whichever of
+        # the appended commands (independent kernel replay / `#print
+        # axioms`) comes first -- both compose_lean_file's own commands,
+        # never part of the declaration itself. `None` on either end means
+        # "no bound on that side" (e.g. a hand-written file with no
+        # trailing commands at all) rather than suppressing the filter.
+        decl_match = re.search(
+            r"\btheorem\s+" + re.escape(theorem_name) + r"\b", text,
+        )
+        decl_start_line = _line_of(text, decl_match.start()) if decl_match else None
+        _decl_end_candidates = [ln for ln in (replay_line, axioms_line) if ln is not None]
+        decl_end_line = min(_decl_end_candidates) if _decl_end_candidates else None
+
+        def _in_tfl_main_decl(msg: dict) -> bool:
+            """Position-based filter for `sorry` warnings: a warning only
+            counts against the theorem when Lean reports it *inside* the
+            declaration's own line span (code review 2026-09-28) --
+            previously any warning whose `data` merely contained the
+            substring "sorry" anywhere in the whole message stream counted,
+            which could also match an unrelated warning outside the
+            declaration. No declaration bounds found at all (`decl_match`
+            didn't match, e.g. a hand-written file not shaped like
+            compose_lean_file's output) falls back to "no position filter"
+            so detection never silently goes blind."""
+            if decl_start_line is None and decl_end_line is None:
+                return True
+            pos = msg.get("pos")
+            if not isinstance(pos, dict):
+                return False
+            line = pos.get("line")
+            if line is None:
+                return False
+            if decl_start_line is not None and line < decl_start_line:
+                return False
+            if decl_end_line is not None and line >= decl_end_line:
+                return False
+            return True
+
+        errors = [m for m in messages if m.get("severity") == "error"]
+        warnings = [m for m in messages if m.get("severity") == "warning"]
+        sorry_warnings = [
+            w for w in warnings
+            if isinstance(w.get("data"), str) and "sorry" in w["data"].lower()
+            and _in_tfl_main_decl(w)
+        ]
 
         if result.returncode == 124:
             status = "timeout"

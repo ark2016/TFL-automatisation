@@ -1568,7 +1568,9 @@ def formalize_node(state: PipelineState) -> dict:
 
         proof_body = new_proof_body
         lean_text = compose_lean_file(statement, proof_body)
-        tc = check_lean_file(lean_text, timeout=LEAN_TIMEOUT)
+        tc = check_lean_file(
+            lean_text, timeout=LEAN_TIMEOUT, theorem_name=statement_snapshot["name"],
+        )
         elapsed_total += tc.get("elapsed", 0.0) or 0.0
         tc_status = tc.get("status", "error")
         tc_errors = tc.get("errors", [])
@@ -1822,8 +1824,14 @@ def assemble_result_node(state: PipelineState) -> dict:
         elif lean_proved:
             # Direction matches `reasoning_verdict` (or the statement carried
             # no explicit direction) -- uncontested, full verified ceiling.
+            # R-Lean: `proved` earns the full 0.98 ceiling outright, same as
+            # the opposite-direction branch above -- it is never further
+            # bounded by the (unverified) reasoning_confidence, so a
+            # low-confidence reasoning agent next to a machine-checked proof
+            # still reports 0.98, not a value dragged down toward its own
+            # self-estimate.
             status = "success"
-            confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["verified"])
+            confidence = CONFIDENCE_CAPS["verified"]
             basis.append({"agent": "formalizer", "trust": "verified", "basis": "lean_proof"})
 
         elif constructive_trust == "bounded_pass" and destructive_ok:

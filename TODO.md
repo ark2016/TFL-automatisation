@@ -259,6 +259,15 @@
   запросу пользователя с согласованным бюджетом — mock-режим (канонические тела доказательств) остаётся дефолтом
   везде, включая `tfl-eval` и CI. Открыто: ни одного live-прогона доказателя (Opus) на CFL/DCFL-примерах ещё не
   было — оценить реальную стоимость на 1–2 задачах прежде чем предлагать его шире.
+- [ ] ⚪ **M** **Подключить R-Lean гейт к CFL/DCFL.** Формализация подключена к вердикту только в `agent_system`
+  (REG): `agent_system/graph.py`'s `formalize_node` + `assemble_result_node` — единственное место, где Lean
+  `proved` поднимает trust до `verified` (0.98) и может развернуть вердикт. `cfl_system.lib.lean_ir` /
+  `dcfl_system.lib.lean_ir` уже умеют генерировать CFL/DCFL-формулировки через langlib, а
+  `agent_system/lib/type_check.py` их напрямую компилирует, но у `cfl_system`/`dcfl_system` пока нет своего
+  `formalize_node`/гейта поверх этого (существующий `cfl_system.orchestrator.formalize_node` — отдельный,
+  Lean-независимый механизм: LLM пишет Markdown-доказательство для отчёта, без Docker и без влияния на
+  verdict gate). Следующий этап — завести для CFL/DCFL тот же цикл statement → proof_body → `check_lean_file`
+  → gate, что уже есть в `agent_system`.
 - [ ] ⚪ **M** **Расширение IR→Lean переводчика (`agent_system/lib/lean_ir.py` + `cfl_system`/`dcfl_system` wrappers).**
   Покрыты не все формы IR (например произвольные регулярные выражения с backreferences, вложенные булевы
   комбинации для CFL/DCFL) — расширять по мере появления вывoда, которого текущий транслятор не переводит в

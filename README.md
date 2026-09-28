@@ -408,7 +408,18 @@ The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-le
 
 ### R-Lean architecture
 
-The policy behind this is `docs/VERDICT_POLICY.md`'s **R-Lean** rule — change it there first, this is a summary:
+The policy behind this is `docs/VERDICT_POLICY.md`'s **R-Lean** rule — change it there first, this is a summary.
+
+**Wired only in `agent_system` (REG) today.** `agent_system/graph.py`'s `formalize_node` +
+`assemble_result_node`'s gate are the only place a Lean `proved` result actually raises trust to `verified`
+(0.98) and can flip the verdict (§"Lean formal proof" above). `cfl_system.lib.lean_ir` /
+`dcfl_system.lib.lean_ir` reuse `agent_system.lib.lean_ir`'s statement translator to generate CFL/DCFL
+theorem *statements* (via langlib) and `agent_system/lib/type_check.py`'s `compose_lean_file`/`check_lean_file`
+can type-check them directly, but CFL and DCFL have no `formalize_node`/gate wiring of their own yet — their
+pipelines' own `--formalize` step (`cfl_system.orchestrator.formalize_node`) is a *different*, Lean-free
+mechanism (an LLM writes a structured Markdown proof for the report; no Lean file, no Docker, no effect on
+the verdict gate). Connecting CFL/DCFL to the same Lean gate `agent_system` already has is a separate, open
+step (`TODO.md`).
 
 - **Statement is code, proof body is the LLM.** The Lean file's theorem *statement* (alphabet type, language
   definition, the claim itself) is generated **deterministically from the IR** by
@@ -424,10 +435,13 @@ The policy behind this is `docs/VERDICT_POLICY.md`'s **R-Lean** rule — change 
   - `has_sorry`, `error`, `timeout`, `unavailable` — evidence for neither side (R1); the pipeline's verdict falls
     back to whatever the non-Lean agents established.
 - **What gets formalized.** REG statements are built on **Mathlib** (`Language.IsRegular`, `DFA.pumping_lemma`,
-  Myhill–Nerode via `Mathlib.Computability.{DFA,RegularExpressions,MyhillNerode,ContextFreeGrammar}`). CFL and
-  DCFL statements are built on **[langlib](https://github.com/nielstron/langlib)**
-  (`Classes.{Regular,ContextFree,DeterministicContextFree}`, the pumping lemma, Ogden's lemma, DCFL closure
-  lemmas). **LL(k) is not formalized** — no Lean statement exists for grammar-level LL(k) claims.
+  Myhill–Nerode via `Mathlib.Computability.{DFA,RegularExpressions,MyhillNerode,ContextFreeGrammar}`) — this is
+  also the only direction wired to a verdict gate today (see above). CFL and DCFL statements are built on
+  **[langlib](https://github.com/nielstron/langlib)** (`Classes.{Regular,ContextFree,DeterministicContextFree}`,
+  the pumping lemma, Ogden's lemma, DCFL closure lemmas); `lean_ir`/`compose_lean_file`/`check_lean_file` can
+  generate and type-check these statements already, but the pipeline step and gate that would act on the
+  result are not wired for CFL/DCFL yet. **LL(k) is not formalized** — no Lean statement exists for
+  grammar-level LL(k) claims.
 - **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0` (resolves to commit
   `db584cd6d46c92f209a44c0f1c829460d327499d`), langlib pinned at commit
   `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — verified against langlib's *own* `lake-manifest.json` at that
@@ -448,8 +462,8 @@ The policy behind this is `docs/VERDICT_POLICY.md`'s **R-Lean** rule — change 
 
 ### The `tfl-lean4` Docker image
 
-`agent_system/lib/type_check.py` (via `agent_system/docker/run_check.sh` / `run_check.ps1`, or directly with
-`docker run`) type-checks Lean 4 code inside the `tfl-lean4` Docker image rather than requiring a local Lean install. The image
+`agent_system/lib/type_check.py` (via `agent_system/docker/run_check.sh`, or directly with `docker run`)
+type-checks Lean 4 code inside the `tfl-lean4` Docker image rather than requiring a local Lean install. The image
 bundles a small pinned lake project, `agent_system/docker/tfl_lean/` (`lakefile.toml`, `lean-toolchain` =
 `leanprover/lean4:v4.33.0`, Mathlib pinned to tag `v4.33.0`, and
 [langlib](https://github.com/nielstron/langlib) pinned by commit `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — its

@@ -223,6 +223,27 @@ def _mock_messages_for_proved(text: str) -> str:
     ) % (replay_line, replay_line, axioms_line, axioms_line)
 
 
+def _mock_messages_for_sorry(text: str) -> str:
+    """Like `_mock_messages_for_proved` but for a `has_sorry` result: a
+    `sorry` warning at the actual line the substituted proof body landed
+    on in *text* (code review 2026-09-28: `sorry` detection is now
+    position-based -- inside the tfl_main declaration's own line span --
+    rather than a substring match against the whole message stream, so a
+    fixture with the warning at a hard-coded, unrelated line would no
+    longer be recognized)."""
+    sorry_idx = text.index("sorry")
+    sorry_line = text.count("\n", 0, sorry_idx) + 1
+    axioms_line = text.count("\n", 0, text.index("#print axioms")) + 1
+    return (
+        '{"severity":"warning","pos":{"line":%d,"column":8},"kind":"[anonymous]",'
+        '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":%d,"column":16},'
+        '"data":"declaration uses \'sorry\'","caption":""}\n'
+        '{"severity":"information","pos":{"line":%d,"column":0},"kind":"[anonymous]",'
+        '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":%d,"column":6},'
+        '"data":"\'tfl_main\' depends on axioms: [sorryAx]","caption":""}\n'
+    ) % (sorry_line, sorry_line, axioms_line, axioms_line)
+
+
 def _fake_completed_process(stdout: str, returncode: int):
     class _Result:
         pass
@@ -298,8 +319,8 @@ class TestComposeAndCheckRoundTrip(unittest.TestCase):
     @patch("agent_system.lib.type_check.is_docker_available", return_value=True)
     @patch("agent_system.lib.type_check.subprocess.run")
     def test_sorry_proof_body_is_has_sorry(self, mock_run, _mock_avail):
-        mock_run.return_value = _fake_completed_process(_JSON_SORRY, returncode=0)
         text = compose_lean_file(_STATEMENT, "by sorry")
+        mock_run.return_value = _fake_completed_process(_mock_messages_for_sorry(text), returncode=0)
         result = check_lean_file(text)
         self.assertEqual(result["status"], "has_sorry")
 
@@ -310,6 +331,102 @@ class TestComposeAndCheckRoundTrip(unittest.TestCase):
         mock_run.return_value = _fake_completed_process(_mock_messages_for_proved(text), returncode=0)
         result = check_lean_file(text)
         self.assertEqual(result["status"], "proved", result)
+
+
+# ── R-Lean, code review 2026-09-28: `sorry` detected by position within the
+# tfl_main declaration (not by a substring match anywhere in the message
+# stream), and the theorem name for `#print axioms` taken from a trusted
+# `theorem_name` argument (statement.name) rather than regex-parsed out of
+# the file text. Fixtures below are hand-built `lake env lean --json`-shaped
+# message streams, not real Docker output, same style as
+# `TestCheckLeanFileParsing` above.
+# ---------------------------------------------------------------------------
+
+class TestSorryPositionAndTheoremNameFromStatement(unittest.TestCase):
+
+    @patch("agent_system.lib.type_check.is_docker_available", return_value=True)
+    @patch("agent_system.lib.type_check.subprocess.run")
+    def test_sorry_substring_outside_declaration_is_not_has_sorry(self, mock_run, _mock_avail):
+        """A warning whose `data` merely *contains* the substring "sorry"
+        but is positioned outside the tfl_main declaration's own line span
+        (here: at the `#print axioms` line, never part of the declaration)
+        must NOT be treated as a `sorry` in the proof -- only a warning
+        Lean actually reports *inside* the declaration counts."""
+        text = (
+            "theorem tfl_main : True := by\n"
+            "  trivial\n"
+            "\n"
+            "#print axioms tfl_main\n"
+        )
+        messages = (
+            '{"severity":"warning","pos":{"line":4,"column":0},"kind":"[anonymous]",'
+            '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":4,"column":10},'
+            '"data":"unused variable \'sorryFlag\'","caption":""}\n'
+            '{"severity":"information","pos":{"line":4,"column":0},"kind":"[anonymous]",'
+            '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":4,"column":6},'
+            '"data":"\'tfl_main\' does not depend on any axioms","caption":""}\n'
+        )
+        mock_run.return_value = _fake_completed_process(messages, returncode=0)
+        result = check_lean_file(text, theorem_name="tfl_main")
+
+        self.assertEqual(result["status"], "proved", result)
+
+    @patch("agent_system.lib.type_check.is_docker_available", return_value=True)
+    @patch("agent_system.lib.type_check.subprocess.run")
+    def test_sorry_warning_inside_declaration_still_detected(self, mock_run, _mock_avail):
+        """The positive case, symmetric to the test above: a real `sorry`
+        warning positioned inside the declaration (line 1, same line as
+        `theorem tfl_main`) is still caught."""
+        text = (
+            "theorem tfl_main : True := by\n"
+            "  sorry\n"
+            "\n"
+            "#print axioms tfl_main\n"
+        )
+        messages = (
+            '{"severity":"warning","pos":{"line":1,"column":8},"kind":"[anonymous]",'
+            '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":1,"column":16},'
+            '"data":"declaration uses \'sorry\'","caption":""}\n'
+            '{"severity":"information","pos":{"line":4,"column":0},"kind":"[anonymous]",'
+            '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":4,"column":6},'
+            '"data":"\'tfl_main\' depends on axioms: [sorryAx]","caption":""}\n'
+        )
+        mock_run.return_value = _fake_completed_process(messages, returncode=0)
+        result = check_lean_file(text, theorem_name="tfl_main")
+
+        self.assertEqual(result["status"], "has_sorry", result)
+
+    @patch("agent_system.lib.type_check.is_docker_available", return_value=True)
+    @patch("agent_system.lib.type_check.subprocess.run")
+    def test_theorem_name_argument_overrides_decoy_in_text(self, mock_run, _mock_avail):
+        """A decoy `#print axioms <other name>` occurring earlier in *text*
+        (e.g. inside a comment, or any text preceding the real appended
+        command) must not be picked up as the theorem name when the caller
+        passes a trusted `theorem_name` -- without it, the regex fallback
+        matches the decoy first and the real axioms message (at its own
+        line) is never found, yielding `error`; with it, the real line is
+        used and the result reaches `proved`."""
+        text = (
+            "-- #print axioms decoy_name\n"
+            "theorem tfl_main : True := by\n"
+            "  trivial\n"
+            "\n"
+            "#print axioms tfl_main\n"
+        )
+        messages = (
+            '{"severity":"information","pos":{"line":5,"column":0},"kind":"[anonymous]",'
+            '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":5,"column":6},'
+            '"data":"\'tfl_main\' does not depend on any axioms","caption":""}\n'
+        )
+        mock_run.return_value = _fake_completed_process(messages, returncode=0)
+
+        result_no_name = check_lean_file(text)
+        self.assertEqual(result_no_name["status"], "error", result_no_name)
+        self.assertIn("decoy_name", str(result_no_name["errors"]))
+
+        mock_run.return_value = _fake_completed_process(messages, returncode=0)
+        result_with_name = check_lean_file(text, theorem_name="tfl_main")
+        self.assertEqual(result_with_name["status"], "proved", result_with_name)
 
 
 # ── R-Lean: real lib.lean_ir.render_statement + compose_lean_file ──────────
