@@ -37,6 +37,38 @@ def _verdict_css_class(verdict: str | None) -> str:
     return "verdict-unknown"
 
 
+# Trust labels per docs/VERDICT_POLICY.md §5: a green "verified" banner is
+# reserved for the top `verified` trust level, never shown for a merely
+# well-formed (structural-only) or bounded (sampled) check.
+_TRUST_RANK_FOR_DISPLAY = {"not_verified": 0, "well_formed": 1, "bounded_pass": 2, "verified": 3}
+_TRUST_LABELS_RU = {
+    "verified": "проверено полностью",
+    "bounded_pass": "проверено выборочно",
+    "well_formed": "корректно оформлено",
+    "not_verified": "не проверено",
+    "refuted": "опровергнуто",
+}
+
+
+def _trust_label(trust: str | None) -> str:
+    return _TRUST_LABELS_RU.get(trust, "не проверено")
+
+
+def _overall_trust(verdict_gate: dict | None) -> str | None:
+    """Strongest non-refuted trust among verdict_gate['basis'] entries, or
+    'refuted' if every entry was refuted. None if there is no basis at all."""
+    basis = (verdict_gate or {}).get("basis") or []
+    if not basis:
+        return None
+    trusts = [b.get("trust") for b in basis if b.get("trust")]
+    if not trusts:
+        return None
+    non_refuted = [t for t in trusts if t != "refuted"]
+    if not non_refuted:
+        return "refuted"
+    return max(non_refuted, key=lambda t: _TRUST_RANK_FOR_DISPLAY.get(t, 0))
+
+
 # ---------------------------------------------------------------------------
 # render_dfa_table
 # ---------------------------------------------------------------------------
@@ -392,6 +424,13 @@ def render_markdown(result: dict) -> str:
     _add("## Итог")
     _add(f"**Статус:** {result.get('status', 'unknown')}  ")
     _add(f"**Уверенность:** {result.get('confidence', 'N/A')}")
+    verdict_gate = result.get("verdict_gate") or evidence.get("verdict_gate")
+    overall_trust = _overall_trust(verdict_gate)
+    if overall_trust is not None:
+        _add(f"**Доверие:** {_trust_label(overall_trust)} ({overall_trust})")
+    if verdict_gate and verdict_gate.get("contradiction"):
+        _add("**Внимание:** обнаружено противоречие между конструктивным и "
+             "деструктивным доказательствами (см. `verdict_gate`).")
     _add()
 
     return "\n".join(lines)
@@ -715,6 +754,22 @@ def render_html(result: dict) -> str:
                             f'oracle: {_esc(tested)}/{_esc(tested)}</span>')
 
     footer_items.append(f'<span>confidence: {final_confidence}</span>')
+
+    # Trust label (docs/VERDICT_POLICY.md §5) -- a green "verified" banner
+    # is reserved for the top `verified` trust level, never for a merely
+    # well-formed or sampled (bounded_pass) check.
+    verdict_gate = result.get("verdict_gate") or evidence.get("verdict_gate")
+    overall_trust = _overall_trust(verdict_gate)
+    if overall_trust is not None:
+        trust_dot = "s-pass" if overall_trust in ("verified", "bounded_pass") else (
+            "s-fail" if overall_trust == "refuted" else "s-unknown")
+        footer_items.append(
+            f'<span style="display:flex;align-items:center;gap:5px">'
+            f'<span class="s-dot {trust_dot}"></span> '
+            f'{_esc(_trust_label(overall_trust))}</span>')
+    if verdict_gate and verdict_gate.get("contradiction"):
+        footer_items.append(
+            '<span style="color:#c62828">⚠ противоречие в доказательствах</span>')
 
     # Lean 4 verification status
     fm = evidence.get("formalization", {})

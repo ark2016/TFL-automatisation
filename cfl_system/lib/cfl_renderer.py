@@ -231,6 +231,22 @@ def _confidence_bar(confidence: float | None) -> str:
     return f"Уверенность: {pct}%"
 
 
+# docs/VERDICT_POLICY.md §1/§5: word labels for the trust taxonomy. The
+# renderer must never call a bounded_pass/well_formed check "verified" — the
+# green "fully verified" banner is reserved for trust == "verified" alone.
+_TRUST_LABELS = {
+    "verified": "проверено полностью",
+    "bounded_pass": "проверено выборочно",
+    "well_formed": "корректно оформлено",
+    "not_verified": "не проверено",
+    "refuted": "опровергнуто",
+}
+
+
+def _trust_label(trust: str | None) -> str:
+    return _TRUST_LABELS.get(trust or "not_verified", "не проверено")
+
+
 # ---------------------------------------------------------------------------
 # Grammar rendering
 # ---------------------------------------------------------------------------
@@ -340,7 +356,10 @@ def render_markdown(result: dict) -> str:
     else:
         sections.append("")
 
-    # Verification banner — critical for honesty about whether proof_checker ran
+    # Verification banner — critical for honesty about whether proof_checker ran.
+    # docs/VERDICT_POLICY.md §5: green only for trust == "verified" (a full
+    # deterministic proof); a bounded_pass/well_formed result gets its own
+    # honest word-label in the verdict-gate block below, not a green banner.
     if "proof_verified" in result:
         if result.get("proof_verified"):
             sections.append("> [!success] Доказательство прошло независимую проверку верификатором\n")
@@ -351,6 +370,27 @@ def render_markdown(result: dict) -> str:
                 "Приведённое ниже доказательство — это аргумент специалиста-агента, "
                 "а не проверенная теорема. Требуется ручная проверка.\n"
             )
+
+    # Verdict gate (docs/VERDICT_POLICY.md §5): honest trust label, any
+    # contradiction between constructive/destructive evidence, and downgrades
+    # the deterministic gate applied to the reasoning agent's proposal.
+    verdict_gate = result.get("verdict_gate")
+    if isinstance(verdict_gate, dict) and verdict_gate:
+        basis_trust = verdict_gate.get("basis_trust")
+        if basis_trust:
+            sections.append(f"> **Доверие к вердикту:** {_trust_label(basis_trust)}\n")
+        if verdict_gate.get("contradiction"):
+            sections.append(
+                "> [!warning] Противоречие\n"
+                "> Конструктивное и деструктивное доказательства одновременно "
+                "прошли порог доверия — confidence ограничен.\n"
+            )
+        downgrades = verdict_gate.get("downgrades") or []
+        if downgrades:
+            sections.append("> **Понижения вердикт-гейта:**")
+            for d in downgrades:
+                sections.append(f"> - {d}")
+            sections.append("")
 
     # Proof
     proof = result.get("proof")
@@ -536,10 +576,13 @@ def _panel_status_line(output: dict) -> str:
     status = output.get("status", "unknown")
     verdict = output.get("verdict")
     conf = output.get("confidence")
+    trust = output.get("trust")
     bits: list[str] = []
     if verdict:
         bits.append(f"вердикт: <code>{_esc(verdict)}</code>")
     bits.append(f"статус: <code>{_esc(status)}</code>")
+    if trust:
+        bits.append(f"доверие: <code>{_esc(_trust_label(trust))}</code>")
     if conf is not None:
         try:
             bits.append(f"уверенность: {float(conf):.2f}")
@@ -1026,6 +1069,29 @@ def render_html(result: dict) -> str:
                 'Требуется ручная проверка.'
                 '</div>'
             )
+
+    # --- Verdict gate (docs/VERDICT_POLICY.md §5) ---
+    verdict_gate = result.get("verdict_gate")
+    if isinstance(verdict_gate, dict) and verdict_gate:
+        basis_trust = verdict_gate.get("basis_trust")
+        parts.append('<div class="s-sec">Вердикт-гейт</div>')
+        if basis_trust:
+            parts.append(
+                f'<div class="s-p"><strong>Доверие к вердикту:</strong> '
+                f'{_esc(_trust_label(basis_trust))}</div>'
+            )
+        if verdict_gate.get("contradiction"):
+            parts.append(
+                '<div class="s-banner-warn"><strong>⚠ Противоречие</strong><br>'
+                'Конструктивное и деструктивное доказательства одновременно '
+                'прошли порог доверия — confidence ограничен.</div>'
+            )
+        downgrades = verdict_gate.get("downgrades") or []
+        if downgrades:
+            parts.append('<div class="s-p"><strong>Понижения вердикт-гейта:</strong></div><ul>')
+            for d in downgrades:
+                parts.append(f'<li>{_esc(d)}</li>')
+            parts.append('</ul>')
 
     # --- Main proof (from formalizer or fallback) ---
     proof = result.get("proof")

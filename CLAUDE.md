@@ -2,6 +2,7 @@
 
 Multi-agent LangGraph pipelines for Theory of Formal Languages problems (ИУ-9).
 Overview and architecture: `README.md`. Open work: `TODO.md` (audit backlog, prioritised).
+Verdict/confidence rules: `docs/VERDICT_POLICY.md` — change the policy there first.
 
 ## Projects
 - `agent_system/` — REG (regularity). Spec: `agent_system/tz_tfl_agent_system.md`

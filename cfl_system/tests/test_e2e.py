@@ -37,14 +37,42 @@ def test_e2e_w1w2w1w3():
 
 
 # ---------------------------------------------------------------------------
-# Test 2: task_wwvvR → cfl
+# Test 2: task_wwvvR -> non_cfl (docs/THEORY.md §2.5, docs/VERDICT_POLICY.md §2)
+#
+# The OLD reference verdict here was `cfl 0.8`, and before that `inconclusive`
+# (see git history) -- neither survives docs/THEORY.md §2.5: L = {w w v v^R}
+# is honestly non-CFL, proved by intersecting with the regular language
+# R* = a(aa)*b a(aa)*b a(aa)*b a(aa)*b (all four a-blocks of ODD length).
+# On R*, the even-palindromic-suffix characterization of L collapses to
+# exactly one disjunct (i == k and j == l), so L ∩ R* = {a^i b a^j b a^i b
+# a^j b | i, j odd} -- a copy language ({ss}), proved non-CFL by pumping
+# z = a^{2p+1} b a^{2p+1} b a^{2p+1} b a^{2p+1} b (see the closure_reduction
+# mock). The mock's cfg_builder honestly fails (S -> W W V does not link the
+# two W's -- it generates a strict superset of L, refuted by the oracle on
+# 'b', 'ab', 'ba', 'baaba', none of which are in L) and decomposition
+# honestly returns inconclusive ({ww} is not a CFL component, so "L = {ww}.
+# {vv^R}" proves nothing in either direction) -- neither counts as evidence
+# either way (R1), leaving closure_reduction as the sole basis.
+#
+# closure_reduction's intersection_examples/intersection_non_examples are
+# checked against the oracle (docs/VERDICT_POLICY.md §4) and pass, so its
+# trust is `bounded_pass` (not `well_formed`) -> confidence capped at 0.85,
+# not 0.60. No contradiction: cfg_builder/decomposition never reach
+# bounded_pass, so there is no competing constructive artifact.
 # ---------------------------------------------------------------------------
 
 def test_e2e_wwvvR():
     ir = load_json("task_wwvvR.json")
     mock = MockRunner(str(MOCK_DIR), "task_wwvvR")
     result = run_pipeline(ir, mock_runner=mock)
-    assert result["verdict"] == "cfl"
+    assert result["verdict"] == "non_cfl"
+    # bounded_pass ceiling (docs/VERDICT_POLICY.md §2): closure_reduction's
+    # intersection examples/non-examples were confirmed by the oracle, so
+    # trust is bounded_pass (cap 0.85), not well_formed (cap 0.60).
+    assert result["confidence"] == 0.85
+    assert result["verdict_gate"]["basis_trust"] == "bounded_pass"
+    assert result["verdict_gate"]["contradiction"] is False
+    assert result["verdict_gate"]["downgrades"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -117,8 +145,12 @@ def test_e2e_selective_retry():
                     "status": "success",
                     "verdict": "non_cfl",
                     "confidence": 0.85,
+                    # "abac" is a genuine member of task_w1w2w1w3's language
+                    # (w1=a, w2=b, w1=a, w3=c) — the verdict gate now checks
+                    # word_chosen against the oracle (VERDICT_POLICY.md §1: a
+                    # word not actually in L is "refuted", not "well_formed").
                     "evidence": {
-                        "word_chosen": "test",
+                        "word_chosen": "abac",
                         "cases": [{"case": "all", "why_not_in_L": "test"}],
                         "all_cases_covered": True,
                     },

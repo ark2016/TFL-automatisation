@@ -28,8 +28,9 @@ class TestTask1PalindromeRegular(unittest.TestCase):
     """Task 1: palindrome prefix/suffix — REGULAR language.
 
     NOTE: The mock DFA for this task is intentionally incorrect so that
-    the oracle detects a counterexample.  This exercises the failure
-    path (oracle_test → status=failure) as a negative fixture.
+    the oracle detects a counterexample.  This exercises the refuted
+    constructive-artifact path (oracle_test → inconclusive, not a flat
+    failure — docs/VERDICT_POLICY.md R1/R6) as a negative fixture.
     """
 
     def setUp(self):
@@ -74,8 +75,15 @@ class TestTask1PalindromeRegular(unittest.TestCase):
         self.assertFalse(ot["counterexample"]["automaton_says"])
 
     def test_status_failure_due_to_counterexample(self):
-        """Pipeline should report failure since oracle test found discrepancy."""
-        self.assertEqual(self.result["status"], "failure")
+        """A refuted constructive artifact with no destructive proof behind
+        it is inconclusive, not "failure 0.0" (docs/VERDICT_POLICY.md R1/R6:
+        constructive failure alone is never destructive evidence). Confidence
+        expectation updated per VERDICT_POLICY.md §2 (not_verified cap 0.40);
+        the verdict itself (regular/non_regular) is untouched."""
+        self.assertEqual(self.result["status"], "partial")
+        self.assertLessEqual(self.result["confidence"], 0.40)
+        self.assertIn("verdict_gate", self.result)
+        self.assertTrue(self.result["verdict_gate"]["downgrades"])
 
 
 class TestTask2GrammarNonRegular(unittest.TestCase):
@@ -103,9 +111,17 @@ class TestTask2GrammarNonRegular(unittest.TestCase):
         self.assertNotIn("dfa_builder", self.result["evidence"])
         self.assertNotIn("oracle_test", self.result["evidence"])
 
-    def test_status_partial(self):
-        """No oracle test → status is partial (proof not verified by oracle)."""
-        self.assertEqual(self.result["status"], "partial")
+    def test_status_success_pumping_oracle_verified(self):
+        """No oracle_test ran (non-regular track has no DFA), but the
+        pumping proof's word family is instantiated at p in {2,3,4} and
+        checked against the grammar oracle (docs/VERDICT_POLICY.md §4) ->
+        bounded_pass, confidence <= 0.85 (R6), not the old flat "partial"
+        with an unverified proof. The non_regular verdict itself is
+        unchanged from before."""
+        self.assertEqual(self.result["status"], "success")
+        self.assertLessEqual(self.result["confidence"], 0.85)
+        pumping_check = self.result["evidence"]["pumping_verification"]
+        self.assertEqual(pumping_check["trust"], "bounded_pass")
 
 
 class TestTask3RegexBackref(unittest.TestCase):
@@ -132,8 +148,15 @@ class TestTask3RegexBackref(unittest.TestCase):
         """Regex with backreferences can't build oracle — error should be recorded."""
         self.assertIn("Oracle build failed", str(self.result["errors"]))
 
-    def test_status_partial(self):
-        self.assertEqual(self.result["status"], "partial")
+    def test_status_success_well_formed_only(self):
+        """No oracle available (backreference regex) -> the destructive
+        proofs (pumping/closure) can only reach `well_formed` trust
+        (structural pass, no oracle to instantiate against), so the
+        verdict stands but confidence is capped at 0.60, per
+        docs/VERDICT_POLICY.md §2/§4. Previously this asserted a flat
+        "partial" regardless of evidence quality."""
+        self.assertEqual(self.result["status"], "success")
+        self.assertLessEqual(self.result["confidence"], 0.60)
 
 
 class TestPipelineWithoutMock(unittest.TestCase):

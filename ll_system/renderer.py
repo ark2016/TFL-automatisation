@@ -233,6 +233,42 @@ def _confidence_str(confidence: float | None) -> str:
     return f"{int(confidence * 100)}%"
 
 
+# docs/VERDICT_POLICY.md §1/§5: human-readable trust labels. A green
+# "verified" banner is reserved for the actual `verified` trust level — a
+# structural pass (`well_formed`) or a sampled check (`bounded_pass`) must
+# say so explicitly, not borrow the "verified" wording.
+_TRUST_LABELS: dict[str, str] = {
+    "verified": "проверено полностью",
+    "bounded_pass": "проверено выборочно",
+    "well_formed": "корректно оформлено",
+    "not_verified": "не проверено",
+    "inconclusive": "не проверено",  # legacy alias from pre-taxonomy results
+    "refuted": "опровергнуто",
+    "error": "ошибка проверки",
+}
+
+_TRUST_COLORS: dict[str, str] = {
+    "verified": "#27ae60",
+    "bounded_pass": "#2980b9",
+    "well_formed": "#8e8e93",
+    "not_verified": "#f39c12",
+    "inconclusive": "#f39c12",
+    "refuted": "#e74c3c",
+    "error": "#e74c3c",
+}
+
+
+def _trust_label(status: Any) -> str:
+    """Human-readable Russian label for a docs/VERDICT_POLICY.md §1 trust level."""
+    if not status:
+        return "?"
+    return _TRUST_LABELS.get(str(status), str(status))
+
+
+def _trust_color(status: Any) -> str:
+    return _TRUST_COLORS.get(str(status), "#7f8c8d")
+
+
 # ---------------------------------------------------------------------------
 # Grammar helpers
 # ---------------------------------------------------------------------------
@@ -464,6 +500,31 @@ def render_markdown(result: dict) -> str:
     if conf is not None:
         sections.append(f"**Уверенность:** {_confidence_str(conf)}\n")
 
+    # Verdict gate (docs/VERDICT_POLICY.md §3/§5): why the confidence is capped
+    # where it is, and whether the pipeline downgraded reasoning's own verdict.
+    verdict_gate = result.get("verdict_gate")
+    if isinstance(verdict_gate, dict) and verdict_gate:
+        gate_lines = ["## Гейт вердикта\n"]
+        cap = verdict_gate.get("confidence_cap")
+        if cap is not None:
+            gate_lines.append(f"**Потолок уверенности:** {_confidence_str(cap)}")
+        if verdict_gate.get("contradiction"):
+            gate_lines.append("**Противоречие:** обнаружено (конструктивное и деструктивное "
+                               "свидетельства одновременно)")
+        basis = verdict_gate.get("basis") or []
+        if basis:
+            basis_str = "; ".join(
+                f"{b.get('agent', '?')} — {_trust_label(b.get('trust'))} (`{b.get('trust')}`)"
+                for b in basis if isinstance(b, dict)
+            )
+            gate_lines.append(f"**Основание:** {basis_str}")
+        downgrades = verdict_gate.get("downgrades") or []
+        if downgrades:
+            gate_lines.append("**Понижения:**")
+            for d in downgrades:
+                gate_lines.append(f"- {d}")
+        sections.append("\n\n".join(gate_lines) + "\n")
+
     k = result.get("k")
     if verdict == "ll" and k is not None:
         sections.append(f"**Минимальное k:** {k}\n")
@@ -573,11 +634,11 @@ def render_markdown(result: dict) -> str:
         for agent_name, vdata in claim_ver.items():
             if not isinstance(vdata, dict):
                 continue
-            vstatus = vdata.get("verification_status") or vdata.get("status", "?")
+            vstatus = vdata.get("trust") or vdata.get("verification_status") or vdata.get("status", "?")
             vissues = vdata.get("issues") or []
             checks_ok = vdata.get("checks_passed", "?")
             checks_tot = vdata.get("checks_total", "?")
-            line = f"- **{agent_name}**: {vstatus} ({checks_ok}/{checks_tot} проверок)"
+            line = f"- **{agent_name}**: {_trust_label(vstatus)} (`{vstatus}`) ({checks_ok}/{checks_tot} проверок)"
             if vissues:
                 line += " — " + "; ".join(str(i) for i in vissues[:2])
             sections.append(line)
@@ -909,6 +970,35 @@ def render_html(result: dict) -> str:
     if verdict == "ll" and k is not None:
         sol_parts.append(f'<div class="ll-p"><strong>Минимальное k:</strong> {_esc(str(k))}</div>')
 
+    # Verdict gate (docs/VERDICT_POLICY.md §3/§5)
+    verdict_gate = result.get("verdict_gate")
+    if isinstance(verdict_gate, dict) and verdict_gate:
+        gate_items: list[str] = []
+        cap = verdict_gate.get("confidence_cap")
+        if cap is not None:
+            try:
+                gate_items.append(f'Потолок уверенности: <strong>{int(float(cap) * 100)}%</strong>')
+            except (TypeError, ValueError):
+                pass
+        if verdict_gate.get("contradiction"):
+            gate_items.append('<strong style="color:#e74c3c">противоречие обнаружено</strong>')
+        basis = verdict_gate.get("basis") or []
+        if basis:
+            basis_str = "; ".join(
+                f'{_esc(str(b.get("agent", "?")))} — {_esc(_trust_label(b.get("trust")))}'
+                for b in basis if isinstance(b, dict)
+            )
+            gate_items.append(f'Основание: {basis_str}')
+        if gate_items:
+            sol_parts.append(f'<div class="ll-meta" style="margin-top:8px">{" · ".join(gate_items)}</div>')
+        downgrades = verdict_gate.get("downgrades") or []
+        if downgrades:
+            dg_items = "".join(f'<li>{_esc(d)}</li>' for d in downgrades)
+            sol_parts.append(
+                f'<div class="ll-p" style="margin-top:8px"><strong>Понижения:</strong></div>'
+                f'<ul style="font-size:13px;color:#7f8c8d">{dg_items}</ul>'
+            )
+
     ff_result = result.get("first_follow_result")
     if isinstance(ff_result, dict):
         is_ll_k = ff_result.get("is_ll_k")
@@ -1039,18 +1129,15 @@ def render_html(result: dict) -> str:
         for agent_name, vdata in claim_ver.items():
             if not isinstance(vdata, dict):
                 continue
-            vstatus = vdata.get("verification_status") or vdata.get("status", "?")
+            vstatus = vdata.get("trust") or vdata.get("verification_status") or vdata.get("status", "?")
             checks_ok = vdata.get("checks_passed", "?")
             checks_tot = vdata.get("checks_total", "?")
             vissues = vdata.get("issues") or []
-            status_color = {
-                "verified": "#27ae60",
-                "refuted": "#e74c3c",
-                "inconclusive": "#f39c12",
-            }.get(vstatus, "#7f8c8d")
+            status_color = _trust_color(vstatus)
             item = (
                 f'<span class="ll-mono" style="font-weight:600">{_esc(agent_name)}</span>: '
-                f'<span style="color:{status_color};font-weight:600">{_esc(vstatus)}</span>'
+                f'<span style="color:{status_color};font-weight:600">{_esc(_trust_label(vstatus))} '
+                f'({_esc(str(vstatus))})</span>'
                 f' ({_esc(str(checks_ok))}/{_esc(str(checks_tot))} проверок)'
             )
             if vissues:

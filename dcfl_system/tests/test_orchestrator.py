@@ -40,18 +40,36 @@ MOCK_DIR = EXAMPLES_DIR / "mock"
 #   dcfl_pumping now succeeds with a complete Yu pumping proof (confidence
 #   0.9) instead of the old incomplete "uncertain 0.5" attempt.
 #
-# In all three cases the expected verdict/confidence below are copied
-# verbatim from each task's `*_reasoning.json` mock (MockRunner finds and
-# returns that file directly, so the reasoning node never falls back to
-# `_fallback_reasoning` in these parametrized tests). See
-# `test_fallback_reasoning_matches_specialist_mocks` below for a check that
-# does exercise `_fallback_reasoning` directly against the specialist mocks
-# (with the reasoning mock unavailable).
+# In all three cases the *verdict* below is copied verbatim from each task's
+# `*_reasoning.json` mock (MockRunner finds and returns that file directly,
+# so the reasoning node never falls back to `_fallback_reasoning` in these
+# parametrized tests). See `test_fallback_reasoning_matches_specialist_mocks`
+# below for a check that does exercise `_fallback_reasoning` directly against
+# the specialist mocks (with the reasoning mock unavailable).
+#
+# *Confidence* is NOT copied verbatim any more: docs/VERDICT_POLICY.md §2-3
+# (orchestrator.py's `_apply_verdict_gate`) caps confidence at the trust the
+# deterministic oracle assigned to the winning specialist's artifact, never
+# at the LLM's own self-reported 0.9. These three mocks' proof_sketch fields
+# (dcfl_pumping.word_w / shallit.distinguishing_suffix etc.) are free-text
+# math prose ("w = xy = W1 = (ab)^n aa (ba)^n ∈ L"), not clean instantiable
+# patterns, so `oracle_verifier`'s step-2 semantic check (§4) never fires and
+# trust stays at the structural-only `well_formed` tier -> confidence cap
+# 0.60 (§2). See dcfl_system/tests/test_verdict_policy.py for cases that DO
+# exercise the step-2 oracle path (bounded_pass / refuted) with clean mocks.
 TASKS = [
-    ("task_wvaavRwR", "non_dcfl", 0.9),
-    ("task_u1au2_u3au4", "non_dcfl", 0.9),
-    ("task_anb_cnbn", "non_dcfl", 0.9),
-    ("task_grammar_aSSb", "dcfl", 0.55),
+    ("task_wvaavRwR", "non_dcfl", 0.60),
+    ("task_u1au2_u3au4", "non_dcfl", 0.60),
+    ("task_anb_cnbn", "non_dcfl", 0.60),
+    # task_grammar_aSSb (§1.9/exam_04): its stack_strategy mock is
+    # status="uncertain" with proof_sketch=None — no artifact at all, so
+    # oracle trust is `not_verified`, not `well_formed`. Per VERDICT_POLICY.md
+    # §2, `not_verified` trust admits only inconclusive/uncertain verdicts,
+    # never a confident "dcfl" (R2) — the old "dcfl 0.55" here was exactly
+    # the kind of unverified-but-confident claim this policy exists to catch
+    # (the task_grammar_filter_49 precedent in R1). Fixed to the honest
+    # outcome rather than kept to preserve the old number.
+    ("task_grammar_aSSb", "inconclusive", 0.40),
 ]
 
 

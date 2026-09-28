@@ -6,6 +6,19 @@ Implements retry_planner logic per §7.2:
 - Don't retry agents with status 'not_applicable'
 - Don't retry agents with confidence > 0.8 and status 'fail'
 - Generate specific hints for retried agents
+
+R7 (docs/VERDICT_POLICY.md §3): an agent whose ``oracle_verification`` entry
+has ``trust == "refuted"`` (a deterministic oracle counterexample — see
+``dcfl_system/lib/oracle_verifier.py``) must always be retried, regardless of
+its self-reported confidence, with the counterexample passed along as a hint.
+This reads ``trust`` (and falls back to the legacy ``verification_status``
+key for older verification dicts), not a ``verification_status == "refuted"``
+check — no verifier has ever emitted that value; ``refuted`` only exists in
+the ``trust`` taxonomy.
+
+A retry plan with an empty ``agents_to_retry`` (``needs_retry: False``) is
+terminal: the caller (``dcfl_system.orchestrator.retry_planner_node``) must
+not fall back to re-dispatching every specialist in that case.
 """
 from __future__ import annotations
 from typing import Any
@@ -15,6 +28,14 @@ DCFL_SPECIALIST_NAMES = (
 )
 
 MAX_RETRIES = 2
+
+
+def _agent_trust(oracle_verification: dict[str, Any], name: str) -> str | None:
+    entry = oracle_verification.get(name)
+    if not isinstance(entry, dict):
+        return None
+    return entry.get("trust") or entry.get("verification_status")
+
 
 def build_retry_plan(
     agent_results: dict[str, Any],
@@ -39,6 +60,7 @@ def build_retry_plan(
             "max_retries_remaining": 0,
         }
 
+    oracle_verification = oracle_verification if isinstance(oracle_verification, dict) else {}
     agents_to_retry = []
     hints = {}
 
@@ -52,6 +74,27 @@ def build_retry_plan(
 
         # Rule: Don't retry not_applicable agents
         if status == "not_applicable":
+            continue
+
+        # R7: a refuted artifact is retried unconditionally (even a
+        # high-confidence 'success' is wrong if the oracle found a
+        # counterexample), with the counterexample passed as a hint.
+        if _agent_trust(oracle_verification, name) == "refuted":
+            agents_to_retry.append(name)
+            entry = oracle_verification.get(name) or {}
+            oracle_issues = entry.get("issues") if isinstance(entry, dict) else None
+            if oracle_issues:
+                hints[name] = (
+                    "Previous artifact was REFUTED by the oracle (deterministic "
+                    "counterexample): " + "; ".join(str(i) for i in oracle_issues[:3])
+                    + ". Provide a different construction that survives this "
+                    "counterexample — do not repeat the same words/argument."
+                )
+            else:
+                hints[name] = (
+                    "Previous artifact was REFUTED by the oracle (deterministic "
+                    "counterexample). Provide a different construction."
+                )
             continue
 
         # Rule: Don't retry high-confidence failures (method genuinely doesn't apply)

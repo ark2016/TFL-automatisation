@@ -411,6 +411,23 @@ n ≥ m ≥ 2 и всякого R ⊆ L ∩ Σⁿ найдётся Z = {z₁,…
 источнику и непроверяема ⇒ удалить из `cfl_interchange.md`, `cfl_retry_planner.md` (`try_sokolowski`),
 `tz_cfl_agent_system.md` (enum method).
 
+## 2.5. task_wwvvR — **не КС** (эталон `cfl` в `cfl_system/tests/test_e2e.py` ошибочен) — **[проверено перебором]**
+
+L = {w w v vᴿ | w, v ∈ {a,b}*}. Мок cfg_builder утверждал грамматику S → W W V с независимыми W (порождает w₁w₂vvᴿ),
+а мок reasoning — что «L = Σ*, так как w, v могут быть пустыми». Оба ложны: все слова L чётной длины, b, ab, ba, baaba ∉ L
+(оракул `exists_decomposition` совпадает с определением на всех словах длины ≤ 10).
+
+**Характеризация на (a⁺b)⁴.** Для z = aⁱ b aʲ b aᵏ b aˡ b (i,j,k,l ≥ 1) чётные палиндромные суффиксы z — только
+b aˡ b (при l чётном) и b aʲ b aᵏ b aˡ b (при j = l, k чётном); остальные суффиксы начинаются с a и оканчиваются b.
+Поэтому z ∈ L ⇔ (l чётно ∧ j = i + k) ∨ (j = l ∧ i, k чётны) ∨ (i = k ∧ j = l) (перебор 1 ≤ i,j,k,l ≤ 4 — 0 расхождений).
+
+**Не КС.** R* = a(aa)*b · a(aa)*b · a(aa)*b · a(aa)*b (все показатели нечётны) убивает первые два условия:
+L ∩ R* = {aⁱ b aʲ b aⁱ b aʲ b | i, j нечётны}. Это классический не-КС язык вида {uu}: лемма о накачке для
+z = a^{2p+1} b a^{2p+1} b a^{2p+1} b a^{2p+1} b — окно |vwx| ≤ p задевает не более двух соседних блоков, накачка (i = 0 или 2)
+нарушает равенство i₁ = i₂ или j₁ = j₂ либо выводит из R* (появление/исчезновение b, чётность). CFL ∩ REG ⊆ CFL ⇒ L ∉ CFL. ∎
+Эталон: verdict `non_cfl`; правильный путь пайплайна — closure_reduction с R* (или (a⁺b)⁴ с накачкой по третьему условию),
+cfg_builder → failure/refuted, decomposition → not_applicable ({ww} — не КС-компонента, см. `cfl_decomposition.md`).
+
 ## 3.4. LL: лемма об ограниченной гибкости — **[доказано]**; два DCFL-не-LL языка
 
 **Лемма (ограниченная гибкость унарного хвоста).** Пусть G — LL(k)-грамматика (значит, однозначная), δ —
@@ -455,3 +472,20 @@ T → c | aSab | bTb (FIRST попарно дизъюнктны).
 | `cfl_system/prompts/cfl_classifier.md`, `cfl_cfg_builder.md`, `cfl_reasoning.md`, `cfl_interchange.md`, `cfl_retry_planner.md`, `tz_cfl_agent_system.md`, моки `task_grammar_filter_49_*`, `tests/test_e2e.py`, `tests/test_prompt_examples.py` (+ тест Огдена по §2.3) | §2.3–2.4 |
 | `ll_system/prompts/ll_classifier.md`, `ll_marker_analyzer.md`, `ll_grammar_builder.md`, `ll_reasoning_agent.md`, `ll_grammar_transformer.md`, `ll_ambiguity_detector.md`, `ll_substitution_agent.md` (второй пример {aⁱbʲ \| i ≥ j} и лемма), моки `wbcwR_*`, `tests/test_orchestrator.py` | §3.4–3.5 |
 | `README.md`, `TODO.md` | эталоны E2E исправлены; запись про grammar_filter_49 переписана |
+
+## 5. Live-прогон на Haiku (2026-09-27) и изменившиеся эталоны
+
+Пять exam-задач прогнаны с `TFL_MODEL_OVERRIDE=claude-haiku-4-5 --live` после правок раундов 1–3: `wvaavRwR` → non_dcfl 0.88,
+`u1au2_u3au4` → non_dcfl 0.88, `anb_cnbn` → non_dcfl 0.85, `grammar_filter_49` → non_cfl 0.92, `anbn_ancn` → not_ll 0.95
+(37 с, 36 с, 30 с, 7 мин 51 с с двумя ретраями и инверсией, 86 с; без ошибок API). Агенты следуют новым контрактам:
+shallit выбирает `technique` и заполняет `dead_class_finite`; dcfl_pumping даёт условия (1) и (2) с парой (x₂,x₄);
+inh_ambiguity на `anb_cnbn` сам установил дизъюнктность ветвей и вернул not_applicable; stack_strategy на `wvaavRwR` отверг
+«aa» как разделитель; классификатор CFL не выдал автоматический cfl для фильтра |a| = |b|; prefix_classes для DCFL-языка
+{aⁿbⁿ}∪{aⁿcⁿ} корректно вернул uncertain (мёртвый класс бесконечен). Найденные дефекты: closure_reduction утверждал
+L ∩ a⁺b⁺ = {aⁿbⁿ} для грамматики, порождающей только {a²ᵐb²ᵐ | m ≥ 2} (закрыто полями `intersection_examples` с проверкой
+оракулом, `docs/VERDICT_POLICY.md` §4); pumping_cfl сломал JSON мета-репликой при ретрае (промпт ужесточён).
+
+После введения гейта (`docs/VERDICT_POLICY.md`) часть E2E-ожиданий изменилась **по политике**, а не по теории:
+`task_grammar_aSSb` (dcfl) — мок stack_strategy без proof_sketch ⇒ trust not_verified ⇒ `inconclusive` вместо dcfl 0.55
+(статус языка не установлен); REG Task1 `failure` → `partial`, Task2/Task3 `partial` → `success` по R6; `task_wwvvR` — см. §2.5
+(теория: язык не КС; эталон меняется на non_cfl).

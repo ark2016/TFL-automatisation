@@ -12,10 +12,13 @@ and grep the prompt files to make sure the old false example is gone.
 """
 
 import itertools
+import json
 import re
 from pathlib import Path
 
 import pytest
+
+from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
 
 ALLOWED_W1 = set("ab")
 ALLOWED_W2 = set("bc")
@@ -361,3 +364,97 @@ def test_filter_49_ogden_witness_all_partitions_escape():
                     assert escapes, (u, v, w, x, y)
 
     assert checked > 0
+
+
+# ---------------------------------------------------------------------------
+# task_wwvvR — L = {w w v v^R | w, v in {a,b}*} is non-CFL (docs/THEORY.md §2.5)
+#
+# The reference verdict changed from `cfl` to `non_cfl`: the old mock grammar
+# (S -> W W V, one nonterminal W used TWICE INDEPENDENTLY) generates a strict
+# superset of L, and the real language is honestly non-CFL, proved by
+# intersecting with R* = a(aa)*b a(aa)*b a(aa)*b a(aa)*b (all four a-blocks
+# of ODD length). These tests brute-force-verify, against the task's own
+# oracle (cfl_oracle_from_ir, exists_decomposition over the IR in
+# task_wwvvR.json — never a hand-rolled reimplementation), every quantitative
+# claim §2.5 and the closure_reduction mock make:
+#   (a) the general characterization of z = a^i b a^j b a^k b a^l b in L,
+#       for all 1 <= i,j,k,l <= 4;
+#   (b) its collapse to "i == k and j == l" once i,j,k,l are all odd
+#       (i.e. on R*), for i,j,k,l in {1,3,5};
+#   (c) the concrete non-membership counterexamples cfg_builder cites;
+#   (d) that every intersection_examples / intersection_non_examples word in
+#       the closure_reduction mock is genuinely in L ∩ R* / R* \\ L.
+# ---------------------------------------------------------------------------
+
+WWVVR_EXAMPLES_DIR = REPO_ROOT / "cfl_system" / "examples"
+WWVVR_MOCK_DIR = WWVVR_EXAMPLES_DIR / "mock"
+
+
+def _wwvvR_oracle():
+    ir = json.loads((WWVVR_EXAMPLES_DIR / "task_wwvvR.json").read_text(encoding="utf-8"))
+    return cfl_oracle_from_ir(ir)
+
+
+def _wwvvR_z(i: int, j: int, k: int, l: int) -> str:
+    return "a" * i + "b" + "a" * j + "b" + "a" * k + "b" + "a" * l + "b"
+
+
+def _wwvvR_characterization(i: int, j: int, k: int, l: int) -> bool:
+    """docs/THEORY.md §2.5: z = a^i b a^j b a^k b a^l b in L iff ..."""
+    return (
+        (l % 2 == 0 and j == i + k)
+        or (j == l and i % 2 == 0 and k % 2 == 0)
+        or (i == k and j == l)
+    )
+
+
+def test_wwvvR_characterization_up_to_4():
+    """(a) The full three-disjunct characterization holds for 1 <= i,j,k,l <= 4."""
+    oracle = _wwvvR_oracle()
+    for i, j, k, l in itertools.product(range(1, 5), repeat=4):
+        word = _wwvvR_z(i, j, k, l)
+        assert bool(oracle(word)) == _wwvvR_characterization(i, j, k, l), (i, j, k, l, word)
+
+
+def test_wwvvR_odd_blocks_collapse_to_copy_language():
+    """(b) Restricted to odd i,j,k,l (i.e. z in R*), membership collapses to
+    exactly 'i == k and j == l' -- the two destructive disjuncts (needing an
+    even l, or even i and k) are both unreachable on R*."""
+    oracle = _wwvvR_oracle()
+    odds = (1, 3, 5)
+    for i, j, k, l in itertools.product(odds, repeat=4):
+        word = _wwvvR_z(i, j, k, l)
+        assert bool(oracle(word)) == (i == k and j == l), (i, j, k, l, word)
+
+
+def test_wwvvR_cfg_builder_counterexamples_not_in_L():
+    """(c) The words the cfg_builder mock cites as refuting S -> W W V are
+    genuinely NOT in L."""
+    oracle = _wwvvR_oracle()
+    for word in ("b", "ab", "ba", "baaba"):
+        assert not oracle(word), word
+
+
+def test_wwvvR_closure_reduction_intersection_words_match_oracle():
+    """(d) Every intersection_examples word in the closure_reduction mock is
+    in L and matches R*; every intersection_non_examples word matches R* but
+    is not in L."""
+    oracle = _wwvvR_oracle()
+    mock = json.loads(
+        (WWVVR_MOCK_DIR / "task_wwvvR_closure_reduction.json").read_text(encoding="utf-8")
+    )
+    evidence = mock["evidence"]
+    pattern = re.compile(evidence["regular_language_regex"])
+
+    examples = evidence["intersection_examples"]
+    non_examples = evidence["intersection_non_examples"]
+    assert len(examples) >= 3
+    assert len(non_examples) >= 2
+
+    for word in examples:
+        assert pattern.fullmatch(word), word
+        assert oracle(word), word
+
+    for word in non_examples:
+        assert pattern.fullmatch(word), word
+        assert not oracle(word), word

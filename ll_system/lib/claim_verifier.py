@@ -1,9 +1,23 @@
 """Claim verifier for ll_system specialist agents.
 
 Dispatches to method-specific verifiers and returns structured results.
+
+Trust taxonomy (docs/VERDICT_POLICY.md §1): a verifier result carries a
+`trust` level, not a binary verified/not-verified flag:
+    refuted < not_verified < well_formed < bounded_pass < verified
+A purely *structural* pass (required fields present, internally consistent)
+is `well_formed` — it is NOT `verified`. `verified` is reserved for a
+deterministic, *complete* check (e.g. a full LL(k)-table test of the exact
+claimed grammar). `bounded_pass` is a deterministic but *approximate* check
+(sample equivalence against the task language, or an oracle-checked
+concrete instantiation). `refuted` means a deterministic counterexample was
+found. `not_verified` means the claim could not be checked at all (missing
+fields, unparsable proof_sketch).
 """
 from __future__ import annotations
 
+import itertools
+import re
 from typing import Any
 
 # Defensive import — may not be available in test environment
@@ -13,6 +27,12 @@ try:
 except ImportError:
     _HAS_TABLE_BUILDER = False
 
+try:
+    from ll_system.lib.grammar_transforms import is_grammar_equivalent_sample, _generate_words
+    _HAS_GRAMMAR_TRANSFORMS = True
+except ImportError:
+    _HAS_GRAMMAR_TRANSFORMS = False
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -20,17 +40,23 @@ except ImportError:
 
 def _make_result(
     agent: str,
-    status: str,
+    trust: str,
     checks_passed: int,
     checks_total: int,
     issues: list[str],
     details: dict | None = None,
 ) -> dict:
-    """Create standard verification result dict."""
+    """Create standard verification result dict.
+
+    `trust` is one of the docs/VERDICT_POLICY.md §1 levels:
+    "refuted" | "verified" | "bounded_pass" | "well_formed" | "not_verified"
+    (plus "error" for a genuine exception, outside the taxonomy).
+    """
     return {
         "agent": agent,
-        "verification_status": status,  # "verified" | "refuted" | "inconclusive" | "error"
-        "status": status,               # alias used by reasoning/formalizer prompts
+        "trust": trust,                 # docs/VERDICT_POLICY.md §1 trust level
+        "verification_status": trust,   # legacy alias, same value as `trust`
+        "status": trust,                # alias used by reasoning/formalizer prompts
         "checks_passed": checks_passed,
         "checks_total": checks_total,
         "issues": issues,
@@ -50,6 +76,379 @@ def _validate_grammar_structure(grammar: Any) -> list[str]:
     if "rules" in grammar and not isinstance(grammar["rules"], list):
         issues.append("grammar['rules'] must be a list")
     return issues
+
+
+def _try_word_oracle(ir: dict):
+    """Best-effort membership oracle for the task's language, from `ir`.
+
+    Returns a Callable[[str], bool] or None if no oracle can be built (e.g.
+    the IR's language_spec kind has no automated oracle — this is the case
+    for `set_builder` today: docs/VERDICT_POLICY.md §4 "до появления общей
+    библиотеки оракулов … trust остаётся well_formed"). Best-effort: the
+    structural checks never depend on it succeeding.
+    """
+    try:
+        from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
+    except ImportError:
+        return None
+    try:
+        return cfl_oracle_from_ir(ir)
+    except Exception:
+        return None
+
+
+def _looks_concrete(word: Any) -> bool:
+    """True if `word` is a plain terminal string (no template variables like n, k)."""
+    if not isinstance(word, str) or not word:
+        return False
+    return all(ch.isalpha() for ch in word)
+
+
+# ---------------------------------------------------------------------------
+# Step 2 (docs/VERDICT_POLICY.md §4): real semantic checks for constructive
+# claims — validate_grammar_symbols against the task alphabet, and sample
+# equivalence of the candidate grammar's language against the task language.
+# ---------------------------------------------------------------------------
+
+def _task_grammar_terminals(ir: dict) -> set[str] | None:
+    """Best-effort task alphabet — terminals the candidate grammar must stay
+    inside of. Returns None when the task alphabet cannot be determined."""
+    if ir.get("task_type") == "ll_check_grammar":
+        g = ir.get("grammar")
+        if isinstance(g, dict) and isinstance(g.get("terminals"), list):
+            return set(g["terminals"])
+    spec = ir.get("language_spec")
+    if isinstance(spec, dict):
+        alphabet = spec.get("alphabet")
+        if isinstance(alphabet, list):
+            return set(alphabet)
+        if spec.get("kind") == "grammar" and isinstance(spec.get("terminals"), list):
+            return set(spec["terminals"])
+    return None
+
+
+def _grammar_terminals_outside_task_alphabet(grammar: dict, ir: dict) -> list[str]:
+    """terminals(grammar) \\ alphabet(task) — non-empty means the candidate
+    grammar invents symbols the task never mentioned (TODO §1: `S→ba|bc`
+    with `terminals=['a']` must not be accepted). Returns [] when the task
+    alphabet is unknown (cannot refute without it)."""
+    task_alphabet = _task_grammar_terminals(ir)
+    if not task_alphabet:
+        return []
+    if not isinstance(grammar, dict):
+        return []
+    grammar_terminals = set(t for t in grammar.get("terminals", []) if isinstance(t, str))
+    return sorted(grammar_terminals - task_alphabet)
+
+
+def _task_language_equivalence_trust(grammar: dict, ir: dict, max_len: int = 8) -> tuple[str | None, dict]:
+    """Best-effort check that `grammar` generates the task's language.
+
+    Format 2 (`ll_check_grammar_lang`, language_spec.kind == "grammar"):
+    real grammar-vs-grammar sample equivalence via
+    `grammar_transforms.is_grammar_equivalent_sample`.
+
+    Otherwise (Format 1, e.g. `set_builder`): falls back to a membership
+    oracle for the task language if one is available (docs/VERDICT_POLICY.md
+    §4 — "если есть генератор слов языка … если недоступно — well_formed").
+    No oracle exists for `set_builder` in this codebase yet, so this path
+    returns (None, {}) for it today, and the caller keeps trust at
+    `well_formed`.
+
+    Returns (trust, details) with trust in {"bounded_pass", "refuted", None}.
+    """
+    if not _HAS_GRAMMAR_TRANSFORMS or not isinstance(grammar, dict):
+        return None, {}
+
+    spec = ir.get("language_spec")
+    if isinstance(spec, dict) and spec.get("kind") == "grammar":
+        try:
+            equal, mismatches = is_grammar_equivalent_sample(grammar, spec, max_len=max_len)
+        except Exception:
+            return None, {}
+        if equal:
+            return "bounded_pass", {"max_len": max_len, "method": "grammar_equivalent_sample"}
+        return "refuted", {"max_len": max_len, "mismatches": mismatches}
+
+    oracle = _try_word_oracle(ir)
+    if oracle is None:
+        return None, {}
+    try:
+        words = _generate_words(grammar, max_len)
+    except Exception:
+        return None, {}
+    if not words:
+        return None, {}
+    mismatches: list[str] = []
+    for w in sorted(words):
+        try:
+            if not oracle(w):
+                mismatches.append(w)
+        except Exception:
+            return None, {}
+        if len(mismatches) >= 5:
+            break
+    if mismatches:
+        return "refuted", {"max_len": max_len, "mismatches": mismatches, "method": "word_oracle"}
+
+    # L(G) ⊆ L checked above; docs/VERDICT_POLICY.md §1/§4 requires SAMPLE
+    # EQUIVALENCE, not mere inclusion — a grammar for a strict subset of L
+    # (e.g. S -> ab for {a^n b^n}) would otherwise sail through with only
+    # the first direction checked (the reviewer's finding). Enumerate L up
+    # to max_len via the oracle (brute force over the task alphabet — only
+    # attempted when that space is small enough to be cheap) and check every
+    # one of those words is also generated by the grammar (L ⊆ L(G)).
+    task_alphabet = _task_grammar_terminals(ir)
+    if not task_alphabet or len(task_alphabet) > 4:
+        # Can't (cheaply) enumerate L itself -- inclusion alone is not
+        # equivalence, so this stays well_formed rather than bounded_pass.
+        return None, {}
+    generated = set(words)
+    missing: list[str] = []
+    alphabet_sorted = sorted(task_alphabet)
+    try:
+        for length in range(0, max_len + 1):
+            for combo in itertools.product(alphabet_sorted, repeat=length):
+                w = "".join(combo)
+                try:
+                    in_l = oracle(w)
+                except Exception:
+                    continue
+                if in_l and w not in generated:
+                    missing.append(w)
+                    if len(missing) >= 5:
+                        break
+            if len(missing) >= 5:
+                break
+    except Exception:
+        return None, {}
+    if missing:
+        return "refuted", {
+            "max_len": max_len, "missing_from_grammar": missing,
+            "method": "word_oracle_equivalence",
+        }
+    return "bounded_pass", {"max_len": max_len, "checked_words": len(words), "method": "word_oracle_equivalence"}
+
+
+def _apply_constructive_step2(grammar: dict, ir: dict) -> tuple[str, list[str], dict]:
+    """Run the step-2 semantic checks shared by all constructive claims.
+
+    Returns (trust, extra_issues, extra_details); trust is one of
+    "refuted" | "bounded_pass" | "well_formed" (never a fields-missing
+    status — the caller already established the grammar is structurally
+    valid before calling this).
+    """
+    issues: list[str] = []
+    details: dict = {}
+
+    bad_terminals = _grammar_terminals_outside_task_alphabet(grammar, ir)
+    if bad_terminals:
+        issues.append(
+            f"grammar terminals {bad_terminals} are not in the task alphabet "
+            "(docs/VERDICT_POLICY.md step 2: validate_grammar_symbols)"
+        )
+        details["invalid_terminals"] = bad_terminals
+        return "refuted", issues, details
+
+    lang_trust, lang_details = _task_language_equivalence_trust(grammar, ir)
+    if lang_details:
+        details["language_equivalence"] = lang_details
+    if lang_trust == "refuted":
+        issues.append(
+            "grammar does not generate the task language (sample equivalence check, "
+            "docs/VERDICT_POLICY.md step 2)"
+        )
+        return "refuted", issues, details
+    if lang_trust == "bounded_pass":
+        return "bounded_pass", issues, details
+
+    return "well_formed", issues, details
+
+
+# ---------------------------------------------------------------------------
+# Step 2 for the substitution method (docs/VERDICT_POLICY.md §4 "ll / substitution"):
+# instantiate branch_words at n = k + 2 for k in {1, 2}, check both concrete
+# words are in the task language (word oracle) and that they still share a
+# long common run just before the claimed branch point — a necessary
+# precondition for the "FIRST_k equal" claim, which otherwise stays an
+# unverified (LLM) part of the argument.
+# ---------------------------------------------------------------------------
+
+_EXP_TOKEN_RE = re.compile(r"([A-Za-z])\^\{?([^\s\^}]+)\}?")
+_SAFE_EXPR_RE = re.compile(r"^[0-9nk()+\-*\s]+$")
+_EXP_DEPENDS_ON_N_RE = re.compile(r"\bn\b")
+
+
+def _tail_token_depends_on_n(template: Any) -> bool:
+    """Whether a branch-word template's LAST <terminal>^<exponent> token has
+    an exponent expression that actually depends on n (e.g. "n", "n+1"),
+    rather than a bare constant (e.g. "1", "3") or an expression only in k.
+
+    The branch-point/substitution argument (docs/THEORY.md §3.3 (C)) needs
+    the discriminating tail (the part after the shared a-run, e.g. b^n vs
+    c^n) to encode a count tied to n: that is what lets the pigeonhole step
+    substitute a mismatched n' in and land outside the language. A tail that
+    doesn't depend on n at all (b^1 vs c^1, or b^n vs c^1) can never produce
+    that contradiction, no matter how large n grows — such a pair is not a
+    valid witness even if it happens to pass the oracle/FIRST_k checks below.
+    """
+    if not isinstance(template, str) or not template.strip():
+        return False
+    tokens = _EXP_TOKEN_RE.findall(template)
+    if not tokens:
+        return False
+    _, exp = tokens[-1]
+    return bool(_EXP_DEPENDS_ON_N_RE.search(exp))
+
+
+def _eval_exponent(expr: str, n: int, k: int) -> int | None:
+    """Evaluate a small arithmetic expression in n/k (only +, -, *, digits,
+    parens — never anything else). Returns None if unparsable/unsafe."""
+    expr = expr.strip()
+    if not expr or not _SAFE_EXPR_RE.match(expr):
+        return None
+    try:
+        value = eval(expr, {"__builtins__": {}}, {"n": n, "k": k})  # noqa: S307 — sandboxed
+    except Exception:
+        return None
+    if not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _instantiate_word_template(template: Any, n: int, k: int) -> str | None:
+    """Best-effort instantiation of an 'a^n b^n'-style template at concrete
+    n, k. Returns None if the template isn't a recognizable sequence of
+    <terminal>^<exponent-in-n,k> tokens (best-effort — never raises)."""
+    if not isinstance(template, str) or not template.strip():
+        return None
+    tokens = _EXP_TOKEN_RE.findall(template)
+    if not tokens:
+        return None
+    out: list[str] = []
+    for sym, exp in tokens:
+        val = _eval_exponent(exp, n, k)
+        if val is None:
+            return None
+        out.append(sym * val)
+    return "".join(out)
+
+
+def _verify_branch_words_by_oracle(bw: dict, ir: dict) -> tuple[str | None, dict]:
+    """Best-effort semantic check of substitution branch_words.
+
+    Instantiates word_1/word_2 at n = k + 2 for k in {1, 2} and checks, via
+    the task's word oracle (docs/VERDICT_POLICY.md §4 "ll / substitution"):
+
+    1. **Refutation is ONLY an oracle counterexample**: if either
+       instantiated word is not in L, the whole instantiated example is
+       wrong regardless of anything else — `refuted`.
+    2. Otherwise, a candidate confirmation at a given k requires the literal
+       substrings w1[boundary:boundary+k] and w2[boundary:boundary+k] (with
+       boundary = n - k) to be equal — this checks that the shared literal
+       prefix reaches at least length n (a common-prefix-length test, NOT a
+       comparison of FIRST_k as *sets* the way earlier revisions of this
+       docstring claimed: with the words agreeing up to `boundary`, equality
+       of that window is exactly the statement "the words still agree once
+       more up through position n"). It is a real precondition of the
+       branch-point argument (THEORY.md §3.3 (C): the sentential form a^j·δ
+       shared by both derivations, for j in (n-k, n]), but not sufficient on
+       its own — see point 4.
+    3. A short common run (the two words' actual literal agreement doesn't
+       even reach position n - k, i.e. they diverge earlier than the claimed
+       branch point) is NOT a refutation — it is simply not enough data to
+       confirm the claim, so it stays `well_formed` (returned as None here,
+       same as "no oracle" — the caller only ever upgrades trust on an
+       explicit bounded_pass).
+    4. `bounded_pass` additionally requires, per docs/VERDICT_POLICY.md §4,
+       that point 2 be confirmed at **both** instantiated k in {1, 2} (`all`,
+       not `any` — a template that only survives at one k, e.g. a constant
+       tail confirmed by chance at k=1 but not k=2, is not a valid witness),
+       AND that the discriminating tail of *both* templates actually depends
+       on n (`_tail_token_depends_on_n`): a claim like "a^n b^1" vs "a^n c^1"
+       (or "a^3 b^1" vs "a^3 c^1") can pass the literal-prefix check above by
+       sheer coincidence — both words happen to still agree through position
+       n because the tail is a fixed-length constant unrelated to n — without
+       the tail encoding any real count tied to n, so the pigeonhole/
+       substitution step that would derive a contradiction from it can never
+       go through, no matter how large n grows. Such a pair is rejected here
+       even when every individual k's oracle/prefix check passes.
+
+    Returns (trust, details); trust in {"bounded_pass", "refuted", None}.
+    None means "insufficient data to confirm the claim, or not instantiable /
+    no oracle / tail doesn't depend on n" — caller keeps well_formed. It is
+    never a refutation on its own.
+    """
+    oracle = _try_word_oracle(ir)
+    if oracle is None:
+        return None, {}
+
+    word_1_t = bw.get("word_1")
+    word_2_t = bw.get("word_2")
+    template_depends_on_n = (
+        _tail_token_depends_on_n(word_1_t) and _tail_token_depends_on_n(word_2_t)
+    )
+    checked: list[dict] = []
+    data_count = 0
+    confirmed_count = 0
+    for k in (1, 2):
+        n = k + 2
+        w1 = _instantiate_word_template(word_1_t, n, k)
+        w2 = _instantiate_word_template(word_2_t, n, k)
+        if w1 is None or w2 is None:
+            continue
+        try:
+            w1_in_l = bool(oracle(w1))
+            w2_in_l = bool(oracle(w2))
+        except Exception:
+            continue
+        if not (w1_in_l and w2_in_l):
+            checked.append({
+                "k": k, "n": n, "word_1": w1, "word_2": w2,
+                "word_1_in_l": w1_in_l, "word_2_in_l": w2_in_l,
+            })
+            return "refuted", {"checked": checked}
+
+        actual_common = 0
+        for a, b in zip(w1, w2):
+            if a != b:
+                break
+            actual_common += 1
+        boundary = max(n - k, 0)
+        sufficient_data = (
+            actual_common >= boundary
+            and len(w1) >= boundary + k
+            and len(w2) >= boundary + k
+        )
+        if sufficient_data:
+            first_k_1 = w1[boundary:boundary + k]
+            first_k_2 = w2[boundary:boundary + k]
+            first_k_equal = first_k_1 == first_k_2
+        else:
+            first_k_1 = first_k_2 = None
+            first_k_equal = False
+        entry = {
+            "k": k, "n": n, "word_1": w1, "word_2": w2,
+            "word_1_in_l": w1_in_l, "word_2_in_l": w2_in_l,
+            "common_run": actual_common, "boundary": boundary,
+            "first_k_remainder_1": first_k_1, "first_k_remainder_2": first_k_2,
+            "sufficient_data": sufficient_data, "first_k_equal": first_k_equal,
+        }
+        checked.append(entry)
+        if sufficient_data:
+            data_count += 1
+            if first_k_equal:
+                confirmed_count += 1
+
+    if not checked:
+        return None, {}
+    # Require BOTH instantiated k in {1, 2} to have sufficient data and
+    # confirm (docs/VERDICT_POLICY.md §4), and the tails to genuinely depend
+    # on n -- otherwise this is not evidence AGAINST the claim (no oracle
+    # counterexample was found), just not enough to confirm it.
+    if data_count == 2 and confirmed_count == 2 and template_depends_on_n:
+        return "bounded_pass", {"checked": checked}
+    return None, {"checked": checked}
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +504,19 @@ def verify_ll_grammar_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         checks_passed += 1
 
-    # Check 4: run check_ll_k if available
-    if _HAS_TABLE_BUILDER and grammar and not _validate_grammar_structure(grammar) and isinstance(k, int) and k >= 1:
+    grammar_ok = bool(grammar) and not _validate_grammar_structure(grammar)
+    k_ok = isinstance(k, int) and k >= 1
+
+    if not grammar_ok or not k_ok:
+        # Fields missing/invalid — no claim to check semantically.
+        return _make_result(
+            agent=agent, trust="not_verified", checks_passed=checks_passed,
+            checks_total=checks_total, issues=issues, details=details,
+        )
+
+    # Check 4: run check_ll_k if available — the candidate grammar must at
+    # least satisfy its own claim before anything else is checked.
+    if _HAS_TABLE_BUILDER:
         checks_total += 1
         try:
             result = check_ll_k(grammar, k)
@@ -119,50 +529,22 @@ def verify_ll_grammar_claim(proof_sketch: dict, ir: dict) -> dict:
                     f"{len(result.get('conflicts', []))} conflict(s)"
                 )
                 details["conflicts"] = result.get("conflicts", [])
+                return _make_result(
+                    agent=agent, trust="refuted", checks_passed=checks_passed,
+                    checks_total=checks_total, issues=issues, details=details,
+                )
         except Exception as exc:
             issues.append(f"check_ll_k raised an error: {exc}")
 
-    if not issues:
-        status = "verified"
-    elif any("NOT LL" in i for i in issues):
-        status = "refuted"
-    else:
-        status = "inconclusive"
+    # Step 2 (docs/VERDICT_POLICY.md §4): task-alphabet + language-equivalence
+    trust, step2_issues, step2_details = _apply_constructive_step2(grammar, ir)
+    issues.extend(step2_issues)
+    details.update(step2_details)
 
     return _make_result(
-        agent=agent,
-        status=status,
-        checks_passed=checks_passed,
-        checks_total=checks_total,
-        issues=issues,
-        details=details,
+        agent=agent, trust=trust, checks_passed=checks_passed,
+        checks_total=checks_total, issues=issues, details=details,
     )
-
-
-def _try_word_oracle(ir: dict):
-    """Best-effort membership oracle for a set_builder language in `ir`.
-
-    Returns a Callable[[str], bool] or None if no oracle can be built (e.g. the
-    IR is not in the cfl_system.lib.cfl_oracle language_spec shape, or the
-    words involved are parametrized templates rather than concrete strings).
-    This is intentionally best-effort: structural checks below never depend on
-    it succeeding.
-    """
-    try:
-        from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
-    except ImportError:
-        return None
-    try:
-        return cfl_oracle_from_ir(ir)
-    except Exception:
-        return None
-
-
-def _looks_concrete(word: Any) -> bool:
-    """True if `word` is a plain terminal string (no template variables like n, k)."""
-    if not isinstance(word, str) or not word:
-        return False
-    return all(ch.isalpha() for ch in word)
 
 
 def verify_substitution_claim(proof_sketch: dict, ir: dict) -> dict:
@@ -284,37 +666,61 @@ def verify_substitution_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append("Missing or empty 'proof_explanation'")
 
-    # Optional check 8: if a word-oracle for the IR's set_builder language is
-    # available and word_1/word_2 are concrete (non-templated) strings, verify
-    # they actually belong to L. Best-effort — never blocks verification when
-    # unavailable.
-    if isinstance(bw, dict):
-        w1, w2 = bw.get("word_1"), bw.get("word_2")
-        if _looks_concrete(w1) or _looks_concrete(w2):
-            oracle = _try_word_oracle(ir)
-            if oracle is not None:
-                checks_total += 1
-                oracle_ok = True
-                for w in (w1, w2):
-                    if _looks_concrete(w):
-                        try:
-                            if not oracle(w):
-                                oracle_ok = False
-                                issues.append(f"word-oracle: {w!r} is claimed in L but oracle rejects it")
-                        except Exception as exc:
-                            issues.append(f"word-oracle raised an error on {w!r}: {exc}")
-                            oracle_ok = False
-                if oracle_ok:
-                    checks_passed += 1
+    if issues:
+        # Missing/invalid structural fields — no claim to check semantically.
+        return _make_result(
+            agent=agent, trust="not_verified", checks_passed=checks_passed,
+            checks_total=checks_total, issues=issues + obsolete, details=details,
+        )
 
-    status = "verified" if not issues else "inconclusive"
+    # Step 2 (docs/VERDICT_POLICY.md §4 "ll / substitution"): if word_1/word_2
+    # are already concrete literal words, check them directly against the
+    # oracle; otherwise try instantiating an 'a^n b^n'-style template at
+    # n = k + 2, k in {1, 2} and check the concrete instantiations. Both are
+    # best-effort — absent an oracle, trust stays well_formed (the derivation
+    # argument itself remains an unverified LLM part either way).
+    trust = "well_formed"
+    w1, w2 = bw.get("word_1"), bw.get("word_2")
+    if _looks_concrete(w1) and _looks_concrete(w2):
+        oracle = _try_word_oracle(ir)
+        if oracle is not None:
+            try:
+                w1_in_l, w2_in_l = bool(oracle(w1)), bool(oracle(w2))
+            except Exception as exc:
+                w1_in_l = w2_in_l = None
+                issues.append(f"word-oracle raised an error: {exc}")
+            else:
+                if w1_in_l and w2_in_l:
+                    trust = "bounded_pass"
+                    details["word_oracle_check"] = {"word_1_in_l": True, "word_2_in_l": True}
+                else:
+                    issues.append(
+                        f"word-oracle: word_1={w1!r} in L={w1_in_l}, "
+                        f"word_2={w2!r} in L={w2_in_l} (expected both True)"
+                    )
+                    return _make_result(
+                        agent=agent, trust="refuted", checks_passed=checks_passed,
+                        checks_total=checks_total, issues=issues + obsolete, details=details,
+                    )
+    if trust == "well_formed":
+        inst_trust, inst_details = _verify_branch_words_by_oracle(bw, ir)
+        if inst_details:
+            details["branch_words_instantiation"] = inst_details
+        if inst_trust == "refuted":
+            issues.append(
+                "instantiated branch_words (n = k + 2) fail the oracle/common-run "
+                "check (docs/VERDICT_POLICY.md §4)"
+            )
+            return _make_result(
+                agent=agent, trust="refuted", checks_passed=checks_passed,
+                checks_total=checks_total, issues=issues + obsolete, details=details,
+            )
+        if inst_trust == "bounded_pass":
+            trust = "bounded_pass"
+
     return _make_result(
-        agent=agent,
-        status=status,
-        checks_passed=checks_passed,
-        checks_total=checks_total,
-        issues=issues + obsolete,
-        details=details,
+        agent=agent, trust=trust, checks_passed=checks_passed,
+        checks_total=checks_total, issues=issues + obsolete, details=details,
     )
 
 
@@ -385,15 +791,18 @@ def verify_grammar_transformation_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append(f"'conflicts_remaining' / 'conflicts' is non-empty: {conflicts_remaining}")
 
-    # Check 5: run check_ll_k on transformed grammar if available
+    # Structural issues so far (missing grammar, bad structure, missing steps,
+    # non-empty conflicts_remaining) — no claim to check semantically.
+    if issues:
+        return _make_result(
+            agent=agent, trust="not_verified", checks_passed=checks_passed,
+            checks_total=checks_total, issues=issues, details=details,
+        )
+
+    # Check 5: run check_ll_k on transformed grammar if available — the
+    # transformed grammar must at least satisfy its own claim first.
     k = proof_sketch.get("k")
-    if (
-        _HAS_TABLE_BUILDER
-        and transformed_grammar
-        and not _validate_grammar_structure(transformed_grammar)
-        and isinstance(k, int)
-        and k >= 1
-    ):
+    if _HAS_TABLE_BUILDER and isinstance(k, int) and k >= 1:
         checks_total += 1
         try:
             result = check_ll_k(transformed_grammar, k)
@@ -405,13 +814,21 @@ def verify_grammar_transformation_claim(proof_sketch: dict, ir: dict) -> dict:
                     f"Transformed grammar is NOT LL({k}): "
                     f"{len(result.get('conflicts', []))} conflict(s)"
                 )
+                return _make_result(
+                    agent=agent, trust="refuted", checks_passed=checks_passed,
+                    checks_total=checks_total, issues=issues, details=details,
+                )
         except Exception as exc:
             issues.append(f"check_ll_k raised an error: {exc}")
 
-    status = "verified" if not issues else "inconclusive"
+    # Step 2 (docs/VERDICT_POLICY.md §4): task-alphabet + language-equivalence
+    trust, step2_issues, step2_details = _apply_constructive_step2(transformed_grammar, ir)
+    issues.extend(step2_issues)
+    details.update(step2_details)
+
     return _make_result(
         agent=agent,
-        status=status,
+        trust=trust,
         checks_passed=checks_passed,
         checks_total=checks_total,
         issues=issues,
@@ -466,6 +883,13 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append("No 'explanation' / 'marker_description' / 'll_usage' provided in proof_sketch")
 
+    if issues:
+        # Missing marker/explanation — no claim to check semantically.
+        return _make_result(
+            agent=agent, trust="not_verified", checks_passed=checks_passed,
+            checks_total=checks_total, issues=issues, details=details,
+        )
+
     # Check 3: grammar provided (optional but preferred)
     # Prompt puts grammar in artifacts.ll_grammar; proof_sketch may also carry it.
     grammar = (
@@ -473,41 +897,54 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
         or proof_sketch.get("ll_grammar")
         or proof_sketch.get("_artifacts_ll_grammar")  # injected by verify_ll_claim
     )
+    if grammar is None:
+        # No artifact to check semantically — structural pass only.
+        return _make_result(
+            agent=agent, trust="well_formed", checks_passed=checks_passed,
+            checks_total=checks_total, issues=issues, details=details,
+        )
+
+    checks_total += 1
+    struct_issues = _validate_grammar_structure(grammar)
+    if struct_issues:
+        issues.extend(struct_issues)
+        return _make_result(
+            agent=agent, trust="not_verified", checks_passed=checks_passed,
+            checks_total=checks_total, issues=issues, details=details,
+        )
+    checks_passed += 1
+
+    # Check 4: run check_ll_k if available — the grammar must at least
+    # satisfy its own claim before anything else is checked.
     # Prompt uses "suggested_k"; accept both names.
     k = proof_sketch.get("k") or proof_sketch.get("suggested_k")
-    if grammar is not None:
+    if _HAS_TABLE_BUILDER and isinstance(k, int) and k >= 1:
         checks_total += 1
-        struct_issues = _validate_grammar_structure(grammar)
-        if struct_issues:
-            issues.extend(struct_issues)
-        else:
-            checks_passed += 1
+        try:
+            result = check_ll_k(grammar, k)
+            details["check_ll_k_result"] = result
+            if result.get("is_ll_k"):
+                checks_passed += 1
+            else:
+                issues.append(
+                    f"Grammar with marker is NOT LL({k}): "
+                    f"{len(result.get('conflicts', []))} conflict(s)"
+                )
+                return _make_result(
+                    agent=agent, trust="refuted", checks_passed=checks_passed,
+                    checks_total=checks_total, issues=issues, details=details,
+                )
+        except Exception as exc:
+            issues.append(f"check_ll_k raised an error: {exc}")
 
-        # Check 4: run check_ll_k if available
-        if (
-            _HAS_TABLE_BUILDER
-            and not struct_issues
-            and isinstance(k, int)
-            and k >= 1
-        ):
-            checks_total += 1
-            try:
-                result = check_ll_k(grammar, k)
-                details["check_ll_k_result"] = result
-                if result.get("is_ll_k"):
-                    checks_passed += 1
-                else:
-                    issues.append(
-                        f"Grammar with marker is NOT LL({k}): "
-                        f"{len(result.get('conflicts', []))} conflict(s)"
-                    )
-            except Exception as exc:
-                issues.append(f"check_ll_k raised an error: {exc}")
+    # Step 2 (docs/VERDICT_POLICY.md §4): task-alphabet + language-equivalence
+    trust, step2_issues, step2_details = _apply_constructive_step2(grammar, ir)
+    issues.extend(step2_issues)
+    details.update(step2_details)
 
-    status = "verified" if not issues else "inconclusive"
     return _make_result(
         agent=agent,
-        status=status,
+        trust=trust,
         checks_passed=checks_passed,
         checks_total=checks_total,
         issues=issues,
@@ -629,10 +1066,13 @@ def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append("Missing or empty 'proof_explanation'")
 
-    status = "verified" if not issues else "inconclusive"
+    # No mechanical semantic check for prefix_classes yet (docs/VERDICT_POLICY.md
+    # scopes step 2 to ll_grammar_builder/grammar_transformer/substitution) — a
+    # structural pass is well_formed, not verified/bounded_pass.
+    trust = "well_formed" if not issues else "not_verified"
     return _make_result(
         agent=agent,
-        status=status,
+        trust=trust,
         checks_passed=checks_passed,
         checks_total=checks_total,
         issues=issues + obsolete,
@@ -710,10 +1150,12 @@ def verify_essential_ambiguity_claim(proof_sketch: dict, ir: dict) -> dict:
     else:
         issues.append("'why_every_grammar_ambiguous' is missing or empty")
 
-    status = "verified" if not issues else "inconclusive"
+    # No mechanical semantic check for essential_ambiguity — structural pass
+    # is well_formed, not verified.
+    trust = "well_formed" if not issues else "not_verified"
     return _make_result(
         agent=agent,
-        status=status,
+        trust=trust,
         checks_passed=checks_passed,
         checks_total=checks_total,
         issues=issues,
@@ -751,7 +1193,7 @@ def verify_ll_claim(agent_result: dict, ir: dict) -> dict:
     if agent_result.get("verdict") == "uncertain":
         return _make_result(
             agent=agent_result.get("agent_name", "unknown"),
-            status="inconclusive",
+            trust="not_verified",
             checks_passed=0,
             checks_total=0,
             issues=["Agent returned uncertain verdict"],
@@ -761,7 +1203,7 @@ def verify_ll_claim(agent_result: dict, ir: dict) -> dict:
     if proof_sketch is None:
         return _make_result(
             agent=agent_result.get("agent_name", "unknown"),
-            status="inconclusive",
+            trust="not_verified",
             checks_passed=0,
             checks_total=0,
             issues=["No proof_sketch in agent result"],
@@ -789,7 +1231,7 @@ def verify_ll_claim(agent_result: dict, ir: dict) -> dict:
 
     return _make_result(
         agent=agent_result.get("agent_name", "unknown"),
-        status="inconclusive",
+        trust="not_verified",
         checks_passed=0,
         checks_total=0,
         issues=[f"No verifier for method '{method}'"],

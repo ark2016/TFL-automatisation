@@ -60,6 +60,31 @@ def _verdict_emoji(verdict: str | None) -> str:
     return _VERDICT_EMOJI.get(verdict or "", "\u2753")
 
 
+# ---------------------------------------------------------------------------
+# Trust labels (docs/VERDICT_POLICY.md §1, §5)
+# ---------------------------------------------------------------------------
+
+_TRUST_LABELS_RU: dict[str, str] = {
+    "verified": "проверено полностью",
+    "bounded_pass": "проверено выборочно",
+    "well_formed": "корректно оформлено",
+    "not_verified": "не проверено",
+    "refuted": "опровергнуто",
+    "not_applicable": "неприменимо",
+    "error": "ошибка проверки",
+}
+
+
+def _trust_of(entry: dict) -> str | None:
+    """Trust label for one oracle_verification entry: the new ``trust``
+    key, falling back to the legacy ``verification_status`` key."""
+    return entry.get("trust") or entry.get("verification_status")
+
+
+def _trust_label(trust: str | None) -> str:
+    return _TRUST_LABELS_RU.get(trust or "", str(trust) if trust else "—")
+
+
 def _safe_get(d: dict | None, *keys: str, default: Any = None) -> Any:
     """Safely traverse nested dicts."""
     current = d
@@ -435,16 +460,27 @@ def render_markdown(result: dict) -> str:
     oracle = result.get("oracle_verification")
     if isinstance(oracle, dict) and oracle:
         sections.append("### Oracle верификация\n")
-        sections.append("| Агент | Статус | Проверки |")
-        sections.append("|-------|--------|----------|")
+        sections.append("| Агент | Доверие | Проверки |")
+        sections.append("|-------|---------|----------|")
         for oname, overify in oracle.items():
             if not isinstance(overify, dict):
                 continue
-            ostatus = overify.get("verification_status", "—")
+            ostatus = _trust_label(_trust_of(overify))
             cp = overify.get("checks_passed", 0)
             ct = overify.get("checks_total", 0)
             checks_str = f"{cp}/{ct}" if ct > 0 else "—"
             sections.append(f"| {oname} | {ostatus} | {checks_str} |")
+        sections.append("")
+
+    # verdict_gate (docs/VERDICT_POLICY.md §5) -- additive, shown when present
+    gate = result.get("verdict_gate")
+    if isinstance(gate, dict) and (gate.get("downgrades") or gate.get("contradiction")):
+        sections.append("### Гейт вердикта\n")
+        if gate.get("contradiction"):
+            sections.append("> [!warning] Обнаружено противоречие между конструктивным и "
+                             "деструктивным доказательствами (confidence ≤ 0.50).\n")
+        for dg in gate.get("downgrades") or []:
+            sections.append(f"- {dg}")
         sections.append("")
 
     # Errors
@@ -734,6 +770,7 @@ def render_html(result: dict) -> str:
     parts.append(".s-pass{background:#4caf50}.s-fail{background:#e53935}")
     parts.append(".s-pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#e3f2fd;color:#1565c0}")
     parts.append(".s-banner-ok{background:#e8f5e9;border-left:4px solid #2e7d32;padding:10px 14px;border-radius:4px;margin:12px 0;font-size:13px}")
+    parts.append(".s-banner-info{background:#e3f2fd;border-left:4px solid #1565c0;padding:10px 14px;border-radius:4px;margin:12px 0;font-size:13px}")
     parts.append(".s-banner-warn{background:#fff3e0;border-left:4px solid #f57c00;padding:10px 14px;border-radius:4px;margin:12px 0;font-size:13px}")
     parts.append(".s-main-proof{background:#f1f8e9;border-left:4px solid #4caf50;padding:14px 18px;border-radius:4px;margin:14px 0}")
     parts.append(".s-err{color:#c62828}")
@@ -752,36 +789,51 @@ def render_html(result: dict) -> str:
     parts.append('</div>')
 
     # --- Verification banner (oracle, per-agent dict) ---
-    any_verified = False
-    if isinstance(oracle, dict) and oracle:
-        any_verified = any(
-            isinstance(v, dict) and v.get("verification_status") == "verified"
-            for v in oracle.values()
-        )
-        verified_count = sum(
-            1 for v in oracle.values()
-            if isinstance(v, dict) and v.get("verification_status") == "verified"
-        )
-        total_agents = sum(
-            1 for v in oracle.values()
-            if isinstance(v, dict) and v.get("verification_status") not in (
-                "not_applicable", "not_verified", None
-            )
-        )
+    # docs/VERDICT_POLICY.md §5: the green "verified" banner is reserved
+    # for trust == "verified" (an exhaustive deterministic check) -- NOT for
+    # bounded_pass (a real but partial oracle check) or well_formed
+    # (structure only), which get their own, honestly-worded banners.
+    trusts = (
+        [_trust_of(v) for v in oracle.values() if isinstance(v, dict)]
+        if isinstance(oracle, dict) else []
+    )
+    any_verified = "verified" in trusts
+    any_bounded_pass = "bounded_pass" in trusts
+    any_refuted = "refuted" in trusts
+    if trusts:
         if any_verified:
+            verified_count = trusts.count("verified")
+            total_agents = sum(1 for t in trusts if t not in ("not_applicable", None))
             parts.append(
                 '<div class="s-banner-ok">'
-                f'<strong>\u2713 Oracle верификация пройдена</strong> '
-                f'({verified_count} из {total_agents} агентов верифицировано)'
+                f'<strong>✓ Oracle верификация пройдена полностью</strong> '
+                f'({verified_count} из {total_agents} агентов проверено полностью)'
+                '</div>'
+            )
+        elif any_bounded_pass:
+            bp_count = trusts.count("bounded_pass")
+            parts.append(
+                '<div class="s-banner-info">'
+                f'<strong>○ Oracle проверил доказательство выборочно</strong> '
+                f'({bp_count} агент(ов) прошли проверку на конкретных словах — '
+                'не исчерпывающая проверка).'
                 '</div>'
             )
         else:
             parts.append(
                 '<div class="s-banner-warn">'
-                '<strong>\u26a0 Oracle верификация НЕ пройдена</strong><br>'
-                'Ни один агент не получил статус "verified". '
+                '<strong>⚠ Oracle верификация НЕ пройдена</strong><br>'
+                'Ни один агент не прошёл проверку выше "корректно оформлено" '
+                '(структура полей, без семантической проверки словами). '
                 'Ниже приведён аргумент специалиста-агента, а не проверенная теорема. '
                 'Требуется ручная проверка.'
+                '</div>'
+            )
+        if any_refuted:
+            parts.append(
+                '<div class="s-banner-warn">'
+                '<strong>✗ Оракул нашёл контрпример</strong> хотя бы для одного '
+                'агента (доверие "опровергнуто") — см. таблицу деталей ниже.'
                 '</div>'
             )
 
@@ -883,13 +935,13 @@ def render_html(result: dict) -> str:
     if isinstance(oracle, dict) and oracle:
         parts.append('<div class="s-sec">Oracle верификация (детали)</div>')
         parts.append(
-            '<table><thead><tr><th>Агент</th><th>Статус</th>'
+            '<table><thead><tr><th>Агент</th><th>Доверие</th>'
             '<th>Проверки</th><th>Проблемы</th></tr></thead><tbody>'
         )
         for oname, overify in oracle.items():
             if not isinstance(overify, dict):
                 continue
-            ostatus = _esc(overify.get("verification_status", "\u2014"))
+            ostatus = _esc(_trust_label(_trust_of(overify)))
             cp = overify.get("checks_passed", 0)
             ct = overify.get("checks_total", 0)
             checks_str = f"{cp}/{ct}" if ct > 0 else "\u2014"
@@ -940,12 +992,17 @@ def render_html(result: dict) -> str:
     if any_verified:
         footer_items.append(
             '<span style="display:flex;align-items:center;gap:5px">'
-            '<span class="s-dot s-pass"></span>verified</span>'
+            f'<span class="s-dot s-pass"></span>{_esc(_trust_label("verified"))}</span>'
+        )
+    elif any_bounded_pass:
+        footer_items.append(
+            '<span style="display:flex;align-items:center;gap:5px">'
+            f'<span class="s-dot s-pass"></span>{_esc(_trust_label("bounded_pass"))}</span>'
         )
     elif isinstance(oracle, dict) and oracle:
         footer_items.append(
             '<span style="display:flex;align-items:center;gap:5px">'
-            '<span class="s-dot s-fail"></span>not verified</span>'
+            f'<span class="s-dot s-fail"></span>{_esc(_trust_label("not_verified"))}</span>'
         )
 
     if footer_items:

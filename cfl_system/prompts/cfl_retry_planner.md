@@ -26,12 +26,21 @@ Minimize wasted computation by only re-running agents that produced incorrect or
     "contradictions": [...],
     "specialist_outputs": { ... },
     "oracle_test": { ... },
-    "proof_checker": { ... }
+    "proof_checker": { ... },
+    "trust": {"pumping_cfl": "well_formed", "closure_reduction": "refuted", "cfg_builder": "not_verified"}
   },
   "retry_count": 1,
   "max_retries": 3
 }
 ```
+
+`trust` (docs/VERDICT_POLICY.md §1) gives the deterministic trust level per
+agent from the last round: `refuted` (a counterexample was found — the
+agent's previous artifact/claim is actually wrong, not just unconvincing),
+`bounded_pass` (checked against the oracle on concrete instances), well_formed
+(structurally complete but not oracle-checked), `not_verified` (no evidence
+or check did not run). Prefer retrying `refuted` agents with their specific
+counterexample as the hint over agents that are merely `not_verified`.
 
 ## Output Format
 
@@ -204,6 +213,22 @@ Retry the agent contradicted by oracle/checker/majority.
 - Do NOT provide empty hints. Every retried agent must receive specific feedback.
 - Do NOT exceed max_retries (3 total). If max_retries_remaining would go below 0, return failure.
 - Do NOT set should_invert_hypothesis: true more than once.
+
+## Hint phrasing — statements, not questions
+
+Every `hint` string is copied verbatim into the retried agent's next prompt
+as `retry_params`. That agent must consume it and go straight to producing
+JSON — it must never start reasoning in prose about the hint itself. Phrase
+every hint as a flat, closed statement of what was wrong and what to do
+instead. Do NOT phrase a hint as an open question that invites the retried
+agent to think out loud before answering — e.g. avoid "Was this verified by
+the oracle?", "Is this word really a valid witness?", "Did you check all
+cases?". A question like that reads as something to answer in free text,
+and free text before/after the JSON object breaks the retried agent's JSON
+output. Instead write it as a statement: "The oracle found this word is NOT
+a valid witness: split v='a', x='b' pumps to a word still in L at both i=0
+and i=2 — choose a different word." Every example hint in this file already
+follows this pattern; keep new ones the same way.
 
 ## Max retries exceeded
 

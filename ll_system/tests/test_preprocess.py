@@ -226,6 +226,47 @@ class TestCheckRegularityHints:
         result = check_regularity_hints(IR_FORMAT3_FINITE)
         assert result["method"] == "finite"
 
+    def test_format2_finite_given_grammar_is_regular(self):
+        """TODO §1(b) regression: check_regularity_hints only tested the
+        top-level `grammar` (Format 3) for finiteness — Format 2's given
+        grammar (language_spec, kind == "grammar") was never checked."""
+        ir_format2_finite = {
+            "task_type": "ll_check_grammar_lang",
+            "source_text": "Finite grammar, Format 2",
+            "language_spec": {
+                "kind": "grammar",
+                "nonterminals": ["S", "A"],
+                "terminals": ["a", "b"],
+                "start": "S",
+                "rules": [
+                    {"lhs": "S", "rhs": ["a", "A", "b"]},
+                    {"lhs": "A", "rhs": ["a"]},
+                    {"lhs": "A", "rhs": ["b"]},
+                ],
+            },
+        }
+        result = check_regularity_hints(ir_format2_finite)
+        assert result["is_regular"] is True
+        assert result["method"] == "finite"
+
+    def test_format2_recursive_given_grammar_not_regular(self):
+        ir_format2_recursive = {
+            "task_type": "ll_check_grammar_lang",
+            "source_text": "Recursive grammar, Format 2",
+            "language_spec": {
+                "kind": "grammar",
+                "nonterminals": ["S"],
+                "terminals": ["a"],
+                "start": "S",
+                "rules": [
+                    {"lhs": "S", "rhs": ["a", "S"]},
+                    {"lhs": "S", "rhs": []},
+                ],
+            },
+        }
+        result = check_regularity_hints(ir_format2_recursive)
+        assert result["is_regular"] is False
+
     def test_set_builder_no_vars_is_regular(self):
         result = check_regularity_hints(IR_SET_BUILDER_NO_VARS)
         assert result["is_regular"] is True

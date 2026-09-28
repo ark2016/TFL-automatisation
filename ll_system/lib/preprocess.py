@@ -20,8 +20,12 @@ def check_regularity_hints(ir: dict) -> dict:
     }
 
     Checks (in order of confidence):
-    1. task_type is ll_check_grammar with grammar that only accepts finite language
-       → is_regular=True (finite languages are regular)
+    1. task_type is ll_check_grammar (Format 3) with a top-level grammar, OR
+       task_type is ll_check_grammar_lang (Format 2) with language_spec.kind
+       == "grammar" — either way, a grammar that only accepts a finite
+       language → is_regular=True (finite languages are regular). TODO §1:
+       this check used to fire only for Format 3, so Format 2's given
+       grammar was never tested for finiteness.
     2. language_spec kind is "regex" → is_regular=True
     3. Set-builder with no constraints or trivially empty constraints → check
     4. Set-builder where all variables are bounded → may be finite/regular
@@ -29,27 +33,33 @@ def check_regularity_hints(ir: dict) -> dict:
     This is a heuristic/advisory function. Returns is_regular=False when uncertain.
     """
     task_type = ir.get("task_type", "")
+    language_spec = ir.get("language_spec", {})
 
-    # Check 1: grammar at top level — is it finite (no recursion)?
+    # Check 1: a grammar is available directly — is it finite (no recursion)?
+    # Format 3: top-level `grammar`. Format 2: `language_spec` IS the grammar
+    # (kind == "grammar") — the given grammar for "is this language LL?".
+    grammar_for_finiteness: dict | None = None
     if task_type == "ll_check_grammar":
-        grammar = ir.get("grammar")
-        if grammar and isinstance(grammar, dict):
-            if _is_finite_grammar(grammar):
-                return {
-                    "is_regular": True,
-                    "confidence": 0.9,
-                    "reason": "Grammar generates a finite language (no recursive rules)",
-                    "method": "finite",
-                }
+        grammar_for_finiteness = ir.get("grammar")
+    elif isinstance(language_spec, dict) and language_spec.get("kind") == "grammar":
+        grammar_for_finiteness = language_spec
+
+    if grammar_for_finiteness and isinstance(grammar_for_finiteness, dict):
+        if _is_finite_grammar(grammar_for_finiteness):
             return {
-                "is_regular": False,
-                "confidence": 0.7,
-                "reason": "Grammar has recursive rules; language may be infinite",
-                "method": None,
+                "is_regular": True,
+                "confidence": 0.9,
+                "reason": "Grammar generates a finite language (no recursive rules)",
+                "method": "finite",
             }
+        return {
+            "is_regular": False,
+            "confidence": 0.7,
+            "reason": "Grammar has recursive rules; language may be infinite",
+            "method": None,
+        }
 
     # Check 2: language_spec kind is "regex"
-    language_spec = ir.get("language_spec", {})
     if isinstance(language_spec, dict):
         kind = language_spec.get("kind")
         if kind == "regex":
@@ -514,6 +524,8 @@ def compute_preprocess_hints(ir: dict) -> dict:
         "is_regular": reg["is_regular"],
         "regularity_confidence": reg["confidence"],
         "regularity_reason": reg["reason"],
+        "regularity_method": reg["method"],  # additive: "finite"/"regex_pattern" are
+        # deterministic facts; "trivial_constraint" is a heuristic (docs/VERDICT_POLICY.md §1/§2)
         "disjunction_pattern": disjunction,
         "extracted_language": None,
         "structural_features": features,

@@ -15,6 +15,12 @@ This file checks (a)/(b) the prompt text itself, (c) that the worked-example
 JSON blocks in both prompts parse and carry the required contract keys, and
 (d) that dcfl_system.lib.oracle_verifier accepts the new fields and rejects
 the obsolete ones with an issue, not a silent pass.
+
+Status strings below use the trust taxonomy from docs/VERDICT_POLICY.md §1:
+a structural-only pass is reported as ``well_formed`` (used to be ``verified``)
+and a structural issue with no counterexample as ``not_verified`` (used to be
+``issues_found``) — no task_ir is passed in these tests, so the step-2
+semantic oracle checks (§4) never fire and trust never exceeds well_formed.
 """
 from __future__ import annotations
 
@@ -161,7 +167,7 @@ def test_verifier_accepts_dcfl_pumping_new_contract():
     }
     result = verify_agent_results(agent_results, {})
     entry = result["dcfl_pumping"]
-    assert entry["verification_status"] == "verified"
+    assert entry["verification_status"] == "well_formed"
     assert "issues" not in entry
 
 
@@ -183,7 +189,7 @@ def test_verifier_flags_obsolete_no_pumping_argument():
     }
     result = verify_agent_results(agent_results, {})
     entry = result["dcfl_pumping"]
-    assert entry["verification_status"] == "issues_found"
+    assert entry["verification_status"] == "not_verified"
     issues = " ".join(entry.get("issues", []))
     assert "no_pumping_argument" in issues
     assert "condition1_argument" in issues and "condition2_argument" in issues
@@ -203,7 +209,7 @@ def test_verifier_accepts_shallit_nerode_classes_contract():
     }
     result = verify_agent_results(agent_results, {})
     entry = result["shallit"]
-    assert entry["verification_status"] == "verified"
+    assert entry["verification_status"] == "well_formed"
 
 
 def test_verifier_accepts_shallit_prefix_continuation_contract():
@@ -220,7 +226,7 @@ def test_verifier_accepts_shallit_prefix_continuation_contract():
     }
     result = verify_agent_results(agent_results, {})
     entry = result["shallit"]
-    assert entry["verification_status"] == "verified"
+    assert entry["verification_status"] == "well_formed"
 
 
 def test_verifier_rejects_shallit_missing_technique_specific_fields():
@@ -234,7 +240,7 @@ def test_verifier_rejects_shallit_missing_technique_specific_fields():
     }
     result = verify_agent_results(agent_results, {})
     entry = result["shallit"]
-    assert entry["verification_status"] == "issues_found"
+    assert entry["verification_status"] == "not_verified"
     issues = " ".join(entry.get("issues", []))
     assert "dead_class_finite" in issues
     assert "distinguishing_suffix" in issues
@@ -252,7 +258,7 @@ def test_verifier_flags_obsolete_homogeneous_subsets_fields(old_field):
     }
     result = verify_agent_results(agent_results, {})
     entry = result["shallit"]
-    assert entry["verification_status"] == "issues_found"
+    assert entry["verification_status"] == "not_verified"
     issues = " ".join(entry.get("issues", []))
     assert "obsolete Shallit formulation (homogeneous subsets)" in issues
 
@@ -311,7 +317,7 @@ def test_verifier_rejects_shallit_invalid_technique():
     }
     result = verify_agent_results(agent_results, {})
     entry = result["shallit"]
-    assert entry["verification_status"] == "issues_found"
+    assert entry["verification_status"] == "not_verified"
 
 
 # ---------------------------------------------------------------------------
