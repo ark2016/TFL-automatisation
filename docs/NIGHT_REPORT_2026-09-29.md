@@ -1,6 +1,6 @@
 # Night report 2026-09-29
 
-Branch `lean-formalization` (HEAD `0a7324e` at start; the night's work is uncommitted in the working tree).
+Branch `lean-formalization` (HEAD `0a7324e` at start; the night's work is committed as `0d514dc`, PR #11).
 No Anthropic API calls were made (mock mode, the root `conftest.py` blocks the client). Lean type-checking ran
 locally in Docker (`tfl-lean4`: Lean v4.33.0 + Mathlib v4.33.0 + langlib).
 
@@ -39,7 +39,7 @@ locally in Docker (`tfl-lean4`: Lean v4.33.0 + Mathlib v4.33.0 + langlib).
 - Stale text outside my file list: `dcfl_system/CLAUDE.md` ("Formal verification": says `non_dcfl` is unprovable) and
   the comment on the Lemmas layer in `agent_system/docker/Dockerfile.lean4`.
 - Branches: nothing deleted. `lean-mathlib` is contained in `lean-formalization` but is not in `main` (PR #10 open);
-  no other local branch exists besides `main`. Untracked `f1.lean` in the repo root predates the work.
+  no other local branch exists besides `main`. A stray empty `f1.lean` slipped into `0d514dc` and was removed in the follow-up commit.
 
 ## Numbers
 - Tests: see the final line of this section, filled from the last full run
@@ -52,7 +52,7 @@ locally in Docker (`tfl-lean4`: Lean v4.33.0 + Mathlib v4.33.0 + langlib).
 ## Needs a decision from the user
 1. **PR #10** (`lean-mathlib`) is open; its commit is an ancestor of `lean-formalization`. Close it in favour of
    #11, or merge it first; only then delete the `lean-mathlib` branch (local and remote).
-2. **PR #11** (`lean-formalization`): review and merge; this working tree is not committed yet.
+2. **PR #11** (`lean-formalization`): review and merge (all work committed).
 3. **Live comparison of Sonnet 5.5 vs Sonnet 5** (2-3 tasks, Haiku is not relevant here) and a first live run of
    the prover on CFL/DCFL: only on your explicit request with an agreed budget (order of $1). Also unverified:
    whether server-side refusal fallback works for Sonnet 5.5 (currently only Opus/Fable).
