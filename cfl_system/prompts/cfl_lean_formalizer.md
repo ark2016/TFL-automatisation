@@ -246,6 +246,10 @@ Transfer section (langlib's worked results moved onto any alphabet; no `Fintype`
 - `TflLean.fin3Map x y z : Fin 3 → β` (`0 ↦ x, 1 ↦ y, 2 ↦ z`), `TflLean.fin3Map_injective`,
   `TflLean.mem_map_iff (f) (L) (w) : w ∈ Language.map f L ↔ ∃ v ∈ L, v.map f = w` — for moving
   other langlib `Fin 3` results yourself.
+- `TflLean.isContextFree_of_isDCF {T : Type} [Fintype T] {L : Language T} (h : is_DCF L) : L.IsContextFree`
+  (DCFL ⊆ CFL) and `TflLean.not_isDCF_of_not_isContextFree {T : Type} [Fintype T] {L : Language T}
+  (h : ¬ L.IsContextFree) : ¬ is_DCF L` — for statements that mention `is_DCF`; the tasks of this
+  pipeline are about `L.IsContextFree`, so you will rarely need them.
 - langlib bridges: `is_CF_iff_isContextFree : is_CF L ↔ L.IsContextFree` (langlib's `is_CF`
   vs Mathlib's predicate), `notCF_lang_eq_eq_pos : ¬ is_CF lang_eq_eq_pos`,
   `CF_of_CF_inter_regular (h₁ : is_CF L₁) (h₂ : L₂.IsRegular) : is_CF (L₁ ⊓ L₂)`.

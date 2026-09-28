@@ -69,8 +69,12 @@ optional Lean 4 step (`lean_formalize_node`, `docs/VERDICT_POLICY.md` R-Lean; sp
 `lib/lean_ir.render_statement` generates `is_DCF L` / `¬ is_DCF L` from the IR, the `lean_formalizer` agent
 (`prompts/dcfl_lean_formalizer.md`) writes only the proof body, `agent_system.lib.type_check` compiles it in Docker.
 `proved` ⇒ verified 0.98 and outranks R1–R4′ (`_apply_lean_gate`). Off by default (`--formalize` /
-`TFL_FORMALIZATION=1`); live only on explicit request. In the image only the explicit-DPDA (`dcfl`) direction is
-provable today — no DCFL⊆CFL inclusion, so `non_dcfl` proofs end as `error` (agent gives up).
+`TFL_FORMALIZATION=1`); live only on explicit request. Both directions are provable in the image: `dcfl` via an
+explicit DPDA (or the `{aⁿbⁿcᵐ}` transfer lemma), `non_dcfl` via DCFL closure (complement / ∩ REG), the inclusion
+DCFL ⊆ CFL (`TflLean.isContextFree_of_isDCF`) and refuting the resulting context-free property
+(`TflLean.not_isContextFree_of_slice` / CF pumping); reference proof
+`agent_system/docker/tfl_lean/TflLean/Examples/AiBjCkNeq_NotDCF.lean`. A `non_dcfl` claim with no such route (e.g. one
+that needs Shallit or inherent ambiguity) still ends as `error` (the agent gives up honestly).
 
 ## Key commands
 ```bash

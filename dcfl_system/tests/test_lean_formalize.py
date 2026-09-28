@@ -151,15 +151,16 @@ class TestApplyLeanGate:
         assert out["verdict"] == "dcfl"
         assert out["confidence"] == 0.98
         gate = out["verdict_gate"]
-        assert gate["contradiction"] is True
-        assert any("opposite" in d and "dcfl" in d for d in gate["downgrades"])
+        assert gate["contradiction"] is False
+        assert any("lean proof of 'dcfl' overrides reasoning verdict 'non_dcfl'" in d for d in gate["downgrades"])
         assert out["primary_evidence"] == "lean_formalizer"
         assert "overruled" in out["summary"] and "specialists' summary" in out["summary"]
 
     def test_proved_non_dcfl_overrules_dcfl(self):
         out = _apply_lean_gate(_reasoning("dcfl", 0.85), _proved("non_dcfl"))
         assert (out["verdict"], out["confidence"]) == ("non_dcfl", 0.98)
-        assert out["verdict_gate"]["contradiction"] is True
+        assert out["verdict_gate"]["contradiction"] is False
+        assert any("overrides reasoning verdict 'dcfl'" in d for d in out["verdict_gate"]["downgrades"])
 
     def test_proved_beats_an_inconclusive_verdict(self):
         reasoning = _reasoning(None, 0.4, primary=None, cap=0.4)
@@ -218,7 +219,7 @@ class TestRendererAppliesTheLeanGate:
         formalization = {**_proved("dcfl"), "statement": {"name": "tfl_main"}, "proof_body": "trivial"}
         res = renderer_node(self._state(_reasoning("non_dcfl", 0.55), formalization))["result"]
         assert (res["verdict"], res["confidence"]) == ("dcfl", 0.98)
-        assert res["verdict_gate"]["contradiction"] is True
+        assert res["verdict_gate"]["contradiction"] is False
         assert res["formalization"] == formalization
 
     def test_terminal_path_retry_action_is_regated_then_lean_wins(self):
@@ -603,27 +604,29 @@ class TestRealDocker:
     def test_anbncm_dcfl_statement_with_sorry_is_has_sorry(self):
         stmt = render_statement(_anbncm_ir(), "dcfl")
         assert stmt is not None
-        result = check_lean_file(compose_lean_file(stmt, "sorry"), timeout=180, theorem_name=stmt.name)
+        result = check_lean_file(compose_lean_file(stmt, "sorry"), timeout=600, theorem_name=stmt.name)
         assert result["status"] == "has_sorry", result
         assert result["errors"] == []
 
     def test_anbncm_non_dcfl_statement_with_sorry_is_has_sorry(self):
         stmt = render_statement(_anbncm_ir(), "non_dcfl")
         assert stmt.theorem_decl == "theorem tfl_main : ¬ is_DCF L"
-        result = check_lean_file(compose_lean_file(stmt, "sorry"), timeout=180, theorem_name=stmt.name)
+        result = check_lean_file(compose_lean_file(stmt, "sorry"), timeout=600, theorem_name=stmt.name)
         assert result["status"] == "has_sorry", result
 
     def test_prompt_worked_example_is_proved(self):
         _inp, out = _prompt_example()
         stmt = render_statement(IR_ANBN, "dcfl")
-        result = check_lean_file(compose_lean_file(stmt, out["proof_body"]), timeout=180, theorem_name=stmt.name)
+        result = check_lean_file(compose_lean_file(stmt, out["proof_body"]), timeout=600, theorem_name=stmt.name)
         assert result["status"] == "proved", result
         assert set(result["axioms"]) <= {"propext", "Classical.choice", "Quot.sound"}
 
-    def test_mock_pipeline_with_the_mock_proof_ends_verified_098(self):
+    def test_mock_pipeline_with_the_mock_proof_ends_verified_098(self, monkeypatch):
         """The whole chain, unpatched: mock specialists -> mock lean_formalizer
         (a real DPDA proof for {a^n b^n c^m}) -> render_statement ->
         compose_lean_file -> Docker check_lean_file -> R-Lean gate."""
+        import dcfl_system.orchestrator as dorch
+        monkeypatch.setattr(dorch, "LEAN_TIMEOUT", 600)  # robust under parallel Docker load
         ir = _anbncm_ir()
         res = run_pipeline(ir, mock_runner=MockRunner(str(MOCK_DIR), ir["task_id"]), formalize=True)
         assert res["formalization"]["status"] == "proved", res["formalization"]

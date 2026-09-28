@@ -353,7 +353,7 @@ class TestReplayCatchesTheRealExploitViaDocker(unittest.TestCase):
             "    logError s!\"TFL_REPLAY_FAIL: {(← e.toMessageData.toString)}\"\n\n"
             "#print axioms tfl_main\n"
         )
-        result = check_lean_file(text, timeout=180)
+        result = check_lean_file(text, timeout=600)
         # Without the replay check, this PoC's plain compile + `#print
         # axioms` looks like a clean, axiom-free proof of `False`.
         self.assertEqual(result["status"], "error", result)

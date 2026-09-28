@@ -1809,15 +1809,16 @@ def assemble_result_node(state: PipelineState) -> dict:
             # outranks the reasoning agent's own (unverified) claim -- the
             # verdict flips to the proven direction at the full verified
             # ceiling, rather than being left as a capped contradiction.
-            contradiction = True
+            # Not a contradiction: the proof is the deciding basis, so
+            # `contradiction` stays False; the override is recorded in
+            # `downgrades` (same convention in cfl_system / dcfl_system).
             status = "success"
             confidence = CONFIDENCE_CAPS["verified"]
             basis.append({"agent": "formalizer", "trust": "verified", "basis": "lean_proof"})
             downgrades.append(
-                f"Lean proof verified for '{lean_direction}', opposite of the proposed "
-                f"'{reasoning_verdict}' -> verdict changed to '{lean_direction}', verified "
-                "0.98 (VERDICT_POLICY.md R-Lean: a machine-checked proof takes priority "
-                "over every other track; R3)"
+                f"lean proof of '{lean_direction}' overrides reasoning verdict "
+                f"'{reasoning_verdict}' -> verified 0.98 (VERDICT_POLICY.md R-Lean: a "
+                "machine-checked proof takes priority over every other track)"
             )
             _set_reasoning_verdict(evidence, lean_direction)
 

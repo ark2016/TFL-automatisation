@@ -856,13 +856,13 @@ def _apply_lean_gate(reasoning_output: dict, formalization: dict | None) -> dict
     if flipped:
         # A machine-checked proof of the OPPOSITE direction outranks the
         # reasoning agent's own claim: the verdict flips at the full verified
-        # ceiling (as agent_system.graph.assemble_result_node does), and the
-        # disagreement stays visible as `contradiction: true` + a downgrade note.
+        # ceiling (as agent_system.graph.assemble_result_node does). Not a
+        # contradiction (`contradiction` stays False); the override is recorded
+        # in a downgrade note.
         downgrades.append(
-            f"Lean proof verified for '{direction}', opposite of the proposed "
-            f"'{prior_verdict}' -> verdict changed to '{direction}', verified {verified_cap} "
-            "(VERDICT_POLICY.md R-Lean: a machine-checked proof takes priority over every "
-            "other track; R3)"
+            f"lean proof of '{direction}' overrides reasoning verdict '{prior_verdict}' "
+            f"-> verified {verified_cap} (VERDICT_POLICY.md R-Lean: a machine-checked "
+            "proof takes priority over every other track)"
         )
         out["primary_evidence"] = "lean_formalizer"
         out["summary"] = (
@@ -888,9 +888,8 @@ def _apply_lean_gate(reasoning_output: dict, formalization: dict | None) -> dict
     out["verdict_gate"] = {
         **gate,
         "basis": basis,
-        # `flipped` keeps the disagreement visible; a confirming/inconclusive
-        # proof leaves no unresolved contradiction behind.
-        "contradiction": flipped,
+        # a proof leaves no unresolved contradiction behind (flip or not).
+        "contradiction": False,
         "downgrades": downgrades,
         "confidence_cap": verified_cap,
     }

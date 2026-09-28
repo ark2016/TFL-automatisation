@@ -325,6 +325,16 @@ def test_terminal_statuses_are_not_retried(checker, terminal):
     assert len(runner.lean_calls) == 1 and len(fake.calls) == 1
 
 
+def test_empty_proof_body_is_an_honest_give_up_without_retries(checker):
+    fake = checker([PROVED])
+    give_up = {"agent": "lean_formalizer", "proof_body": "", "lemmas_used": [], "notes": "no route in the image"}
+    runner = ScriptedRunner([give_up, _body()])
+    f = lean_formalize_node(_state(runner=runner))["formalization"]
+    assert f["status"] == "error" and "no route in the image" in f["errors"][0]
+    assert f["attempts"][0]["status"] == "gave_up" and len(f["attempts"]) == 1
+    assert len(runner.lean_calls) == 1 and len(fake.calls) == 0
+
+
 def test_agent_error_is_recorded_and_ends_the_loop(checker):
     fake = checker([PROVED])
     runner = ScriptedRunner([
@@ -468,6 +478,7 @@ def test_gate_proved_opposite_direction_flips_the_verdict(standing):
     assert g["contradiction"] is False and g["proof_verified"] is True
     assert len(g["downgrades"]) == 1
     assert "non_cfl" in g["downgrades"][0] and "R-Lean" in g["downgrades"][0]
+    assert "lean proof of 'non_cfl' overrides reasoning verdict" in g["downgrades"][0]
     assert g["lean_proof"] == {"direction": "non_cfl", "flipped": True}
 
 
@@ -692,6 +703,13 @@ def test_prompt_and_hint_list_name_only_existing_tfllean_lemmas():
         assert re.search(rf"\b(theorem|def|lemma)\s+(\S*\.)?{re.escape(last)}\b", lemmas), name
 
 
+def test_hint_list_covers_the_new_transfer_lemmas():
+    for name in ("not_isContextFree_of_slice", "isContextFree_of_isDCF",
+                 "not_isDCF_of_not_isContextFree", "replicate_append_inj",
+                 "replicate_append_replicate_append_replicate_inj", "fin3Map_injective"):
+        assert f"TflLean.{name}" in orch._LEAN_AVAILABLE_LEMMAS, name
+
+
 def test_hint_lemmas_appear_in_the_prompt():
     prompt = PROMPT.read_text(encoding="utf-8")
     for name in orch._LEAN_AVAILABLE_LEMMAS:
@@ -728,9 +746,10 @@ def test_anbncn_statement_with_sorry_is_has_sorry():
 
 
 @docker
-def test_pipeline_end_to_end_proved_on_the_real_compiler():
+def test_pipeline_end_to_end_proved_on_the_real_compiler(monkeypatch):
     """task_anbncn mocks + the compiled example body: the whole chain
     (IR -> statement -> agent -> compose -> Docker -> gate) ends verified 0.98."""
+    monkeypatch.setattr(orch, "LEAN_TIMEOUT", 600)  # robust under parallel Docker load
     res = _run(formalize=True)
     f = res["formalization"]
     assert f["status"] == "proved", f

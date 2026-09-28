@@ -2400,6 +2400,15 @@ _LEAN_AVAILABLE_LEMMAS = (
     "TflLean.count_replicate_of_ne",
     "TflLean.count_flatten_replicate",
     "TflLean.replicate_append_replicate_inj",
+    "TflLean.length_eq_sum_count",
+    "TflLean.not_isContextFree_of_slice",
+    "TflLean.replicate_append_inj",
+    "TflLean.replicate_append_replicate_append_replicate_inj",
+    "TflLean.fin3Map",
+    "TflLean.fin3Map_injective",
+    "TflLean.mem_map_iff",
+    "TflLean.isContextFree_of_isDCF",
+    "TflLean.not_isDCF_of_not_isContextFree",
     "List.count_replicate",
     "List.take_append",
     "List.take_replicate",
@@ -2443,6 +2452,21 @@ def _lean_agent_output(output: dict | None) -> tuple[str | None, list[str]]:
     if isinstance(body, str) and body.strip():
         return body, []
     return None, ["lean_formalizer output had no proof_body"]
+
+
+def _lean_gave_up(output: dict | None) -> str | None:
+    """The agent's notes (possibly ``""``) when it explicitly answered with an
+    empty ``proof_body`` (an honest give-up), else ``None``. A missing key or a
+    non-string body is a malformed reply, not a give-up."""
+    if not isinstance(output, dict) or output.get("status") == "agent_error":
+        return None
+    ev = output.get("evidence")
+    src = ev if isinstance(ev, dict) and "proof_body" in ev else output
+    body = src.get("proof_body")
+    if isinstance(body, str) and not body.strip():
+        notes = src.get("notes")
+        return str(notes).strip() if notes else ""
+    return None
 
 
 def lean_formalize_node(state: PipelineState) -> dict:
@@ -2544,6 +2568,17 @@ def lean_formalize_node(state: PipelineState) -> dict:
 
         log_msg(state, f"  lean_formalizer: attempt {attempt_num}/{MAX_FORMALIZE_ITERATIONS}")
         output = _run_agent(state, "lean_formalizer", agent_input)
+        gave_up_notes = _lean_gave_up(output)
+        if gave_up_notes is not None:
+            # An explicit empty proof_body is the agent's honest "no route with
+            # the available lemmas": stop now (same as dcfl), more attempts on
+            # the same dead end only burn budget. Not evidence either way (R1).
+            log_msg(state, "  lean_formalizer: gave up (empty proof_body)")
+            status = "error"
+            errors = [f"lean_formalizer gave up: {gave_up_notes}" if gave_up_notes
+                      else "lean_formalizer gave up (empty proof_body)"]
+            attempts.append({"attempt": attempt_num, "status": "gave_up", "errors": errors})
+            break
         body, agent_errs = _lean_agent_output(output)
         if body is None:
             log_msg(state, f"  lean_formalizer: {agent_errs}")
@@ -2636,10 +2671,9 @@ def apply_lean_gate(
     if flipped:
         was = f"'{verdict}'" if verdict else "no definite verdict"
         downgrades.append(
-            f"Lean proof verified for '{direction}' but the standing verdict was {was} "
-            f"-> verdict set to '{direction}', verified "
-            f"{_CONFIDENCE_CAP_BY_TRUST['verified']} (VERDICT_POLICY.md R-Lean: a "
-            "machine-checked proof takes priority over every other track; R3)"
+            f"lean proof of '{direction}' overrides reasoning verdict {was} "
+            f"-> verified {_CONFIDENCE_CAP_BY_TRUST['verified']} (VERDICT_POLICY.md R-Lean: a "
+            "machine-checked proof takes priority over every other track)"
         )
     gate.update({
         "basis": basis,

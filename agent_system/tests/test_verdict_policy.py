@@ -135,7 +135,9 @@ class TestScenario2VerifiedWins(unittest.TestCase):
         )
         result = assemble_result_node(state)["result"]
 
-        self.assertTrue(result["verdict_gate"]["contradiction"])
+        self.assertFalse(result["verdict_gate"]["contradiction"])
+        self.assertTrue(any("lean proof of 'non_regular' overrides reasoning verdict"
+                            in d for d in result["verdict_gate"]["downgrades"]))
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["confidence"], 0.98)
         self.assertEqual(result["evidence"]["reasoning"]["verdict"], "non_regular")
@@ -196,7 +198,9 @@ class TestScenario3LeanVerified(unittest.TestCase):
         )
         result = assemble_result_node(state)["result"]
 
-        self.assertTrue(result["verdict_gate"]["contradiction"])
+        self.assertFalse(result["verdict_gate"]["contradiction"])
+        self.assertTrue(any("lean proof of 'regular' overrides reasoning verdict"
+                            in d for d in result["verdict_gate"]["downgrades"]))
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
         self.assertEqual(result["evidence"]["reasoning"]["verdict"], "regular")

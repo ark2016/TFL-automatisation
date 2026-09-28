@@ -71,7 +71,10 @@ COPY --chown=lean:lean tfl_lean/TflLean/Langlib.lean ./TflLean/Langlib.lean
 RUN lake build TflLean.Langlib
 
 # TflLean.Lemmas: reusable lemmas for proof bodies (counting, Myhill–Nerode,
-# pumping). Last, so editing it only rebuilds this small layer. TflLean.lean
+# pumping, plus the transfer section: langlib's DCFL ⊆ CFL inclusion, CF closure
+# under inverse homomorphism / ∩ REG and the {aⁿbⁿcᵐ} DPDA moved onto any
+# alphabet). Imports the langlib modules pulled in above, so it is built last;
+# editing it only rebuilds this small layer. TflLean.lean
 # re-exports it, so a harness file's `import TflLean` sees `TflLean.*`.
 COPY --chown=lean:lean tfl_lean/TflLean/Lemmas.lean ./TflLean/Lemmas.lean
 COPY --chown=lean:lean tfl_lean/TflLean.lean ./TflLean.lean
