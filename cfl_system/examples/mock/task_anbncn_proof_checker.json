@@ -1,0 +1,8 @@
+{
+  "status": "checked",
+  "proof": {
+    "method": "pumping_lemma",
+    "conclusion": "non_cfl",
+    "valid": true
+  }
+}

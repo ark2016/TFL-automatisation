@@ -465,7 +465,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
 
 **Вход:** Текст задачи на русском или формальная нотация.
 **Выход:** JSON IR по schema из §3.
-**Модель:** Sonnet 5 (effort=medium, structured output=JSON).
+**Модель:** Sonnet 5.5 (effort=medium, structured output=JSON).
 **Валидация:** Pure fn `validate_ir(json)` — проверка по JSON Schema.
 **Retry:** Если невалидный JSON — повтор с ошибкой валидации в промпте (max 2 retry).
 
@@ -535,7 +535,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
   }
 }
 ```
-**Модель:** Sonnet 5 (effort=medium).
+**Модель:** Sonnet 5.5 (effort=medium).
 
 ### 4.4. RE Builder Agent (LLM)
 

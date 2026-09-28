@@ -1,0 +1,20 @@
+{
+  "agent": "pumping_cfl",
+  "status": "success",
+  "verdict": "non_cfl",
+  "confidence": 0.9,
+  "evidence": {
+    "word_chosen": "a^p b^p c^p",
+    "cases": [
+      {
+        "case": "v x y lies inside one block",
+        "why_not_in_L": "pumping changes the count of one letter only"
+      },
+      {
+        "case": "v x y straddles two adjacent blocks",
+        "why_not_in_L": "pumping changes two counts but never the third"
+      }
+    ],
+    "all_cases_covered": true
+  }
+}

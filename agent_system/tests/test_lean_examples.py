@@ -22,6 +22,15 @@ Two layers:
   langlib's ``Language.IsContextFree.pumping``), ``Lemmas.lean`` compiles, and
   the lemma-based proof bodies quoted in its module doc compile against the
   pipeline statements with nothing but ``import TflLean``.
+
+The CFL/DCFL "transfer" examples (``TRANSFER_EXAMPLES``: a langlib result
+moved onto a pipeline statement through ``TflLean.Lemmas``' Transfer section)
+have statements rendered by ``cfl_system``/``dcfl_system``'s ``lean_ir``,
+which agent_system must not import (root CLAUDE.md, "Import direction"); they
+are spelled out here and ``cfl_system/tests/test_lean_examples_cfl.py`` /
+``dcfl_system/tests/test_lean_examples_dcfl.py`` check them against
+``render_statement(IR, direction)`` and against the few-shot examples of the
+``cfl_lean_formalizer`` / ``dcfl_lean_formalizer`` prompts.
 """
 
 from __future__ import annotations
@@ -75,8 +84,106 @@ def _anbncn_decls() -> LeanStatement:
     return stmt
 
 
+_CFL_IMPORTS = ["import TflLean", "import Mathlib.Computability.ContextFreeGrammar"]
+_NON_CFL_IMPORTS = [
+    *_CFL_IMPORTS,
+    "import Langlib.Classes.ContextFree.Pumping.Pumping",
+    "import Langlib.Classes.ContextFree.Basics.Ogden",
+]
+_DCFL_IMPORTS = ["import TflLean", "import Langlib.Classes.DeterministicContextFree.Definition"]
+_LETTER_AB = "inductive Letter\n  | a | b\n  deriving DecidableEq, Repr"
+_LETTER_ABC_FINTYPE = (
+    "inductive Letter\n  | a | b | c\n  deriving DecidableEq, Repr\n\n"
+    "instance : Fintype Letter where\n  elems := {Letter.a, Letter.b, Letter.c}\n"
+    "  complete := by intro x; cases x <;> decide"
+)
+
+# name -> (IR path relative to the repo root, system, direction, LeanStatement).
+# The statement is exactly `<system>.lib.lean_ir.render_statement(IR, direction)`
+# (checked by the cfl/dcfl test modules named in the module docstring).
+TRANSFER_EXAMPLES: dict[str, tuple[str, str, str, LeanStatement]] = {
+    # {aⁿ bⁿ aⁿ} is not CF: TflLean.not_isContextFree_of_slice (inverse
+    # homomorphism + ∩ regular onto langlib's notCF_lang_eq_eq_pos).
+    "AnBnAnNotCF.lean": (
+        "cfl_system/examples/eval/cfl-20.json", "cfl", "non_cfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_AB,
+            language_decl=(
+                "def L : Language Letter := {w : List Letter | ∃ n : ℕ, w = List.replicate n Letter.a"
+                " ++ List.replicate n Letter.b ++ List.replicate n Letter.a ∧ n ≥ 0}"
+            ),
+            theorem_decl="theorem tfl_main : ¬ L.IsContextFree",
+            imports=_NON_CFL_IMPORTS,
+        ),
+    ),
+    # Even palindromes, S → aSa | bSb | ε: a grammar IR renders L := g.language,
+    # so the positive direction is ⟨g, rfl⟩.
+    "EvenPalGrammar_CF.lean": (
+        "cfl_system/examples/eval/cfl-04.json", "cfl", "cfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_AB,
+            language_decl=(
+                "inductive NT\n  | S\n  deriving DecidableEq, Repr\n\n"
+                "def g : ContextFreeGrammar Letter :=\n"
+                "  { NT := NT, initial := NT.S, rules := {⟨NT.S, [Symbol.terminal Letter.a, "
+                "Symbol.nonterminal NT.S, Symbol.terminal Letter.a]⟩, ⟨NT.S, [Symbol.terminal Letter.b, "
+                "Symbol.nonterminal NT.S, Symbol.terminal Letter.b]⟩, ⟨NT.S, []⟩} }\n\n"
+                "def L : Language Letter := g.language"
+            ),
+            theorem_decl="theorem tfl_main : L.IsContextFree",
+            imports=_CFL_IMPORTS,
+        ),
+    ),
+    # {aⁿ bⁿ cᵐ | n, m ≥ 1} (task_anbncm) is DCF: langlib's DCF_lang_eq_any_pos
+    # via TflLean.isDCF_anbncm_pos.
+    "AnBnCmPos_DCF.lean": (
+        "dcfl_system/examples/task_anbncm.json", "dcfl", "dcfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_ABC_FINTYPE,
+            language_decl=(
+                "def L : Language Letter := {w : List Letter | ∃ n_u n_v n_w : ℕ, w = List.replicate n_u Letter.a"
+                " ++ List.replicate n_v Letter.b ++ List.replicate n_w Letter.c"
+                " ∧ n_u ≥ 1 ∧ n_v ≥ 1 ∧ n_w ≥ 1 ∧ n_u = n_v}"
+            ),
+            theorem_decl="theorem tfl_main : is_DCF L",
+            imports=_DCFL_IMPORTS,
+        ),
+    ),
+    # {aⁿ bⁿ cᵐ | n, m ≥ 0} (dcfl-04) is DCF: langlib's DCF_lang_eq_any via
+    # TflLean.isDCF_anbncm.
+    "AnBnCm_DCF.lean": (
+        "dcfl_system/examples/eval/dcfl-04.json", "dcfl", "dcfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_ABC_FINTYPE,
+            language_decl=(
+                "def L : Language Letter := {w : List Letter | ∃ m n : ℕ, w = List.replicate n Letter.a"
+                " ++ List.replicate n Letter.b ++ List.replicate m Letter.c ∧ n ≥ 0 ∧ m ≥ 0}"
+            ),
+            theorem_decl="theorem tfl_main : is_DCF L",
+            imports=_DCFL_IMPORTS,
+        ),
+    ),
+    # {aⁱ bʲ cᵏ | i ≠ j ∨ j ≠ k} (dcfl-20) is CF but not DCF: complement
+    # (DCF_closedUnderComplement) + DCFL ⊆ CFL + not_isContextFree_of_slice.
+    "AiBjCkNeq_NotDCF.lean": (
+        "dcfl_system/examples/eval/dcfl-20.json", "dcfl", "non_dcfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_ABC_FINTYPE,
+            language_decl=(
+                "def L : Language Letter := {w : List Letter | ∃ i j k : ℕ, w = List.replicate i Letter.a"
+                " ++ List.replicate j Letter.b ++ List.replicate k Letter.c ∧ (i ≠ j ∨ j ≠ k)}"
+            ),
+            theorem_decl="theorem tfl_main : ¬ is_DCF L",
+            imports=_DCFL_IMPORTS,
+        ),
+    ),
+}
+
+
 def _statement(name: str) -> LeanStatement:
     """The statement each example file must start with."""
+    if name in TRANSFER_EXAMPLES:
+        return TRANSFER_EXAMPLES[name][3]
     if name == "AnBnNotRegular.lean":
         stmt = render_statement(_ANBN_IR, "non_regular")
         assert stmt is not None
@@ -130,15 +237,25 @@ EXAMPLE_NAMES = [
     "EvenA_Regular.lean",
     "AnBnCnPumpingCore.lean",
     "AnBnCnNotCF.lean",
+    *TRANSFER_EXAMPLES,
 ]
 FEW_SHOT = ["AnBnNotRegular.lean", "EvenA_Regular.lean"]
 
+# Named in agent_system's formalizer prompt (test_prompt_lists_lemmas_...).
 LEMMA_NAMES = [
     "count_replicate_self", "count_replicate_of_ne", "count_flatten_replicate",
     "length_eq_sum_count", "replicate_append_replicate_inj", "evalFrom_cons",
     "isRegular_of_dfa", "not_isRegular_of_distinguishable", "IsRegular.pumping",
     "IsContextFree.cfPumping", "not_isContextFree_of_not_cfPumping",
     "flatten_replicate_zero", "flatten_replicate_two",
+]
+# The Transfer section of Lemmas.lean (CFL/DCFL; named in the cfl/dcfl
+# lean_formalizer prompts, checked by their test modules).
+TRANSFER_LEMMA_NAMES = [
+    "fin3Map_injective", "mem_map_iff", "replicate_append_inj",
+    "replicate_append_replicate_append_replicate_inj", "isContextFree_of_isDCF",
+    "not_isDCF_of_not_isContextFree", "not_isContextFree_of_slice",
+    "isDCF_anbncm", "isDCF_anbncm_pos",
 ]
 
 
@@ -227,6 +344,19 @@ def test_prompt_lists_lemmas_that_exist_in_lemmas_file():
         assert (f"theorem {name}" in lemmas) or (f"def {name}" in lemmas), name
 
 
+def test_transfer_lemmas_exist_in_lemmas_file():
+    lemmas = LEMMAS.read_text(encoding="utf-8")
+    for name in [*TRANSFER_LEMMA_NAMES, "fin3Map"]:
+        assert (f"theorem {name} " in lemmas) or (f"def {name} " in lemmas), name
+
+
+def test_transfer_example_irs_exist():
+    repo = ROOT.parent
+    for name, (ir_path, system, direction, _stmt) in TRANSFER_EXAMPLES.items():
+        assert (repo / ir_path).is_file(), (name, ir_path)
+        assert system in ("cfl", "dcfl") and direction in ("cfl", "non_cfl", "dcfl", "non_dcfl")
+
+
 def test_lemmas_file_has_no_escape_hatches():
     text = LEMMAS.read_text(encoding="utf-8")
     code = text.split("-/", 1)[1]  # skip the module docstring
@@ -260,13 +390,35 @@ def _assert_proved(result: dict, what: str) -> None:
 
 @functools.lru_cache(maxsize=1)
 def _lemmas_in_image() -> bool:
-    probe = "import TflLean\n\n#check @TflLean.not_isContextFree_of_not_cfPumping\n"
+    # check_lean_file only returns `proved` for a file that ends with
+    # `#print axioms tfl_main` (no axiom result -> `error`), so the probe
+    # carries a trivial `tfl_main` next to the `#check`.
+    probe = (
+        "import TflLean\n\n"
+        "#check @TflLean.not_isContextFree_of_not_cfPumping\n\n"
+        "theorem tfl_main : True := trivial\n\n"
+        "#print axioms tfl_main\n"
+    )
+    return check_lean_file(probe, timeout=300)["status"] == "proved"
+
+
+@functools.lru_cache(maxsize=1)
+def _transfer_lemmas_in_image() -> bool:
+    probe = (
+        "import TflLean\n\n"
+        "#check @TflLean.not_isContextFree_of_slice\n"
+        "#check @TflLean.isDCF_anbncm_pos\n\n"
+        "theorem tfl_main : True := trivial\n\n"
+        "#print axioms tfl_main\n"
+    )
     return check_lean_file(probe, timeout=300)["status"] == "proved"
 
 
 @docker
 @pytest.mark.parametrize("name", EXAMPLE_NAMES)
 def test_example_proved(name):
+    if name in TRANSFER_EXAMPLES and not _transfer_lemmas_in_image():
+        pytest.skip("tfl-lean4 image predates TflLean.Lemmas' Transfer section; rebuild it (README, Lean section)")
     result = check_lean_file(_read(name), timeout=600)
     _assert_proved(result, name)
     assert result["axioms"], f"{name}: `#print axioms tfl_main` output missing"
@@ -275,7 +427,7 @@ def test_example_proved(name):
 @docker
 def test_lemmas_file_compiles():
     text = LEMMAS.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + "\n".join(
-        f"#print axioms TflLean.{n}" for n in LEMMA_NAMES
+        f"#print axioms TflLean.{n}" for n in [*LEMMA_NAMES, *TRANSFER_LEMMA_NAMES]
     ) + "\n"
     # check_lean_file reads the axiom list of the first `#print axioms` target;
     # any `sorry` anywhere would still surface as a warning -> has_sorry.

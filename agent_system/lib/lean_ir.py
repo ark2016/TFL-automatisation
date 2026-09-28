@@ -160,7 +160,12 @@ Language construction
 ----------------------
 - ``grammar`` kind -> Mathlib ``ContextFreeGrammar Letter`` (``g``) with
   ``L := g.language`` (used for all three of reg/cfl/dcfl -- e.g. dcfl's
-  exam_04, ``task_grammar_aSSb``, is a grammar IR).
+  exam_04, ``task_grammar_aSSb``, is a grammar IR). The rules are a ``Finset``
+  of ``ContextFreeRule``, so ε-rules (``rhs == []``) and unit rules
+  (``A -> B``) need no special handling; the nonterminals become their own
+  ``inductive NT``. A symbol that is both a terminal and a nonterminal is
+  ambiguous and yields ``None``. ``cfl_system``'s ``grammar_filter`` adds
+  ``⊓ {w | <filter>}`` to the language (``grammar_decl(filter_body=...)``).
 - ``regex`` kind (``has_backreferences: false`` only -- ``true`` means the
   pattern isn't a regular expression at all and is rejected with a reason)
   -> Mathlib ``RegularExpression Letter`` (``re``) with ``L := re.matches'``.
@@ -180,29 +185,89 @@ Language construction
   change the meaning) anywhere in an exponent expression.
 - ``natural`` kind describing a palindrome (``w = reverse(w)`` / ``w = w^R`` /
   ``w = wᴿ``, case-insensitively) -> ``L := {w : List Letter | w = w.reverse}``.
+  The optional ``w ∈ SET`` in front of the ``|`` must be ``Σ*``/``{a,b}*`` (see
+  ``_alphabet_set``): the full alphabet gives the bare palindrome language, a
+  proper subset adds ``∧ ∀ ch ∈ w, ch = Letter.a ∨ ...``, anything else is
+  ``None`` -- a set-builder domain is never silently dropped.
+- ``natural`` kind of the *word templates* ``{w wᴿ | w ∈ Σ*}``,
+  ``{w c wᴿ | w ∈ Σ*}`` (``c`` a letter of the alphabet) and the copy twins
+  ``{w w | ...}``/``{w c w | ...}`` -> ``∃ u : List Letter, w = u ++ u.reverse``
+  / ``w = u ++ [Letter.c] ++ u.reverse`` / ``w = u ++ u`` / ...
+  (``word_template_body``; ``fullmatch`` against the whole description, like
+  the palindrome, so extra clauses make it ``None``).
+- **Composites** (``build_language``): a ``language_spec`` of ``kind``
+  ``"union"``/``"intersection"`` with ``branches`` (each a language_spec or a
+  natural-description string), and -- for ``natural`` descriptions that no
+  single-language translation accepts -- a top-level ``A ∪ B`` /
+  ``A union B`` / ``A ∩ B`` / ``A intersect B`` split (brace depth 0), are
+  translated branch by branch into ``L_1``, ``L_2``, ... (helper
+  definitions carry the same ``_i`` suffix: ``NT_1``/``g_1``/``re_1``) and
+  combined as ``L := L_1 ⊔ L_2`` / ``L_1 ⊓ L_2`` -- Mathlib's ``Language`` is
+  a ``CompleteAtomicBooleanAlgebra`` whose ``⊔``/``⊓`` are union/intersection.
+  An exponent-notation ``A union B`` that the (cfl/dcfl) exponent parser
+  handles in one piece keeps its ``∨``-of-``∃`` form (pinned by golden tests).
 - Anything else (``predicate``, ``arithmetic_index``, cfl's
-  ``grammar_filter``/``repeated_subword``/``exists_decomposition``, a
-  ``natural`` description that is neither exponent notation nor a simple
-  palindrome, a dcfl ``set_builder`` that isn't the letter-domain shape
-  ``cfl_system/lib/lean_ir.py`` and ``dcfl_system/lib/lean_ir.py`` handle) ->
+  ``repeated_subword``, a ``natural`` description that is neither exponent
+  notation nor a simple palindrome/reversal template, a dcfl ``set_builder``
+  that isn't the letter-domain shape ``cfl_system/lib/lean_ir.py`` and
+  ``dcfl_system/lib/lean_ir.py`` handle) ->
   ``None`` with a reason. This module never invents a formalization for
   something it cannot mechanically translate.
+
+Decidable companion (``LeanStatement.decidable_decl``)
+-------------------------------------------------------
+``L`` itself is a ``Set (List Letter)`` with (for exponent patterns) an
+*unbounded* ``∃ n : ℕ`` -- Lean cannot ``decide`` membership. For
+every language this module renders whose membership is computable it also
+produces ``def Lb (w : List Letter) : Bool := decide (<Prop>)`` where the
+``Prop`` is *equivalent* to the language's body but decidable:
+
+- exponent patterns: every ``∃ n : ℕ`` becomes ``∃ n : ℕ, n < w.length + 1 ∧ ...``
+  -- sound exactly when each variable is bounded by the word's length, which
+  ``_bounded_by_var`` proves syntactically (a block ``a^e`` with ``e ≥ n`` as
+  a naturals fact: ``e = n``, ``n + ...``, ``k * n`` for a numeral ``k ≥ 1``,
+  ``n * n``); a variable that appears only in the condition makes the
+  companion ``None`` (never a guess);
+- word templates: ``u`` is forced to be ``w.take (w.length / 2)``;
+- regex: ``RegularExpression.rmatch``; union/intersection of decidable
+  branches: ``||``/``&&``;
+- grammar languages have no companion (derivability is not decidable by
+  ``decide``); a ``grammar_filter`` gets ``Fb``, the *filter part only*
+  (``decidable_covers == "filter_only"``).
+
+The companion is never part of the theorem file (``LeanStatement.render``
+ignores it): it exists so tests -- and anyone auditing a ``verified`` result
+-- can ``#eval`` the generated formulation against the task's Python oracle
+on short words and see that the Lean text means what the IR means.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 __all__ = [
+    "COMPOSITE_KINDS",
+    "LangDef",
     "LeanStatement",
     "alphabet_decl",
+    "build_language",
+    "combine_languages",
+    "composite_alphabet",
     "fintype_instance_decl",
     "grammar_decl",
+    "letters_only",
+    "make_statement",
+    "palindrome_body",
     "parse_regex",
     "pattern_body",
+    "pattern_tree_body",
+    "predicate_to_lean",
     "render_statement",
     "render_statement_verbose",
+    "set_language",
+    "word_template_body",
 ]
 
 # ---------------------------------------------------------------------------
@@ -222,6 +287,14 @@ class LeanStatement:
     ``imports``: full ``import ...`` lines, in the order they should appear,
       always starting with ``"import TflLean"``.
     ``name``: the theorem's name (``"tfl_main"`` -- R-Lean's fixed contract).
+    ``decidable_decl``: optional Lean text defining ``def <decidable_name> (w :
+      List Letter) : Bool`` -- a decidable, provably equivalent form of the
+      language (module docstring, "Decidable companion"). Never part of
+      :meth:`render`; for ``#eval``-ing the statement against an oracle in
+      tests. ``None`` when the language has no such form (grammar languages).
+    ``decidable_name``: ``"Lb"``; ``decidable_covers``: ``"language"`` (``Lb``
+      decides ``L``) or ``"filter_only"`` (``Fb`` decides only the filter
+      part of a ``grammar_filter`` language).
     """
 
     alphabet_decl: str
@@ -229,6 +302,9 @@ class LeanStatement:
     theorem_decl: str
     imports: list[str] = field(default_factory=list)
     name: str = "tfl_main"
+    decidable_decl: str | None = None
+    decidable_name: str = "Lb"
+    decidable_covers: str = "language"
 
     def render(self, proof: str = "sorry") -> str:
         """Assemble the full ``.lean`` file text, substituting *proof* into
@@ -341,12 +417,25 @@ def fintype_instance_decl(sym_map: dict[str, str]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def grammar_decl(lang_spec: dict, sym_map: dict[str, str]) -> str | None:
+def grammar_decl(
+    lang_spec: dict,
+    sym_map: dict[str, str],
+    *,
+    suffix: str = "",
+    filter_body: str | None = None,
+) -> str | None:
     """``inductive NT ...`` + ``def g : ContextFreeGrammar Letter := ...`` +
     ``def L : Language Letter := g.language`` for a ``kind == "grammar"``
     ``language_spec`` (``nonterminals``, ``start``, ``rules: [{lhs, rhs}]``).
     Every ``rhs`` token must be a member of *sym_map* (a terminal) or of
-    ``nonterminals``; ``None`` on any other malformed/unsupported shape."""
+    ``nonterminals`` (never both -- a token that is both is ambiguous);
+    ε-rules (``rhs == []``) and unit rules are ordinary rules. ``None`` on any
+    other malformed/unsupported shape.
+
+    *suffix* renames ``NT``/``g``/``L`` to ``NT<suffix>``/``g<suffix>``/
+    ``L<suffix>`` (composite branches, see :func:`build_language`).
+    *filter_body*, a ``Prop`` over the word ``w`` (``grammar_filter``), makes
+    ``L := g.language ⊓ {w : List Letter | <filter_body>}``."""
     if not isinstance(lang_spec, dict):
         return None
     nonterminals = lang_spec.get("nonterminals")
@@ -363,12 +452,15 @@ def grammar_decl(lang_spec: dict, sym_map: dict[str, str]) -> str | None:
             return None
         if n not in seen_nt:
             seen_nt.append(n)
+    if any(n in sym_map for n in seen_nt):
+        return None  # a symbol that is both a terminal and a nonterminal is ambiguous
 
     used: set[str] = set()
     nt_map: dict[str, str] = {}
     for i, n in enumerate(seen_nt):
         nt_map[n] = _safe_ident(n, "N", i, used)
 
+    nt_type = f"NT{suffix}"
     rule_texts: list[str] = []
     for rule in rules:
         if not isinstance(rule, dict):
@@ -380,22 +472,29 @@ def grammar_decl(lang_spec: dict, sym_map: dict[str, str]) -> str | None:
         sym_texts: list[str] = []
         for tok in rhs:
             if tok in nt_map:
-                sym_texts.append(f"Symbol.nonterminal NT.{nt_map[tok]}")
+                sym_texts.append(f"Symbol.nonterminal {nt_type}.{nt_map[tok]}")
             elif tok in sym_map:
                 sym_texts.append(f"Symbol.terminal Letter.{sym_map[tok]}")
             else:
                 return None
-        rule_texts.append(f"⟨NT.{nt_map[lhs]}, [{', '.join(sym_texts)}]⟩")
+        rule_texts.append(f"⟨{nt_type}.{nt_map[lhs]}, [{', '.join(sym_texts)}]⟩")
 
     nt_ctor_list = " | ".join(nt_map[n] for n in seen_nt)
-    nt_decl = f"inductive NT\n  | {nt_ctor_list}\n  deriving DecidableEq, Repr"
+    nt_decl = f"inductive {nt_type}\n  | {nt_ctor_list}\n  deriving DecidableEq, Repr"
     rules_set = "{" + ", ".join(rule_texts) + "}"
 
+    if filter_body is None:
+        lang_line = f"def L{suffix} : Language Letter := g{suffix}.language"
+    else:
+        lang_line = (
+            f"def L{suffix} : Language Letter := g{suffix}.language ⊓ "
+            f"({{w : List Letter | {filter_body}}} : Language Letter)"
+        )
     return (
         f"{nt_decl}\n\n"
-        "def g : ContextFreeGrammar Letter :=\n"
-        f"  {{ NT := NT, initial := NT.{nt_map[start]}, rules := {rules_set} }}\n\n"
-        "def L : Language Letter := g.language"
+        f"def g{suffix} : ContextFreeGrammar Letter :=\n"
+        f"  {{ NT := {nt_type}, initial := {nt_type}.{nt_map[start]}, rules := {rules_set} }}\n\n"
+        f"{lang_line}"
     )
 
 
@@ -611,13 +710,46 @@ def _segments_to_lean(segments: list[dict], sym_map: dict[str, str], var_names: 
     return " ++ ".join(parts) if parts else "[]"
 
 
-def pattern_body(segments: list[dict], condition: tuple | None, sym_map: dict[str, str]) -> str | None:
+def _bounded_by_var(expr: tuple, v: str) -> bool:
+    """``True`` if the exponent expression *expr* is provably ``≥ v`` for
+    every assignment of naturals (the syntactic sufficient conditions the
+    module docstring lists), so ``v ≤`` the block's length ``≤ |w|``."""
+    kind = expr[0]
+    if kind == "var":
+        return expr[1] == v
+    if kind == "bin":
+        _, op, l, r = expr
+        if op == "+":
+            return _bounded_by_var(l, v) or _bounded_by_var(r, v)
+        if op == "*":
+            if l == r:  # e * e ≥ e for every natural e
+                return _bounded_by_var(l, v)
+            if l[0] == "num" and l[1] >= 1:
+                return _bounded_by_var(r, v)
+            if r[0] == "num" and r[1] >= 1:
+                return _bounded_by_var(l, v)
+    return False
+
+
+def pattern_body(
+    segments: list[dict],
+    condition: tuple | None,
+    sym_map: dict[str, str],
+    *,
+    decidable: bool = False,
+) -> str | None:
     """The set-builder body (without the surrounding ``{w : List Letter | ...}``)
     for one exponent-notation branch: ``∃ <vars> : ℕ, w = <segments> [∧
     <condition>]``, or just ``w = <segments>`` when no variable appears
     anywhere. ``None`` if *segments*/*condition* use anything this converter
     doesn't support (a letter outside *sym_map*, ``-`` in an exponent, an
-    unrecognized condition shape)."""
+    unrecognized condition shape).
+
+    ``decidable=True`` renders the equivalent *decidable* ``Prop`` for
+    ``LeanStatement.decidable_decl``: each ``∃ n : ℕ`` gets the bound
+    ``n < w.length + 1``, which is sound only if every variable is provably
+    ``≤ |w|`` (``_bounded_by_var`` on some block's exponent); otherwise
+    ``None``."""
     if not isinstance(segments, list) or not segments:
         return None
     block_vars: set[str] = set()
@@ -647,10 +779,40 @@ def pattern_body(segments: list[dict], condition: tuple | None, sym_map: dict[st
             return None
         clauses.append(cond_text)
     body = " ∧ ".join(clauses)
-    if all_vars:
-        quant = " ".join(var_names[v] for v in all_vars)
-        return f"∃ {quant} : ℕ, {body}"
-    return body
+    if not all_vars:
+        return body
+    if decidable:
+        for v in all_vars:
+            if not any(
+                "expr" in seg and seg.get("unit") and _bounded_by_var(seg["expr"], v)
+                for seg in segments
+            ):
+                return None
+        inner = body
+        for v in reversed(all_vars):
+            n = var_names[v]
+            inner = f"∃ {n} : ℕ, {n} < w.length + 1 ∧ {inner}"
+        return inner
+    quant = " ".join(var_names[v] for v in all_vars)
+    return f"∃ {quant} : ℕ, {body}"
+
+
+def pattern_tree_body(pattern, sym_map: dict[str, str], *, decidable: bool = False) -> str | None:
+    """:func:`pattern_body` for a parsed exponent pattern, or the ``∨``-join of
+    it over each branch of a union (duck-typed: ``.segments``/``.condition``
+    for one pattern, ``.parts`` for a union -- ``cfl_system.lib
+    .exponent_pattern``'s ``ExponentPattern``/``_UnionPattern``, which this
+    module may not import)."""
+    segments = getattr(pattern, "segments", None)
+    if segments is not None:
+        return pattern_body(segments, getattr(pattern, "condition", None), sym_map, decidable=decidable)
+    parts = getattr(pattern, "parts", None)
+    if not parts:
+        return None
+    bodies = [pattern_tree_body(p, sym_map, decidable=decidable) for p in parts]
+    if any(b is None for b in bodies):
+        return None
+    return " ∨ ".join(f"({b})" for b in bodies)
 
 
 # ---------------------------------------------------------------------------
@@ -729,25 +891,78 @@ def _parse_simple_exponent_natural(text: str) -> tuple[list[dict], tuple | None]
     return segments, condition
 
 
+def _single_char_alphabet(sym_map: dict[str, str]) -> bool:
+    """Words are Python strings in every oracle, so a translation that talks
+    about "the letters of w" is only faithful when each alphabet symbol is one
+    character."""
+    return bool(sym_map) and all(isinstance(k, str) and len(k) == 1 for k in sym_map)
+
+
+_SET_RE = re.compile(r"(?:(?P<sigma>Σ|Sigma)|\{(?P<letters>[^{}]*)\})\s*(?:\^\s*)?\*", re.IGNORECASE)
+
+
+def _alphabet_set(text: str, sym_map: dict[str, str]) -> tuple[list[str], bool] | None:
+    """``(letters, restricted)`` for a domain ``Σ*`` / ``{a, b}*`` /
+    ``{a,b}^*`` (``letters``: the letters it allows, in alphabet order;
+    ``restricted``: whether that is a proper subset of the alphabet), or
+    ``None`` for any other domain text or a letter outside the alphabet."""
+    if not isinstance(text, str) or not _single_char_alphabet(sym_map):
+        return None
+    m = _SET_RE.fullmatch(text.strip())
+    if not m:
+        return None
+    if m.group("sigma"):
+        return list(sym_map), False
+    raw = [p.strip() for p in m.group("letters").split(",")]
+    if not raw or any(len(p) != 1 or p not in sym_map for p in raw):
+        return None
+    chosen = [letter for letter in sym_map if letter in raw]
+    return chosen, len(chosen) != len(sym_map)
+
+
+def _letters_only(var: str, letters: list[str], sym_map: dict[str, str]) -> str:
+    """``∀ ch ∈ var, ch = Letter.a ∨ ch = Letter.b`` for *letters* (the bound
+    variable is ``ch``, not ``c``: a letter ``c`` of the alphabet would make
+    Lean's ``constructorNameAsVariable`` linter warn)."""
+    alts = " ∨ ".join(f"ch = Letter.{sym_map[letter]}" for letter in letters)
+    return f"∀ ch ∈ {var}, {alts}"
+
+
+def _letters_only_all(expr: str, letters: list[str], sym_map: dict[str, str]) -> str:
+    """The same statement as a ``List.all`` test -- for the *decidable*
+    companion of the reversal templates, where the list is ``w.take (w.length
+    / 2)``: the instance search for ``∀ x ∈ w.take (w.length / 2), ...``
+    fails on the pinned toolchain (any non-atomic length argument such as
+    ``w.length + 1`` does), ``List.all`` elaborates fine."""
+    alts = " ∨ ".join(f"ch = Letter.{sym_map[letter]}" for letter in letters)
+    return f"({expr}).all (fun ch => decide ({alts})) = true"
+
+
+def letters_only(var: str, letters: list[str], sym_map: dict[str, str]) -> str:
+    """``∀ ch ∈ var, ch = Letter.a ∨ ch = Letter.b`` for *letters* (a non-empty
+    list of keys of *sym_map*): "every letter of *var* is one of these"."""
+    return _letters_only(var, letters, sym_map)
+
+
 _PALINDROME_RE = re.compile(
     r"""^\s*
         \{?\s*
-        (?:[A-Za-z]\s*(?:(?:in|∈)\s*[^|]*?\*\s*)?\|\s*)?
+        (?:(?P<v0>[A-Za-z])\s*(?:(?:(?i:in)|∈)\s*(?P<set>[^|]*?\*)\s*)?\|\s*)?
         (?P<var>[A-Za-z])\s*
         (?:
-            =\s*reverse\s*\(\s*(?P=var)\s*\)
+            =\s*(?i:reverse)\s*\(\s*(?P=var)\s*\)
             |
-            =\s*(?P=var)\s*(?:\^\{?R\}?|ᴿ)
+            =\s*(?P=var)\s*(?:\^\{?[Rr]\}?|ᴿ)
             |
-            (?:\^\{?R\}?|ᴿ)\s*=\s*(?P=var)
+            (?:\^\{?[Rr]\}?|ᴿ)\s*=\s*(?P=var)
         )
         \s*\}?\s*$
     """,
-    re.IGNORECASE | re.VERBOSE,
+    re.VERBOSE,  # case-sensitive: the backreference must be the *same* variable
 )
 
 
-def _palindrome_body(description: str) -> str | None:
+def _palindrome_body(description: str, sym_map: dict[str, str] | None = None) -> str | None:
     """Recognize *only* a strict "all palindromes" set-builder description
     -- ``{w (in Sigma*)? | w = reverse(w)}`` (or ``w = w^R`` / ``w^R = w``),
     with nothing else in the body -- via ``fullmatch`` against the whole
@@ -760,12 +975,408 @@ def _palindrome_body(description: str) -> str | None:
     (larger) language as "the language of all palindromes". Any extra
     clause must instead make this return ``None`` -- the whole point of
     ``fullmatch``.
+
+    A stated domain (``w in SET*``) is honoured, not ignored: the full
+    alphabet is the bare palindrome language, a proper subset of it adds
+    ``∧ ∀ ch ∈ w, ...``, and a domain that is not ``Σ*``/``{a,b}*`` (or one
+    given while *sym_map* is not) yields ``None``.
     """
     if not isinstance(description, str):
         return None
-    if _PALINDROME_RE.fullmatch(description.strip()):
+    m = _PALINDROME_RE.fullmatch(description.strip())
+    if not m:
+        return None
+    if m.group("v0") is not None and m.group("v0") != m.group("var"):
+        return None
+    dom = m.group("set")
+    if dom is None:
         return "w = w.reverse"
+    parsed = _alphabet_set(dom, sym_map) if sym_map else None
+    if parsed is None:
+        return None
+    letters, restricted = parsed
+    if not restricted:
+        return "w = w.reverse"
+    return f"w = w.reverse ∧ {_letters_only('w', letters, sym_map)}"
+
+
+palindrome_body = _palindrome_body
+
+
+_WORD_TEMPLATE_RE = re.compile(
+    r"""(?P<v>[A-Za-z])\s*[·⋅]?\s*
+        (?:(?P<c>[^\s·⋅])\s*[·⋅]?\s*)?
+        (?:
+            (?P=v)\s*(?P<rmark>\^\s*\{?\s*[Rr]\s*\}?|ᴿ)?
+            |
+            (?P<rfun>(?i:rev|reverse)\s*\(\s*(?P=v)\s*\))
+        )""",
+    re.VERBOSE,  # case-sensitive: the second occurrence must be the *same* variable
+)
+
+
+def word_template_body(description: str, sym_map: dict[str, str]) -> tuple[str, str] | None:
+    """``(prop_body, decidable_body)`` -- both ``Prop`` texts over the word
+    ``w`` -- for the strict templates ``{w wᴿ | w ∈ Σ*}``, ``{w c wᴿ | w ∈
+    Σ*}`` (``c`` one letter of the alphabet; ``wᴿ`` also ``w^R``/``w^{R}``/
+    ``rev(w)``/``reverse(w)``) and their *copy* twins ``{w w | w ∈ Σ*}``,
+    ``{w c w | w ∈ Σ*}``; ``| w ∈ Σ*`` is optional, ``Σ*`` also ``{a,b}*``
+    (a proper subset of the alphabet restricts ``w`` to it). ``None``
+    otherwise.
+
+    ``fullmatch`` against the whole description, so every extra clause (a
+    length condition, a second variable, ``w = wᴿ``, ...) rejects it. The
+    variable name must not be a letter of the alphabet (``w`` vs ``Letter.w``
+    would be ambiguous); ``c`` must be one.
+
+    The decidable form is exact because ``x = u ++ [c] ++ u'`` (``u'`` = ``u``
+    or ``u.reverse``) forces ``u = x.take (x.length / 2)``."""
+    if not isinstance(description, str) or not _single_char_alphabet(sym_map):
+        return None
+    text = description.strip()
+    text = re.sub(r"^[A-Za-z]\w*\s*=\s*(?=\{)", "", text)  # "L = {...}"
+    if text.startswith("{"):
+        if not text.endswith("}"):
+            return None
+        text = text[1:-1].strip()
+    elif text.endswith("}"):
+        return None
+    body_text, sep, cond_text = text.partition("|")
+    m = _WORD_TEMPLATE_RE.fullmatch(body_text.strip())
+    if not m:
+        return None
+    v, c = m.group("v"), m.group("c")
+    reversed_ = bool(m.group("rmark") or m.group("rfun"))
+    if v in sym_map or (c is not None and c not in sym_map):
+        return None
+    letters, restricted = list(sym_map), False
+    if sep:
+        cm = re.fullmatch(rf"{re.escape(v)}\s*(?:∈|(?i:in))\s*(?P<set>.+)", cond_text.strip())
+        if not cm:
+            return None
+        parsed = _alphabet_set(cm.group("set"), sym_map)
+        if parsed is None:
+            return None
+        letters, restricted = parsed
+    mid = f" ++ [Letter.{sym_map[c]}]" if c is not None else ""
+    half = "w.take (w.length / 2)"
+    prop = f"∃ u : List Letter, w = u{mid} ++ " + ("u.reverse" if reversed_ else "u")
+    dec = f"w = {half}{mid} ++ " + (f"({half}).reverse" if reversed_ else half)
+    if restricted:
+        prop += f" ∧ {_letters_only('u', letters, sym_map)}"
+        dec += f" ∧ {_letters_only_all(half, letters, sym_map)}"
+    return prop, dec
+
+
+# ---------------------------------------------------------------------------
+# Predicate IR (agent_system.lib.ir_schema's Expr/Predicate) -> Lean Prop.
+#
+# Used for ``grammar_filter`` filters and ``exists_decomposition`` constraints
+# (cfl_system); *env* maps an IR variable name to the Lean identifier of a
+# ``List Letter`` in scope. Mirrors the oracles' semantics exactly
+# (agent_system.lib.oracle / cfl_system.lib.cfl_oracle): naturals only, so a
+# negative constant is rejected; ``count_subword`` counts overlapping
+# occurrences (an empty subword counts 0); ``is_substring``/``starts_with``
+# take a literal string over the alphabet unless the operand names a variable
+# of *env*. Anything else -> ``None``.
+# ---------------------------------------------------------------------------
+
+_CMP_IR_LEAN = {"eq": "=", "neq": "≠", "lt": "<", "leq": "≤", "gt": ">", "geq": "≥"}
+
+
+def _word_literal(text: str, sym_map: dict[str, str]) -> str | None:
+    if not isinstance(text, str) or not _single_char_alphabet(sym_map):
+        return None
+    if any(ch not in sym_map for ch in text):
+        return None
+    return "[" + ", ".join(f"Letter.{sym_map[ch]}" for ch in text) + "]"
+
+
+def _word_operand(name: Any, sym_map: dict[str, str], env: dict[str, str]) -> str | None:
+    """A variable of *env* (oracle: ``env.get(name, name)``) or a literal."""
+    if not isinstance(name, str):
+        return None
+    if name in env:
+        return env[name]
+    return _word_literal(name, sym_map)
+
+
+def _ir_expr_to_lean(expr: Any, sym_map: dict[str, str], env: dict[str, str]) -> str | None:
+    if not isinstance(expr, dict):
+        return None
+    kind = expr.get("kind")
+    if kind == "constant":
+        val = expr.get("value")
+        if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+            return str(val)
+        return None
+    if kind == "length":
+        of_var = expr.get("of_var")
+        x = env.get(of_var) if isinstance(of_var, str) else None
+        return None if x is None else f"{x}.length"
+    if kind == "count_symbol":
+        in_var, sym = expr.get("in_var"), expr.get("symbol")
+        x = env.get(in_var) if isinstance(in_var, str) else None
+        if x is None or not isinstance(sym, str) or len(sym) != 1 or sym not in sym_map:
+            return None
+        if not _single_char_alphabet(sym_map):
+            return None
+        return f"{x}.count Letter.{sym_map[sym]}"
+    if kind == "count_subword":
+        in_var, sub = expr.get("in_var"), expr.get("subword")
+        x = env.get(in_var) if isinstance(in_var, str) else None
+        if x is None or not isinstance(sub, str):
+            return None
+        if sub == "":
+            return "0"
+        lit = _word_literal(sub, sym_map)
+        if lit is None:
+            return None
+        return f"((List.range {x}.length).countP (fun i => decide ({lit} <+: {x}.drop i)))"
     return None
+
+
+def predicate_to_lean(pred: Any, sym_map: dict[str, str], env: dict[str, str]) -> str | None:
+    """A decidable Lean ``Prop`` for the IR predicate *pred* (``and``/``or``/
+    ``not``, the six comparisons, modular, ``is_palindrome``,
+    ``is_substring``, ``starts_with`` and their negations), *env* mapping IR
+    variable names to Lean ``List Letter`` identifiers; ``None`` for anything
+    else (unknown structure, unknown variable, a letter outside the
+    alphabet)."""
+    if not isinstance(pred, dict):
+        return None
+    op = pred.get("op")
+    if op in ("and", "or", "not"):
+        operands = pred.get("operands")
+        if not isinstance(operands, list) or not operands:
+            return None
+        parts = [predicate_to_lean(o, sym_map, env) for o in operands]
+        if any(p is None for p in parts):
+            return None
+        if op == "not":
+            return f"¬ ({parts[0]})" if len(parts) == 1 else None
+        sep = " ∧ " if op == "and" else " ∨ "
+        return sep.join(f"({p})" for p in parts)
+    if op in _CMP_IR_LEAN:
+        left = _ir_expr_to_lean(pred.get("left"), sym_map, env)
+        right = _ir_expr_to_lean(pred.get("right"), sym_map, env)
+        if left is None or right is None:
+            return None
+        return f"{left} {_CMP_IR_LEAN[op]} {right}"
+    if op is None and "modulus" in pred and "remainder" in pred and "expr" in pred:
+        mod, rem = pred["modulus"], pred["remainder"]
+        if not all(isinstance(n, int) and not isinstance(n, bool) for n in (mod, rem)):
+            return None
+        if mod <= 0 or rem < 0:
+            return None
+        e = _ir_expr_to_lean(pred["expr"], sym_map, env)
+        return None if e is None else f"({e}) % {mod} = {rem}"
+    if op in ("is_palindrome", "is_not_palindrome"):
+        var = pred.get("var")
+        x = env.get(var) if isinstance(var, str) else None
+        if x is None:
+            return None
+        return f"{x} = {x}.reverse" if op == "is_palindrome" else f"¬ ({x} = {x}.reverse)"
+    if op in ("is_substring", "is_not_substring"):
+        x = env.get(pred.get("in_var")) if isinstance(pred.get("in_var"), str) else None
+        sub = _word_operand(pred.get("substring_expr"), sym_map, env)
+        if x is None or sub is None:
+            return None
+        return f"{sub} <:+: {x}" if op == "is_substring" else f"¬ ({sub} <:+: {x})"
+    if op in ("starts_with", "not_starts_with"):
+        x = env.get(pred.get("of_var")) if isinstance(pred.get("of_var"), str) else None
+        pre = _word_operand(pred.get("prefix_expr"), sym_map, env)
+        if x is None or pre is None:
+            return None
+        return f"{pre} <+: {x}" if op == "starts_with" else f"¬ ({pre} <+: {x})"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Language definitions and composites (union / intersection of branches)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LangDef:
+    """One translated language. ``decls`` is the Lean text that defines
+    ``L<suffix>`` (with any helper definitions it needs, all carrying the same
+    suffix); ``decidable`` the optional ``def <decidable_name><suffix> (w :
+    List Letter) : Bool`` companion (see ``LeanStatement.decidable_decl``);
+    ``covers`` is ``"language"`` or ``"filter_only"``."""
+
+    decls: str
+    decidable: str | None = None
+    decidable_name: str = "Lb"
+    covers: str = "language"
+
+
+def set_language(
+    suffix: str,
+    body: str,
+    decidable_body: str | None = None,
+    *,
+    binder: str = "w",
+    decidable_prefix: str = "",
+) -> LangDef:
+    """``def L<suffix> : Language Letter := {<binder> : List Letter | <body>}``
+    and, if *decidable_body* is given, ``def Lb<suffix> (<binder> : List
+    Letter) : Bool := decide (<decidable_body>)`` (preceded by
+    *decidable_prefix*, helper definitions the body uses)."""
+    decidable = None
+    if decidable_body is not None:
+        decidable = (
+            f"{decidable_prefix}def Lb{suffix} ({binder} : List Letter) : Bool := "
+            f"decide ({decidable_body})"
+        )
+    return LangDef(f"def L{suffix} : Language Letter := {{{binder} : List Letter | {body}}}", decidable)
+
+
+def make_statement(alpha_decl: str, ld: LangDef, theorem_decl: str, imports: list[str]) -> LeanStatement:
+    """A :class:`LeanStatement` for the translated language *ld*."""
+    return LeanStatement(
+        alpha_decl,
+        ld.decls,
+        theorem_decl,
+        imports,
+        decidable_decl=ld.decidable,
+        decidable_name=ld.decidable_name,
+        decidable_covers=ld.covers,
+    )
+
+
+_COMPOSITE_OPS = {"union": ("⊔", "||"), "intersection": ("⊓", "&&")}
+COMPOSITE_KINDS = frozenset(_COMPOSITE_OPS)
+_UNION_TOKEN_RE = re.compile(r"\bunion\b|∪", re.IGNORECASE)
+_INTERSECTION_TOKEN_RE = re.compile(r"\bintersect(?:ion)?\b|∩", re.IGNORECASE)
+
+
+def combine_languages(kind: str, subs: list[LangDef], suffix: str) -> LangDef | None:
+    """``L<suffix> := L<suffix>_1 ⊔ L<suffix>_2 ...`` (``"union"``) or ``⊓``
+    (``"intersection"``) over *subs* (already rendered with suffixes
+    ``<suffix>_1``, ``<suffix>_2``, ...); the decidable companion is the
+    ``||``/``&&`` of the branches' when every branch has one covering its
+    whole language."""
+    if kind not in _COMPOSITE_OPS or len(subs) < 2:
+        return None
+    op_lang, op_bool = _COMPOSITE_OPS[kind]
+    names = [f"L{suffix}_{i}" for i in range(1, len(subs) + 1)]
+    decls = "\n\n".join(sd.decls for sd in subs) + f"\n\ndef L{suffix} : Language Letter := " + f" {op_lang} ".join(names)
+    decidable = None
+    if all(sd.decidable and sd.covers == "language" and sd.decidable_name == "Lb" for sd in subs):
+        expr = f" {op_bool} ".join(f"Lb{suffix}_{i} w" for i in range(1, len(subs) + 1))
+        decidable = "\n\n".join(sd.decidable for sd in subs) + f"\n\ndef Lb{suffix} (w : List Letter) : Bool := {expr}"
+    return LangDef(decls, decidable)
+
+
+def _split_top_level(text: str, token_re: re.Pattern) -> list[str]:
+    """Split *text* at the matches of *token_re* that sit at brace/paren/
+    bracket depth 0; ``[text]`` if there is none or a piece would be empty."""
+    depth_at: list[int] = []
+    depth = 0
+    for ch in text:
+        if ch in "{([":
+            depth += 1
+        elif ch in "})]":
+            depth = max(0, depth - 1)
+        depth_at.append(depth)
+    pieces: list[str] = []
+    last = 0
+    for m in token_re.finditer(text):
+        if depth_at[m.start()] == 0:
+            pieces.append(text[last:m.start()].strip())
+            last = m.end()
+    if not pieces:
+        return [text]
+    pieces.append(text[last:].strip())
+    if any(not p for p in pieces):
+        return [text]
+    return pieces
+
+
+def build_language(spec: Any, sym_map: dict[str, str], suffix: str, leaf) -> LangDef | None:
+    """Translate *spec* (a language_spec dict, or a bare natural-description
+    string) into a :class:`LangDef` whose top definition is ``L<suffix>``.
+
+    * ``kind`` ``"union"``/``"intersection"`` with ``branches`` (>= 2): each
+      branch is translated recursively under ``<suffix>_<i>`` and combined by
+      :func:`combine_languages` -- ``⊔``/``⊓`` of Mathlib's ``Language``
+      lattice.
+    * any other kind: ``leaf(spec, sym_map, suffix)`` (the direction's own
+      single-language translator, ``None`` if it cannot);
+    * a ``natural`` spec its leaf cannot translate whose description is a
+      top-level ``A ∪ B``/``A union B`` (resp. ``A ∩ B``/``A intersect B``)
+      is split and treated as the composite of its parts (union binds looser
+      than intersection).
+
+    ``None`` if any part fails -- never a partial or guessed result."""
+    if isinstance(spec, str):
+        spec = {"kind": "natural", "description": spec}
+    if not isinstance(spec, dict):
+        return None
+    kind = spec.get("kind")
+    if kind in _COMPOSITE_OPS:
+        branches = spec.get("branches")
+        if not isinstance(branches, list) or len(branches) < 2:
+            return None
+        subs = [build_language(b, sym_map, f"{suffix}_{i}", leaf) for i, b in enumerate(branches, start=1)]
+        if any(sd is None for sd in subs):
+            return None
+        return combine_languages(kind, subs, suffix)
+    single = leaf(spec, sym_map, suffix)
+    if single is not None or kind != "natural":
+        return single
+    description = spec.get("description")
+    if not isinstance(description, str):
+        return None
+    for comp_kind, token_re in (("union", _UNION_TOKEN_RE), ("intersection", _INTERSECTION_TOKEN_RE)):
+        pieces = _split_top_level(description, token_re)
+        if len(pieces) >= 2:
+            branches = [{**spec, "description": p} for p in pieces]
+            return build_language({"kind": comp_kind, "branches": branches}, sym_map, suffix, leaf)
+    return None
+
+
+def composite_alphabet(ir: dict, spec: dict) -> list[str] | None:
+    """The alphabet symbols for a composite *spec*: the IR's (or the spec's)
+    declared ``alphabet``, else the ordered union of what its branches
+    declare (grammar terminals, ``alphabet`` fields, ``exists_decomposition``
+    part alphabets); ``None`` if nothing is declared anywhere."""
+    declared = ir.get("alphabet") if isinstance(ir, dict) else None
+    if not (isinstance(declared, list) and declared):
+        declared = spec.get("alphabet")
+    if isinstance(declared, list) and declared:
+        return declared
+    out: list[str] = []
+
+    def add(symbols: Any) -> None:
+        if isinstance(symbols, list):
+            for x in symbols:
+                if isinstance(x, str) and x and x not in out:
+                    out.append(x)
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        kind = node.get("kind")
+        if kind == "grammar":
+            add(node.get("terminals"))
+        elif kind == "grammar_filter":
+            walk(node.get("grammar"))
+        elif kind in _COMPOSITE_OPS:
+            for b in node.get("branches") or []:
+                walk(b)
+        elif kind == "exists_decomposition":
+            add(node.get("alphabet"))
+            alphabets = node.get("alphabets")
+            if isinstance(alphabets, dict):
+                for key in node.get("parts") or []:
+                    add(alphabets.get(key))
+        else:
+            add(node.get("alphabet"))
+
+    walk(spec)
+    return out or None
 
 
 # ---------------------------------------------------------------------------
@@ -823,7 +1434,73 @@ def _render_statement_verbose(ir: dict, direction: str) -> tuple[LeanStatement |
         return _render_regex_case(ir, lang_spec, negate)
     if kind == "natural":
         return _render_natural_case(ir, lang_spec, negate)
+    if kind in _COMPOSITE_OPS:
+        return _render_composite_case(ir, lang_spec, negate)
     return None, f"unsupported language_spec.kind {kind!r} for direction {direction!r}"
+
+
+_CFG_IMPORT = "import Mathlib.Computability.ContextFreeGrammar"
+
+
+def _reg_theorem_decl(negate: bool) -> str:
+    prop = "L.IsRegular"
+    if negate:
+        prop = f"¬ {prop}"
+    return f"theorem tfl_main : {prop}"
+
+
+def _reg_imports(ld: LangDef) -> list[str]:
+    imports = ["import TflLean"]
+    if "ContextFreeGrammar" in ld.decls:
+        imports.append(_CFG_IMPORT)
+    return imports
+
+
+def _regex_lang(lang_spec: dict, sym_map: dict[str, str], suffix: str) -> LangDef | None:
+    if lang_spec.get("has_backreferences"):
+        return None
+    pattern = lang_spec.get("pattern")
+    re_expr = parse_regex(pattern, sym_map) if isinstance(pattern, str) else None
+    if re_expr is None:
+        return None
+    return LangDef(
+        f"def re{suffix} : RegularExpression Letter := {re_expr}\n\n"
+        f"def L{suffix} : Language Letter := re{suffix}.matches'",
+        f"def Lb{suffix} (w : List Letter) : Bool := re{suffix}.rmatch w",
+    )
+
+
+def _reg_natural_leaf(spec: dict, sym_map: dict[str, str], suffix: str) -> LangDef | None:
+    """One ``natural`` description -> a single language: minimal exponent
+    notation, a bare palindrome, or a reversal template."""
+    description = spec.get("description")
+    if not isinstance(description, str):
+        return None
+    parsed = _parse_simple_exponent_natural(description)
+    if parsed is not None:
+        segments, condition = parsed
+        body = pattern_body(segments, condition, sym_map)
+        if body is not None:
+            return set_language(suffix, body, pattern_body(segments, condition, sym_map, decidable=True))
+    pal = _palindrome_body(description, sym_map)
+    if pal is not None:
+        return set_language(suffix, pal, pal)
+    tpl = word_template_body(description, sym_map)
+    if tpl is not None:
+        return set_language(suffix, tpl[0], tpl[1])
+    return None
+
+
+def _reg_leaf(spec: dict, sym_map: dict[str, str], suffix: str) -> LangDef | None:
+    kind = spec.get("kind")
+    if kind == "grammar":
+        text = grammar_decl(spec, sym_map, suffix=suffix)
+        return None if text is None else LangDef(text)
+    if kind == "regex":
+        return _regex_lang(spec, sym_map, suffix)
+    if kind == "natural":
+        return _reg_natural_leaf(spec, sym_map, suffix)
+    return None
 
 
 def _render_grammar_case(lang_spec: dict, negate: bool) -> tuple[LeanStatement | None, str | None]:
@@ -835,12 +1512,8 @@ def _render_grammar_case(lang_spec: dict, negate: bool) -> tuple[LeanStatement |
     lang_decl = grammar_decl(lang_spec, sym_map)
     if lang_decl is None:
         return None, "grammar language_spec could not be translated (malformed rules or symbols)"
-    prop = "L.IsRegular"
-    if negate:
-        prop = f"¬ {prop}"
-    theorem_decl = f"theorem tfl_main : {prop}"
-    imports = ["import TflLean", "import Mathlib.Computability.ContextFreeGrammar"]
-    return LeanStatement(alpha_decl, lang_decl, theorem_decl, imports), None
+    ld = LangDef(lang_decl)
+    return make_statement(alpha_decl, ld, _reg_theorem_decl(negate), _reg_imports(ld)), None
 
 
 def _render_regex_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanStatement | None, str | None]:
@@ -854,21 +1527,13 @@ def _render_regex_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanSta
     if alpha is None:
         return None, "regex language_spec missing a usable alphabet"
     alpha_decl, sym_map = alpha
-    re_expr = parse_regex(pattern, sym_map)
-    if re_expr is None:
+    ld = _regex_lang(lang_spec, sym_map, "")
+    if ld is None:
         return None, (
             f"regex pattern {pattern!r} uses syntax this translator does not "
             "support (only literal alphabet characters, (), |, *, +, ? are)"
         )
-    lang_decl = (
-        f"def re : RegularExpression Letter := {re_expr}\n\n"
-        "def L : Language Letter := re.matches'"
-    )
-    prop = "L.IsRegular"
-    if negate:
-        prop = f"¬ {prop}"
-    theorem_decl = f"theorem tfl_main : {prop}"
-    return LeanStatement(alpha_decl, lang_decl, theorem_decl, ["import TflLean"]), None
+    return make_statement(alpha_decl, ld, _reg_theorem_decl(negate), ["import TflLean"]), None
 
 
 def _render_natural_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanStatement | None, str | None]:
@@ -881,24 +1546,30 @@ def _render_natural_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanS
         return None, "no usable alphabet declared in IR for a 'natural' language_spec"
     alpha_decl, sym_map = alpha
 
-    parsed = _parse_simple_exponent_natural(description)
-    body = None
-    if parsed is not None:
-        segments, condition = parsed
-        body = pattern_body(segments, condition, sym_map)
-    if body is None:
-        body = _palindrome_body(description)
-    if body is None:
+    ld = build_language(lang_spec, sym_map, "", _reg_leaf)
+    if ld is None:
         return None, (
             "natural-language description is neither simple exponent "
-            "notation (whitespace-separated letter^var blocks) nor a "
-            "recognized w = reverse(w) palindrome description -- "
+            "notation (whitespace-separated letter^var blocks), a recognized "
+            "w = reverse(w) palindrome / reversal-template description, nor a "
+            "union/intersection of such -- "
             "cfl_system.lib.lean_ir's full exponent-notation parser may "
             "still handle it for the cfl/dcfl directions"
         )
-    lang_decl = f"def L : Language Letter := {{w : List Letter | {body}}}"
-    prop = "L.IsRegular"
-    if negate:
-        prop = f"¬ {prop}"
-    theorem_decl = f"theorem tfl_main : {prop}"
-    return LeanStatement(alpha_decl, lang_decl, theorem_decl, ["import TflLean"]), None
+    return make_statement(alpha_decl, ld, _reg_theorem_decl(negate), _reg_imports(ld)), None
+
+
+def _render_composite_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanStatement | None, str | None]:
+    symbols = composite_alphabet(ir, lang_spec)
+    alpha = alphabet_decl(symbols) if symbols else None
+    if alpha is None:
+        return None, "no usable alphabet declared for a union/intersection language_spec"
+    alpha_decl, sym_map = alpha
+    ld = build_language(lang_spec, sym_map, "", _reg_leaf)
+    if ld is None:
+        return None, (
+            f"{lang_spec.get('kind')} language_spec has a branch this translator cannot "
+            "formalize (each branch must be a grammar, regex, or a natural description "
+            "in a supported shape)"
+        )
+    return make_statement(alpha_decl, ld, _reg_theorem_decl(negate), _reg_imports(ld)), None

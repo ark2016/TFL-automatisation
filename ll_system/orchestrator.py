@@ -240,7 +240,7 @@ class LiveRunner:
     # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
     # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
     # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
-    # Opus 4.7+, Sonnet 5 and Opus 5.x reject `temperature` with a 400, so
+    # Opus 4.7+, Sonnet 5 / 5.5 and Opus 5.x reject `temperature` with a 400, so
     # thinking models never get sampling parameters.
     _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
     # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
@@ -377,7 +377,7 @@ class LiveRunner:
             logger.warning("Skipping agent '%s': %s", agent_name, exc)
             return None
 
-        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5")
+        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5-5")
         temperature = self.temperatures.get(agent_name, 0.0)
         effort = self.efforts.get(agent_name, self.default_effort)
         max_tokens = self.max_tokens_per_agent.get(agent_name, self.max_tokens)

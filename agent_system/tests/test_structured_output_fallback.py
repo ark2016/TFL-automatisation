@@ -57,7 +57,7 @@ def _clear_schema_rejection_memory():
 def test_request_carries_output_config_format_when_schema_given():
     fake = FakeAnthropic([text_turn('{"status": "success", "confidence": 0.9, "errors": []}')])
     result = _client().call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u", output_schema=SCHEMA,
     )
     assert result.used_structured_output is True
@@ -70,7 +70,7 @@ def test_request_carries_output_config_format_when_schema_given():
 def test_no_schema_no_output_config_format_backward_compatible():
     fake = FakeAnthropic([text_turn('{"status": "success"}')])
     result = _client().call(
-        fake, model="claude-sonnet-5", max_tokens=1000, system="sys", user="u",
+        fake, model="claude-sonnet-5-5", max_tokens=1000, system="sys", user="u",
     )
     assert result.used_structured_output is False
     kwargs = fake.stream_calls[0]
@@ -85,7 +85,7 @@ def test_schema_rejection_falls_back_to_plain_call():
         text_turn('Sure, here you go:\n```json\n{"status": "success", "confidence": 0.5, "errors": []}\n```'),
     ])
     result = _client().call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u", output_schema=SCHEMA,
     )
     assert result.used_structured_output is False
@@ -111,14 +111,14 @@ def test_schema_rejection_is_remembered_for_later_calls_to_the_same_model():
     client = _client()
 
     first = client.call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u", output_schema=SCHEMA,
     )
     assert first.used_structured_output is False
     assert len(fake.stream_calls) == 2  # schema attempt + fallback
 
     second = client.call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u2", output_schema=SCHEMA,
     )
     assert second.used_structured_output is False
@@ -137,7 +137,7 @@ def test_schema_rejection_memory_is_per_model():
     client = _client()
 
     client.call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u", output_schema=SCHEMA,
     )
     assert len(fake.stream_calls) == 2
@@ -218,7 +218,7 @@ def test_unrelated_fatal_error_is_not_treated_as_schema_rejection():
     fake = FakeAnthropic([raises_turn(fatal_error(400, "invalid task IR: missing 'alphabet'"))])
     with pytest.raises(FatalAPIError):
         _client().call(
-            fake, model="claude-sonnet-5", max_tokens=1000,
+            fake, model="claude-sonnet-5-5", max_tokens=1000,
             system="sys", user="u", output_schema=SCHEMA,
         )
     assert len(fake.stream_calls) == 1
@@ -237,11 +237,11 @@ def test_too_many_requests_rate_limit_is_not_treated_as_schema_rejection():
     ))])
     with pytest.raises(FatalAPIError):
         _client().call(
-            fake, model="claude-sonnet-5", max_tokens=1000,
+            fake, model="claude-sonnet-5-5", max_tokens=1000,
             system="sys", user="u", output_schema=SCHEMA,
         )
     assert len(fake.stream_calls) == 1
-    assert not llm_client._model_schema_known_rejected("claude-sonnet-5")
+    assert not llm_client._model_schema_known_rejected("claude-sonnet-5-5")
 
 
 def test_no_schema_requested_verbose_flag_is_plain_so_no():
@@ -249,7 +249,7 @@ def test_no_schema_requested_verbose_flag_is_plain_so_no():
     flag has nothing to explain, unlike a real fallback."""
     fake = FakeAnthropic([text_turn('{"status": "success"}')])
     result = _client().call(
-        fake, model="claude-sonnet-5", max_tokens=1000, system="sys", user="u",
+        fake, model="claude-sonnet-5-5", max_tokens=1000, system="sys", user="u",
     )
     assert result.requested_structured_output is False
     assert result.schema_fallback_reason is None
@@ -265,7 +265,7 @@ def test_schema_rejection_verbose_flag_names_the_reason():
         text_turn('{"status": "success", "confidence": 0.5, "errors": []}'),
     ])
     result = _client().call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u", output_schema=SCHEMA,
     )
     assert result.requested_structured_output is True
@@ -287,11 +287,11 @@ def test_schema_known_rejected_upfront_verbose_flag_names_the_reason():
     ])
     client = _client()
     client.call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u", output_schema=SCHEMA,
     )
     result = client.call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u2", output_schema=SCHEMA,
     )
     assert result.requested_structured_output is True
@@ -304,7 +304,7 @@ def test_schema_known_rejected_upfront_verbose_flag_names_the_reason():
 def test_successful_structured_call_verbose_flag_is_so_yes():
     fake = FakeAnthropic([text_turn('{"status": "success", "confidence": 0.9, "errors": []}')])
     result = _client().call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u", output_schema=SCHEMA,
     )
     assert format_structured_output_flag(result) == " so=yes"
@@ -320,7 +320,7 @@ def test_agent_output_schema_end_to_end_for_a_real_agent():
         '"dispatch": {}, "hard_rule_applied": null, "reasoning": "...", "confidence": 0.9}'
     )])
     result = _client().call(
-        fake, model="claude-sonnet-5", max_tokens=1000,
+        fake, model="claude-sonnet-5-5", max_tokens=1000,
         system="sys", user="u", output_schema=schema,
     )
     parsed = json.loads(result.text)

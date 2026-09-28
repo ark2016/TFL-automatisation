@@ -64,9 +64,13 @@ Open work is tracked in the root `TODO.md`. Live test runs: Haiku only, via
 `TFL_MODEL_OVERRIDE=claude-haiku-4-5` (see root `CLAUDE.md`).
 
 ## Formal verification
-NOT implemented. No Lean/Coq proof checking — not in scope.
-Proofs verified only via oracle tests (CYK, word sampling, counterexamples)
-and LLM-based reasoning.
+Oracle tests (CYK, word sampling, counterexamples) verify the specialists' proofs. On top of them an
+optional Lean 4 step (`lean_formalize_node`, `docs/VERDICT_POLICY.md` R-Lean; spec `tz_dcfl_agent_system.md` §7.3):
+`lib/lean_ir.render_statement` generates `is_DCF L` / `¬ is_DCF L` from the IR, the `lean_formalizer` agent
+(`prompts/dcfl_lean_formalizer.md`) writes only the proof body, `agent_system.lib.type_check` compiles it in Docker.
+`proved` ⇒ verified 0.98 and outranks R1–R4′ (`_apply_lean_gate`). Off by default (`--formalize` /
+`TFL_FORMALIZATION=1`); live only on explicit request. In the image only the explicit-DPDA (`dcfl`) direction is
+provable today — no DCFL⊆CFL inclusion, so `non_dcfl` proofs end as `error` (agent gives up).
 
 ## Key commands
 ```bash

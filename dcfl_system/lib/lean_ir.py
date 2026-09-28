@@ -5,11 +5,13 @@ Thin wrapper around ``agent_system.lib.lean_ir`` (``LeanStatement``, the
 for the full ``is_DCF`` provenance: langlib's own predicate,
 ``Langlib.Classes.DeterministicContextFree.Definition``, since Mathlib has no
 deterministic-pushdown-automaton formalization at all). Adds the
-``"dcfl"``/``"non_dcfl"`` directions for two IR shapes:
+``"dcfl"``/``"non_dcfl"`` directions for these IR shapes:
 
 - ``kind == "grammar"`` (e.g. exam_04, ``task_grammar_aSSb.json`` --
   ``S -> aSSb | ba | Ab, A -> aAb | a``) -- reuses
-  ``agent_system.lib.lean_ir.grammar_decl`` verbatim.
+  ``agent_system.lib.lean_ir.grammar_decl`` verbatim (Mathlib
+  ``ContextFreeGrammar``, ``L := g.language``; ε-rules and unit rules are
+  ordinary rules).
 - ``kind == "set_builder"`` in the shape the real DCFL examples use
   (``dcfl_system/examples/task_anbncm.json`` et al.): each of
   ``language_spec.variables`` is a single letter with a ``"<letter>+"``/
@@ -24,7 +26,13 @@ deterministic-pushdown-automaton formalization at all). Adds the
   ``"a^n b^n"`` string, is tried as a fallback via
   ``cfl_system.lib.exponent_pattern.parse_exponent_pattern`` --
   ``dcfl_system`` may import ``cfl_system``, root CLAUDE.md "Import
-  direction").
+  direction"; a ``"A union B"`` there stays an ``∨`` of ``∃`` bodies), or
+  a strict palindrome / word template (``{w reverse(w) | w in {a,b}*}``,
+  ``{w c reverse(w) | ...}``, dcfl-02/03; see ``agent_system.lib.lean_ir
+  .word_template_body``).
+- ``kind == "union"``/``"intersection"`` with ``branches`` (grammars and
+  set_builders) -- ``L := L_1 ⊔ L_2`` / ``⊓`` (``agent_system.lib.lean_ir
+  .build_language``).
 
 Every statement this module renders also appends a hand-written
 ``instance : Fintype Letter`` after ``alphabet_decl``
@@ -32,6 +40,11 @@ Every statement this module renders also appends a hand-written
 docstring for why: langlib's ``is_DPDA`` takes ``[Fintype T]`` on the
 alphabet explicitly, unlike the Mathlib predicates ``agent_system.lib
 .lean_ir``/``cfl_system.lib.lean_ir`` state directly).
+
+The set_builder shapes also carry a decidable companion
+(``LeanStatement.decidable_decl``; every count variable is a ``replicate``
+length, hence ``< w.length + 1``), which the tests ``#eval`` against
+``dcfl_system.lib.word_sampler.build_membership_oracle_from_ir``.
 """
 
 from __future__ import annotations
@@ -39,13 +52,21 @@ from __future__ import annotations
 import re
 
 from agent_system.lib.lean_ir import (
+    COMPOSITE_KINDS,
+    LangDef,
     LeanStatement,
     alphabet_decl,
+    build_language,
+    composite_alphabet,
     fintype_instance_decl,
     grammar_decl,
-    pattern_body,
+    make_statement,
+    palindrome_body,
+    pattern_tree_body,
+    set_language,
+    word_template_body,
 )
-from cfl_system.lib.exponent_pattern import ExponentPattern, parse_exponent_pattern
+from cfl_system.lib.exponent_pattern import parse_exponent_pattern
 
 __all__ = ["render_statement", "render_statement_verbose"]
 
@@ -84,6 +105,8 @@ def _render_statement_verbose(ir: dict, direction: str) -> tuple[LeanStatement |
         return _render_grammar_case(lang_spec, negate)
     if kind == "set_builder":
         return _render_setbuilder_case(ir, lang_spec, negate)
+    if kind in COMPOSITE_KINDS:
+        return _render_composite_case(ir, lang_spec, negate)
     return None, f"unsupported language_spec.kind {kind!r} for direction {direction!r}"
 
 
@@ -111,6 +134,15 @@ def _alpha_decl_with_fintype(alpha_decl: str, sym_map: dict[str, str]) -> str:
     return f"{alpha_decl}\n\n{fintype_instance_decl(sym_map)}"
 
 
+def _statement(alpha_decl: str, sym_map: dict[str, str], ld: LangDef, negate: bool) -> LeanStatement:
+    return make_statement(
+        _alpha_decl_with_fintype(alpha_decl, sym_map),
+        ld,
+        _dcfl_theorem_decl(negate),
+        _dcfl_imports("ContextFreeGrammar" in ld.decls),
+    )
+
+
 def _render_grammar_case(lang_spec: dict, negate: bool) -> tuple[LeanStatement | None, str | None]:
     terminals = lang_spec.get("terminals")
     alpha = alphabet_decl(terminals) if isinstance(terminals, list) else None
@@ -120,18 +152,14 @@ def _render_grammar_case(lang_spec: dict, negate: bool) -> tuple[LeanStatement |
     lang_decl = grammar_decl(lang_spec, sym_map)
     if lang_decl is None:
         return None, "grammar language_spec could not be translated (malformed rules or symbols)"
-    stmt = LeanStatement(
-        _alpha_decl_with_fintype(alpha_decl, sym_map),
-        lang_decl,
-        _dcfl_theorem_decl(negate),
-        _dcfl_imports(True),
-    )
-    return stmt, None
+    return _statement(alpha_decl, sym_map, LangDef(lang_decl), negate), None
 
 
-def _letter_domain_setbuilder(lang_spec: dict, sym_map: dict[str, str]) -> str | None:
+def _letter_domain_setbuilder(lang_spec: dict, sym_map: dict[str, str]) -> tuple[str, str] | None:
     """The ``{a^n b^n c^m | ...}``-shaped ``set_builder`` (see module
-    docstring) -- ``None`` if it isn't that exact shape."""
+    docstring): ``(body, decidable_body)`` -- the ``∃ n_u n_v ... : ℕ, w = ...
+    ∧ ...`` proposition and its ``n_x < w.length + 1``-bounded (decidable)
+    twin -- or ``None`` if it isn't that exact shape."""
     word_pattern = lang_spec.get("word_pattern")
     variables = lang_spec.get("variables")
     constraints = lang_spec.get("constraints", [])
@@ -201,24 +229,55 @@ def _letter_domain_setbuilder(lang_spec: dict, sym_map: dict[str, str]) -> str |
 
     word_expr = " ++ ".join(parts)
     all_conds = domain_conds + extra_conds
-    quant = " ".join(count_ident[name] for name in var_by_name)
-    body = f"w = {word_expr}"
+    names = [count_ident[name] for name in var_by_name]
+    matrix = f"w = {word_expr}"
     if all_conds:
-        body += " ∧ " + " ∧ ".join(all_conds)
-    inner = f"∃ {quant} : ℕ, {body}" if quant else body
-    return f"def L : Language Letter := {{w : List Letter | {inner}}}"
+        matrix += " ∧ " + " ∧ ".join(all_conds)
+    body = f"∃ {' '.join(names)} : ℕ, {matrix}"
+    # Every count is the length of a `replicate` block, so `n < w.length + 1`.
+    bounded = matrix
+    for n in reversed(names):
+        bounded = f"∃ {n} : ℕ, {n} < w.length + 1 ∧ {bounded}"
+    return body, bounded
 
 
-def _pattern_body_or_none(pattern, sym_map: dict[str, str]) -> str | None:
-    if isinstance(pattern, ExponentPattern):
-        return pattern_body(pattern.segments, pattern.condition, sym_map)
-    parts = getattr(pattern, "parts", None)
-    if parts is None:
+def _setbuilder_leaf(spec: dict, sym_map: dict[str, str], suffix: str) -> LangDef | None:
+    letter_domain = _letter_domain_setbuilder(spec, sym_map)
+    if letter_domain is not None:
+        return set_language(suffix, *letter_domain)
+    # Fallbacks below read ONLY word_pattern; they are sound only when the
+    # spec has no ``variables`` (domains) and no ``constraints`` -- otherwise
+    # those would be silently dropped and the theorem would be about another
+    # language (e.g. ``w c reverse(w)`` with ``w: a+`` / ``|w|>=2``, or
+    # ``a^n b^n c^m`` with ``m>n``). Then: not formalizable.
+    if spec.get("variables") or spec.get("constraints"):
         return None
-    bodies = [_pattern_body_or_none(p, sym_map) for p in parts]
-    if any(b is None for b in bodies):
-        return None
-    return " ∨ ".join(f"({b})" for b in bodies)
+    # Fallback: word_pattern carries exponent notation directly (a plain
+    # "a^n b^n"-style string) rather than the variables+domains shape.
+    word_pattern = spec.get("word_pattern")
+    pattern = parse_exponent_pattern(word_pattern) if isinstance(word_pattern, str) else None
+    body = pattern_tree_body(pattern, sym_map) if pattern is not None else None
+    if body is not None:
+        return set_language(suffix, body, pattern_tree_body(pattern, sym_map, decidable=True))
+    # ... or a strict palindrome / word template (``{w c reverse(w) | w in
+    # {a,b}*}``, dcfl-02/03) -- fullmatch, extra clauses reject it.
+    pal = palindrome_body(word_pattern, sym_map)
+    if pal is not None:
+        return set_language(suffix, pal, pal)
+    tpl = word_template_body(word_pattern, sym_map)
+    if tpl is not None:
+        return set_language(suffix, tpl[0], tpl[1])
+    return None
+
+
+def _dcfl_leaf(spec: dict, sym_map: dict[str, str], suffix: str) -> LangDef | None:
+    kind = spec.get("kind")
+    if kind == "grammar":
+        text = grammar_decl(spec, sym_map, suffix=suffix)
+        return None if text is None else LangDef(text)
+    if kind == "set_builder":
+        return _setbuilder_leaf(spec, sym_map, suffix)
+    return None
 
 
 def _render_setbuilder_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanStatement | None, str | None]:
@@ -228,27 +287,28 @@ def _render_setbuilder_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[Le
         return None, "no usable alphabet declared in IR for a dcfl 'set_builder' language_spec"
     alpha_decl, sym_map = alpha
 
-    lang_decl = _letter_domain_setbuilder(lang_spec, sym_map)
-    if lang_decl is None:
-        # Fallback: word_pattern carries exponent notation directly (a plain
-        # "a^n b^n"-style string) rather than the variables+domains shape.
-        word_pattern = lang_spec.get("word_pattern")
-        pattern = parse_exponent_pattern(word_pattern) if isinstance(word_pattern, str) else None
-        body = _pattern_body_or_none(pattern, sym_map) if pattern is not None else None
-        if body is None:
-            return None, (
-                "dcfl 'set_builder' language_spec is neither the letter-domain "
-                "shape (each variable a single letter with a '+'/'*' domain, "
-                "word_pattern a straight concatenation of the variable names, "
-                "constraints limited to length_cmp/integer_cmp) nor exponent "
-                "notation in word_pattern"
-            )
-        lang_decl = f"def L : Language Letter := {{w : List Letter | {body}}}"
+    ld = _setbuilder_leaf(lang_spec, sym_map, "")
+    if ld is None:
+        return None, (
+            "dcfl 'set_builder' language_spec is neither the letter-domain "
+            "shape (each variable a single letter with a '+'/'*' domain, "
+            "word_pattern a straight concatenation of the variable names, "
+            "constraints limited to length_cmp/integer_cmp) nor exponent "
+            "notation, a palindrome or a w c reverse(w)-style template in word_pattern"
+        )
+    return _statement(alpha_decl, sym_map, ld, negate), None
 
-    stmt = LeanStatement(
-        _alpha_decl_with_fintype(alpha_decl, sym_map),
-        lang_decl,
-        _dcfl_theorem_decl(negate),
-        _dcfl_imports(False),
-    )
-    return stmt, None
+
+def _render_composite_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanStatement | None, str | None]:
+    symbols = composite_alphabet(ir, lang_spec)
+    alpha = alphabet_decl(symbols) if symbols else None
+    if alpha is None:
+        return None, "no usable alphabet declared for a dcfl union/intersection language_spec"
+    alpha_decl, sym_map = alpha
+    ld = build_language(lang_spec, sym_map, "", _dcfl_leaf)
+    if ld is None:
+        return None, (
+            f"dcfl {lang_spec.get('kind')} language_spec has a branch that is not a "
+            "translatable grammar / set_builder"
+        )
+    return _statement(alpha_decl, sym_map, ld, negate), None

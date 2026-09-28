@@ -133,6 +133,9 @@ REQUIRED_KEYS: dict[str, frozenset[str]] = {
         "overall_assessment", "errors",
     }),
     "formalizer": frozenset({"agent", "status", "proof_document", "confidence", "errors"}),
+    # R-Lean's proof-body agent (prompts/cfl_lean_formalizer.md) -- distinct
+    # from `formalizer` above, which only structures the informal proof.
+    "lean_formalizer": frozenset({"agent", "proof_body", "lemmas_used", "notes"}),
 }
 
 # input_parser's output shape depends on the IR "kind" (grammar / regex /
@@ -492,6 +495,12 @@ _FIELD_SCHEMAS: dict[str, dict[str, dict]] = {
         }),
         "confidence": schema_number(),
         "errors": schema_string_array(),
+    },
+    "lean_formalizer": {
+        "agent": schema_string(enum=["lean_formalizer"]),
+        "proof_body": schema_string(),
+        "lemmas_used": schema_string_array(),
+        "notes": schema_string(),
     },
 }
 

@@ -17,7 +17,8 @@ def runner():
 
 @pytest.mark.parametrize("model, adaptive", [
     ("claude-opus-5-5", True),
-    ("claude-sonnet-5", True),
+    ("claude-sonnet-5-5", True),
+    ("claude-sonnet-5", True),  # legacy, still available
     ("claude-opus-4-7", True),
     ("claude-sonnet-4-6", True),
     ("claude-haiku-4-5", False),
@@ -43,7 +44,7 @@ def test_opus_request_uses_effort_and_fallback(runner):
 
 
 def test_sonnet_request_has_no_fallback(runner):
-    kw = runner._build_request_kwargs("claude-sonnet-5", 64000, 0.0, "sys", "u", effort="medium")
+    kw = runner._build_request_kwargs("claude-sonnet-5-5", 64000, 0.0, "sys", "u", effort="medium")
     assert kw["output_config"] == {"effort": "medium"}
     assert "extra_body" not in kw and "temperature" not in kw
 

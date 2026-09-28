@@ -13,11 +13,11 @@ import os
 
 MODELS: dict[str, str] = {
     # Fast / structured → Sonnet
-    "input_parser":         "claude-sonnet-5",
-    "classifier":           "claude-sonnet-5",
-    "marker_analyzer":      "claude-sonnet-5",
-    "grammar_transformer":  "claude-sonnet-5",
-    "formalizer":           "claude-sonnet-5",
+    "input_parser":         "claude-sonnet-5-5",
+    "classifier":           "claude-sonnet-5-5",
+    "marker_analyzer":      "claude-sonnet-5-5",
+    "grammar_transformer":  "claude-sonnet-5-5",
+    "formalizer":           "claude-sonnet-5-5",
 
     # Deep reasoning → Opus
     "ll_grammar_builder":   "claude-opus-5-5",
@@ -28,7 +28,7 @@ MODELS: dict[str, str] = {
 }
 
 # Temperature per agent — only sent to legacy models (Haiku 4.5, pre-4.6).
-# Adaptive-thinking models (Opus 4.7+, Sonnet 5, Opus 5.x) reject sampling
+# Adaptive-thinking models (Opus 4.7+, Sonnet 5 / 5.5, Opus 5.x) reject sampling
 # parameters with a 400, so for them these values are ignored; see EFFORT.
 TEMPERATURES: dict[str, float] = {
     # System / structural agents: fully deterministic
@@ -49,7 +49,7 @@ TEMPERATURES: dict[str, float] = {
 }
 
 # Reasoning depth per agent (`output_config.effort`). Opus 5.5 always runs
-# adaptive thinking (it can't be switched off) and Sonnet 5 runs it by default;
+# adaptive thinking (it can't be switched off) and Sonnet 5.5 runs it by default;
 # effort is the knob for how much they think (and thus for latency and cost). Opus 5.5 defaults to "medium"
 # when effort is omitted, so every agent gets an explicit value: proof-producing
 # agents run at "high", structured parsing/classification at "medium".
@@ -80,7 +80,7 @@ REFUSAL_FALLBACK = True
 # Output token budget.
 #
 # The Anthropic API requires max_tokens — it cannot be omitted. Key facts:
-#   • Opus 5.5 / Sonnet 5 think adaptively on every call, and thinking tokens
+#   • Opus 5.5 / Sonnet 5.5 think adaptively on every call, and thinking tokens
 #     count toward max_tokens even though their text is not returned — so the
 #     limit must cover reasoning + the JSON answer.
 #   • Opus 5.5 output ceiling is 128K per request; 64K is the recommended start

@@ -20,7 +20,7 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 
 ## Models and LLM calls
 - Models, per-agent `EFFORT`, `MAX_TOKENS`, `REFUSAL_FALLBACK` live in each project's `config.py`
-  (Opus 5.5 for reasoning agents, Sonnet 5 for parsing/classification, Haiku 4.5 for JSON repair).
+  (Opus 5.5 for reasoning agents, Sonnet 5.5 for parsing/classification, Haiku 4.5 for JSON repair).
   Change them in all four projects together.
 - Theory statements used by prompts: `docs/THEORY.md` — change lemma formulations there first, then in prompts.
 - Shared LLM client: `agent_system/lib/llm_client.py` (`AnthropicClient`) — request kwargs (adaptive thinking +
@@ -34,7 +34,7 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
   session); never as an automatic step of a workflow, round or review. All verification defaults to mock mode. When a live run
   is requested, use Haiku only (`TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`), state the estimated cost first, and run the
   smallest task set that answers the question. Opus runs cost real money — only on request.
-- `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables `agent_system`'s `formalizer` agent by default for every
+- `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables the Lean formalization step (`agent_system` `formalizer`, `cfl_system`/`dcfl_system` `lean_formalize_node`; `ll_system` has none) by default for every
   run, without passing `--formalize` each time; unset/other values keep it opt-in per `--formalize`. This only
   turns on the pipeline step; it does not by itself spend API budget. Within that step, Lean **type-checking**
   (`agent_system/lib/type_check.py`, `docker run ... lake env lean`) runs locally in Docker as ordinary pipeline

@@ -805,6 +805,7 @@ class TestLiveRunnerUnit:
             "cfg_builder", "pda_builder", "decomposition", "parikh",
             "pumping_cfl", "ogden", "closure_reduction", "interchange", "morphism",
             "reasoning", "retry_planner", "proof_checker", "formalizer",
+            "lean_formalizer",
         }
         assert expected == set(PROMPT_FILES.keys())
 

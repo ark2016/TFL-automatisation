@@ -12,9 +12,9 @@ import os
 
 MODELS: dict[str, str] = {
     # Fast / structured → Sonnet
-    "input_parser":       "claude-sonnet-5",
-    "classifier":         "claude-sonnet-5",
-    "retry_planner":      "claude-sonnet-5",
+    "input_parser":       "claude-sonnet-5-5",
+    "classifier":         "claude-sonnet-5-5",
+    "retry_planner":      "claude-sonnet-5-5",
 
     # Deep reasoning → Opus
     "cfg_builder":        "claude-opus-5-5",
@@ -29,10 +29,13 @@ MODELS: dict[str, str] = {
     "reasoning":          "claude-opus-5-5",
     "proof_checker":      "claude-opus-5-5",
     "formalizer":         "claude-opus-5-5",
+    # R-Lean: writes only the Lean 4 proof body (the statement is generated
+    # from the IR by code, cfl_system.lib.lean_ir) -- proof-producing, Opus.
+    "lean_formalizer":    "claude-opus-5-5",
 }
 
 # Temperature per agent — only sent to legacy models (Haiku 4.5, pre-4.6).
-# Adaptive-thinking models (Opus 4.7+, Sonnet 5, Opus 5.x) reject sampling
+# Adaptive-thinking models (Opus 4.7+, Sonnet 5 / 5.5, Opus 5.x) reject sampling
 # parameters with a 400, so for them these values are ignored; see EFFORT.
 TEMPERATURES: dict[str, float] = {
     "input_parser":       0.0,
@@ -41,6 +44,7 @@ TEMPERATURES: dict[str, float] = {
     "reasoning":          0.0,
     "proof_checker":      0.0,
     "formalizer":         0.0,
+    "lean_formalizer":    0.0,
     "cfg_builder":        0.2,
     "pda_builder":        0.2,
     "decomposition":      0.3,
@@ -53,7 +57,7 @@ TEMPERATURES: dict[str, float] = {
 }
 
 # Reasoning depth per agent (`output_config.effort`). Opus 5.5 always runs
-# adaptive thinking (it can't be switched off) and Sonnet 5 runs it by default;
+# adaptive thinking (it can't be switched off) and Sonnet 5.5 runs it by default;
 # effort is the knob for how much they think (and thus for latency and cost). Opus 5.5 defaults to "medium"
 # when effort is omitted, so every agent gets an explicit value: proof-producing
 # agents run at "high", structured parsing/classification at "medium".
@@ -74,6 +78,7 @@ EFFORT: dict[str, str] = {
     "reasoning":         "high",
     "proof_checker":     "high",
     "formalizer":        "high",
+    "lean_formalizer":   "high",
 }
 DEFAULT_EFFORT = "high"
 
@@ -89,7 +94,7 @@ REFUSAL_FALLBACK = True
 # Output token budget.
 #
 # The Anthropic API requires max_tokens — it cannot be omitted. Key facts:
-#   • Opus 5.5 / Sonnet 5 think adaptively on every call, and thinking tokens
+#   • Opus 5.5 / Sonnet 5.5 think adaptively on every call, and thinking tokens
 #     count toward max_tokens even though their text is not returned — so the
 #     limit must cover reasoning + the JSON answer.
 #   • Opus 5.5 output ceiling is 128K per request; 64K is the recommended start
@@ -124,6 +129,38 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # backstop note, for an agent that still slips through some other path).
 MAX_CALLS_PER_AGENT = 3
 
+# ---------------------------------------------------------------------------
+# Lean 4 formalization (docs/VERDICT_POLICY.md R-Lean)
+# ---------------------------------------------------------------------------
+#
+# `orchestrator.lean_formalize_node` -- the Lean step that runs after the
+# verdict; distinct from `formalize_node`, which only structures the
+# informal proof as Markdown (agent "formalizer", no Lean).
+
+# Max lean_formalizer <-> type_check.check_lean_file round trips for one
+# statement. The statement never changes between attempts (it is generated
+# from the IR by code); only the compiler errors are fed back to the agent.
+# Every attempt is one Opus call, so this is also the per-task cost ceiling
+# of the Lean step (mirrors agent_system.config.MAX_FORMALIZE_ITERATIONS).
+MAX_FORMALIZE_ITERATIONS = 3
+
+# Seconds allowed for one `lake env lean` check. CFL statements import
+# langlib's pumping/Ogden modules on top of Mathlib, so this is a bit above
+# agent_system's 120.
+LEAN_TIMEOUT = 180
+
+
+def formalization_enabled_default() -> bool:
+    """Default for the Lean step: ``TFL_FORMALIZATION`` = 1/true/yes/on
+    enables it for every run (same switch as agent_system); anything else
+    keeps it opt-in per call (``run_pipeline(..., formalize=True)`` / the
+    CLI's ``--formalize``). Enabling the step spends no API budget by
+    itself -- a live run still needs ``--live`` (root CLAUDE.md)."""
+    return os.environ.get("TFL_FORMALIZATION", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+FORMALIZATION_ENABLED = formalization_enabled_default()
+
 # Prompt file mapping: agent_name → prompt filename (without path)
 PROMPT_FILES: dict[str, str] = {
     "input_parser":       "cfl_input_parser.md",
@@ -141,4 +178,5 @@ PROMPT_FILES: dict[str, str] = {
     "retry_planner":      "cfl_retry_planner.md",
     "proof_checker":      "cfl_proof_checker.md",
     "formalizer":         "cfl_formalizer.md",
+    "lean_formalizer":    "cfl_lean_formalizer.md",
 }

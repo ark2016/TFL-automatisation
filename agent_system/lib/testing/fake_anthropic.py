@@ -46,7 +46,7 @@ class _Turn:
     kind: str  # "message" | "raises"
     text: str = ""
     stop_reason: str = "end_turn"
-    model: str = "claude-sonnet-5"
+    model: str = "claude-sonnet-5-5"
     thinking: str | None = None
     refusal_category: str | None = None
     refusal_explanation: str | None = None
@@ -69,7 +69,7 @@ def text_turn(
     text: str,
     *,
     stop_reason: str = "end_turn",
-    model: str = "claude-sonnet-5",
+    model: str = "claude-sonnet-5-5",
     thinking: str | None = None,
     input_tokens: int = 100,
     output_tokens: int = 50,
@@ -100,7 +100,7 @@ def text_turn(
 
 def refusal_turn(
     *, category: str | None = "bio", explanation: str | None = None,
-    model: str = "claude-sonnet-5",
+    model: str = "claude-sonnet-5-5",
 ) -> _Turn:
     """A server-side safety decline (``stop_reason == "refusal"``)."""
     return _Turn(

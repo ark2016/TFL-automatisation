@@ -1,0 +1,9 @@
+{
+  "action": "done",
+  "verdict": "non_cfl",
+  "confidence": 0.9,
+  "primary_evidence": "pumping_cfl",
+  "primary_justification": "Pumping lemma for CFLs with the witness a^p b^p c^p: |vxy| <= p, so vxy touches at most two blocks.",
+  "summary": "{a^n b^n c^n | n >= 0} is not context-free.",
+  "reasoning": "Bar-Hillel pumping on a^p b^p c^p."
+}
