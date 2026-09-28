@@ -139,6 +139,8 @@ def _render_proof_sketch_md(sketch: dict | None, method: str | None) -> str:
             ("suffix_z", "Суффикс z"),
             ("first_letters_match", "Первые буквы совпадают"),
             ("no_pumping_argument", "Аргумент отсутствия накачки"),
+            ("condition1_argument", "Условие (1): пара (x2, x4) в любом месте x"),
+            ("condition2_argument", "Условие (2): x2 в последних p символах x"),
             ("words", "Слова"),
             ("prefix", "Префикс"),
             ("pumping_argument", "Аргумент накачки"),
@@ -156,10 +158,17 @@ def _render_proof_sketch_md(sketch: dict | None, method: str | None) -> str:
 
     elif method == "shallit" or "infinite_set" in sketch or "infinite_set_description" in sketch:
         fields = [
+            ("technique", "Техника"),
             ("infinite_set_description", "Бесконечное множество"),
             ("infinite_set", "Бесконечное множество"),
             ("separating_context", "Разделяющий контекст"),
             ("two_elements", "Два элемента"),
+            ("dead_class_finite", "Мёртвый класс D конечен"),
+            ("distinguishing_suffix", "Разделяющий суффикс"),
+            ("separation_argument", "Аргумент разделения"),
+            ("derived_language", "Производный язык"),
+            ("regular_filter", "Регулярный фильтр R"),
+            ("non_cfl_argument", "Аргумент не-КС"),
             ("argument", "Аргумент"),
         ]
         for key, label in fields:
@@ -257,6 +266,8 @@ def _render_proof_sketch_html(sketch: dict | None, method: str | None) -> str:
             ("suffix_z", "Суффикс z"),
             ("first_letters_match", "Первые буквы совпадают"),
             ("no_pumping_argument", "Аргумент отсутствия накачки"),
+            ("condition1_argument", "Условие (1): пара (x2, x4) в любом месте x"),
+            ("condition2_argument", "Условие (2): x2 в последних p символах x"),
             # Legacy field names
             ("words", "Слова"),
             ("prefix", "Префикс"),
@@ -276,10 +287,17 @@ def _render_proof_sketch_html(sketch: dict | None, method: str | None) -> str:
 
     elif method == "shallit" or "infinite_set" in sketch or "infinite_set_description" in sketch:
         fields = [
+            ("technique", "Техника"),
             ("infinite_set_description", "Бесконечное множество"),
             ("infinite_set", "Бесконечное множество"),
             ("separating_context", "Разделяющий контекст"),
             ("two_elements", "Два элемента"),
+            ("dead_class_finite", "Мёртвый класс D конечен"),
+            ("distinguishing_suffix", "Разделяющий суффикс"),
+            ("separation_argument", "Аргумент разделения"),
+            ("derived_language", "Производный язык"),
+            ("regular_filter", "Регулярный фильтр R"),
+            ("non_cfl_argument", "Аргумент не-КС"),
             ("argument", "Аргумент"),
         ]
         for key, label in fields:
@@ -583,6 +601,8 @@ def _panel_dcfl_pumping(output: dict) -> str:
             ("suffix_z", "Суффикс z"),
             ("first_letters_match", "Первые буквы совпадают"),
             ("no_pumping_argument", "Аргумент отсутствия накачки"),
+            ("condition1_argument", "Условие (1): пара (x2, x4) в любом месте x"),
+            ("condition2_argument", "Условие (2): x2 в последних p символах x"),
         ], parts)
     _render_evidence_steps(output, parts)
     _render_errors(output, parts)
@@ -594,9 +614,16 @@ def _panel_shallit(output: dict) -> str:
     sketch = output.get("proof_sketch")
     if isinstance(sketch, dict) and sketch:
         _render_fields(sketch, [
+            ("technique", "Техника"),
             ("infinite_set_description", "Бесконечное множество"),
             ("separating_context", "Разделяющий контекст"),
             ("two_elements", "Два элемента"),
+            ("dead_class_finite", "Мёртвый класс D конечен"),
+            ("distinguishing_suffix", "Разделяющий суффикс"),
+            ("separation_argument", "Аргумент разделения"),
+            ("derived_language", "Производный язык"),
+            ("regular_filter", "Регулярный фильтр R"),
+            ("non_cfl_argument", "Аргумент не-КС"),
             ("argument", "Аргумент"),
         ], parts)
     _render_evidence_steps(output, parts)

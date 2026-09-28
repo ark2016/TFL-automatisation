@@ -23,8 +23,10 @@ REQUIRED_MATCH_KEYS = {"pattern", "score", "verdict", "method", "reason"}
 # ── 1. DB integrity ─────────────────────────────────────────────────────
 
 class TestDBIntegrity:
-    def test_db_has_20_patterns(self):
-        assert len(PATTERN_DB) == 20
+    def test_db_has_19_patterns(self):
+        # THEORY.md §4 round 2: "sequential_palindromes" (was #3) was removed
+        # — its dcfl verdict for {ww^Rvv^R} was unproven and most likely false.
+        assert len(PATTERN_DB) == 19
 
     def test_each_pattern_has_required_keys(self):
         for i, p in enumerate(PATTERN_DB):
@@ -67,9 +69,9 @@ class TestGetPattern:
 # ── 3. list_patterns ────────────────────────────────────────────────────
 
 class TestListPatterns:
-    def test_returns_all_20(self):
+    def test_returns_all_19(self):
         result = list_patterns()
-        assert len(result) == 20
+        assert len(result) == 19
 
     def test_returns_list_copy(self):
         a = list_patterns()
@@ -324,7 +326,9 @@ class TestResultStructure:
                 "variables": [],
                 "constraints": [],
             },
-            "source_text": "{wcw^R}",
+            # source_text without ^R to keep the reversal count at exactly 1
+            # (see test_single_palindrome_with_separator above).
+            "source_text": "{wcwR}",
         }
         return match_patterns(ir)
 
@@ -410,10 +414,23 @@ class TestExampleTasks:
             "nested_palindromes_with_separator",
             "nested_palindromes_no_separator",
             "regex_constrained_palindrome",
-            "sequential_palindromes",
         }
         assert any(c in palindrome_codes for c in codes), (
             f"Expected a palindrome pattern match, got: {codes}"
+        )
+
+    @pytest.mark.parametrize("filename", ["task_wvaavRwR.json", "task_u1au2_u3au4.json"])
+    def test_example_does_not_match_dcfl_verdict(self, filename):
+        """THEORY.md §1.6-1.7 (round 2): both exam_01 and exam_02 are
+        non-DCFL. The pattern DB used to fire regex_constrained_palindrome
+        (dcfl 0.75) on exam_01 and dual_length_cmp_compatible (dcfl 0.8) on
+        exam_02 — no hit for these tasks may claim verdict == "dcfl"."""
+        ir = json.loads((EXAMPLES_DIR / filename).read_text(encoding="utf-8"))
+        hits = match_patterns(ir)
+        assert hits, f"expected at least one pattern match for {filename}"
+        dcfl_hits = [h for h in hits if h["verdict"] == "dcfl"]
+        assert not dcfl_hits, (
+            f"{filename}: match_patterns still returns verdict=dcfl: {dcfl_hits}"
         )
 
     def test_length_cmp_example_matches_length_pattern(self):

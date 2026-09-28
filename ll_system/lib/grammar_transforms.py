@@ -2,6 +2,7 @@
 
 Public API:
     is_left_recursive(grammar)         -- detect direct/indirect left recursion
+    remove_useless_symbols(grammar)    -- drop non-productive/unreachable nonterminals
     eliminate_left_recursion(grammar)  -- remove all left recursion
     left_factor(grammar)               -- eliminate common prefixes
     eliminate_epsilon_rules(grammar)   -- remove A → ε rules
@@ -131,6 +132,65 @@ def _dedup_rules(rules: list[tuple[str, list[str]]]) -> list[tuple[str, list[str
             seen.add(key)
             result.append((lhs, list(rhs)))
     return result
+
+
+# ---------------------------------------------------------------------------
+# 0. remove_useless_symbols
+# ---------------------------------------------------------------------------
+
+def remove_useless_symbols(grammar: dict) -> dict:
+    """Remove non-productive and unreachable nonterminals (standard 2-pass algorithm).
+
+    A symbol is useless if it can never appear in the derivation of any
+    terminal string from the start symbol. The standard construction (e.g.
+    Aho–Sethi–Ullman §4.3) removes such symbols in two passes:
+
+    1. **Productive** (generating) nonterminals: those that derive *some*
+       terminal string. Rules mentioning a non-productive nonterminal
+       (as lhs, or as a nonterminal in rhs) are dropped.
+    2. **Reachable** nonterminals: those reachable from the start symbol via
+       the rules that survived pass 1. Rules mentioning an unreachable
+       nonterminal are dropped.
+
+    Order matters — computing reachability first can keep non-productive
+    symbols that are reachable but dead-ended, so productivity is always
+    computed first, on the *original* grammar.
+
+    Language-preserving: does not change L(G). Used before proof-by-grammar
+    certificates (e.g. left recursion, docs/THEORY.md §3.1) that must not be
+    tainted by symbols that could never occur in any actual derivation, such
+    as an unreachable left-recursive nonterminal.
+
+    If the start symbol itself is non-productive, the result has no rules
+    (the grammar generates the empty language).
+    """
+    g = _normalize_grammar(grammar)
+    terminals = set(g.get("terminals", []))
+    rules = _rules_list(g)
+    start = g["start"]
+
+    # Pass 1: keep only productive (generating) nonterminals.
+    productive = _compute_productive(rules, terminals)
+    if start not in productive:
+        g["nonterminals"] = [nt for nt in g["nonterminals"] if nt == start]
+        g["rules"] = []
+        return g
+
+    rules_productive = [
+        (lhs, rhs) for lhs, rhs in rules
+        if lhs in productive and all(s in terminals or s in productive for s in rhs)
+    ]
+
+    # Pass 2: keep only nonterminals reachable from start in what remains.
+    reachable = _compute_reachable(rules_productive, start)
+    rules_final = [
+        (lhs, rhs) for lhs, rhs in rules_productive
+        if lhs in reachable and all(s in terminals or s in reachable for s in rhs)
+    ]
+
+    g["nonterminals"] = [nt for nt in g["nonterminals"] if nt in productive and nt in reachable]
+    g["rules"] = _rules_to_dicts(_dedup_rules(rules_final))
+    return g
 
 
 # ---------------------------------------------------------------------------

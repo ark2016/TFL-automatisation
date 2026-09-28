@@ -151,7 +151,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
 {
   "ir": {
     "task_type": "ll_check_language",
-    "source_text": "L = {w b* c w^R | w ∈ {a,b}*}",
+    "source_text": "L = {w b c w^R | w ∈ {a,b}*}",
     "alphabet": ["a", "b", "c"],
     "language": {"type": "set_builder", ...},
     "question": "is_ll",
@@ -170,12 +170,29 @@ Return **only** valid JSON. No markdown fences, no extra text.
 {
   "prediction": "ll",
   "confidence": 0.80,
-  "reasoning": "Hard rule 4 applies: the language has the form w · (separator) · w^R where 'c' is the unique separator not in alphabet(w) ∪ {b}. The LL parser reads w forward, then upon seeing 'c' switches to checking w^R. This is a standard LL(1) construction with the center marker enabling deterministic rule selection.",
+  "reasoning": "Hard rule 4 applies: the language has the form w · b · c · w^R where 'c' is a unique separator (c ∉ alphabet(w) = {a,b}). Grammar S → aSa | bT, T → c | aSab | bTb has FIRST(aSa)={a}, FIRST(bT)={b} for S, and FIRST(c)={c}, FIRST(aSab)={a}, FIRST(bTb)={b} for T — pairwise disjoint, no ε-rules, so this is LL(1) without any lookahead subtlety.",
   "suggested_methods": ["ll_grammar_construction", "marker_detection"],
   "suggested_k": 1,
   "advisory_only": true
 }
 ```
+
+### Example 2b: Trap — Same-Looking Language with a `b*` Run is DCFL but NOT LL
+
+**Do not confuse Example 2 with `L' = {w b* c w^R | w ∈ {a,b}*}` (an *unbounded* run of `b`
+between `w` and `c`, not a single literal `b`).** `L'` is a DCFL (a DPDA pushes `w`, then counts the
+`b*` run, then after `c` pops the count and matches `w^R`), but it is **NOT LL(k) for any k**
+(docs/THEORY.md §3.4, "лемма об ограниченной гибкости"): after the prefix `b^M c`, at most `M`
+further `b`'s are admissible before the derivation is forced into the `w^R`-matching phase, so for
+any candidate LL(k) grammar the words `b^M c b^k` and `b^M c b^M` (M > k plus the grammar's bounded-
+flexibility constant) force the same leftmost-derivation prefix `b^M c b^r δ` with `δ` deriving
+both `b^{k−r}` and `b^{M−r}` — impossible once `M − k` exceeds the grammar's constant `W_G`. Do
+**not** apply hard rule 4 to `L'`: the presence of a unique marker `c` is necessary but not
+sufficient once an unbounded run sits directly against it. Verdict for `L'`: `"not_ll"`,
+`suggested_methods: ["substitution"]` only — `L'` is itself a DCFL (see above), and `prefix_classes`
+proves not_ll via Theorem 4.7.4 [Sh] through the contrapositive "not DCFL ⇒ not LL"; it cannot fire
+on a language that IS DCFL, so it must not be suggested here. The destructive agent should use the
+bounded-flexibility lemma (THEORY.md §3.4), not the pumping lemma.
 
 ### Example 3: Left-Recursive Grammar (Format 2) — uncertain
 
@@ -216,6 +233,13 @@ Return **only** valid JSON. No markdown fences, no extra text.
 - Language containing `{ww | w ∈ Σ*}` — copying requires two stacks, not LL
 - Essential ambiguity: every grammar for L is ambiguous → cannot be LL
 - Crossed dependencies / two independent count equalities
+- Unbounded run of a repeated symbol sitting directly against a unique marker, e.g.
+  `{w b* c w^R}` (docs/THEORY.md §3.4): DCFL, but the bounded-flexibility lemma rules out LL(k)
+  for every k — do not let the marker alone trigger hard rule 4 here (see Example 2b)
+
+### Catalog of worked LL / not-LL examples (docs/THEORY.md §3.4, keep in sync)
+- **DCFL, not LL:** `{aⁱbʲ | i ≥ j}`, `{bᴹcbʲ | j ≤ M}`, `{w b* c w^R | w ∈ {a,b}*}`
+- **LL(1):** `{aⁱbʲ | i ≤ j}` (`S → TB, T → aTb | ε, B → bB | ε`), `{w c w^R}`, `{w b c w^R}`
 
 ### Strong ll signals:
 - Regular language → LL(1)

@@ -74,51 +74,75 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
 - By Ogden's lemma, this overlap forces ambiguity in any grammar.
 - Therefore L is inherently ambiguous, hence not DCFL.
 
-## Example from section 5.6: L = { a^n b* (c^n | b^n) a c* }
+## Honest counter-example (THEORY.md §1.8): L = { a^n b* (c^n | b^n) a c* }, n >= 1
+
+**Important:** this language LOOKS like a shared-variable disjunction (`c^n | b^n`), but it is
+**not** inherently ambiguous — this is exactly the trap this rule must not fall into.
 
 **Analysis:**
-- Branch 1: a^n b* c^n a c* (the c^n case)
-- Branch 2: a^n b* b^n a c* = a^n b^{m+n} a c* (the b^n case)
-- Overlap words: a^n b^n a (when b* is empty and we use either c^n with n=0 or b^n)
-- More precisely, the disjunction `c^n | b^n` with shared variable n creates overlap.
+- Branch 1 ("c^n"): a^n b* c^n a c* — before the mandatory `a`, the block is `c^n`.
+- Branch 2 ("b^n"): a^n b* b^n a c* = a^n b^{m+n} a c* — before the mandatory `a`, there is no `c`
+  at all (the `b*` and `b^n` merge into one bigger `b` block, and nothing separates them).
+- **The branches are disjoint for n >= 1.** In branch 1, the block immediately preceding the `a`
+  is `c^n` with n >= 1, i.e. there is at least one `c` right before `a`. In branch 2, the symbol
+  immediately preceding `a` is always `b` (or, if `m = 0`, `a` itself follows `a^n` directly);
+  either way branch 2 never has a `c` adjacent to the mandatory `a`. So no word
+  can be parsed via both branches at once: a word with >=1 `c` right before the `a` can only come
+  from branch 1, a word without can only come from branch 2. There is no overlap word to build an
+  ambiguity argument on.
+- A union of two **disjoint** unambiguous CFLs is itself unambiguous (each word has a unique
+  branch, hence a unique parse within that branch's unambiguous grammar) — this directly
+  contradicts the premise needed for this agent's method.
+- Conclusion: this agent must return `not_applicable` for this language. (It may still be
+  non-DCFL for other reasons — see THEORY.md §1.8, where `dcfl_pumping` proves non-DCFL for the
+  related family `{a^n b^m (c^n | b^n) a c^l}` via a genuine pumping argument, not via inherent
+  ambiguity.)
 
 **Output:**
 ```json
 {
   "agent_name": "inh_ambiguity",
-  "status": "success",
-  "verdict": "non_dcfl",
-  "proof_sketch": {
-    "kind": "inh_ambiguity",
-    "disjunction_identified": "Язык содержит дизъюнкцию c^n | b^n с общей переменной n. Ветвь 1: a^n b* c^n a c* (выбор c^n). Ветвь 2: a^n b* b^n a c* (выбор b^n).",
-    "overlap_words": "Слова вида a^n b^n a принадлежат обеим ветвям: в ветви 1 при b*=epsilon, c^n с n=0 и c*=epsilon; в ветви 2 при b*=epsilon и c*=epsilon. Бесконечное семейство пересекающихся слов.",
-    "ambiguity_argument": "Любая КС-грамматика для L должна порождать слова пересечения двумя способами — через механизм ветви 1 и через механизм ветви 2. По лемме Огдена, для бесконечно многих слов пересечения существуют два различных дерева вывода. Следовательно, любая грамматика неоднозначна.",
-    "dcfl_implication": "L существенно неоднозначен → L не принадлежит UnambCF → L не является DCFL"
-  },
+  "status": "not_applicable",
+  "verdict": null,
+  "proof_sketch": null,
   "evidence": [
-    "Обнаружена дизъюнкция c^n | b^n с общей переменной n",
-    "Ветвь 1: a^n b* c^n a c* — выбор c^n",
-    "Ветвь 2: a^n b* b^n a c* — выбор b^n",
-    "Пересечение ветвей: слова вида a^n b^n a принадлежат обеим ветвям",
-    "По лемме Огдена: любая грамматика порождает два дерева вывода для слов пересечения",
-    "Существенная неоднозначность → не UnambCF → не DCFL"
+    "Дизъюнкция c^n | b^n выглядит как классический признак существенной неоднозначности, но при n>=1 ветви ДИЗЪЮНКТНЫ",
+    "Ветвь 1 (c^n): непосредственно перед обязательной буквой a стоит блок c^n, n>=1 — хотя бы одна буква c",
+    "Ветвь 2 (b^n): непосредственно перед обязательной буквой a буквы c нет вовсе — блок только из b",
+    "Значит ни одно слово не порождается одновременно обеими ветвями — слов пересечения нет",
+    "Объединение двух дизъюнктных однозначных КС-языков однозначно — метод существенной неоднозначности неприменим",
+    "Возвращаем not_applicable; для non-DCFL нужен другой метод (dcfl_pumping, THEORY.md §1.8)"
   ],
-  "confidence": 0.9,
+  "confidence": 0.0,
   "errors": []
 }
 ```
 
 ## When to apply
 
-- **Strong indicator:** Disjunction with shared variable (e.g., `c^n | b^n`, `i=j OR j=k`).
+- **Strong indicator:** Disjunction with shared variable (e.g., `i=j OR j=k`) where the branches
+  provably **overlap on an infinite set of words** (see rule below).
 - **Strong indicator:** Language is a union of two CFLs whose intersection is infinite.
 - **Weak indicator:** Multiple independent counting constraints.
+
+## Mandatory check before applying: branches must actually overlap
+
+Before building an ambiguity argument, the agent MUST verify that the two disjunction branches
+overlap on an **infinite** set of words — i.e. that there exist infinitely many words derivable
+via BOTH branches. A shared variable name in the disjunction (`c^n | b^n`) is **not** by itself
+evidence of overlap: check whether the surrounding fixed symbols make the branches disjoint (as in
+the counter-example above, where the letter immediately adjacent to the mandatory `a` differs
+between branches). If the branches are disjoint, or only finitely many words lie in both, this
+method is inapplicable — return `not_applicable`, do not fabricate an overlap.
 
 ## When to return `not_applicable`
 
 - No disjunction pattern detected.
 - Language has a clear unambiguous grammar (single constraint, no union).
 - Language is likely DCFL.
+- **The disjunction's branches do not overlap on an infinite set of words** (branches are
+  disjoint, or overlap only finitely) — see the mandatory check above and the counter-example
+  `{a^n b* (c^n | b^n) a c*}`.
 
 ## Reminder
 

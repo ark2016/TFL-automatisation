@@ -42,25 +42,21 @@ th{background:#f5f5f5;font-weight:600}
     <div class="s-label-sm">Задача (анализ детерминированности КС-языка)</div>
     <div class="s-task">Исследовать на детерминированность: {w₁w₂ | w₁ = u₁au₂ &amp; w₂ = u₃au₄ &amp; |u₁| ≤ |u₂| &amp; |u₃| ≥ |u₄|}</div>
   </div>
-  <span class="s-badge s-dcfl">ДКСЯ</span>
+  <span class="s-badge s-nondcfl">НЕ ДКСЯ</span>
 </div>
 <div class="s-banner-ok"><strong>✓ Oracle верификация пройдена</strong> (1 из 1 агентов верифицировано)</div>
 <div class="s-sec">Основное доказательство</div>
 <div class="s-main-proof">
-<div class="s-p"><strong>Метод:</strong> stack_strategy</div>
-<table><thead><tr><th>#</th><th>Фаза</th><th>Действие</th><th>Что</th><th>Триггер</th></tr></thead><tbody>
-<tr><td>1</td><td>read_u1</td><td>push</td><td>символы u₁ на стек</td><td>встретили &#x27;a&#x27; — разделитель w₁</td></tr>
-<tr><td>2</td><td>read_u2</td><td>compare</td><td>снимаем u₂ со стека, считаем |u₁| ≤ |u₂|</td><td>стек пуст или u₂ длиннее u₁</td></tr>
-<tr><td>3</td><td>read_u3</td><td>push</td><td>символы u₃ на стек</td><td>встретили &#x27;a&#x27; — разделитель w₂</td></tr>
-<tr><td>4</td><td>read_u4</td><td>compare</td><td>снимаем u₄, проверяем |u₃| ≥ |u₄|</td><td>конец слова</td></tr>
-</tbody></table>
-<div class="s-p"><strong>Разделитель:</strong> a (два вхождения символа &#x27;a&#x27; разделяют u₁u₂ и u₃u₄)</div>
-<div class="s-p"><strong>Аргумент детерминированности:</strong> Символ &#x27;a&#x27; однозначно маркирует границу между частями; после каждого &#x27;a&#x27; переключение детерминировано</div>
-<div class="s-p"><strong>Конечное управление:</strong> Два состояния: чтение первой и второй половины</div>
+<div class="s-p"><strong>Метод:</strong> shallit</div>
+<div class="s-p"><strong>Техника:</strong> nerode_classes</div>
+<div class="s-p"><strong>Мёртвый класс D конечен:</strong> Любое слово u = v a b^r продолжается до u*a ∈ L2 (дописываем ещё одну букву a — новое последнее вхождение a оказывается в самом конце, u4&#x27;=ε ⊆ u3&#x27;, условие |u3&#x27;|&gt;=|u4&#x27;| тривиально выполнено), поэтому мёртвый класс D пуст.</div>
+<div class="s-p"><strong>Разделяющий суффикс:</strong> Для слова u = v a b^r будущее определяется парой чисел (|v|-r, |v|+r) (или суммой |v|+r при |v|&lt;r): это сколько ещё b можно дописать без нового a, и сколько всего b накопится к следующему a.</div>
+<div class="s-p"><strong>Аргумент разделения:</strong> Два слова с разными парами (|v|-r,|v|+r) различимы: подходящий суффикс из t букв b и затем одной буквы a попадает в L2 для одного слова и не попадает для другого, так как условие |u3|&gt;=|u4| для нового вхождения a зависит именно от этой пары. Поскольку пар (|v|-r,|v|+r) бесконечно много, а каждая пара фиксирует длину слов в своём классе — каждый класс Нероуда конечен, и таких классов бесконечно много.</div>
+<div class="s-p"><strong>Аргумент:</strong> L2 = {u3 a u4 | |u3| &gt;= |u4|}. Мёртвый класс D пуст (любое слово продолжается до слова из L2 через дописывание финального &#x27;a&#x27;). Будущее каждого слова u = v a b^r определяется парой чисел (|v|-r, |v|+r) — а значит каждый класс эквивалентности Майхилла-Нероуда содержит только слова ограниченной длины, т.е. конечен. По теореме 4.7.4 [Sh] (контрапозиция): все классы конечны ⇒ L2 не является DCFL. Это даёт non-DCFL для L2, а через допустимые для DCFL операции ∩REG (L ∩ aΣ* = a*L2) и левое частное на слово &#x27;a&#x27; (a^{-1}(a*L2) = L2) — если бы исходный L был DCFL, то L2 тоже была бы DCFL (обе операции сохраняют DCFL) — противоречие. Значит исходный L (task u1au2_u3au4) тоже не DCFL.</div>
 </div>
 <div class="s-box" style="background:#e3f2fd;border-left:4px solid #1976d2;margin:12px 0">
 <div class="s-p"><strong>Итог рассуждения:</strong></div>
-<div style="white-space:pre-wrap">Agent &#x27;stack_strategy&#x27; verdict: dcfl</div>
+<div style="white-space:pre-wrap">L = {w1w2 | w1=u1au2, |u1|&lt;=|u2|; w2=u3au4, |u3|&gt;=|u4|} не является DCFL. stack_strategy вернул fail: выбор разделяющего вхождения &#x27;a&#x27; не фиксирован (нужное вхождение для условия |u1|&lt;=|u2| или |u3|&gt;=|u4| не является единственным и заранее известным), а после допустимого сведения L ∩ aΣ* = a·L2 сам L2 не DCFL. dcfl_pumping и closure_reduction вернули not_applicable, inh_ambiguity — not_applicable. Агент shallit доказал non_dcfl для L2 = {u3au4 | |u3|&gt;=|u4|} по теореме 4.7.4 [Sh] (все классы Нероуда конечны, мёртвый класс пуст), а затем свёл исходный язык к L2 через два сохраняющих DCFL сведения: пересечение с регулярным aΣ* (L ∩ aΣ* = a·L2) и левое частное на слово &#x27;a&#x27; — если бы L был DCFL, то и L2 был бы DCFL, противоречие. Confidence=0.9.</div>
 </div>
 <div class="s-sec">Методы специалистов</div>
 <div class="s-tab">
@@ -71,20 +67,14 @@ th{background:#f5f5f5;font-weight:600}
   <button class="s-tab-btn" onclick="showTab(4)">Существ. неоднозначность</button>
 </div>
 <div class="s-panel active" id="panel-0">
-<div class="s-meta">вердикт: <code>dcfl</code> · статус: <code>success</code> · уверенность: 0.88</div>
-<table><thead><tr><th>#</th><th>Фаза</th><th>Действие</th><th>Что</th><th>Триггер</th></tr></thead><tbody>
-<tr><td>1</td><td>read_u1</td><td>push</td><td>символы u₁ на стек</td><td>встретили &#x27;a&#x27; — разделитель w₁</td></tr>
-<tr><td>2</td><td>read_u2</td><td>compare</td><td>снимаем u₂ со стека, считаем |u₁| ≤ |u₂|</td><td>стек пуст или u₂ длиннее u₁</td></tr>
-<tr><td>3</td><td>read_u3</td><td>push</td><td>символы u₃ на стек</td><td>встретили &#x27;a&#x27; — разделитель w₂</td></tr>
-<tr><td>4</td><td>read_u4</td><td>compare</td><td>снимаем u₄, проверяем |u₃| ≥ |u₄|</td><td>конец слова</td></tr>
-</tbody></table>
-<div class="s-p"><strong>Разделитель:</strong> a (два вхождения символа &#x27;a&#x27; разделяют u₁u₂ и u₃u₄)</div>
-<div class="s-p"><strong>Аргумент детерминированности:</strong> Символ &#x27;a&#x27; однозначно маркирует границу между частями; после каждого &#x27;a&#x27; переключение детерминировано</div>
-<div class="s-p"><strong>Конечное управление:</strong> Два состояния: чтение первой и второй половины</div>
-<div class="s-step"><div class="s-n">1</div><div class="s-t">Identified separator &#x27;a&#x27; appearing twice to delimit u₁u₂ and u₃u₄</div></div>
-<div class="s-step"><div class="s-n">2</div><div class="s-t">Constructed 4-phase stack strategy: read_u1, read_u2, read_u3, read_u4</div></div>
-<div class="s-step"><div class="s-n">3</div><div class="s-t">Deterministic switching via &#x27;a&#x27; separator</div></div>
-<div class="s-step"><div class="s-n">4</div><div class="s-t">Finite control uses 2 states for first/second half</div></div>
+<div class="s-meta">статус: <code>fail</code> · уверенность: 0.25</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">L = {w1 w2 | w1 = u1 a u2, |u1| &lt;= |u2|; w2 = u3 a u4, |u3| &gt;= |u4|} — условие говорит про СУЩЕСТВОВАНИЕ разбиения на некотором вхождении &#x27;a&#x27;, а не про фиксированный разделитель</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Буква &#x27;a&#x27; в w1 и w2 может встречаться многократно (u1,u2,u3,u4 — произвольные слова над {a,b}), поэтому автомат не знает заранее, какое именно вхождение &#x27;a&#x27; даёт нужное разбиение |u1|&lt;=|u2| (в w1) или |u3|&gt;=|u4| (в w2) — выбор требует либо взгляда в будущее, либо недетерминированного угадывания позиции</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">Попытка взять &#x27;первое a слова&#x27; для w1 и &#x27;последнее a слова&#x27; для w2 как канонические кандидаты не даёт детерминированной стековой стратегии для ВСЕГО языка: после сведения L ∩ aΣ* = a·L2 (THEORY.md §1.7) сам L2 = {u3au4 | |u3|&gt;=|u4|} не является DCFL (доказано агентом shallit через теорему 4.7.4), значит никакая детерминированная стековая стратегия для этой части не существует</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">Возврат fail: детерминированная стековая стратегия для L не построена</div></div>
+<div class="s-p s-err"><strong>Ошибки:</strong></div><ul>
+<li>Не удалось построить детерминированную стековую стратегию: выбор разделяющего вхождения &#x27;a&#x27; не фиксирован, а производный язык L2 (THEORY.md §1.7) сам не DCFL</li>
+</ul>
 </div>
 <div class="s-panel" id="panel-1">
 <div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
@@ -93,23 +83,34 @@ th{background:#f5f5f5;font-weight:600}
 <div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
 </div>
 <div class="s-panel" id="panel-3">
-<div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
+<div class="s-meta">вердикт: <code>non_dcfl</code> · статус: <code>success</code> · уверенность: 0.90</div>
+<div class="s-p"><strong>Техника:</strong> nerode_classes</div>
+<div class="s-p"><strong>Мёртвый класс D конечен:</strong> Любое слово u = v a b^r продолжается до u*a ∈ L2 (дописываем ещё одну букву a — новое последнее вхождение a оказывается в самом конце, u4&#x27;=ε ⊆ u3&#x27;, условие |u3&#x27;|&gt;=|u4&#x27;| тривиально выполнено), поэтому мёртвый класс D пуст.</div>
+<div class="s-p"><strong>Разделяющий суффикс:</strong> Для слова u = v a b^r будущее определяется парой чисел (|v|-r, |v|+r) (или суммой |v|+r при |v|&lt;r): это сколько ещё b можно дописать без нового a, и сколько всего b накопится к следующему a.</div>
+<div class="s-p"><strong>Аргумент разделения:</strong> Два слова с разными парами (|v|-r,|v|+r) различимы: подходящий суффикс из t букв b и затем одной буквы a попадает в L2 для одного слова и не попадает для другого, так как условие |u3|&gt;=|u4| для нового вхождения a зависит именно от этой пары. Поскольку пар (|v|-r,|v|+r) бесконечно много, а каждая пара фиксирует длину слов в своём классе — каждый класс Нероуда конечен, и таких классов бесконечно много.</div>
+<div class="s-p"><strong>Аргумент:</strong> L2 = {u3 a u4 | |u3| &gt;= |u4|}. Мёртвый класс D пуст (любое слово продолжается до слова из L2 через дописывание финального &#x27;a&#x27;). Будущее каждого слова u = v a b^r определяется парой чисел (|v|-r, |v|+r) — а значит каждый класс эквивалентности Майхилла-Нероуда содержит только слова ограниченной длины, т.е. конечен. По теореме 4.7.4 [Sh] (контрапозиция): все классы конечны ⇒ L2 не является DCFL. Это даёт non-DCFL для L2, а через допустимые для DCFL операции ∩REG (L ∩ aΣ* = a*L2) и левое частное на слово &#x27;a&#x27; (a^{-1}(a*L2) = L2) — если бы исходный L был DCFL, то L2 тоже была бы DCFL (обе операции сохраняют DCFL) — противоречие. Значит исходный L (task u1au2_u3au4) тоже не DCFL.</div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t">L2 = {u3au4 | |u3|&gt;=|u4|}, любое слово продолжается до слова из L2 дописыванием финального &#x27;a&#x27; ⇒ мёртвый класс D пуст</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t">Будущее слова u = v a b^r определяется парой чисел (|v|-r, |v|+r) — сколько ещё b можно дописать до следующего a, и сколько всего b накопится</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t">Слова с разными парами различимы подходящим суффиксом из b* затем &#x27;a&#x27; ⇒ каждый класс Нероуда конечен, классов бесконечно много</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t">По контрапозиции теоремы 4.7.4 [Sh]: все классы конечны ⇒ L2 не DCFL</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t">L ∩ aΣ* = a·L2 (допустимо: DCFL замкнуты относительно ∩REG) и левое частное a^{-1}(a*L2)=L2 (допустимо для DCFL) ⇒ если бы L был DCFL, то и L2 был бы DCFL — противоречие ⇒ исходный L не DCFL</div></div>
 </div>
 <div class="s-panel" id="panel-4">
 <div class="s-meta">статус: <code>not_applicable</code> · уверенность: 0.00</div>
 </div>
 <div class="s-sec">Oracle верификация (детали)</div>
 <table><thead><tr><th>Агент</th><th>Статус</th><th>Проверки</th><th>Проблемы</th></tr></thead><tbody>
-<tr><td>stack_strategy</td><td><code>verified</code></td><td>5/5</td><td>—</td></tr>
+<tr><td>stack_strategy</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
 <tr><td>closure_reduction</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
 <tr><td>dcfl_pumping</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
-<tr><td>shallit</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
+<tr><td>shallit</td><td><code>verified</code></td><td>5/5</td><td>—</td></tr>
 <tr><td>inh_ambiguity</td><td><code>not_applicable</code></td><td>—</td><td>—</td></tr>
 </tbody></table>
 <div class="s-sec">Подсказки и наблюдения</div>
-<div class="s-step"><div class="s-n">💡</div><div class="s-t">Fallback reasoning (no LLM available)</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">stack_strategy не сработал: выбор разделяющего вхождения &#x27;a&#x27; не фиксирован заранее</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Ключевой шаг — редукция L ∩ aΣ* = a·L2 и левое частное на &#x27;a&#x27;, не обратный гомоморфизм</div></div>
 <div class="s-footer">
-  <span>confidence: 0.88</span>
+  <span>confidence: 0.90</span>
   <span class="s-pill">5 агентов отработали</span>
   <span style="display:flex;align-items:center;gap:5px"><span class="s-dot s-pass"></span>verified</span>
 </div>

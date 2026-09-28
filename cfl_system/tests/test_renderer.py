@@ -25,14 +25,14 @@ FULL_RESULT = {
     "confidence": 0.95,
     "proof": {
         "method": "closure_reduction + pumping",
-        "summary": "Intersected L with R = a*(b|c)*a*(a|c)* (regular).",
+        "summary": "Intersected L with R = a+b+ac.a+b+ac (regular).",
         "details": {
-            "word_chosen": "a^p b a^p c",
+            "word_chosen": "a^p b^p ac.a^p b^p ac",
             "cases": [
                 {
                     "case": "v and x in first a-block",
-                    "pumped_word": "a^{p+|vx|} b a^p c",
-                    "why_not_in_L": "Blocks differ in length",
+                    "pumped_word": "a^{p+|vx|} b^p ac.a^p b^p ac",
+                    "why_not_in_L": "Counters n1 != n2",
                 },
             ],
         },

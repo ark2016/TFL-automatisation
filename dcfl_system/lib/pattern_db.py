@@ -15,7 +15,7 @@ from typing import Any
 # Pattern database
 # ---------------------------------------------------------------------------
 
-PATTERN_DB: list[dict[str, str]] = [
+PATTERN_DB: list[dict[str, Any]] = [
     # 1
     {
         "pattern": "single_palindrome_with_separator",
@@ -32,21 +32,26 @@ PATTERN_DB: list[dict[str, str]] = [
         "method": "shallit",
         "example": "{ww^R | w ∈ {a,b}*}",
     },
-    # 3
-    {
-        "pattern": "sequential_palindromes",
-        "description": "sequential w/w^R then v/v^R",
-        "verdict": "dcfl",
-        "method": "stack_strategy",
-        "example": "{ww^Rvv^R | w,v ∈ {a,b}*}",
-    },
+    # 3 — removed (was "sequential_palindromes", verdict dcfl): unproven and
+    # most likely FALSE. {ww^Rvv^R | w,v ∈ {a,b}*} contains {ww^R} as the
+    # v=ε slice, and {ww^R} itself is non-DCFL (THEORY.md §1.2 corollary,
+    # no separator ⇒ the split point can't be found deterministically); no
+    # proof establishes the full union as DCFL either. This DB is advisory
+    # only (see dcfl_system/CLAUDE.md) — do not reintroduce an unproven
+    # verdict here.
     # 4
     {
+        # THEORY.md §1.6: "aa" inside {wvaav^Rw^R | w∈(aa*b)*a, v∈b(ab|aa)*}
+        # is NOT a genuine separator (it also occurs inside w's a⁺b-blocks and
+        # inside v's ab|aa pairs) — that specific language is non-DCFL, see
+        # pattern #11 below. This entry is about a GENUINE separator (a
+        # symbol that provably cannot occur inside w or v), which really
+        # does make nested reversals DCFL by the same stack argument as #1.
         "pattern": "nested_palindromes_with_separator",
-        "description": "wv...v^Rw^R with separator",
+        "description": "wv...v^Rw^R with a genuine separator (not in w's or v's alphabet)",
         "verdict": "dcfl",
         "method": "stack_strategy",
-        "example": "{wvaav^Rw^R}",
+        "example": "{w v c v^R w^R | w, v ∈ {a,b}*} (c ∉ {a,b} is a genuine separator)",
     },
     # 5
     {
@@ -74,10 +79,14 @@ PATTERN_DB: list[dict[str, str]] = [
     },
     # 8
     {
+        # THEORY.md §1.7 (dcfl_exam_02): this exact language reduces (via
+        # ∩ aΣ* and left quotient by 'a') to L₂ = {v a b^q | |v| >= q}, whose
+        # Nerode classes are ALL finite (theorem 4.7.4 [Sh], contrapositive)
+        # ⇒ non-DCFL. "Compatible directions" does not by itself imply DCFL.
         "pattern": "dual_length_cmp_compatible",
-        "description": "two compatible length comparisons",
-        "verdict": "dcfl",
-        "method": "stack_strategy",
+        "description": "two length comparisons in the same direction (>= / <=) — NOT sufficient for DCFL by itself",
+        "verdict": "non_dcfl",
+        "method": "shallit",
         "example": "{u₁au₂u₃au₄ | |u₁|≤|u₂| & |u₃|≥|u₄|}",
     },
     # 9
@@ -98,10 +107,14 @@ PATTERN_DB: list[dict[str, str]] = [
     },
     # 11
     {
+        # THEORY.md §1.6 (dcfl_exam_01): restricting w,v to these regex
+        # domains does NOT turn "aa" into a genuine separator (it still
+        # occurs inside w's a⁺b-blocks and inside v's ab|aa pairs) — proven
+        # non-DCFL via the two-word pumping lemma (лемма Ю).
         "pattern": "regex_constrained_palindrome",
-        "description": "palindrome with regex-constrained variable",
-        "verdict": "dcfl",
-        "method": "stack_strategy",
+        "description": "palindrome with regex-constrained variable, candidate separator occurs inside the variables' own domains",
+        "verdict": "non_dcfl",
+        "method": "dcfl_pumping",
         "example": "{wvaav^Rw^R | w∈(aa*b)*a, v∈b(ab|aa)*}",
     },
     # 12
@@ -114,10 +127,14 @@ PATTERN_DB: list[dict[str, str]] = [
     },
     # 13
     {
+        # THEORY.md §1.8 (dcfl_exam_03): the two branches (c^n vs b^n) are
+        # actually DISJOINT for n>=1, so the language is not inherently
+        # ambiguous; the correct method is the DCFL pumping lemma, not
+        # inh_ambiguity.
         "pattern": "disjunction_count_parts",
-        "description": "disjunction in counted parts",
+        "description": "disjunction in counted parts (branches may be disjoint — check before assuming inherent ambiguity)",
         "verdict": "non_dcfl",
-        "method": "inh_ambiguity",
+        "method": "dcfl_pumping",
         "example": "{a^n b*(c^n|b^n)ac*}",
     },
     # 14
@@ -130,11 +147,16 @@ PATTERN_DB: list[dict[str, str]] = [
     },
     # 15
     {
+        # {a^n b^n c^n} is not even context-free (let alone DCFL), so "DCFL
+        # closed under complement ⇒ ~{a^n b^n c^n} is DCFL" does not apply —
+        # if the complement were DCFL, the original would be DCFL ⊂ CFL,
+        # contradiction. Use the complement of a GENUINE DCFL example instead
+        # (THEORY.md §1.4: complement closure applies to L ∈ DCFL).
         "pattern": "complement_of_known",
-        "description": "complement of a known language",
+        "description": "complement of a known DCFL language",
         "verdict": "dcfl",
         "method": "closure_reduction",
-        "example": "~{a^n b^n c^n}",
+        "example": "~{a^n b^n | n≥1} (complement of the DCFL language {a^n b^n})",
     },
     # 16
     {
@@ -170,16 +192,21 @@ PATTERN_DB: list[dict[str, str]] = [
     },
     # 20
     {
+        # Heuristic only — reversal of a DCFL is not a proof method by itself
+        # (THEORY.md §1.9: DCFL is not closed under reversal, but there is no
+        # single agent/technique that this pattern maps to; the actual verdict
+        # depends on the specific language and must be established by one of
+        # the real specialist agents). "method" is intentionally None.
         "pattern": "reversal_of_dcfl",
-        "description": "reversal of a DCFL",
+        "description": "reversal of a DCFL (heuristic signal only, no fixed proof method)",
         "verdict": "non_dcfl",
-        "method": "shallit",
+        "method": None,
         "example": "L^R where L is DCFL but L^R is not",
     },
 ]
 
 # Index for O(1) lookup by pattern code
-_PATTERN_INDEX: dict[str, dict[str, str]] = {p["pattern"]: p for p in PATTERN_DB}
+_PATTERN_INDEX: dict[str, dict[str, Any]] = {p["pattern"]: p for p in PATTERN_DB}
 
 
 # ---------------------------------------------------------------------------
@@ -392,9 +419,11 @@ def _match_set_builder(ir: dict) -> list[dict[str, Any]]:
                 else:
                     hits.append(_hit("nested_palindromes_no_separator", 0.85,
                                      "nested reversal structure without separator"))
-            else:
-                hits.append(_hit("sequential_palindromes", 0.8,
-                                 "sequential reversal pairs detected"))
+            # else: n_rev >= 2 but not detected as nested — no reliable
+            # pattern to hit (pattern "sequential_palindromes" was removed:
+            # its dcfl verdict was unproven and likely false, see PATTERN_DB
+            # comment above pattern #4). Leave unclassified rather than
+            # guess a verdict.
 
         # regex-constrained palindrome
         if has_rev and has_regex:
@@ -585,11 +614,11 @@ def match_patterns(ir: dict) -> list[dict[str, Any]]:
     return sorted(best.values(), key=lambda x: x["score"], reverse=True)
 
 
-def get_pattern(pattern_code: str) -> dict[str, str] | None:
+def get_pattern(pattern_code: str) -> dict[str, Any] | None:
     """Look up a single pattern entry by its code. Returns None if not found."""
     return _PATTERN_INDEX.get(pattern_code)
 
 
-def list_patterns() -> list[dict[str, str]]:
+def list_patterns() -> list[dict[str, Any]]:
     """Return a copy of the full pattern database."""
     return list(PATTERN_DB)

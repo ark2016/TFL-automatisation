@@ -1,18 +1,13 @@
 {
-  "agent_name": "reasoning",
-  "status": "success",
-  "verdict": "dcfl",
-  "proof_sketch": {
-    "action": "done",
-    "primary_evidence": "stack_strategy",
-    "supporting_agents": ["stack_strategy"],
-    "conflicting_agents": []
-  },
-  "evidence": [
-    "stack_strategy agent returned verdict=dcfl with confidence=0.88",
-    "No conflicting evidence from other agents",
-    "Final verdict: dcfl (action=done)"
+  "action": "done",
+  "verdict": "non_dcfl",
+  "confidence": 0.9,
+  "primary_evidence": "shallit",
+  "summary": "L = {w1w2 | w1=u1au2, |u1|<=|u2|; w2=u3au4, |u3|>=|u4|} не является DCFL. stack_strategy вернул fail: выбор разделяющего вхождения 'a' не фиксирован (нужное вхождение для условия |u1|<=|u2| или |u3|>=|u4| не является единственным и заранее известным), а после допустимого сведения L ∩ aΣ* = a·L2 сам L2 не DCFL. dcfl_pumping и closure_reduction вернули not_applicable, inh_ambiguity — not_applicable. Агент shallit доказал non_dcfl для L2 = {u3au4 | |u3|>=|u4|} по теореме 4.7.4 [Sh] (все классы Нероуда конечны, мёртвый класс пуст), а затем свёл исходный язык к L2 через два сохраняющих DCFL сведения: пересечение с регулярным aΣ* (L ∩ aΣ* = a·L2) и левое частное на слово 'a' — если бы L был DCFL, то и L2 был бы DCFL, противоречие. Confidence=0.9.",
+  "retry_plan": null,
+  "hints_for_human": [
+    "stack_strategy не сработал: выбор разделяющего вхождения 'a' не фиксирован заранее",
+    "Ключевой шаг — редукция L ∩ aΣ* = a·L2 и левое частное на 'a', не обратный гомоморфизм"
   ],
-  "confidence": 0.88,
   "errors": []
 }

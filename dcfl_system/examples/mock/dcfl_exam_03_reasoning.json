@@ -1,19 +1,13 @@
 {
-  "agent_name": "reasoning",
-  "status": "success",
+  "action": "done",
   "verdict": "non_dcfl",
-  "proof_sketch": {
-    "action": "done",
-    "primary_evidence": "inh_ambiguity",
-    "supporting_agents": ["inh_ambiguity", "dcfl_pumping"],
-    "conflicting_agents": []
-  },
-  "evidence": [
-    "inh_ambiguity agent returned verdict=non_dcfl with confidence=0.90",
-    "dcfl_pumping agent returned verdict=non_dcfl with confidence=0.50 (supporting)",
-    "stack_strategy agent failed to construct DPDA (consistent with non_dcfl)",
-    "Final verdict: non_dcfl (action=done)"
-  ],
   "confidence": 0.9,
+  "primary_evidence": "dcfl_pumping",
+  "summary": "L = {a^n b^m c^n a c^l} ∪ {a^n b^{m+n} a c^l}, n>=1 не является DCFL. inh_ambiguity вернул not_applicable: ранее заявленное пересечение ветвей a^n b^n a ложно — при n>=1 ветви c^n и b^n дизъюнктны (в первой перед 'a' стоит c^n, во второй c перед 'a' нет), каждая ветвь по отдельности однозначна, поэтому существенная неоднозначность не устанавливается (THEORY.md §1.8). stack_strategy вернул fail (дизъюнкция требует недетерминированного выбора ветви), shallit и closure_reduction вернули not_applicable. Агент dcfl_pumping построил полное доказательство по лемме Ю: для слов xy=a^n b^n c^n a (ветвь c^n) и xz=a^n b^n a (ветвь b^n, m=0) с общим префиксом x=a^n b^{n-1} оба условия леммы нарушены для произвольного p, так как окно накачки размера <=p не достаёт до блока c^n. Итог: verdict=non_dcfl, primary_evidence=dcfl_pumping, confidence=0.9 (THEORY.md §1.8).",
+  "retry_plan": null,
+  "hints_for_human": [
+    "inh_ambiguity ошибался: пример пересечения ветвей a^n b^n a на деле лежит только во второй ветви — ветви дизъюнктны при n>=1",
+    "Корректный метод для non_dcfl здесь — лемма Ю (dcfl_pumping), а не существенная неоднозначность"
+  ],
   "errors": []
 }

@@ -1,18 +1,13 @@
 {
-  "agent_name": "reasoning",
-  "status": "success",
-  "verdict": "dcfl",
-  "proof_sketch": {
-    "action": "done",
-    "primary_evidence": "stack_strategy",
-    "supporting_agents": ["stack_strategy"],
-    "conflicting_agents": []
-  },
-  "evidence": [
-    "stack_strategy agent returned verdict=dcfl with confidence=0.92",
-    "No conflicting evidence from other agents",
-    "Final verdict: dcfl (action=done)"
+  "action": "done",
+  "verdict": "non_dcfl",
+  "confidence": 0.9,
+  "primary_evidence": "dcfl_pumping",
+  "summary": "L = {w v aa v^R w^R} не является DCFL. stack_strategy вернул fail: кандидат в разделители 'aa' не является истинным разделителем — он встречается и внутри w (блоки a+b), и внутри v (пары aa), поэтому граница фаз v/v^R не отличима детерминированным ДМПА (THEORY.md §1.6). shallit вернул not_applicable: мёртвый класс D бесконечен (слова вне Pref(X·aa·X^R), например bb, bbb, ...), поэтому теорема 4.7.4 выполняется тривиально и ничего не доказывает. closure_reduction и inh_ambiguity вернули not_applicable. Единственное успешное доказательство дал dcfl_pumping: по двухсловной лемме Ю (THEORY.md §1.1) для слов W1=(ab)^n aa (ba)^n и W2=(ab)^n aab (ab)^n aa (ba)^n baa (ba)^n с общим префиксом x=(ab)^n aa (ba)^{n-1}b оба условия леммы нарушены для произвольного p — значит L не является DCFL (confidence=0.9).",
+  "retry_plan": null,
+  "hints_for_human": [
+    "'aa' не разделитель: встречается внутри w и внутри v — stack_strategy для этого языка неприменим",
+    "Работает только лемма Ю (dcfl_pumping): общий префикс x надо брать длиннее половины первого слова"
   ],
-  "confidence": 0.92,
   "errors": []
 }

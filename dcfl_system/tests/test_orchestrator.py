@@ -21,10 +21,36 @@ EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 MOCK_DIR = EXAMPLES_DIR / "mock"
 
 # (ir_filename, expected_verdict, expected_confidence)
+#
+# docs/THEORY.md Part II §1.6-1.8 (round 2): all three exam languages below
+# are actually non-DCFL; the round-1 reference verdicts ("dcfl 0.92" / "dcfl
+# 0.88" / the incomplete "non_dcfl 0.5") were wrong or incomplete:
+#
+# - task_wvaavRwR (§1.6): stack_strategy now fails ('aa' is not a true phase
+#   separator — it also occurs inside w and inside v), dcfl_pumping succeeds
+#   with a full Yu two-word pumping proof (confidence 0.9) -> reasoning
+#   picks dcfl_pumping as primary_evidence, verdict=non_dcfl.
+# - task_u1au2_u3au4 (§1.7): stack_strategy fails (no fixed separating
+#   occurrence of 'a'), shallit succeeds via Theorem 4.7.4 on the derived
+#   language L2 = {u3au4 | |u3|>=|u4|} (all Nerode classes finite,
+#   confidence 0.9) -> reasoning picks shallit as primary_evidence.
+# - task_anb_cnbn (§1.8): inh_ambiguity is corrected to not_applicable (the
+#   two branches c^n / b^n are disjoint for n>=1 and each individually
+#   unambiguous, so essential ambiguity is not established), and
+#   dcfl_pumping now succeeds with a complete Yu pumping proof (confidence
+#   0.9) instead of the old incomplete "uncertain 0.5" attempt.
+#
+# In all three cases the expected verdict/confidence below are copied
+# verbatim from each task's `*_reasoning.json` mock (MockRunner finds and
+# returns that file directly, so the reasoning node never falls back to
+# `_fallback_reasoning` in these parametrized tests). See
+# `test_fallback_reasoning_matches_specialist_mocks` below for a check that
+# does exercise `_fallback_reasoning` directly against the specialist mocks
+# (with the reasoning mock unavailable).
 TASKS = [
-    ("task_wvaavRwR", "dcfl", 0.92),
-    ("task_u1au2_u3au4", "dcfl", 0.88),
-    ("task_anb_cnbn", "non_dcfl", 0.90),
+    ("task_wvaavRwR", "non_dcfl", 0.9),
+    ("task_u1au2_u3au4", "non_dcfl", 0.9),
+    ("task_anb_cnbn", "non_dcfl", 0.9),
     ("task_grammar_aSSb", "dcfl", 0.55),
 ]
 
@@ -57,6 +83,38 @@ def test_confidence_correct(task_filename, expected_verdict, expected_confidence
     result = _run_task(task_filename)
     assert result["confidence"] == pytest.approx(expected_confidence, abs=0.01), (
         f"Expected confidence={expected_confidence}, got {result['confidence']}"
+    )
+
+
+class _NoReasoningMockRunner(MockRunner):
+    """MockRunner that pretends no reasoning mock exists, forcing the
+    orchestrator's reasoning node to fall back to `_fallback_reasoning`
+    (heuristic consolidation over the specialist mock outputs)."""
+
+    def run_agent(self, agent_name: str, input_data: dict | None = None):
+        if agent_name == "reasoning":
+            return None
+        return super().run_agent(agent_name, input_data)
+
+
+@pytest.mark.parametrize(
+    "task_filename,expected_verdict,expected_confidence",
+    TASKS[:3],  # only the three non-DCFL exam tasks; task_grammar_aSSb has no single dominant specialist
+)
+def test_fallback_reasoning_matches_specialist_mocks(
+    task_filename, expected_verdict, expected_confidence
+):
+    """With the reasoning mock unavailable, `_fallback_reasoning` must pick
+    the highest-confidence specialist verdict from the specialist mocks
+    directly, reproducing the same non_dcfl/0.9 result as the reasoning mock."""
+    ir = _load_ir(task_filename)
+    mock = _NoReasoningMockRunner(str(MOCK_DIR), ir["task_id"])
+    result = run_pipeline(ir, mock_runner=mock)
+    assert result["verdict"] == expected_verdict, (
+        f"Fallback reasoning: expected verdict={expected_verdict}, got {result['verdict']}"
+    )
+    assert result["confidence"] == pytest.approx(expected_confidence, abs=0.01), (
+        f"Fallback reasoning: expected confidence={expected_confidence}, got {result['confidence']}"
     )
 
 

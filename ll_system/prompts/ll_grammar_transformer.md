@@ -53,10 +53,22 @@ Compute FIRST_k(α) and FOLLOW_k(A) for each nonterminal A and each production A
 
 ### Step 5: Check LL(k) Conditions
 
-For each nonterminal A with productions A → α₁ | α₂ | ... | αₙ:
-- Compute the **director set** for each αᵢ:
-  - If αᵢ ⟹* ε: Director(αᵢ) = FIRST_k(αᵢ) ∪ FOLLOW_k(A)
-  - Otherwise: Director(αᵢ) = FIRST_k(αᵢ)
+For each nonterminal A with productions A → α₁ | α₂ | ... | αₙ, compute the **director set** for
+each αᵢ (docs/THEORY.md §3.1/§3.5):
+- **k = 1:** the union form is correct — if αᵢ ⟹* ε: Director(αᵢ) = FIRST₁(αᵢ) ∪ FOLLOW₁(A);
+  otherwise Director(αᵢ) = FIRST₁(αᵢ).
+- **k ≥ 2 (strong LL(k)):** a plain union is WRONG — the two sets must be combined with
+  **k-concatenation**, not union: Director(αᵢ) = FIRST_k(αᵢ) ⊕_k FOLLOW_k(A), where
+  `X ⊕_k Y = {(xy) truncated to k symbols | x ∈ X, y ∈ Y}` (`k_concat` in `lib/first_follow.py`).
+  Using `FIRST_k(αᵢ) ∪ FOLLOW_k(A)` at k ≥ 2 checks a different (incomparable) condition — it can
+  both miss real conflicts and invent spurious ones.
+- **Full LL(k) (not just strong LL(k)):** even `⊕_k` with a single *global* FOLLOW_k(A) is not the
+  complete test — the full Aho–Ullman test replaces the global FOLLOW_k(A) with the *local* follow
+  sets σ(A) (docs/THEORY.md §3.1; `compute_local_follow_sets` in `lib/first_follow.py`), each a
+  whole context checked as one set, not flattened into individual strings. Strong LL(k) is a
+  sufficient (not necessary) condition for LL(k) — prefer it when it passes, but a strong-LL(k)
+  failure does not itself prove the *language* (or even this grammar) is not LL(k); only the full
+  test with σ(A) can conclude that.
 - Check: Director(αᵢ) ∩ Director(αⱼ) = ∅ for all i ≠ j.
 
 If all checks pass for k = 1 → grammar is LL(1).

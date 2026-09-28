@@ -19,7 +19,7 @@ A **marker** is a symbol or structural feature that an LL parser can observe to 
 ### 1. Unique separator symbol
 A terminal symbol `c` that appears in the language only at a specific position and belongs to none of the "variable" parts.
 
-**Example:** `{w b* c w^R | w ∈ {a,b}*}` — the symbol `c` marks the boundary between `w b*` and `w^R`. Upon seeing `c`, the parser knows the first half is complete.
+**Example:** `{w b c w^R | w ∈ {a,b}*}` — the symbol `c` marks the boundary between `w b` and `w^R`. Upon seeing `c`, the parser knows the first half is complete. (Caution: if the single `b` is instead an *unbounded* run `b*` right before `c`, the marker alone is no longer sufficient — see the "When a Marker Is Absent" trap below.)
 
 ### 2. Alphabet transition
 The language is divided into **phases** with strictly different terminal symbols. The parser can detect phase boundaries by lookahead.
@@ -55,6 +55,17 @@ Markers are absent in:
 - **Copying languages:** `{ww | w ∈ Σ*}` — no marker separates the two copies.
 
 In these cases, return `"uncertain"` with an explanation.
+
+**A marker can also be present yet NOT sufficient.** `{w b* c w^R | w ∈ {a,b}*}` has a perfectly
+unique separator `c`, but the *unbounded* run `b*` directly in front of it means that after
+`b^M c`, only a bounded number of further `b`'s (≤ M) can follow before the parser must switch to
+matching `w^R` — this needs unbounded lookahead to tell `M` apart from any smaller count, so no
+fixed k works (docs/THEORY.md §3.4, bounded-flexibility lemma). This language is DCFL but not
+LL(k) for any k. Do NOT report `"ll"` just because a unique symbol exists — check whether an
+*unbounded* repetition sits immediately against that symbol; if so, return `"uncertain"` and note
+that `substitution` (not `prefix_classes`) should decide it — this language is itself a DCFL, and
+`prefix_classes` proves not_ll only via Theorem 4.7.4 [Sh] (not DCFL ⇒ not LL), which cannot fire
+here — this agent should not suggest `prefix_classes`.
 
 ---
 
@@ -118,7 +129,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
 
 ### Example 1: Unique Center Marker
 
-**Input language:** `{w b* c w^R | w ∈ {a,b}*}`
+**Input language:** `{w b c w^R | w ∈ {a,b}*}`
 
 **Output:**
 ```json
@@ -132,7 +143,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "marker_symbol": "c",
     "marker_type": "unique_separator",
     "marker_position": "center",
-    "marker_description": "Символ 'c' является уникальным разделителем: он встречается в языке ровно один раз в каждом слове и отделяет w b* от w^R. Символ 'c' не входит в алфавит переменной w = {a,b}*, поэтому его появление однозначно сигнализирует о конце первой половины слова.",
+    "marker_description": "Символ 'c' является уникальным разделителем: он встречается в языке ровно один раз в каждом слове и отделяет w b от w^R. Символ 'c' не входит в алфавит переменной w = {a,b}*, поэтому его появление однозначно сигнализирует о конце первой половины слова. Важно: перед 'c' стоит ровно один литерный символ 'b', а не неограниченный повтор b* — иначе маркера было бы недостаточно (см. раздел 'When a Marker Is Absent').",
     "ll_usage": "LL-парсер читает символы w, помещая их в стек через рекурсивные вызовы. При обнаружении символа 'c' (lookahead k=1) парсер переключается в режим проверки w^R: каждый последующий символ должен совпадать с символом, снятым со стека. Поскольку 'c' единственен и не входит в алфавит w, выбор правил однозначен.",
     "suggested_k": 1
   },
@@ -222,7 +233,7 @@ If `retry_params` is provided:
 {
   "retry_params": {
     "strategy": "recheck_marker",
-    "hint": "Symbol 'b' appears in both the w variable and the separator b*. Re-examine whether 'c' truly acts as a unique separator."
+    "hint": "Symbol 'b' appears both in the w variable and as the fixed separator before 'c'; also double-check whether that separator is a single literal 'b' or an unbounded run 'b*' — the latter breaks LL(k) even though 'c' is still unique (docs/THEORY.md §3.4)."
   }
 }
 ```

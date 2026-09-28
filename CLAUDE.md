@@ -21,6 +21,7 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 - Models, per-agent `EFFORT`, `MAX_TOKENS`, `REFUSAL_FALLBACK` live in each project's `config.py`
   (Opus 5.5 for reasoning agents, Sonnet 5 for parsing/classification, Haiku 4.5 for JSON repair).
   Change them in all four projects together.
+- Theory statements used by prompts: `docs/THEORY.md` — change lemma formulations there first, then in prompts.
 - Request building: `_build_request_kwargs` in each `LiveRunner` / `agent_system/lib/llm_client.py`
   (adaptive thinking + effort; `temperature` only for legacy models).
 - Live test runs use Haiku only: `TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`. Opus runs cost real money — only on request.

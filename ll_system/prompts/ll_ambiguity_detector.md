@@ -62,7 +62,14 @@ The word `a^n b^n c^n` ∈ L because both `i = j = n` AND `j = k = n`. In any gr
 
 ### 3. Intersection Argument
 
-Sometimes: compute L' = L ∩ R for a regular language R. If L' is essentially ambiguous, then so is L (under certain conditions). Use Parikh's theorem or structural analysis.
+Sometimes: compute L' = L ∩ R for a regular language R. If L' is essentially ambiguous, then so is
+L — under exactly one condition, no others: **L itself must be a CFL** (docs/THEORY.md §3.5).
+This is what makes the argument valid: unambiguous CFLs are closed under intersection with a
+regular language (given an unambiguous grammar for L and a DFA for R, the standard product
+construction yields an unambiguous grammar for L ∩ R), so if L were unambiguous, L ∩ R would be
+unambiguous too — contrapositive: L ∩ R essentially ambiguous ⇒ L is not unambiguous ⇒ (since L is
+a CFL) L is essentially ambiguous. The argument does not need Parikh's theorem, and it says nothing
+about a non-context-free L.
 
 ---
 

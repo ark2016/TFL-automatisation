@@ -98,21 +98,43 @@ Return **only** valid JSON. No markdown fences, no extra text.
 
 ## Solved Examples
 
-### Example 1: {w1w2w1w3} — Intersection with a*b*a*c*
+### Example 1: {w1w2w1w3} — Intersection with a+b+ac·a+b+ac
 
 **Task:** L = {w1w2w1w3 | w2 in {b,c}*, w1 in {a,b}*, w3 in {a,c}*, |wi| > 0}
 
 **Reasoning (Chain-of-Thought):**
-1. The language has repeated w1 with w1 in {a,b}*. If I restrict w1 to a*, w2 to b*, w3 to c*, I get a simpler language.
-2. Let R = a+ · b+ · a+ · c+. R is regular (described by regex a+b+a+c+).
-3. L ∩ R = {a^n · b^m · a^n · c^k | n >= 1, m >= 1, k >= 1}.
-   Justification: words in L ∩ R must have form w1w2w1w3 where all components match R's structure. w1 must be a+ (only a's, from R's first and third blocks). w2 must be b+ (from R's second block, and w2 in {b,c}*). w3 must be c+ (from R's fourth block, and w3 in {a,c}*). The two copies of w1 must be identical, so both a-blocks have length n.
-4. Now pump L ∩ R. Choose z = a^p b c a^p c (but better: z = a^p b a^p c).
-5. z = a^p · b · a^p · c, in L ∩ R with n=p, m=1, k=1.
-6. |z| = 2p+2 >= p.
-7. Since |vwx| <= p, vwx cannot span both a-blocks (separated by distance >= 1+p).
-8. Cases: (a) vwx in first a^p — pumping changes first block but not second. (b) vwx spans first a^p and b — still only affects first block + separator. (c) vwx spans b and second a^p — affects separator + second block. (d) vwx in second a^p — changes second but not first. (e) vwx spans second a^p and c.
-9. In all cases, pumping breaks the equality of the two a-blocks (n != n').
+1. The naive restriction R = a+ · b+ · a+ · c+ (regex a+b+a+c+) does NOT force the two w1 copies to
+   have equal length: extra a's after the second w1 simply fall into w3, since w3 in {a,c}+. E.g.
+   abaac is in L with w1=a, w2=b, w3=aac. In fact L ∩ a+b+a+c+ = {a^n b^m a^j c^k | j >= n} — this
+   IS context-free (j is unbounded above n), so this R proves nothing about non-CFL.
+2. Fix this by pinning down w1 completely, including its very last symbol, so nothing can leak into
+   w3: let R = a+ · b+ · a · c · a+ · b+ · a · c (regex a+b+aca+b+ac). Each copy of the pattern ends
+   the a-block with a single 'a' immediately followed by 'c' — this marker leaves w3 no room to
+   absorb stray a's.
+3. R is regular (explicit regex a+b+aca+b+ac).
+4. L ∩ R = {a^n · b^m · a · c · a^n · b^m · a · c | n >= 1, m >= 1}. Justification by exhausting how
+   w1 (in {a,b}+) can start inside R's first "a+b+ac" chunk:
+   - w1 = a^i, i < n1 (a proper prefix of the first a-block): then w2 must start with 'a' — but
+     w2 in {b,c}+, impossible.
+   - w1 = a^n1 exactly (stops right before the b-block): then w2 = b^j, and the second copy of w1
+     must start right after the b-block, i.e. at "a c a…" — so the second w1 can be at most 'a'
+     (length 1, since {a,b}+ cannot include 'c'), forcing n1 = 1 and leaving 'c' + the rest as w3 —
+     but the rest still contains the second copy's b-block, which is not in {a,c}+. Impossible.
+   - w1 = a^n1 b^j, j <= m1 (straddling into the b-block): the second copy of w1 would have to start
+     with "ac" — impossible, w1 in {a,b}+ excludes 'c'.
+   - The only surviving split: w1 = a^n b^m a (whole first a-block, whole b-block, and the separator
+     'a'), w2 = c, second w1 = a^n b^m a (forces n2=n, m2=m by literal equality of the two copies),
+     w3 = c. Checked exhaustively for 1 <= n1,m1,n2,m2 <= 4 (brute force).
+5. Now pump L ∩ R. Choose z = a^p b^p ac · a^p b^p ac (n=m=p in both copies). |z| = 4p+4 >= p.
+6. For any decomposition z = uvwxy, |vwx| <= p, |vx| >= 1, use a SINGLE pump value i=0 that works
+   for every decomposition (pumping UP is unsafe here too — see cfl_pumping.md — so pump DOWN):
+   - If vx touches the 'c' or the lone separator 'a' immediately before it, removing it (i=0)
+     destroys one of the two "ac" markers, so uwy is not even in R (R requires exactly two of them).
+   - Otherwise vx lies entirely inside at most one a-block and/or one b-block of a SINGLE copy —
+     the window |vwx| <= p cannot reach the same-named block of the other copy (they are separated
+     by at least the rest of the first copy, length > p). Removing vx (i=0) either empties that
+     block (uwy leaves R's structure) or shortens it, breaking n1=n2 or m1=m2.
+7. Every decomposition leaves L ∩ R; checked exhaustively at p=3 (233 decompositions).
 
 **Output:**
 ```json
@@ -121,48 +143,30 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "status": "success",
   "verdict": "non_cfl",
   "evidence": {
-    "regular_language": "a+ · b+ · a+ · c+",
-    "regular_language_regex": "a+b+a+c+",
-    "regular_justification": "Язык R описывается регулярным выражением a⁺b⁺a⁺c⁺, следовательно, является регулярным.",
-    "intersection_description": "{a^n · b^m · a^n · c^k | n >= 1, m >= 1, k >= 1}",
+    "regular_language": "a+ · b+ · a · c · a+ · b+ · a · c",
+    "regular_language_regex": "a+b+aca+b+ac",
+    "regular_justification": "Язык R описывается регулярным выражением a⁺b⁺aca⁺b⁺ac, следовательно, является регулярным.",
+    "intersection_description": "{a^n · b^m · ac · a^n · b^m · ac | n >= 1, m >= 1}",
     "intersection_not_cfl_proof": {
       "method": "pumping",
-      "word_chosen": "a^p b a^p c",
+      "word_chosen": "a^p b^p ac a^p b^p ac",
       "cases": [
         {
-          "case": "vwx целиком в первом блоке aᵖ",
+          "case": "vx задевает 'c' или одиночный разделитель 'a' перед 'c'",
           "pump_value": 0,
-          "pumped_word": "a^{p-|vx|} b a^p c",
-          "why_not_in_L": "Первый a-блок теперь имеет длину p-|vx| < p, второй по-прежнему p. Блоки не равны: n₁ ≠ n₂."
+          "pumped_word": "один из двух маркеров «ac» разрушен",
+          "why_not_in_L": "В R ровно два маркера «ac» (по одному на копию). Если vx содержит символ маркера, при i=0 (удаление vx) маркер исчезает или искажается — uwy не в R, значит не в L ∩ R."
         },
         {
-          "case": "vwx на границе первого aᵖ и b",
+          "case": "vx целиком в одном a-блоке и/или одном b-блоке одной копии",
           "pump_value": 0,
-          "pumped_word": "a^{p-j} b' a^p c (j >= 0, часть a и/или b затронуты)",
-          "why_not_in_L": "При i=0 удаляются символы из первого блока и/или разделитель b. Если b удалён, результат не в R (нет b-блока). Если b цел, первый a-блок короче второго."
-        },
-        {
-          "case": "vwx содержит b и часть второго aᵖ",
-          "pump_value": 0,
-          "pumped_word": "a^p b' a^{p-k} c (часть b и/или a затронуты)",
-          "why_not_in_L": "Аналогично: удаление нарушает структуру R или создаёт неравные a-блоки."
-        },
-        {
-          "case": "vwx целиком во втором блоке aᵖ",
-          "pump_value": 0,
-          "pumped_word": "a^p b a^{p-|vx|} c",
-          "why_not_in_L": "Второй a-блок короче первого: p-|vx| < p = n₁."
-        },
-        {
-          "case": "vwx на границе второго aᵖ и c",
-          "pump_value": 0,
-          "pumped_word": "a^p b a^{p-j} c' (j >= 0)",
-          "why_not_in_L": "Если c удалён, результат не в R. Если c цел, второй a-блок укорочен."
+          "pumped_word": "тот же a-блок и/или b-блок укорочен (или опустошён) ровно в ОДНОЙ копии",
+          "why_not_in_L": "Окно |vwx| <= p не может дотянуться до одноимённого блока второй копии — их разделяет остаток первой копии длиной > p. При i=0 либо блок опустошается (нарушена структура a⁺b⁺ac — uwy не в R), либо укорачивается: n₁ ≠ n₂ или m₁ ≠ m₂, значит uwy не в L ∩ R."
         }
       ],
       "all_cases_covered": true
     },
-    "conclusion": "R = a⁺b⁺a⁺c⁺ — регулярный язык. L ∩ R = {aⁿbᵐaⁿcᵏ | n,m,k ≥ 1} не является КС-языком (доказано леммой о накачке). Поскольку КС ∩ РЕГ = КС, если бы L был КС, то L ∩ R тоже был бы КС. Противоречие. Следовательно, L не является контекстно-свободным."
+    "conclusion": "R = a⁺b⁺aca⁺b⁺ac — регулярный язык (задан регулярным выражением a+b+aca+b+ac). L ∩ R = {aⁿbᵐac·aⁿbᵐac | n,m ≥ 1} не является КС-языком: для z = aᵖbᵖac·aᵖbᵖac и любого разбиения uvwxy с |vwx| ≤ p, |vx| ≥ 1 накачка с i = 0 либо ломает маркер «ac», либо нарушает n₁=n₂ или m₁=m₂ — доказано леммой о накачке для КС-языков. Поскольку КС ∩ РЕГ = КС, если бы L был КС, то L ∩ R тоже был бы КС. Противоречие. Следовательно, L не является контекстно-свободным."
   },
   "confidence": 0.93,
   "errors": []

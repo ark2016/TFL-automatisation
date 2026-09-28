@@ -94,7 +94,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "action": "proceed_to_formalizer",
   "retry_context": null,
   "hints_for_human": [
-    "Установлено: L ∩ a*b* = {aⁿbⁿ | n ≥ 0} (доказано через анализ грамматики)",
+    "Установлено: для грамматики S → SaSb | ε | A, A → bb | aa | bSb, L ∩ a*b* = {aᵐbᵏ | m ≡ k (mod 2), m ≤ 3k+2} (доказано перебором; НЕ {aⁿbⁿ} — контрпримеры bb, aa)",
     "Инвариант: для всех w ∈ L, разность #a(w) − #b(w) чётна",
     "Рекомендация: для экзамена достаточно доказательства через замыкание (пересечение с a*b*)"
   ],
@@ -120,7 +120,7 @@ This field is critical for the user experience. Even when the system fully solve
 
 Include any of these that apply:
 
-1. **Установленные факты** — things proved along the way (e.g., "L ∩ a*b* = {aⁿbⁿ}", "все строки из L имеют чётную разность #a − #b")
+1. **Установленные факты** — things proved along the way (e.g., "L ∩ a*b* = {aᵐbᵏ | m ≡ k (mod 2), m ≤ 3k+2}" for S → SaSb | ε | A, A → bb | aa | bSb, "все строки из L имеют чётную разность #a − #b")
 2. **Опровергнутые гипотезы** — approaches that failed and WHY (e.g., "Regex (aa|bb)Σ* неверен: контрпример abbba")
 3. **Контрпримеры** — specific words from oracle testing with explanation
 4. **Частичные конструкции** — partial DFA/regex that works for most cases, with known failures

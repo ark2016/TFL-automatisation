@@ -1,1 +1,6 @@
-{"verdict": "uncertain", "confidence": 0.5, "reasoning": "Grammar filter with counting constraint needs careful analysis", "advisory_only": true}
+{
+  "verdict": "uncertain",
+  "confidence": 0.45,
+  "reasoning": "The grammar G is context-free by definition, but the filter |a|=|b| is an equality between two counters, not a threshold/modular condition on one counter and not a regex — so it is a non-regular CFL filter, and CFL ∩ CFL is NOT closed under intersection in general (Hard rule 1 exception). Structurally: every application of S→aSbb / S→bbSa adds one 'a' and two 'b', so |a|=|b| forces the nesting depth n and the central block a^n (n≥2, or the empty derivation) to be tied together — this is exactly the kind of two-linked-quantities pattern that intersecting with a regular set (b*a*b*a*) reduces to a provably non-CFL language via Ogden's lemma (see docs/THEORY.md §2.3). I cannot decide CFL vs non-CFL from surface features alone; the destructive agents (closure_reduction with the regular witness b*a*b*a*, then Ogden's lemma) must settle this.",
+  "advisory_only": true
+}

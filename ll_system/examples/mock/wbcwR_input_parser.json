@@ -1,10 +1,10 @@
 {
   "ir": {
     "task_type": "ll_check_language",
-    "source_text": "L = {w b* c w^R | w ∈ {a,b}*}. Является ли L LL(k)-языком?",
+    "source_text": "L = {w b c w^R | w ∈ {a,b}*}. Является ли L LL(k)-языком?",
     "language_spec": {
       "kind": "natural",
-      "description": "{w b* c w^R | w in {a,b}*}"
+      "description": "{w b c w^R | w in {a,b}*}"
     },
     "question": "is_ll"
   },

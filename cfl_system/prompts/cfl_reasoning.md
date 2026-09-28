@@ -161,14 +161,14 @@ Return **only** valid JSON. No markdown fences, no extra text.
 - pda_builder: failure
 - decomposition: inconclusive
 - parikh: semilinear (inconclusive)
-- pumping_cfl: success (non_cfl, 0.90)
+- pumping_cfl: inconclusive (verdict null — direct pumping unreliable, recommends closure_reduction)
 - closure_reduction: success (non_cfl, 0.93)
 - ogden: inconclusive
 - interchange: inconclusive
 - morphism: inconclusive
 - oracle_test: not_applicable
-- claim_verification: pumping verified, closure verified
-- proof_checker: verified [pumping_cfl, closure_reduction]
+- claim_verification: closure verified
+- proof_checker: verified [closure_reduction]
 
 **Output:**
 ```json
@@ -176,15 +176,17 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "agent": "reasoning",
   "decision": "done",
   "verdict": "non_cfl",
-  "confidence": 0.95,
+  "confidence": 0.93,
   "primary_evidence": "closure_reduction",
-  "supporting_evidence": ["pumping_cfl", "parikh"],
+  "supporting_evidence": ["parikh", "pumping_cfl"],
   "contradictions": [],
-  "summary": "Язык L = {w₁w₂w₁w₃ | w₂ ∈ {b,c}*, w₁ ∈ {a,b}*, w₃ ∈ {a,c}*, |wᵢ| > 0} не является контекстно-свободным. Основное доказательство через замкнутость: пересечение L с регулярным языком R = a⁺b⁺a⁺c⁺ даёт L ∩ R = {aⁿbᵐaⁿcᵏ | n,m,k ≥ 1}, который не является КС (доказано леммой Бар-Хиллеля). Дополнительное подтверждение: прямое применение леммы о накачке к слову aᵖbaᵖc. Конструктивные агенты (грамматика, МП-автомат) не смогли построить конструкции — косвенное подтверждение не-КС статуса.",
-  "primary_justification": "Теорема: L не является контекстно-свободным языком.\n\nДоказательство. Рассмотрим регулярный язык R = a⁺b⁺a⁺c⁺ (описан регулярным выражением). Покажем, что L ∩ R не является КС-языком.\n\nL ∩ R = {aⁿbᵐaⁿcᵏ | n ≥ 1, m ≥ 1, k ≥ 1}. Применим лемму о накачке для КС-языков. Пусть p — длина накачки. Выберем z = aᵖbaᵖc ∈ L ∩ R. Для любого разбиения z = uvwxy с |vwx| ≤ p, |vx| ≥ 1: подстрока vwx не может покрыть оба блока aᵖ (расстояние между ними > p). Следовательно, накачка изменяет длину ровно одного блока, нарушая равенство n₁ = n₂. По лемме Бар-Хиллеля, L ∩ R не является КС.\n\nПоскольку КС ∩ РЕГ = КС, если бы L был КС, то L ∩ R тоже был бы КС. Противоречие. ∎",
+  "summary": "Язык L = {w₁w₂w₁w₃ | w₂ ∈ {b,c}*, w₁ ∈ {a,b}*, w₃ ∈ {a,c}*, |wᵢ| > 0} не является контекстно-свободным. Основное доказательство через замкнутость: пересечение L с регулярным языком R = a⁺b⁺aca⁺b⁺ac даёт L ∩ R = {aⁿbᵐac·aⁿbᵐac | n,m ≥ 1}, который не является КС (накачка вниз, i=0, на слове z = aᵖbᵖac·aᵖbᵖac; доказано леммой Бар-Хиллеля). Прямая накачка pumping_cfl оказалась ненадёжной: для слова aᵖbaᵖc разбиение v=a|w=b|x=a (границы a-блоков) даёт a^{p-1+i}ba^{p-1+i}c ∈ L при всех i, то есть ни одно i не выводит это разбиение из L; дополнительно лишние a при накачке вверх других разбиений уходят в w₃ ∈ {a,c}⁺. Поэтому этот агент честно вернул uncertain и рекомендовал closure_reduction — что и стало основным доказательством. Конструктивные агенты (грамматика, МП-автомат) не смогли построить конструкции — косвенное подтверждение не-КС статуса.",
+  "primary_justification": "Теорема: L не является контекстно-свободным языком.\n\nДоказательство. Рассмотрим регулярный язык R = a⁺b⁺aca⁺b⁺ac (регулярное выражение a+b+aca+b+ac). Покажем, что L ∩ R не является КС-языком.\n\nL ∩ R = {aⁿbᵐac·aⁿbᵐac | n ≥ 1, m ≥ 1}: единственное разложение w₁w₂w₁w₃, совместимое с R, — это w₁ = aⁿbᵐa, w₂ = c, второй экземпляр w₁ = aⁿbᵐa (отсюда n₂=n, m₂=m), w₃ = c; все остальные варианты старта w₁ невозможны (см. разбор в closure_reduction).\n\nПрименим лемму о накачке для КС-языков. Пусть p — длина накачки. Выберем z = aᵖbᵖac·aᵖbᵖac ∈ L ∩ R, |z| = 4p+4. Для любого разбиения z = uvwxy с |vwx| ≤ p, |vx| ≥ 1 возьмём i = 0: если vx задевает 'c' или разделительную 'a' перед ней — uwy не в R (нарушен маркер «ac»); иначе vx лежит внутри одного a-блока и/или одного b-блока одной копии (окно ≤ p не дотягивается до одноимённого блока второй копии) — накачка вниз либо опустошает блок (uwy не в R), либо нарушает n₁=n₂ или m₁=m₂ (uwy не в L ∩ R). По лемме Бар-Хиллеля, L ∩ R не является КС.\n\nПоскольку КС ∩ РЕГ = КС, если бы L был КС, то L ∩ R тоже был бы КС. Противоречие. ∎",
   "retry_plan": null,
   "hints_for_human": [
-    "Установлено: L ∩ a⁺b⁺a⁺c⁺ = {aⁿbᵐaⁿcᵏ | n,m,k ≥ 1} — не КС",
+    "Установлено: L ∩ a⁺b⁺aca⁺b⁺ac = {aⁿbᵐac·aⁿbᵐac | n,m ≥ 1} — не КС",
+    "Наивное R = a⁺b⁺a⁺c⁺ ложно упрощает L: лишние a уходят в w₃ ∈ {a,c}⁺, L ∩ a⁺b⁺a⁺c⁺ = {aⁿbᵐaʲcᵏ | j≥n} — это КС, доказать не-КС так нельзя",
+    "Прямая накачка L (без сужения) ненадёжна по той же причине: слово переразлагается при накачке вверх — используйте closure_reduction с R = a⁺b⁺aca⁺b⁺ac и накачку вниз (i=0)",
     "Повторяющееся подслово w₁ на позициях 1 и 3 создаёт зависимость копирования, недоступную для стека МП-автомата",
     "Образ Париха полулинеен — это не помогает, но подтверждает, что нужны структурные методы",
     "Для экзамена достаточно доказательства через замкнутость (пересечение с регулярным)"
@@ -193,31 +195,35 @@ Return **only** valid JSON. No markdown fences, no extra text.
 }
 ```
 
-### Example 2: Grammar + filter — CFL (verified constructive proof)
+### Example 2: Grammar + counting filter — NON-CFL (task_grammar_filter_49, verified destructive proof)
 
 **Input summary:**
-- classifier_hint: cfl (0.75)
-- cfg_builder: success (grammar for intersection)
-- oracle_test: pass (50 positive, 50 negative)
-- proof_checker: verified [cfg_builder]
-- All destructive agents: failure
+- classifier_hint: uncertain (0.45) — |a|=|b| is a two-counter equality, not a regular filter (Hard rule 1 exception)
+- cfg_builder: failure — |a|=|b| is not regular, product construction with a filter DFA does not apply
+  (cfg_builder's failure is not itself evidence of non-CFL; it only shows the ∩REG shortcut is
+  unavailable, so it is excluded from supporting_evidence below)
+- closure_reduction: success — R = b*a*b*a*, (L(G) ∩ F) ∩ R = {b²ᵐa²ⁿ⁻ᵐb²ⁿ⁻²ᵐaᵐ | n ≥ 2, 0 ≤ m ≤ n} ∪ {ε},
+  proved non-CFL by Ogden's lemma (witness z = b²ᵖa³ᵖb²ᵖaᵖ, marked positions in the first b-block)
+- proof_checker: verified [closure_reduction]
+- pumping_cfl: inconclusive (direct pumping on L(G) ∩ F unreliable — recommends closure_reduction, consistent)
 
 **Output:**
 ```json
 {
   "agent": "reasoning",
   "decision": "done",
-  "verdict": "cfl",
-  "confidence": 0.90,
-  "primary_evidence": "cfg_builder",
+  "verdict": "non_cfl",
+  "confidence": 0.93,
+  "primary_evidence": "closure_reduction",
   "supporting_evidence": [],
   "contradictions": [],
-  "summary": "Язык L(G) ∩ {w : |a| = |b|} является контекстно-свободным. Построена КС-грамматика G', порождающая ровно L. Oracle-тестирование подтвердило корректность: 50 положительных и 50 отрицательных тестов пройдены без контрпримеров.",
-  "primary_justification": "Теорема: L = L(G) ∩ {w : |w|_a = |w|_b} является контекстно-свободным языком.\n\nДоказательство. Построим КС-грамматику G' такую, что L(G') = L. [Грамматика G' из cfg_builder]. Корректность подтверждена автоматическим тестированием (CYK-парсер проверил 50 положительных и 50 отрицательных примеров). ∎",
+  "summary": "Язык L(G) ∩ {w : |w|_a = |w|_b} НЕ является контекстно-свободным. Фильтр |a|=|b| сравнивает два счётчика и сам не регулярен, поэтому закон CFL ∩ REG здесь неприменим (CFL ∩ CFL не замкнуто относительно пересечения) — попытка cfg_builder построить грамматику провалилась (это не доказательство не-КС, лишь недоступность ∩REG-сведения). Пересечение с регулярным языком R = b*a*b*a* сводит задачу к языку {b²ᵐa²ⁿ⁻ᵐb²ⁿ⁻²ᵐaᵐ}, для которого лемма Огдена даёт прямое противоречие.",
+  "primary_justification": "Теорема: L = L(G) ∩ {w : |w|_a = |w|_b} не является контекстно-свободным.\n\nДоказательство (closure_reduction + лемма Огдена). Каждое применение правил S → aSbb / S → bbSa добавляет 1 'a' и 2 'b'; из |a| = |b| следует, что глубина вложенности n и центральный блок a^n (n ≥ 2, либо ε) — две связанные величины. Пересекая L(G) ∩ F с регулярным R = b*a*b*a*, получаем L' = {b²ᵐa²ⁿ⁻ᵐb²ⁿ⁻²ᵐaᵐ | n ≥ 2, 0 ≤ m ≤ n} ∪ {ε} (CFL ∩ REG = CFL, поэтому если L(G) ∩ F было бы КС, то и L' было бы КС). Применяем лемму Огдена к z = b²ᵖa³ᵖb²ᵖaᵖ (m = p, n = 2p) с помеченным первым блоком b²ᵖ: любое разбиение uvwxy с накачиваемой позицией в vx либо выбрасывает слово из b*a*b*a* при i = 2, либо при i = 0 нарушает баланс B₁ = 2B₄ (если x — в первых трёх блоках) или одновременно требует s = 2t и t = 0, s = 0 — противоречие (если x = aᵗ в последнем блоке). Все случаи невозможны ⇒ L' ∉ CFL ⇒ L(G) ∩ F ∉ CFL. ∎",
   "retry_plan": null,
   "hints_for_human": [
-    "Грамматика G' проверена oracle на 100 словах без контрпримеров",
-    "Деструктивные агенты (накачка, Огден, замыкание) не нашли доказательств не-КС — косвенное подтверждение КС-статуса"
+    "cfg_builder честно вернул failure вместо придуманной «модифицированной грамматики» — фильтр |a|=|b| не регулярен (это не доказательство не-КС, поэтому cfg_builder не входит в supporting_evidence)",
+    "Классификатор дал uncertain (0.45), а не автоматический cfl — так и должно быть для сравнения двух счётчиков",
+    "См. docs/THEORY.md §2.3 для полного разбора"
   ],
   "errors": []
 }

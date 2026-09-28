@@ -341,8 +341,11 @@ assemble_result_node      assemble_early_failure
 Логика:
 1. **Format 2:** Если `kind == "grammar_filter"`:
    - Анализировать фильтр: регулярен ли?
-   - Если фильтр = Comparison(count_a, count_b) → регулярное условие (через PDA × DFA)
-   - Если фильтр = Modular → регулярное условие
+   - Если фильтр = Comparison с константой (например `|a| ≥ k`) → регулярное условие
+   - Если фильтр = Comparison(count_a, count_b) (сравнение двух счётчиков, например `|a| = |b|`)
+     → **НЕ регулярно** (`filter_is_regular: false`, `intersection_strategy: "manual"`; L(G) ∩ F
+     может не быть КС, так как CFL ∩ CFL не замкнуто — см. THEORY.md §2.3)
+   - Если фильтр = Modular (например `|a| ≡ r (mod m)`) → регулярное условие
    - Если фильтр нерегулярен → пометить `filter_analysis_needed: true`
    - Результат: `{"filter_is_regular": true/false, "intersection_strategy": "pda_x_dfa" | "manual"}`
 
@@ -553,18 +556,25 @@ LLM анализирует коммутативный образ.
 2. Показать, что L ∩ R не КС (через pumping)
 3. Поскольку CFL ∩ REG = CFL, если L ∩ R не КС → L не КС
 
-**Пример:** L = {w₁w₂w₁w₃ | ...}, R = a* · {b,c}* · a* · {a,c}*
-Тогда L ∩ R = {aⁿ · w₂ · aⁿ · w₃} — содержит aⁿ(b|c)ᵐaⁿ, далее pumping.
+**Пример:** L = {w₁w₂w₁w₃ | w₂ ∈ {b,c}⁺, w₁ ∈ {a,b}⁺, w₃ ∈ {a,c}⁺}, R = a⁺b⁺ac·a⁺b⁺ac
+(regex `a+b+aca+b+ac`). Наивный R = a*(b|c)*a*(a|c)* (или a⁺b⁺a⁺c⁺) **не годится**: лишние a
+из второго вхождения w₁ уходят в w₃ ∈ {a,c}⁺, поэтому L ∩ a⁺b⁺a⁺c⁺ = {aⁿbᵐaʲcᵏ | j ≥ n} —
+это КС-язык, и он ничего не доказывает. Фиксация w₁ вплоть до последнего символа перед
+явным маркером «ac» устраняет эту свободу: L ∩ R = {aⁿbᵐac·aⁿbᵐac | n,m ≥ 1} (единственное
+разложение w₁w₂w₁w₃, совместимое с R, — это w₁ = aⁿbᵐa, w₂ = c, второй w₁ = aⁿbᵐa, w₃ = c;
+см. полный разбор вариантов в `prompts/cfl_closure_reduction.md`). Для z = aᵖbᵖac·aᵖbᵖac
+накачка вниз (i = 0) для любого разбиения либо ломает один из двух маркеров «ac», либо
+нарушает n₁ = n₂ или m₁ = m₂ — далее pumping.
 
 **Выход (evidence):**
 ```json
 {
-  "regular_language": "a*(b|c)*a*(a|c)*",
-  "regular_language_regex": "a*(b|c)*a*(a|c)*",
-  "intersection_description": "{a^n w₂ a^n w₃ | w₂ ∈ {b,c}+, w₃ ∈ {a,c}+}",
+  "regular_language": "a+b+ac·a+b+ac",
+  "regular_language_regex": "a+b+aca+b+ac",
+  "intersection_description": "{a^n b^m ac a^n b^m ac | n ≥ 1, m ≥ 1}",
   "intersection_not_cfl_proof": {
     "method": "pumping",
-    "word_chosen": "a^p b a^p c",
+    "word_chosen": "a^p b^p ac a^p b^p ac",
     "cases": [ ... ]
   },
   "conclusion": "L ∩ R is not CFL, R is regular, therefore L is not CFL"
@@ -575,19 +585,25 @@ LLM анализирует коммутативный образ.
 #### 4.5.8. interchange (destructive, LLM)
 
 **Промпт:** `prompts/cfl_interchange.md`
-**Задача:** Доказать ¬CFL с помощью Interchange lemma или леммы Соколовского.
+**Задача:** Доказать ¬CFL с помощью Interchange lemma (лемма Соколовского удалена из системы —
+формулировка была непроверяема, см. docs/THEORY.md §2.4).
 
-**Interchange lemma:** Для КС-языка L существует константа c такая, что
-для любых n, из любого множества из n² слов длины n в L можно выбрать
-n слов, для которых interchange (обмен подсловами) сохраняет принадлежность L.
+**Лемма 4.5.1 [Sh] (Ogden–Ross–Winklmann, 1985):** Для КС-языка L существует c > 0 такое, что для всех
+n ≥ m ≥ 2 и всякого R ⊆ L ∩ Σⁿ найдётся Z = {z₁,…,z_k} ⊆ R с k ≥ |R| / (c(n+1)²) и разложениями zᵢ = wᵢxᵢyᵢ,
+где все wᵢ одной длины, все yᵢ одной длины, m/2 < |xᵢ| ≤ m одной длины, и wᵢxⱼyᵢ ∈ L для всех i, j
+(средние блоки взаимозаменяемы). Схема доказательства ¬CFL: взять R экспоненциального размера в «жёстком»
+регулярном шаблоне, показать, что взаимозаменяемость вынуждает xᵢ = xⱼ, и получить |Z| ≤ (нечто существенно
+меньшее экспоненциальной нижней оценки) — противоречие.
 
-**Когда эффективен:** Когда pumping и Ogden не работают.
-Пример: {xyyz | |y| > 0} над алфавитом из 3+ букв.
+**Когда эффективен:** Когда pumping и Ogden не работают и есть плотное (экспоненциальное) множество слов
+в жёстком шаблоне. Учебный пример: L₆ = {xyyz | y ≠ ε} над 6-буквенным алфавитом [Sh, Thm 4.5.4]
+(бесквадратные слова + плотность). Для экзаменационных языков над {a,b,c} лемма почти никогда не подходит —
+предпочитать pumping/Ogden и честно возвращать `inconclusive`.
 
 **Выход (evidence):**
 ```json
 {
-  "method": "interchange_lemma" | "sokolowski",
+  "method": "interchange_lemma",
   "chosen_words": "...",
   "interchange_result": "...",
   "contradiction": "...",
@@ -773,7 +789,7 @@ n слов, для которых interchange (обмен подсловами) 
   "confidence": 0.95,
   "proof": {
     "method": "closure_reduction + pumping",
-    "summary": "Intersected L with R = a*(b|c)*a*(a|c)* (regular). Showed L ∩ R contains {a^n b a^n c | n ≥ 1} which is not CFL by Bar-Hillel pumping.",
+    "summary": "Intersected L with R = a+b+ac·a+b+ac (regular). Showed L ∩ R = {a^n b^m ac · a^n b^m ac | n,m ≥ 1}, not CFL: pumping z = a^p b^p ac·a^p b^p ac down (i = 0) breaks one of the two matched counters for every decomposition (docs/THEORY.md §2).",
     "details": { ... }
   },
   "grammar": null,

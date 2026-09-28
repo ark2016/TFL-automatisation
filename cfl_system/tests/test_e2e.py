@@ -59,14 +59,19 @@ def test_e2e_w0w1w2w1w3():
 
 
 # ---------------------------------------------------------------------------
-# Test 4: task_grammar_filter_49 → cfl
+# Test 4: task_grammar_filter_49 → non_cfl
+#
+# THEORY.md §2.3: the previous "cfl" reference verdict was wrong. |a|=|b| is
+# an equality between two counters, not a regular filter, so CFL ∩ REG does
+# not apply; cfg_builder honestly fails and closure_reduction (R = b*a*b*a*,
+# Ogden's lemma) proves L(G) ∩ F is not context-free.
 # ---------------------------------------------------------------------------
 
 def test_e2e_grammar_filter_49():
     ir = load_json("task_grammar_filter_49.json")
     mock = MockRunner(str(MOCK_DIR), "task_grammar_filter_49")
     result = run_pipeline(ir, mock_runner=mock)
-    assert result["verdict"] == "cfl"
+    assert result["verdict"] == "non_cfl"
 
 
 # ---------------------------------------------------------------------------

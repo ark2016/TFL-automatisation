@@ -105,7 +105,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
 - `proof.argument`: the full logical argument tying it together.
 - `proof.conclusion`: the final statement.
 
-## Example: Language of balanced parentheses
+## Example: Language {a^n b^n}
 
 For L = {a^n b^n | n >= 0}:
 
