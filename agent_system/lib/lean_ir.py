@@ -44,19 +44,56 @@ its own field-name convention rather than importing ``cfl_system``'s).
 
 Alphabet type
 -------------
-``inductive Sym | a | b | c ... deriving DecidableEq, Fintype, Repr`` --
-one named constructor per letter of ``ir.alphabet`` (or ``language_spec``'s
+``inductive Letter | a | b | c ... deriving DecidableEq, Repr`` -- one named
+constructor per letter of ``ir.alphabet`` (or ``language_spec``'s
 ``terminals``/``alphabet`` field, per IR kind), rather than ``Fin k``.
 Reasoning: every generated word literal and grammar rule reads as
-``Sym.a``/``Sym.b`` instead of an opaque ``(0 : Fin k)``/``(1 : Fin k)``,
+``Letter.a``/``Letter.b`` instead of an opaque ``(0 : Fin k)``/``(1 : Fin k)``,
 which matters because this text is read by both the LLM formalizer (writing
 the proof body against these exact names) and a human auditing a `verified`
 result. ``Fin k`` would need the same "letter -> index" bookkeeping duplicated
 by every reader; a named inductive puts it in one place (this module) and
-erases it from everything downstream. The three `deriving` classes are
-exactly what ``Language.IsRegular``/``Language.IsContextFree``/``is_DCF`` (in
-their `Fintype`-and/or-`DecidableEq`-polymorphic statements) and `Finset`
-literals (grammar rules) need.
+erases it from everything downstream. Named ``Letter``, not ``Sym``: Mathlib
+already has a top-level ``def Sym (α : Type*) (n : ℕ) := ...`` (symmetric
+powers, ``Mathlib.Data.Sym.Basic``, transitively imported by every direction
+here) -- ``inductive Sym`` in ``check.lean`` collides with it
+("`Sym` has already been declared"), confirmed against the pinned image
+(``docker run tfl-lean4``) while writing this module.
+
+``deriving DecidableEq, Repr`` only, **not** ``Fintype``, on the ``Letter``
+inductive itself: ``deriving Fintype`` for a plain enum inductive fails to
+elaborate under the pinned toolchain, ``leanprover/lean4:v4.33.0``
+(confirmed with a minimal ``inductive Letter | a | b deriving Fintype``
+against ``docker run tfl-lean4``: `` Tactic `rewrite` failed... Application
+type mismatch: ... Letter.enumList_nodup ... expected ...
+(↑Letter.enumList).Nodup`` -- a `Finset`/`Multiset` coercion mismatch
+inside the derive handler itself, not anything to do with this module's
+generated names -- and the hint Lean prints for the error,
+``deriving instance Fintype for Letter`` as a separate command, hits the
+exact same broken handler). Every ``LeanStatement`` this module or its
+``cfl_system``/``dcfl_system`` wrappers ever produced with ``Fintype`` in
+the ``deriving`` clause would have failed to type-check regardless of the
+proof body.
+
+Whether a ``Fintype Letter`` instance is needed at all depends on the
+direction: ``Language.IsRegular``/``Language.IsContextFree``
+(``Mathlib.Computability.{DFA, ContextFreeGrammar}``) quantify ``Fintype``
+over the automaton's *state* type only, never over the alphabet -- REG/CFL
+statements need nothing beyond ``DecidableEq Letter``. langlib's
+``is_DCF``/``is_DPDA`` (``Langlib/Automata/DeterministicPushdown/
+Definition.lean``: ``is_DPDA {T : Type} [Fintype T] (L : Language T) :
+Prop``) is the opposite: it takes ``[Fintype T]`` on the alphabet as an
+explicit instance argument, so a DCFL statement genuinely cannot elaborate
+without one (confirmed: ``dcfl_system.lib.lean_ir``'s statements fail
+``failed to synthesize instance ... Fintype Letter`` against ``docker run
+tfl-lean4`` without it). ``fintype_instance_decl(sym_map)`` is the
+workaround: a literal ``Finset`` of every constructor plus a ``decide``d
+completeness proof (``instance : Fintype Letter where elems := {Letter.a,
+...}; complete := by intro x; cases x <;> decide``), which *does* compile
+-- ``dcfl_system.lib.lean_ir`` appends it after ``alphabet_decl`` for both
+its directions; ``agent_system.lib.lean_ir``/``cfl_system.lib.lean_ir``
+never call it, since REG/CFL statements don't need it and it would just be
+dead code in their generated files.
 
 CFL/DCFL predicate provenance
 ------------------------------
@@ -99,16 +136,17 @@ predicate/lemma name below:
   (``Langlib/Classes/DeterministicContextFree/Definition.lean``:
   ``is_DCF (L : Language T) : Prop := is_DPDA L``, over langlib's own DPDA
   automaton type) -- there is no alternative.
-- **Known gap** (out of scope for this module/PR): ``langlib`` is not yet a
-  Lake dependency of ``agent_system/docker/tfl_lean`` (its own
-  ``lean-toolchain`` happens to already match, ``v4.33.0``, but its pinned
-  Mathlib commit differs slightly and it has never been added/fetched here).
-  Statements this module emits for ``cfl``/``non_cfl``/``dcfl``/``non_dcfl``
-  therefore reference imports (``Langlib.Classes...``) that do not yet
-  resolve in the current Docker image; only the REG-direction statements
-  (Mathlib-only) are exercised by the Docker-conditional compile test in
-  ``agent_system/tests/test_lean_ir.py``. Wiring langlib in is tracked as a
-  follow-up (TODO.md), not part of this translator.
+- **langlib availability**: ``agent_system/docker/tfl_lean/lakefile.toml``
+  now pins ``langlib`` as a Lake dependency (``rev
+  c5fb8340b42543713f79e1c283a3f6a929cb71ef``, matching the reference clone
+  above) and the pinned ``tfl-lean4`` image has it built in
+  (``docker run tfl-lean4 ls .lake/packages/`` lists ``langlib`` alongside
+  ``mathlib``, confirmed while writing this module) -- so, as of this
+  module, statements for every direction (including ``cfl``/``non_cfl``/
+  ``dcfl``/``non_dcfl`` with their real ``Langlib.Classes...`` imports, not
+  a stripped-imports substitute) actually type-check against the current
+  image; ``cfl_system.lib.lean_ir``'s and ``dcfl_system.lib.lean_ir``'s own
+  Docker-conditional tests exercise this directly.
 
 LL(k)
 -----
@@ -120,12 +158,12 @@ regularity/CFL-ness/DCFL-ness are (see docs/VERDICT_POLICY.md R-Lean: "LL(k)
 
 Language construction
 ----------------------
-- ``grammar`` kind -> Mathlib ``ContextFreeGrammar Sym`` (``g``) with
+- ``grammar`` kind -> Mathlib ``ContextFreeGrammar Letter`` (``g``) with
   ``L := g.language`` (used for all three of reg/cfl/dcfl -- e.g. dcfl's
   exam_04, ``task_grammar_aSSb``, is a grammar IR).
 - ``regex`` kind (``has_backreferences: false`` only -- ``true`` means the
   pattern isn't a regular expression at all and is rejected with a reason)
-  -> Mathlib ``RegularExpression Sym`` (``re``) with ``L := re.matches'``.
+  -> Mathlib ``RegularExpression Letter`` (``re``) with ``L := re.matches'``.
   Supports literal alphabet characters, ``|`` (union), implicit
   concatenation, ``*``/``+``/``?`` (postfix repetition/optional) and ``()``
   grouping -- i.e. plain regular-expression syntax, nothing POSIX-specific
@@ -141,7 +179,7 @@ Language construction
   What it does *not* support: ``-`` (unbounded ℕ subtraction would silently
   change the meaning) anywhere in an exponent expression.
 - ``natural`` kind describing a palindrome (``w = reverse(w)`` / ``w = w^R`` /
-  ``w = wᴿ``, case-insensitively) -> ``L := {w : List Sym | w = w.reverse}``.
+  ``w = wᴿ``, case-insensitively) -> ``L := {w : List Letter | w = w.reverse}``.
 - Anything else (``predicate``, ``arithmetic_index``, cfl's
   ``grammar_filter``/``repeated_subword``/``exists_decomposition``, a
   ``natural`` description that is neither exponent notation nor a simple
@@ -159,6 +197,7 @@ from dataclasses import dataclass, field
 __all__ = [
     "LeanStatement",
     "alphabet_decl",
+    "fintype_instance_decl",
     "grammar_decl",
     "parse_regex",
     "pattern_body",
@@ -175,9 +214,9 @@ __all__ = [
 class LeanStatement:
     """A deterministically-generated Lean 4 theorem formulation.
 
-    ``alphabet_decl``: the ``inductive Sym ...`` declaration.
+    ``alphabet_decl``: the ``inductive Letter ...`` declaration.
     ``language_decl``: whatever else the statement needs (grammar/regex/`NT`
-      declarations and ``def L : Language Sym := ...``).
+      declarations and ``def L : Language Letter := ...``).
     ``theorem_decl``: ``"theorem tfl_main : <Prop>"`` -- no ``:= by ...``;
       :meth:`render` appends that with the harness-supplied proof body.
     ``imports``: full ``import ...`` lines, in the order they should appear,
@@ -239,8 +278,9 @@ def _safe_ident(raw: str, fallback_prefix: str, idx: int, used: set[str]) -> str
 
 
 def alphabet_decl(symbols: list) -> tuple[str, dict[str, str]] | None:
-    """``inductive Sym | <ctor> | ... deriving DecidableEq, Fintype, Repr``
-    for the (order-preserving, de-duplicated) *symbols*, plus the
+    """``inductive Letter | <ctor> | ... deriving DecidableEq, Repr`` (not
+    ``Fintype`` -- see the module docstring's "Alphabet type" section) for
+    the (order-preserving, de-duplicated) *symbols*, plus the
     ``{original symbol: Lean constructor name}`` map. ``None`` if *symbols*
     isn't a non-empty list of non-empty strings."""
     if not isinstance(symbols, list):
@@ -259,11 +299,41 @@ def alphabet_decl(symbols: list) -> tuple[str, dict[str, str]] | None:
         mapping[s] = _safe_ident(s, "t", i, used)
     ctor_list = " | ".join(mapping[s] for s in seen)
     decl = (
-        "inductive Sym\n"
+        "inductive Letter\n"
         f"  | {ctor_list}\n"
-        "  deriving DecidableEq, Fintype, Repr"
+        "  deriving DecidableEq, Repr"
     )
     return decl, mapping
+
+
+def fintype_instance_decl(sym_map: dict[str, str]) -> str | None:
+    """A hand-written ``instance : Fintype Letter where ...`` for the
+    ``Letter`` inductive *sym_map* (``alphabet_decl``'s second return value)
+    names -- for statements that actually need ``Fintype Letter`` (langlib's
+    ``is_DPDA``/``is_DCF`` do, via ``DPDA``'s ``[Fintype T]`` -- confirmed
+    against ``docker run tfl-lean4``: ``dcfl_system.lib.lean_ir``'s
+    statements fail with ``failed to synthesize instance ... Fintype
+    Letter`` without this. ``Language.IsRegular``/``Language.IsContextFree``
+    do not, see the module docstring's "Alphabet type" section, so
+    ``agent_system.lib.lean_ir``/``cfl_system.lib.lean_ir`` never call this).
+
+    Deliberately **not** ``deriving Fintype`` (broken on the pinned
+    toolchain for a plain enum inductive, see "Alphabet type" above) or the
+    hint-suggested standalone ``deriving instance Fintype for Letter``
+    (same derive handler, same failure) -- a literal ``Finset`` of every
+    constructor plus a ``decide``d completeness proof, which *does* compile
+    (confirmed against ``docker run tfl-lean4`` while writing this module).
+    ``None`` if *sym_map* is empty (mirrors ``alphabet_decl``, which never
+    itself returns an empty mapping, but this function stays a pure,
+    independently-callable sibling)."""
+    if not sym_map:
+        return None
+    elems = "{" + ", ".join(f"Letter.{ctor}" for ctor in sym_map.values()) + "}"
+    return (
+        "instance : Fintype Letter where\n"
+        f"  elems := {elems}\n"
+        "  complete := by intro x; cases x <;> decide"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +342,8 @@ def alphabet_decl(symbols: list) -> tuple[str, dict[str, str]] | None:
 
 
 def grammar_decl(lang_spec: dict, sym_map: dict[str, str]) -> str | None:
-    """``inductive NT ...`` + ``def g : ContextFreeGrammar Sym := ...`` +
-    ``def L : Language Sym := g.language`` for a ``kind == "grammar"``
+    """``inductive NT ...`` + ``def g : ContextFreeGrammar Letter := ...`` +
+    ``def L : Language Letter := g.language`` for a ``kind == "grammar"``
     ``language_spec`` (``nonterminals``, ``start``, ``rules: [{lhs, rhs}]``).
     Every ``rhs`` token must be a member of *sym_map* (a terminal) or of
     ``nonterminals``; ``None`` on any other malformed/unsupported shape."""
@@ -312,20 +382,20 @@ def grammar_decl(lang_spec: dict, sym_map: dict[str, str]) -> str | None:
             if tok in nt_map:
                 sym_texts.append(f"Symbol.nonterminal NT.{nt_map[tok]}")
             elif tok in sym_map:
-                sym_texts.append(f"Symbol.terminal Sym.{sym_map[tok]}")
+                sym_texts.append(f"Symbol.terminal Letter.{sym_map[tok]}")
             else:
                 return None
         rule_texts.append(f"⟨NT.{nt_map[lhs]}, [{', '.join(sym_texts)}]⟩")
 
     nt_ctor_list = " | ".join(nt_map[n] for n in seen_nt)
-    nt_decl = f"inductive NT\n  | {nt_ctor_list}\n  deriving DecidableEq, Fintype, Repr"
+    nt_decl = f"inductive NT\n  | {nt_ctor_list}\n  deriving DecidableEq, Repr"
     rules_set = "{" + ", ".join(rule_texts) + "}"
 
     return (
         f"{nt_decl}\n\n"
-        "def g : ContextFreeGrammar Sym :=\n"
+        "def g : ContextFreeGrammar Letter :=\n"
         f"  {{ NT := NT, initial := NT.{nt_map[start]}, rules := {rules_set} }}\n\n"
-        "def L : Language Sym := g.language"
+        "def L : Language Letter := g.language"
     )
 
 
@@ -335,7 +405,7 @@ def grammar_decl(lang_spec: dict, sym_map: dict[str, str]) -> str | None:
 
 
 def parse_regex(pattern: str, sym_map: dict[str, str]) -> str | None:
-    """A ``RegularExpression Sym`` term for *pattern* (alphabet chars, ``|``,
+    """A ``RegularExpression Letter`` term for *pattern* (alphabet chars, ``|``,
     implicit concatenation, postfix ``*``/``+``/``?``, ``()`` grouping) --
     ``None`` for anything else (backreferences, character classes, anchors,
     unrecognized characters, or a character outside *sym_map*)."""
@@ -408,7 +478,7 @@ def parse_regex(pattern: str, sym_map: dict[str, str]) -> str | None:
             return inner
         if c in sym_map:
             advance()
-            return f"(RegularExpression.char Sym.{sym_map[c]})"
+            return f"(RegularExpression.char Letter.{sym_map[c]})"
         return None
 
     result = parse_union()
@@ -520,7 +590,7 @@ def _segments_to_lean(segments: list[dict], sym_map: dict[str, str], var_names: 
                 continue
             if any(ch not in sym_map for ch in lit):
                 return None
-            parts.append("[" + ", ".join(f"Sym.{sym_map[ch]}" for ch in lit) + "]")
+            parts.append("[" + ", ".join(f"Letter.{sym_map[ch]}" for ch in lit) + "]")
             continue
         unit = seg.get("unit")
         expr = seg.get("expr")
@@ -532,17 +602,17 @@ def _segments_to_lean(segments: list[dict], sym_map: dict[str, str], var_names: 
         if len(unit) == 1:
             if unit not in sym_map:
                 return None
-            parts.append(f"List.replicate {count_lean} Sym.{sym_map[unit]}")
+            parts.append(f"List.replicate {count_lean} Letter.{sym_map[unit]}")
         else:
             if any(ch not in sym_map for ch in unit):
                 return None
-            lit_list = "[" + ", ".join(f"Sym.{sym_map[ch]}" for ch in unit) + "]"
+            lit_list = "[" + ", ".join(f"Letter.{sym_map[ch]}" for ch in unit) + "]"
             parts.append(f"(List.replicate {count_lean} {lit_list}).flatten")
     return " ++ ".join(parts) if parts else "[]"
 
 
 def pattern_body(segments: list[dict], condition: tuple | None, sym_map: dict[str, str]) -> str | None:
-    """The set-builder body (without the surrounding ``{w : List Sym | ...}``)
+    """The set-builder body (without the surrounding ``{w : List Letter | ...}``)
     for one exponent-notation branch: ``∃ <vars> : ℕ, w = <segments> [∧
     <condition>]``, or just ``w = <segments>`` when no variable appears
     anywhere. ``None`` if *segments*/*condition* use anything this converter
@@ -660,13 +730,40 @@ def _parse_simple_exponent_natural(text: str) -> tuple[list[dict], tuple | None]
 
 
 _PALINDROME_RE = re.compile(
-    r"\bw\s*=\s*(?:reverse\s*\(\s*w\s*\)|w\s*(?:\^\{?R\}?|ᴿ|R\b))",
-    re.IGNORECASE,
+    r"""^\s*
+        \{?\s*
+        (?:[A-Za-z]\s*(?:(?:in|∈)\s*[^|]*?\*\s*)?\|\s*)?
+        (?P<var>[A-Za-z])\s*
+        (?:
+            =\s*reverse\s*\(\s*(?P=var)\s*\)
+            |
+            =\s*(?P=var)\s*(?:\^\{?R\}?|ᴿ)
+            |
+            (?:\^\{?R\}?|ᴿ)\s*=\s*(?P=var)
+        )
+        \s*\}?\s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 
 
 def _palindrome_body(description: str) -> str | None:
-    if isinstance(description, str) and _PALINDROME_RE.search(description):
+    """Recognize *only* a strict "all palindromes" set-builder description
+    -- ``{w (in Sigma*)? | w = reverse(w)}`` (or ``w = w^R`` / ``w^R = w``),
+    with nothing else in the body -- via ``fullmatch`` against the whole
+    (stripped) description.
+
+    A ``search`` here (the previous implementation) would also match e.g.
+    ``{w in {a,b}* | w = reverse(w) and |w| is even}`` or
+    ``{w | w = w^R, |w|_a = 2}``: additional conditions the description
+    imposes beyond "is a palindrome", silently formalizing the wrong
+    (larger) language as "the language of all palindromes". Any extra
+    clause must instead make this return ``None`` -- the whole point of
+    ``fullmatch``.
+    """
+    if not isinstance(description, str):
+        return None
+    if _PALINDROME_RE.fullmatch(description.strip()):
         return "w = w.reverse"
     return None
 
@@ -764,8 +861,8 @@ def _render_regex_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanSta
             "support (only literal alphabet characters, (), |, *, +, ? are)"
         )
     lang_decl = (
-        f"def re : RegularExpression Sym := {re_expr}\n\n"
-        "def L : Language Sym := re.matches'"
+        f"def re : RegularExpression Letter := {re_expr}\n\n"
+        "def L : Language Letter := re.matches'"
     )
     prop = "L.IsRegular"
     if negate:
@@ -799,7 +896,7 @@ def _render_natural_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanS
             "cfl_system.lib.lean_ir's full exponent-notation parser may "
             "still handle it for the cfl/dcfl directions"
         )
-    lang_decl = f"def L : Language Sym := {{w : List Sym | {body}}}"
+    lang_decl = f"def L : Language Letter := {{w : List Letter | {body}}}"
     prop = "L.IsRegular"
     if negate:
         prop = f"¬ {prop}"

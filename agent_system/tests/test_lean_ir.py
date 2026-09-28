@@ -48,12 +48,12 @@ class TestGoldenNaturalExponent(unittest.TestCase):
         self.assertEqual(stmt.imports, ["import TflLean"])
         self.assertEqual(
             stmt.alphabet_decl,
-            "inductive Sym\n  | a | b\n  deriving DecidableEq, Fintype, Repr",
+            "inductive Letter\n  | a | b\n  deriving DecidableEq, Repr",
         )
         self.assertEqual(
             stmt.language_decl,
-            "def L : Language Sym := {w : List Sym | ∃ n : ℕ, "
-            "w = List.replicate n Sym.a ++ List.replicate n Sym.b ∧ n ≥ 0}",
+            "def L : Language Letter := {w : List Letter | ∃ n : ℕ, "
+            "w = List.replicate n Letter.a ++ List.replicate n Letter.b ∧ n ≥ 0}",
         )
         self.assertEqual(stmt.theorem_decl, "theorem tfl_main : ¬ L.IsRegular")
         self.assertEqual(stmt.name, "tfl_main")
@@ -78,17 +78,17 @@ class TestGoldenGrammar(unittest.TestCase):
         )
         self.assertEqual(
             stmt.alphabet_decl,
-            "inductive Sym\n  | a | b\n  deriving DecidableEq, Fintype, Repr",
+            "inductive Letter\n  | a | b\n  deriving DecidableEq, Repr",
         )
-        self.assertIn("inductive NT\n  | S | A\n  deriving DecidableEq, Fintype, Repr", stmt.language_decl)
-        self.assertIn("def g : ContextFreeGrammar Sym :=", stmt.language_decl)
+        self.assertIn("inductive NT\n  | S | A\n  deriving DecidableEq, Repr", stmt.language_decl)
+        self.assertIn("def g : ContextFreeGrammar Letter :=", stmt.language_decl)
         self.assertIn(
-            "⟨NT.S, [Symbol.nonterminal NT.S, Symbol.terminal Sym.a, "
-            "Symbol.nonterminal NT.S, Symbol.terminal Sym.b]⟩",
+            "⟨NT.S, [Symbol.nonterminal NT.S, Symbol.terminal Letter.a, "
+            "Symbol.nonterminal NT.S, Symbol.terminal Letter.b]⟩",
             stmt.language_decl,
         )
         self.assertIn("⟨NT.S, []⟩", stmt.language_decl)
-        self.assertTrue(stmt.language_decl.endswith("def L : Language Sym := g.language"))
+        self.assertTrue(stmt.language_decl.endswith("def L : Language Letter := g.language"))
         self.assertEqual(stmt.theorem_decl, "theorem tfl_main : ¬ L.IsRegular")
 
     def test_grammar_regular_direction_no_negation(self):
@@ -104,11 +104,11 @@ class TestGoldenRegex(unittest.TestCase):
         ir = _load("eval/reg-04.json")
         stmt = render_statement(ir, "regular")
         self.assertEqual(stmt.imports, ["import TflLean"])
-        self.assertIn("def re : RegularExpression Sym :=", stmt.language_decl)
+        self.assertIn("def re : RegularExpression Letter :=", stmt.language_decl)
         self.assertIn("RegularExpression.star", stmt.language_decl)
-        self.assertIn("RegularExpression.char Sym.a", stmt.language_decl)
-        self.assertIn("RegularExpression.char Sym.b", stmt.language_decl)
-        self.assertTrue(stmt.language_decl.endswith("def L : Language Sym := re.matches'"))
+        self.assertIn("RegularExpression.char Letter.a", stmt.language_decl)
+        self.assertIn("RegularExpression.char Letter.b", stmt.language_decl)
+        self.assertTrue(stmt.language_decl.endswith("def L : Language Letter := re.matches'"))
         self.assertEqual(stmt.theorem_decl, "theorem tfl_main : L.IsRegular")
 
 
@@ -120,7 +120,7 @@ class TestGoldenPalindrome(unittest.TestCase):
         stmt = render_statement(ir, "non_regular")
         self.assertEqual(
             stmt.language_decl,
-            "def L : Language Sym := {w : List Sym | w = w.reverse}",
+            "def L : Language Letter := {w : List Letter | w = w.reverse}",
         )
         self.assertEqual(stmt.theorem_decl, "theorem tfl_main : ¬ L.IsRegular")
 
@@ -161,6 +161,30 @@ class TestUnsupportedReturnsNone(unittest.TestCase):
         stmt, reason = render_statement_verbose(ir, "non_regular")
         self.assertIsNone(stmt)
         self.assertIn("predicate", reason)
+
+    def test_palindrome_with_extra_condition_is_none(self):
+        """Code review (agent_system/lib/lean_ir.py, major): the old
+        ``_PALINDROME_RE.search`` matched whenever "w = reverse(w)" (etc.)
+        appeared *anywhere* in the description, so a strictly smaller
+        language with an extra conjunct -- e.g. finite "w = w^R and |w| is
+        even" -- was silently formalized as "all palindromes", changing the
+        proved verdict's direction. ``fullmatch`` must reject every one of
+        these; only the bare "all palindromes" shape (reg-06) is accepted."""
+        for description in (
+            "{w in {a,b}* | w = reverse(w) and |w| is even}",
+            "{w | w = w^R, |w|_a = 2}",
+            "{x | x = w w^R, w = w^R}",
+        ):
+            ir = {
+                "language_spec": {
+                    "kind": "natural",
+                    "alphabet": ["a", "b"],
+                    "description": description,
+                }
+            }
+            stmt, reason = render_statement_verbose(ir, "non_regular")
+            self.assertIsNone(stmt, f"{description!r} must not formalize as a bare palindrome")
+            self.assertIn("exponent", reason)
 
     def test_cfl_and_dcfl_directions_delegate_elsewhere(self):
         ir = _load("eval/reg-01.json")
@@ -210,8 +234,8 @@ class TestAlphabetDecl(unittest.TestCase):
     def test_all_symbols_present_even_if_unused_by_the_pattern(self):
         decl, mapping = alphabet_decl(["a", "b", "c"])
         self.assertEqual(set(mapping), {"a", "b", "c"})
-        self.assertEqual(decl, "inductive Sym\n  | a | b | c\n  deriving DecidableEq, Fintype, Repr")
-        self.assertIn("deriving DecidableEq, Fintype, Repr", decl)
+        self.assertEqual(decl, "inductive Letter\n  | a | b | c\n  deriving DecidableEq, Repr")
+        self.assertIn("deriving DecidableEq, Repr", decl)
 
     def test_reg01_alphabet_has_both_letters(self):
         ir = _load("eval/reg-01.json")
@@ -238,10 +262,11 @@ class TestAlphabetDecl(unittest.TestCase):
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
 class TestGoldenStringsCompile(unittest.TestCase):
     """`sorry` for <PROOF> should type-check with a sorry warning only --
-    never an error -- for every kind of statement this module can produce
-    without a langlib dependency (see the module docstring's "Known gap":
-    cfl/dcfl statements that reference langlib imports are out of scope for
-    this Docker check until langlib is wired into agent_system/docker/tfl_lean)."""
+    never an error -- for every kind of statement this module (the REG
+    direction only; ``cfl``/``dcfl`` are ``cfl_system.lib.lean_ir``'s/
+    ``dcfl_system.lib.lean_ir``'s own modules, with their own Docker-
+    conditional golden-string-compile tests, langlib imports included --
+    see the module docstring's "langlib availability") can produce."""
 
     def _assert_valid_with_sorry(self, ir_name: str, direction: str) -> None:
         ir = _load(ir_name)

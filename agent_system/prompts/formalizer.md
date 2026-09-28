@@ -87,10 +87,19 @@ Return **only** a JSON object, no markdown fences, no commentary outside the JSO
 
 ## Conventions
 
-- The alphabet is always `inductive Sym | a | b ... deriving DecidableEq, Fintype, Repr`
-  (letters are `Sym.a`, `Sym.b`, ...), words are `List Sym`, `aⁿ` is
-  `List.replicate n Sym.a`, the language is `def L : Language Sym := ...` and the theorem
-  is always `tfl_main`. Membership in a set-builder `L` unfolds definitionally:
+- **Always read the alphabet type's actual name and `deriving` clause off
+  `statement.alphabet_decl` -- never hardcode either from memory.** `lib.lean_ir`'s
+  deterministic renderer currently emits `inductive Letter | a | b ... deriving
+  DecidableEq, Repr` (the worked examples below use exactly that). There is **no**
+  `Fintype Letter` instance unless the statement declares one (DCFL statements add an
+  explicit `instance : Fintype Letter`), so do not lean on `Fintype`/`Finset.univ` over the
+  alphabet -- counting arguments work with `List.count` per letter instead. Writing
+  `Sym.a` against a `Letter` statement, or relying on an instance the statement didn't
+  provide, costs a whole retry to `unknown identifier` / a failed instance search.
+- The alphabet is `inductive <Name> | a | b ... deriving <...>` (see `statement` for the
+  exact name and derived classes; letters are `<Name>.a`, `<Name>.b`, ...), words are
+  `List.replicate n <Name>.a`, the language is `def L : Language <Name> := ...` and the
+  theorem is always `tfl_main`. Membership in a set-builder `L` unfolds definitionally:
   `exact ⟨n, rfl, Nat.zero_le _⟩` proves `aⁿbⁿ ∈ L`, `obtain ⟨n, hn, -⟩ := h` takes
   `h : w ∈ L` apart.
 - Prefer `simp`, `omega`, `decide`, `constructor`, `exact`, `intro`/`rintro`, `obtain`,
@@ -98,12 +107,19 @@ Return **only** a JSON object, no markdown fences, no commentary outside the JSO
   Letter counting (`List.count`) plus `omega` settles most "this word is not in `L`" goals.
 - Lean on the API below rather than reproving it from scratch. Do not guess other names:
   an unknown identifier costs a whole retry.
+- Ordinary tactic proofs only — never metaprogramming (`run_tac`, `run_cmd`, `run_meta`,
+  `elab`, `macro`, `syntax`, `set_option`, `unsafe`, anything starting `Lean.`), never a new
+  `#`-command or a line at column 0 (that would end the `by` block early). `compose_lean_file`
+  rejects a `proof_body` containing any of these *before* it ever reaches the compiler
+  (docs/VERDICT_POLICY.md R-Lean) — there is no legitimate proof that needs them.
 
 ## Available lemmas
 
-Checked against the `tfl-lean4` image (Lean/Mathlib v4.18.0); `import TflLean` in the
-statement brings in `Mathlib.Computability.DFA` and `Mathlib.Computability.RegularExpressions`
-with all their dependencies (lists, `Fintype`, `Finset`, `Nat` parity, `omega`, ...).
+Checked against the `tfl-lean4` image (Lean v4.33.0, Mathlib v4.33.0, langlib @ c5fb834);
+`import TflLean` in the statement brings in `Mathlib.Computability.{DFA,
+RegularExpressions, MyhillNerode, ContextFreeGrammar}`, langlib's regular / context-free /
+DCFL classes with the CF pumping and Ogden lemmas, and `TflLean.Lemmas` (below) -- with all
+their dependencies (lists, `Fintype`, `Finset`, `Nat` parity, `omega`, ...).
 
 ### Mathlib — regular languages (always available)
 
@@ -111,8 +127,8 @@ with all their dependencies (lists, `Fintype`, `Finset`, `Nat` parity, `omega`, 
   — take it apart with `rintro ⟨σ, _, M, hM⟩`, build it with
   `refine ⟨σ, inferInstance, M, ?_⟩` (then `ext w`).
 - `Language.isRegular_iff : L.IsRegular ↔ ∃ σ : Type v, ∃ _ : Fintype σ, ∃ M : DFA T σ, M.accepts = L`
-- A DFA literal: `{ step := fun s x => ..., start := ..., accept := {...} } : DFA Sym σ`
-  (introduce it with `let M : DFA Sym σ := ...`, unfold with `simp [M]`).
+- A DFA literal: `{ step := fun s x => ..., start := ..., accept := {...} } : DFA Letter σ`
+  (introduce it with `let M : DFA Letter σ := ...`, unfold with `simp [M]`).
 - `DFA.mem_accepts : x ∈ M.accepts ↔ M.eval x ∈ M.accept`; `DFA.eval` is
   `M.evalFrom M.start` (unfold with `simp only [DFA.eval]` / `rw [DFA.eval]`).
 - `DFA.evalFrom_nil`, `DFA.evalFrom_singleton`, `DFA.evalFrom_append_singleton`,
@@ -132,29 +148,35 @@ with all their dependencies (lists, `Fintype`, `Finset`, `Nat` parity, `omega`, 
 - `List.count_replicate : List.count a (List.replicate n b) = if (b == a) = true then n else 0`
   (with concrete letters `simp [List.count_replicate]` reduces it to `n` or `0`),
   `List.count_append`, `List.count_cons`, `List.length_replicate`, `List.length_append`.
-- Counting both sides of a word equation: `have h1 := congrArg (List.count Sym.a) hn`,
+- Counting both sides of a word equation: `have h1 := congrArg (List.count Letter.a) hn`,
   then `simp [List.count_replicate] at h1` and `omega`.
-- `List.take_append_eq_append_take`, `List.take_replicate`,
+- `List.take_append : List.take i (l₁ ++ l₂) = List.take i l₁ ++ List.take (i - l₁.length) l₂`,
+  `List.take_replicate`,
   `List.take_left : List.take l₁.length (l₁ ++ l₂) = l₁` — prefix counts of
   `aᵖbᵖcᵖ` (`simp` turns them into `min`/truncated subtraction that `omega` handles).
 - `List.replicate_succ`, `List.replicate_zero`, `List.flatten_nil`, `List.append_nil`,
   `List.eq_of_mem_replicate`.
 - `Nat.even_add_one : Even (n + 1) ↔ ¬Even n`; simp rewrites `¬Even n` to `Odd n`
-  (`Nat.not_even_iff_odd`) — pass `← Nat.not_even_iff_odd` to keep everything in `Even`.
+  (`Nat.not_even_iff_odd`) — pass `-Nat.not_even_iff_odd` to keep everything in `Even`
+  (see Example 2).
+- Over a 3-letter alphabet, `|w| = #a + #b + #c` is one short induction:
+  `have hlen : ∀ l : List Letter, l.length = l.count Letter.a + l.count Letter.b + l.count Letter.c`
+  proved by `intro l; induction l with | nil => rfl | cons s l ih => cases s <;> simp [ih] <;> omega`.
 
 ### Mathlib — context-free (statement imports `Mathlib.Computability.ContextFreeGrammar`)
 
 - `Language.IsContextFree L : Prop := ∃ g : ContextFreeGrammar T, g.language = L`;
   `ContextFreeGrammar.language`, `Language.IsContextFree.reverse`.
 
-### langlib (only when the statement imports `Langlib.…`)
+### langlib (in the image; CFL/DCFL statements import the modules explicitly)
 
 The CFL/DCFL statements import `Langlib.Classes.ContextFree.Pumping.Pumping` and
-`Langlib.Classes.ContextFree.Basics.Ogden` (langlib, pinned in
-`agent_system/docker/tfl_lean/lakefile.toml`). The current image does not contain langlib
-yet; such a check comes back `error` (unknown module `Langlib`) whatever the proof body.
+`Langlib.Classes.ContextFree.Basics.Ogden` (langlib, pinned by commit in
+`agent_system/docker/tfl_lean/lakefile.toml`). `L.IsContextFree` in a statement is
+Mathlib's `Language.IsContextFree`, which langlib's lemmas below take directly.
 
-- `Language.IsContextFree.pumping (hL : L.IsContextFree) : ∃ p : ℕ, ∀ w ∈ L, w.length ≥ p →
+- `Language.IsContextFree.pumping {T : Type} {L : Language T} (hL : L.IsContextFree) :
+  ∃ p : ℕ, ∀ w ∈ L, w.length ≥ p →
   ∃ u v x y z : List T, w = u ++ v ++ x ++ y ++ z ∧ (v ++ y).length > 0 ∧
   (v ++ x ++ y).length ≤ p ∧ ∀ i : ℕ, u ++ v ^+^ i ++ x ++ y ^+^ i ++ z ∈ L`, where
   `v ^+^ i` is `nTimes v i := (List.replicate i v).flatten` (`simp only [nTimes] at h`).
@@ -164,27 +186,30 @@ yet; such a check comes back `error` (unknown module `Langlib`) whatever the pro
 - `CF_pumping`, `CF_ogdens_lemma` — the same for langlib's own `is_CF`
   (`is_CF_iff_isContextFree` converts); `is_DCF L` for DCFL statements.
 - Pattern for `¬ L.IsContextFree`: `intro h; obtain ⟨p, hp⟩ := h.pumping`, pump the witness
-  `aᵖbᵖcᵖ` down (`i = 0`) and compare letter counts; the whole argument is
-  `agent_system/docker/tfl_lean/TflLean/Examples/AnBnCnNotCF.lean` (its Mathlib-only
-  half, compiled against the current image, is `Examples/AnBnCnPumpingCore.lean`; the
-  full body is also checked against langlib's verbatim `nTimes`/`pumping` signatures).
-  Right after `obtain`, `simp only [nTimes, List.replicate_zero, List.flatten_nil,
-  List.append_nil] at hn` turns the pumped-down word into plain `u ++ x ++ z`.
+  `aᵖbᵖcᵖ` down (`i = 0`) and compare letter counts plus prefix counts of `aᵖbᵖcᵖ` (an `a`
+  and a `c` in `v x y` would force `|v x y| > p`); the whole argument, proved in the image,
+  is `agent_system/docker/tfl_lean/TflLean/Examples/AnBnCnNotCF.lean`. Right after
+  `obtain`, `simp only [nTimes, List.replicate_zero, List.flatten_nil, List.append_nil] at hn`
+  turns the pumped-down word into plain `u ++ x ++ z`. Equivalently:
+  `apply TflLean.not_isContextFree_of_not_cfPumping`, then `rintro ⟨p, hp⟩` and the same
+  argument with `(List.replicate i v).flatten` instead of `v ^+^ i`
+  (`Examples/AnBnCnPumpingCore.lean` is exactly that body).
 
 ### TflLean.Lemmas (`agent_system/docker/tfl_lean/TflLean/Lemmas.lean`)
 
-Proved generic helpers, namespace `TflLean`. They are usable only once `TflLean.lean`
-imports `TflLean.Lemmas` (not yet the case in the current image); if a check reports
-`unknown identifier 'TflLean.…'`, inline the fact as a `have` instead, as the examples do.
+Proved generic helpers (any alphabet `α`), namespace `TflLean`, re-exported by
+`import TflLean` -- always write the full `TflLean.` name (dot notation such as
+`h.cfPumping` does **not** find them).
 
 - `TflLean.not_isRegular_of_distinguishable {L : Language α} (f : ℕ → List α)
   (h : ∀ i j, i ≠ j → ∃ z, f i ++ z ∈ L ∧ f j ++ z ∉ L) : ¬ L.IsRegular` — easy half of
   Myhill–Nerode. Example 1 becomes: `apply TflLean.not_isRegular_of_distinguishable
-  (fun i => List.replicate i Sym.a)`, `intro i j hij`, `refine ⟨List.replicate i Sym.b,
+  (fun i => List.replicate i Letter.a)`, `intro i j hij`, `refine ⟨List.replicate i Letter.b,
   ⟨i, rfl, Nat.zero_le _⟩, ?_⟩`, `rintro ⟨n, hn, -⟩`,
   `have := TflLean.replicate_append_replicate_inj (by decide) hn`, `omega`.
 - `TflLean.IsRegular.pumping (hL : L.IsRegular) : ∃ p, ∀ w ∈ L, p ≤ w.length → ∃ x y z,
   w = x ++ y ++ z ∧ (x ++ y).length ≤ p ∧ y ≠ [] ∧ ∀ i, x ++ (List.replicate i y).flatten ++ z ∈ L`
+  (use as `TflLean.IsRegular.pumping h`)
 - `TflLean.isRegular_of_dfa {σ : Type} [Fintype σ] (M : DFA α σ)
   (h : ∀ w, w ∈ L ↔ M.eval w ∈ M.accept) : L.IsRegular`
 - `TflLean.evalFrom_cons (M) (s) (a) (w) : M.evalFrom s (a :: w) = M.evalFrom (M.step s a) w`
@@ -195,8 +220,12 @@ imports `TflLean.Lemmas` (not yet the case in the current image); if a check rep
   `TflLean.count_replicate_of_ne (h : a ≠ b) (n) : (List.replicate n b).count a = 0`
 - `TflLean.count_flatten_replicate (a) (v) (i) : ((List.replicate i v).flatten).count a = i * v.count a`
 - `TflLean.length_eq_sum_count [Fintype α] (l : List α) : l.length = ∑ s, l.count s`
+  (needs a `Fintype` instance on the alphabet — `Letter` has none by default; use the
+  per-letter `hlen` induction above instead)
 - `TflLean.CFPumping (L : Language α) : Prop` — the conclusion of
   `Language.IsContextFree.pumping` with `v ^+^ i` spelled `(List.replicate i v).flatten`;
+  `TflLean.IsContextFree.cfPumping {T : Type} {L : Language T} (h : L.IsContextFree) : TflLean.CFPumping L`,
+  `TflLean.not_isContextFree_of_not_cfPumping (h : ¬ TflLean.CFPumping L) : ¬ L.IsContextFree`;
   `TflLean.flatten_replicate_zero (v) : (List.replicate 0 v).flatten = []`,
   `TflLean.flatten_replicate_two (v) : (List.replicate 2 v).flatten = v ++ v`.
 
@@ -213,8 +242,8 @@ Input:
 {
   "statement": {
     "imports": ["import TflLean"],
-    "alphabet_decl": "inductive Sym\n  | a | b\n  deriving DecidableEq, Fintype, Repr",
-    "language_decl": "def L : Language Sym := {w : List Sym | ∃ n : ℕ, w = List.replicate n Sym.a ++ List.replicate n Sym.b ∧ n ≥ 0}",
+    "alphabet_decl": "inductive Letter\n  | a | b\n  deriving DecidableEq, Repr",
+    "language_decl": "def L : Language Letter := {w : List Letter | ∃ n : ℕ, w = List.replicate n Letter.a ++ List.replicate n Letter.b ∧ n ≥ 0}",
     "theorem_decl": "theorem tfl_main : ¬ L.IsRegular",
     "name": "tfl_main"
   },
@@ -227,14 +256,14 @@ Output:
 
 ```json
 {
-  "proof_body": "-- Myhill–Nerode by pigeonhole: of the card σ + 1 prefixes a^0 … a^(card σ),\n  -- two (a^i, a^j with i ≠ j) end in the same DFA state; a^i b^i is accepted,\n  -- hence so is a^j b^i, which is not in L (count the a's and the b's).\n  rintro ⟨σ, _, M, hM⟩\n  obtain ⟨i, j, hij, heq⟩ := Fintype.exists_ne_map_eq_of_card_lt\n    (fun k : Fin (Fintype.card σ + 1) => M.eval (List.replicate k Sym.a)) (by simp)\n  have hacc : List.replicate (i : ℕ) Sym.a ++ List.replicate i Sym.b ∈ M.accepts := by\n    rw [hM]; exact ⟨i, rfl, Nat.zero_le _⟩\n  have hacc' : List.replicate (j : ℕ) Sym.a ++ List.replicate i Sym.b ∈ M.accepts := by\n    rw [DFA.mem_accepts] at hacc ⊢\n    simp only [DFA.eval, DFA.evalFrom_of_append] at hacc heq ⊢\n    rw [← heq]; exact hacc\n  rw [hM] at hacc'\n  obtain ⟨n, hn, -⟩ := hacc'\n  have h1 := congrArg (List.count Sym.a) hn\n  have h2 := congrArg (List.count Sym.b) hn\n  simp [List.count_replicate] at h1 h2\n  exact hij (Fin.ext (by omega))",
+  "proof_body": "-- Myhill–Nerode by pigeonhole: of the card σ + 1 prefixes a^0 … a^(card σ),\n  -- two (a^i, a^j with i ≠ j) end in the same DFA state; a^i b^i is accepted,\n  -- hence so is a^j b^i, which is not in L (count the a's and the b's).\n  rintro ⟨σ, _, M, hM⟩\n  obtain ⟨i, j, hij, heq⟩ := Fintype.exists_ne_map_eq_of_card_lt\n    (fun k : Fin (Fintype.card σ + 1) => M.eval (List.replicate k Letter.a)) (by simp)\n  have hacc : List.replicate (i : ℕ) Letter.a ++ List.replicate i Letter.b ∈ M.accepts := by\n    rw [hM]; exact ⟨i, rfl, Nat.zero_le _⟩\n  have hacc' : List.replicate (j : ℕ) Letter.a ++ List.replicate i Letter.b ∈ M.accepts := by\n    rw [DFA.mem_accepts] at hacc ⊢\n    simp only [DFA.eval, DFA.evalFrom_of_append] at hacc heq ⊢\n    rw [← heq]; exact hacc\n  rw [hM] at hacc'\n  obtain ⟨n, hn, -⟩ := hacc'\n  have h1 := congrArg (List.count Letter.a) hn\n  have h2 := congrArg (List.count Letter.b) hn\n  simp [List.count_replicate] at h1 h2\n  exact hij (Fin.ext (by omega))",
   "lemmas_used": ["Fintype.exists_ne_map_eq_of_card_lt", "DFA.mem_accepts", "DFA.evalFrom_of_append", "List.count_replicate"],
   "notes": "Pigeonhole on the states reached after a^0..a^(card σ); the two colliding prefixes are told apart by the suffix b^i."
 }
 ```
 
 The same pattern proves any "infinitely many pairwise distinguishable prefixes" argument:
-change `f k` (here `List.replicate k Sym.a`), the distinguishing suffix and the final
+change `f k` (here `List.replicate k Letter.a`), the distinguishing suffix and the final
 count comparison.
 
 ### Example 2 — even number of `a`'s is regular (explicit DFA)
@@ -245,8 +274,8 @@ Input:
 {
   "statement": {
     "imports": ["import TflLean"],
-    "alphabet_decl": "inductive Sym\n  | a | b\n  deriving DecidableEq, Fintype, Repr",
-    "language_decl": "def L : Language Sym := {w : List Sym | Even (w.count Sym.a)}",
+    "alphabet_decl": "inductive Letter\n  | a | b\n  deriving DecidableEq, Repr",
+    "language_decl": "def L : Language Letter := {w : List Letter | Even (w.count Letter.a)}",
     "theorem_decl": "theorem tfl_main : L.IsRegular",
     "name": "tfl_main"
   },
@@ -259,8 +288,8 @@ Output:
 
 ```json
 {
-  "proof_body": "-- Explicit two-state DFA: the state is the parity of the a's read so far\n  -- (`true` = odd); accept iff the parity is even.\n  let M : DFA Sym Bool :=\n    { step := fun s x => if x = Sym.a then !s else s\n      start := false\n      accept := {false} }\n  -- Invariant, by induction on the word (generalizing the start state).\n  have key : ∀ (w : List Sym) (s : Bool),\n      M.evalFrom s w = (s ^^ !decide (Even (w.count Sym.a))) := by\n    intro w\n    induction w with\n    | nil => intro s; simp [DFA.evalFrom]\n    | cons x w ih =>\n      intro s\n      show M.evalFrom (M.step s x) w = _\n      rw [ih]\n      cases x <;> cases s <;> simp [M, List.count_cons, Nat.even_add_one, ← Nat.not_even_iff_odd]\n  refine ⟨Bool, inferInstance, M, ?_⟩\n  ext w\n  rw [DFA.mem_accepts, DFA.eval, key]\n  simp [M]\n  rfl",
-  "lemmas_used": ["DFA.mem_accepts", "DFA.eval", "List.count_cons", "Nat.even_add_one", "Nat.not_even_iff_odd"],
+  "proof_body": "-- Explicit two-state DFA: the state is the parity of the a's read so far\n  -- (`true` = odd); accept iff the parity is even.\n  let M : DFA Letter Bool :=\n    { step := fun s x => if x = Letter.a then !s else s\n      start := false\n      accept := {false} }\n  -- Invariant, by induction on the word (generalizing the start state).\n  have key : ∀ (w : List Letter) (s : Bool),\n      M.evalFrom s w = (s ^^ !decide (Even (w.count Letter.a))) := by\n    intro w\n    induction w with\n    | nil => intro s; simp [DFA.evalFrom]\n    | cons x w ih =>\n      intro s\n      show M.evalFrom (M.step s x) w = _\n      rw [ih]\n      cases x <;> cases s <;> simp [M, List.count_cons, Nat.even_add_one, ← Nat.not_even_iff_odd]\n  refine ⟨Bool, inferInstance, M, ?_⟩\n  ext w\n  rw [DFA.mem_accepts, DFA.eval, key]\n  simp [M]\n  rfl",
+  "lemmas_used": ["DFA.mem_accepts", "DFA.eval", "Nat.even_add_one", "Nat.not_even_iff_odd"],
   "notes": "Invariant proved for every start state (induction generalizing s), then specialised to M.start = false."
 }
 ```

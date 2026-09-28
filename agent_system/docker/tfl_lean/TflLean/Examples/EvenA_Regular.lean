@@ -1,21 +1,23 @@
+import Lean.Replay
+import Lean.Elab.Command
 import TflLean
 
-inductive Sym
+inductive Letter
   | a | b
-  deriving DecidableEq, Fintype, Repr
+  deriving DecidableEq, Repr
 
-def L : Language Sym := {w : List Sym | Even (w.count Sym.a)}
+def L : Language Letter := {w : List Letter | Even (w.count Letter.a)}
 
 theorem tfl_main : L.IsRegular := by
   -- Explicit two-state DFA: the state is the parity of the a's read so far
   -- (`true` = odd); accept iff the parity is even.
-  let M : DFA Sym Bool :=
-    { step := fun s x => if x = Sym.a then !s else s
+  let M : DFA Letter Bool :=
+    { step := fun s x => if x = Letter.a then !s else s
       start := false
       accept := {false} }
   -- Invariant, by induction on the word (generalizing the start state).
-  have key : ∀ (w : List Sym) (s : Bool),
-      M.evalFrom s w = (s ^^ !decide (Even (w.count Sym.a))) := by
+  have key : ∀ (w : List Letter) (s : Bool),
+      M.evalFrom s w = (s ^^ !decide (Even (w.count Letter.a))) := by
     intro w
     induction w with
     | nil => intro s; simp [DFA.evalFrom]
@@ -29,5 +31,19 @@ theorem tfl_main : L.IsRegular := by
   rw [DFA.mem_accepts, DFA.eval, key]
   simp [M]
   rfl
+
+open Lean in
+run_cmd do
+  let env ← getEnv
+  let mut newConsts : Std.HashMap Name ConstantInfo := {}
+  for (n, ci) in env.constants.toList do
+    if !env.const2ModIdx.contains n then
+      newConsts := newConsts.insert n ci
+  try
+    let importEnv ← importModules env.imports {} (trustLevel := 0)
+    let _ ← Lean.Environment.replay newConsts importEnv
+    logInfo "TFL_REPLAY_OK"
+  catch e =>
+    logError s!"TFL_REPLAY_FAIL: {(← e.toMessageData.toString)}"
 
 #print axioms tfl_main

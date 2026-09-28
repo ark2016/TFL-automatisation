@@ -1730,6 +1730,15 @@ def assemble_result_node(state: PipelineState) -> dict:
         state.get("closure_verification") or evidence.get("closure_verification")
     )
 
+    # Surface `formalize_node`'s output in the final result too (not just the
+    # gate below) -- otherwise a `proved` Lean statement/proof_body that
+    # earned `verified` trust would be invisible to anything reading the
+    # returned result (report generation, the CLI's JSON/MD output), leaving
+    # only the `verdict_gate.basis` entry as indirect evidence it happened.
+    formalization = state.get("formalization")
+    if formalization is not None:
+        evidence["formalization"] = formalization
+
     r_ev = (reasoning_output or {}).get("evidence", reasoning_output or {})
     reasoning_verdict = r_ev.get(
         "verdict", (reasoning_output or {}).get("verdict"),

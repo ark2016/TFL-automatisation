@@ -1,24 +1,19 @@
 import Mathlib.Computability.DFA
 import Mathlib.Computability.RegularExpressions
 import Mathlib.Computability.ContextFreeGrammar
-import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+import Mathlib.Algebra.BigOperators.Group.Finset.Piecewise
+import Langlib.Classes.ContextFree.Pumping.Pumping
 
 /-!
 # TflLean.Lemmas — reusable lemmas for R-Lean proof bodies
 
 Helpers that the worked examples in `TflLean/Examples/` needed, stated
-generically (any alphabet `α`, not the per-task `Sym`). Mathlib only — no
-langlib — so this file compiles against the current `tfl-lean4` image
-(Lean/Mathlib v4.18.0) and is meant to keep compiling on the v4.33.0 +
-langlib pin in `../lakefile.toml`.
+generically (any alphabet `α`, not the per-task `Letter`). Built into the
+`tfl-lean4` image (Lean/Mathlib v4.33.0 + langlib @ c5fb834) and re-exported
+by `import TflLean`, so a proof body checked by the harness can use every name
+below as `TflLean.<name>`.
 
 Everything lives in the `TflLean` namespace.
-
-NOTE: `TflLean.lean` does not import this module yet, so a proof body checked
-by the harness (whose statement only says `import TflLean`) cannot reference
-these names until the image is rebuilt with `import TflLean.Lemmas` added
-there. Until then the examples inline the same facts as `have`s (see
-`Examples/*.lean`).
 
 ## Contents
 
@@ -29,16 +24,18 @@ there. Until then the examples inline the same facts as `have`s (see
   `not_isRegular_of_distinguishable` (easy half of Myhill–Nerode),
   `IsRegular.pumping` (textbook pumping lemma for `Language.IsRegular`).
 * Context-free: `CFPumping` (the conclusion of langlib's
-  `Language.IsContextFree.pumping`, Mathlib-only), `flatten_replicate_zero`,
+  `Language.IsContextFree.pumping`, with `v ^+^ i` unfolded),
+  `IsContextFree.cfPumping` (Mathlib's `L.IsContextFree → CFPumping L`, via
+  langlib), `not_isContextFree_of_not_cfPumping`, `flatten_replicate_zero`,
   `flatten_replicate_two`.
 
-With `TflLean.Lemmas` available, the proof body of
-`Examples/AnBnNotRegular.lean` shrinks to (Myhill–Nerode)
+With these, the proof body of `Examples/AnBnNotRegular.lean` shrinks to
+(Myhill–Nerode)
 
 ```
-apply TflLean.not_isRegular_of_distinguishable (fun i => List.replicate i Sym.a)
+apply TflLean.not_isRegular_of_distinguishable (fun i => List.replicate i Letter.a)
 intro i j hij
-refine ⟨List.replicate i Sym.b, ⟨i, rfl, Nat.zero_le _⟩, ?_⟩
+refine ⟨List.replicate i Letter.b, ⟨i, rfl, Nat.zero_le _⟩, ?_⟩
 rintro ⟨n, hn, -⟩
 have := TflLean.replicate_append_replicate_inj (by decide) hn
 omega
@@ -51,35 +48,39 @@ or, via the textbook pumping lemma (pump `aᵖbᵖ` down: `y` lies inside the
 intro h
 obtain ⟨p, hp⟩ := TflLean.IsRegular.pumping h
 obtain ⟨x, y, z, hw, hxy, hy, hpump⟩ :=
-  hp (List.replicate p Sym.a ++ List.replicate p Sym.b) ⟨p, rfl, Nat.zero_le _⟩ (by simp)
+  hp (List.replicate p Letter.a ++ List.replicate p Letter.b) ⟨p, rfl, Nat.zero_le _⟩ (by simp)
 obtain ⟨n, hn, -⟩ := hpump 0
 have hy' : 0 < y.length := List.length_pos_of_ne_nil hy
 simp only [List.length_append] at hxy
-have hta : List.take (x ++ y).length (List.replicate p Sym.a ++ List.replicate p Sym.b) = x ++ y := by
+have hta : List.take (x ++ y).length (List.replicate p Letter.a ++ List.replicate p Letter.b) = x ++ y := by
   rw [hw, List.append_assoc x y z, ← List.append_assoc, List.take_left]
-have hya : y.count Sym.a = y.length := by
-  have h1 : (x ++ y).count Sym.a = (x ++ y).length := by
-    rw [← hta]; simp [List.take_append_eq_append_take, List.take_replicate, List.count_replicate]; omega
+have hya : y.count Letter.a = y.length := by
+  have h1 : (x ++ y).count Letter.a = (x ++ y).length := by
+    rw [← hta]; simp [List.take_append, List.take_replicate, List.count_replicate]; omega
   simp only [List.count_append, List.length_append] at h1
-  have := List.count_le_length (a := Sym.a) (l := x)
-  have := List.count_le_length (a := Sym.a) (l := y); omega
-have ca := congrArg (List.count Sym.a) hw
-have cb := congrArg (List.count Sym.b) hw
-have ca0 := congrArg (List.count Sym.a) hn
-have cb0 := congrArg (List.count Sym.b) hn
+  have := List.count_le_length (a := Letter.a) (l := x)
+  have := List.count_le_length (a := Letter.a) (l := y); omega
+have ca := congrArg (List.count Letter.a) hw
+have cb := congrArg (List.count Letter.b) hw
+have ca0 := congrArg (List.count Letter.a) hn
+have cb0 := congrArg (List.count Letter.b) hn
 simp [List.count_replicate] at ca cb ca0 cb0
-have hlen : ∀ l : List Sym, l.length = l.count Sym.a + l.count Sym.b := by
+have hlen : ∀ l : List Letter, l.length = l.count Letter.a + l.count Letter.b := by
   intro l
   induction l with
   | nil => rfl
-  | cons s l ih => cases s <;> simp [List.count_cons, ih] <;> omega
+  | cons s l ih => cases s <;> simp [ih] <;> omega
 have := hlen y
 omega
 ```
 
+and the proof body of `Examples/AnBnCnNotCF.lean` to
+`apply TflLean.not_isContextFree_of_not_cfPumping` followed by the (langlib-free)
+body of `Examples/AnBnCnPumpingCore.lean`.
+
 (`agent_system/tests/test_lean_examples.py` compiles both blocks against the
-`Examples/AnBnNotRegular.lean` statement, with this file's declarations
-inlined, so they stay in sync with the lemmas.)
+`Examples/AnBnNotRegular.lean` statement, and the CF variant against the
+`Examples/AnBnCnNotCF.lean` one, so they stay in sync with the lemmas.)
 -/
 
 namespace TflLean
@@ -108,13 +109,13 @@ theorem count_flatten_replicate (a : α) (v : List α) (i : ℕ) :
   | succ i ih => simp [List.replicate_succ, List.count_append, ih, Nat.succ_mul, Nat.add_comm]
 
 /-- Over a finite alphabet the length of a word is the sum of its letter counts
-(for `Sym = {a, b, c}`: `|w| = #a + #b + #c`). -/
+(for `Letter = {a, b, c}`: `|w| = #a + #b + #c`). -/
 theorem length_eq_sum_count [Fintype α] (l : List α) : l.length = ∑ s, l.count s := by
   induction l with
   | nil => simp
   | cons x l ih =>
     simp only [List.length_cons, List.count_cons, Finset.sum_add_distrib, ih]
-    simp
+    simp [Finset.sum_ite_eq]
 
 /-- `aⁱ bʲ = aᵏ bˡ` (with `a ≠ b`) forces `i = k` and `j = l`. -/
 theorem replicate_append_replicate_inj {a b : α} (hab : a ≠ b) {i j k l : ℕ}
@@ -174,12 +175,25 @@ section ContextFree
 
 /-- The conclusion of the context-free pumping lemma, in the exact shape of
 langlib's `Language.IsContextFree.pumping` (`v ^+^ i` unfolds to
-`(List.replicate i v).flatten`). Refuting it is the Mathlib-only half of a
-`¬ L.IsContextFree` proof; see `Examples/AnBnCnPumpingCore.lean`. -/
+`(List.replicate i v).flatten`). Refuting it is the combinatorial half of a
+`¬ L.IsContextFree` proof (see `not_isContextFree_of_not_cfPumping` and
+`Examples/AnBnCnPumpingCore.lean`). -/
 def CFPumping (L : Language α) : Prop :=
   ∃ p : ℕ, ∀ w ∈ L, w.length ≥ p → ∃ u v x y z : List α,
     w = u ++ v ++ x ++ y ++ z ∧ (v ++ y).length > 0 ∧ (v ++ x ++ y).length ≤ p ∧
     ∀ i : ℕ, u ++ (List.replicate i v).flatten ++ x ++ (List.replicate i y).flatten ++ z ∈ L
+
+/-- Mathlib's `Language.IsContextFree` satisfies the pumping property
+(langlib's `Language.IsContextFree.pumping`; `v ^+^ i` is by definition
+`(List.replicate i v).flatten`). -/
+theorem IsContextFree.cfPumping {T : Type} {L : Language T} (h : L.IsContextFree) :
+    CFPumping L :=
+  h.pumping
+
+/-- To refute `L.IsContextFree`, refute the pumping property. -/
+theorem not_isContextFree_of_not_cfPumping {T : Type} {L : Language T} (h : ¬ CFPumping L) :
+    ¬ L.IsContextFree :=
+  fun hL => h (IsContextFree.cfPumping hL)
 
 /-- Pumping down: `v⁰ = ε`. -/
 theorem flatten_replicate_zero (v : List α) : (List.replicate 0 v).flatten = [] := rfl

@@ -1,12 +1,12 @@
 """CFL-direction IR -> Lean 4 statement translator (docs/VERDICT_POLICY.md R-Lean).
 
 Thin wrapper around ``agent_system.lib.lean_ir``, which owns the shared
-machinery (``LeanStatement``, the ``Sym``/``NT`` alphabet and grammar
+machinery (``LeanStatement``, the ``Letter``/``NT`` alphabet and grammar
 builders, and ``pattern_body``, the exponent-notation segments/condition ->
 Lean converter) and the theorem-formulation rationale (see that module's
 docstring for the full citation trail: why the theorem uses Mathlib's own
-``Language.IsContextFree`` rather than langlib's ``is_CF``, and the known gap
-that langlib isn't yet a Lake dependency of ``agent_system/docker/tfl_lean``).
+``Language.IsContextFree`` rather than langlib's ``is_CF``, and langlib's
+availability as a Lake dependency of ``agent_system/docker/tfl_lean``).
 
 What this module adds, that ``agent_system.lib.lean_ir`` cannot contain
 itself (root ``CLAUDE.md`` "Import direction": ``cfl_system`` may import
@@ -143,6 +143,6 @@ def _render_natural_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanS
             "declared alphabet, '-' in an exponent, or another shape "
             "agent_system.lib.lean_ir.pattern_body does not support"
         )
-    lang_decl = f"def L : Language Sym := {{w : List Sym | {body}}}"
+    lang_decl = f"def L : Language Letter := {{w : List Letter | {body}}}"
     stmt = LeanStatement(alpha_decl, lang_decl, _cfl_theorem_decl(negate), _cfl_imports(negate))
     return stmt, None

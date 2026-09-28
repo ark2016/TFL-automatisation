@@ -203,6 +203,26 @@ _JSON_DISALLOWED_AXIOM = (
 )
 
 
+def _mock_messages_for_proved(text: str) -> str:
+    """The `--json` message stream `check_lean_file` needs to see
+    status="proved" for *text* -- a `TFL_REPLAY_OK` message at the
+    independent-replay `run_cmd`'s own line, and an axiom-free axioms
+    message at the `#print axioms` line -- wherever `compose_lean_file`
+    actually put those commands in *text*, rather than a second
+    hard-coded copy of its layout (code review 2026-09-28: `proved` now
+    requires the replay check to confirm too, when *text* carries it)."""
+    replay_line = text.count("\n", 0, text.index("run_cmd do")) + 1
+    axioms_line = text.count("\n", 0, text.index("#print axioms")) + 1
+    return (
+        '{"severity":"information","pos":{"line":%d,"column":0},"kind":"[anonymous]",'
+        '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":%d,"column":7},'
+        '"data":"TFL_REPLAY_OK","caption":""}\n'
+        '{"severity":"information","pos":{"line":%d,"column":0},"kind":"[anonymous]",'
+        '"keepFullRange":false,"fileName":"/home/lean/check.lean","endPos":{"line":%d,"column":6},'
+        '"data":"\'tfl_main\' does not depend on any axioms","caption":""}\n'
+    ) % (replay_line, replay_line, axioms_line, axioms_line)
+
+
 def _fake_completed_process(stdout: str, returncode: int):
     class _Result:
         pass
@@ -286,10 +306,10 @@ class TestComposeAndCheckRoundTrip(unittest.TestCase):
     @patch("agent_system.lib.type_check.is_docker_available", return_value=True)
     @patch("agent_system.lib.type_check.subprocess.run")
     def test_proved_proof_body_is_proved(self, mock_run, _mock_avail):
-        mock_run.return_value = _fake_completed_process(_JSON_PROVED, returncode=0)
         text = compose_lean_file(_STATEMENT, "by trivial")
+        mock_run.return_value = _fake_completed_process(_mock_messages_for_proved(text), returncode=0)
         result = check_lean_file(text)
-        self.assertEqual(result["status"], "proved")
+        self.assertEqual(result["status"], "proved", result)
 
 
 # ── R-Lean: real lib.lean_ir.render_statement + compose_lean_file ──────────
@@ -323,7 +343,7 @@ class TestComposeWithRealLeanIr(unittest.TestCase):
         self.assertIsNotNone(statement)
         text = compose_lean_file(statement, "sorry")
         self.assertIn("import TflLean", text)
-        self.assertIn("inductive Sym", text)
+        self.assertIn("inductive Letter", text)
         self.assertIn("theorem tfl_main : ¬ L.IsRegular := by\n  sorry", text)
         self.assertTrue(text.rstrip().endswith("#print axioms tfl_main"))
 

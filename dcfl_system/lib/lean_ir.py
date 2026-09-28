@@ -1,7 +1,7 @@
 """DCFL-direction IR -> Lean 4 statement translator (docs/VERDICT_POLICY.md R-Lean).
 
 Thin wrapper around ``agent_system.lib.lean_ir`` (``LeanStatement``, the
-``Sym``/``NT`` alphabet and grammar builders -- see that module's docstring
+``Letter``/``NT`` alphabet and grammar builders -- see that module's docstring
 for the full ``is_DCF`` provenance: langlib's own predicate,
 ``Langlib.Classes.DeterministicContextFree.Definition``, since Mathlib has no
 deterministic-pushdown-automaton formalization at all). Adds the
@@ -25,6 +25,13 @@ deterministic-pushdown-automaton formalization at all). Adds the
   ``cfl_system.lib.exponent_pattern.parse_exponent_pattern`` --
   ``dcfl_system`` may import ``cfl_system``, root CLAUDE.md "Import
   direction").
+
+Every statement this module renders also appends a hand-written
+``instance : Fintype Letter`` after ``alphabet_decl``
+(``agent_system.lib.lean_ir.fintype_instance_decl`` -- see that module's
+docstring for why: langlib's ``is_DPDA`` takes ``[Fintype T]`` on the
+alphabet explicitly, unlike the Mathlib predicates ``agent_system.lib
+.lean_ir``/``cfl_system.lib.lean_ir`` state directly).
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ import re
 from agent_system.lib.lean_ir import (
     LeanStatement,
     alphabet_decl,
+    fintype_instance_decl,
     grammar_decl,
     pattern_body,
 )
@@ -93,6 +101,16 @@ def _dcfl_theorem_decl(negate: bool) -> str:
     return f"theorem tfl_main : {prop}"
 
 
+def _alpha_decl_with_fintype(alpha_decl: str, sym_map: dict[str, str]) -> str:
+    """*alpha_decl* (``alphabet_decl``'s ``inductive Letter ...``) plus the
+    manual ``instance : Fintype Letter`` every dcfl statement needs
+    (langlib's ``is_DPDA`` takes ``[Fintype T]`` on the alphabet -- see
+    ``agent_system.lib.lean_ir``'s module docstring, "Alphabet type" ->
+    ``deriving Fintype`` paragraph, for why this isn't just ``deriving
+    Fintype`` on the inductive itself)."""
+    return f"{alpha_decl}\n\n{fintype_instance_decl(sym_map)}"
+
+
 def _render_grammar_case(lang_spec: dict, negate: bool) -> tuple[LeanStatement | None, str | None]:
     terminals = lang_spec.get("terminals")
     alpha = alphabet_decl(terminals) if isinstance(terminals, list) else None
@@ -102,7 +120,12 @@ def _render_grammar_case(lang_spec: dict, negate: bool) -> tuple[LeanStatement |
     lang_decl = grammar_decl(lang_spec, sym_map)
     if lang_decl is None:
         return None, "grammar language_spec could not be translated (malformed rules or symbols)"
-    stmt = LeanStatement(alpha_decl, lang_decl, _dcfl_theorem_decl(negate), _dcfl_imports(True))
+    stmt = LeanStatement(
+        _alpha_decl_with_fintype(alpha_decl, sym_map),
+        lang_decl,
+        _dcfl_theorem_decl(negate),
+        _dcfl_imports(True),
+    )
     return stmt, None
 
 
@@ -149,7 +172,7 @@ def _letter_domain_setbuilder(lang_spec: dict, sym_map: dict[str, str]) -> str |
     for ch in word_pattern:
         letter, rep = var_by_name[ch]
         cid = count_ident[ch]
-        parts.append(f"List.replicate {cid} Sym.{sym_map[letter]}")
+        parts.append(f"List.replicate {cid} Letter.{sym_map[letter]}")
         if rep == "+":
             domain_conds.append(f"{cid} ≥ 1")
 
@@ -183,7 +206,7 @@ def _letter_domain_setbuilder(lang_spec: dict, sym_map: dict[str, str]) -> str |
     if all_conds:
         body += " ∧ " + " ∧ ".join(all_conds)
     inner = f"∃ {quant} : ℕ, {body}" if quant else body
-    return f"def L : Language Sym := {{w : List Sym | {inner}}}"
+    return f"def L : Language Letter := {{w : List Letter | {inner}}}"
 
 
 def _pattern_body_or_none(pattern, sym_map: dict[str, str]) -> str | None:
@@ -220,7 +243,12 @@ def _render_setbuilder_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[Le
                 "constraints limited to length_cmp/integer_cmp) nor exponent "
                 "notation in word_pattern"
             )
-        lang_decl = f"def L : Language Sym := {{w : List Sym | {body}}}"
+        lang_decl = f"def L : Language Letter := {{w : List Letter | {body}}}"
 
-    stmt = LeanStatement(alpha_decl, lang_decl, _dcfl_theorem_decl(negate), _dcfl_imports(False))
+    stmt = LeanStatement(
+        _alpha_decl_with_fintype(alpha_decl, sym_map),
+        lang_decl,
+        _dcfl_theorem_decl(negate),
+        _dcfl_imports(False),
+    )
     return stmt, None

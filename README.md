@@ -428,18 +428,28 @@ The policy behind this is `docs/VERDICT_POLICY.md`'s **R-Lean** rule — change 
   DCFL statements are built on **[langlib](https://github.com/nielstron/langlib)**
   (`Classes.{Regular,ContextFree,DeterministicContextFree}`, the pumping lemma, Ogden's lemma, DCFL closure
   lemmas). **LL(k) is not formalized** — no Lean statement exists for grammar-level LL(k) claims.
-- **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0`, langlib pinned at commit
-  `c5fb8340b42543713f79e1c283a3f6a929cb71e` (its own lakefile requires the same Mathlib tag, no conflict). Image
-  build is checkpoint-layered (`elan default` → `lake update` + `cache get` → build `TflLean.Basic` → build
-  `TflLean.Langlib` → `lake build`); expect on the order of 20–60 minutes and several GB on a normal connection —
-  see the notes below for what changes on a throttled one.
+- **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0` (resolves to commit
+  `db584cd6d46c92f209a44c0f1c829460d327499d`), langlib pinned at commit
+  `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — verified against langlib's *own* `lake-manifest.json` at that
+  commit, which resolves Mathlib to the exact same `v4.33.0`/`db584cd6...`, so there's nothing for `lake` to
+  arbitrate. Image build is checkpoint-layered (`elan default` → `cache get` → build `TflLean.Basic` → build
+  `TflLean.Langlib` → `lake build`); measured this round (BuildKit, pinned `lake-manifest.json`, elan/toolchain
+  layers warm from a prior build): `lake exe cache get` ~7 min, `lake build TflLean.Basic` ~10s,
+  `lake build TflLean.Langlib` ~67s, final `lake build` ~6s, image export ~8 min — **~20 minutes** total for the
+  Lean-project layers; a fully cold build (toolchain + `apt-get` too) adds a few more minutes. Final image
+  **~16 GB**. A file that does `import TflLean` and `#check`s `Language.IsRegular`, `DFA.pumping_lemma`,
+  `CF_pumping`, `Language.IsContextFree.ogdens_lemma` type-checks in a few seconds via `lake env lean` (not
+  minutes) — Mathlib and the langlib modules `TflLean.Langlib` imports are pre-built .olean, not recompiled per
+  check.
 - **Where each step runs.** Type checking (`docker run ... lake env lean`) is **local, in Docker**, and is part of
   the normal `--formalize` pipeline run — no API cost. Writing the proof body is an LLM call and, like every other
   live call in this repo, happens **only on explicit request with an agreed budget**; mock mode (canned proof
   bodies) is the default everywhere else, including in `tfl-eval` and CI.
 
+### The `tfl-lean4` Docker image
 
-type-checks Lean 4 code inside the `tfl-lean4` Docker image rather than requiring a local Lean install. The image
+`agent_system/lib/type_check.py` (via `agent_system/docker/run_check.sh` / `run_check.ps1`, or directly with
+`docker run`) type-checks Lean 4 code inside the `tfl-lean4` Docker image rather than requiring a local Lean install. The image
 bundles a small pinned lake project, `agent_system/docker/tfl_lean/` (`lakefile.toml`, `lean-toolchain` =
 `leanprover/lean4:v4.33.0`, Mathlib pinned to tag `v4.33.0`, and
 [langlib](https://github.com/nielstron/langlib) pinned by commit `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — its
@@ -455,10 +465,10 @@ required modules are pre-compiled, instead of either being recompiled on every c
 
 ```bash
 # Build the image (native on both amd64 and arm64 — e.g. Apple Silicon / Windows-on-ARM under
-# Docker Desktop's WSL2 backend build Lean natively, no emulation). Downloads the Lean 4.33 toolchain
-# (~550 MB), Mathlib's source (~250 MB) and precompiled .olean cache (~1-2 GB), plus langlib's source;
-# the resulting image is several GB. On a normal connection this is the ~20-60 min the checkpoint
-# layers below are designed around; on a throttled one, expect proportionally longer (see the note below).
+# Docker Desktop's WSL2 backend build Lean natively, no emulation). Downloads the Lean 4.33 toolchain,
+# Mathlib's precompiled .olean cache, and langlib's source, per the pinned tfl_lean/lake-manifest.json.
+# Measured this round on a normal connection: ~20 min for the Lean-project layers (cache get + builds +
+# image export), ~16 GB final image; a throttled connection is proportionally longer (see the note below).
 docker compose -f agent_system/docker/docker-compose.yml build lean4
 # or: agent_system/docker/build.sh (bash) / build.ps1 (PowerShell)
 
@@ -474,18 +484,21 @@ Notes:
 - Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
   leading UTF-8 BOM. PowerShell's `Set-Content -Encoding utf8` adds one; use `-Encoding utf8NoBOM` (or write with a
   tool that doesn't add a BOM) instead.
-- `agent_system/docker/tfl_lean/lake-manifest.json` is **not committed**: `Dockerfile.lean4` runs `lake update`
-  at build time instead, which resolves deterministically from the `rev`-pinned `mathlib`/`langlib` requires in
-  `lakefile.toml` (both pin their own transitive deps at their tagged commit, so nothing floats). It was generated
-  this way — rather than pre-built and committed, as the project's other pinned revisions are — because producing
-  it requires downloading the Lean toolchain first, and the connection this pin was last updated from measured
-  ~50-70 KB/s to both `releases.lean-lang.org` and `github.com` (confirmed host-level, not Docker-specific), making
-  that download alone a multi-hour operation. On a normal connection, run the build once, `docker cp` the
-  resulting container's `tfl_lean/lake-manifest.json` out, commit it, and switch the Dockerfile's first checkpoint
-  back to `COPY` + `lake exe cache get` (no `lake update`) for a faster, fully offline-reproducible rebuild.
+- `agent_system/docker/tfl_lean/lake-manifest.json` **is committed**: `Dockerfile.lean4` `COPY`s it in and runs
+  `lake exe cache get` directly (no `lake update`), so every build fetches the exact pinned commits without a
+  network-based version-resolution step. It was regenerated this round on a normal-bandwidth connection (`lake
+  update` inside a container, then `docker cp tfl_lean/lake-manifest.json` out) — a prior pin on a throttled
+  connection (~50-70 KB/s to `releases.lean-lang.org` and `github.com`) had left it uncommitted because producing
+  it required downloading the Lean toolchain first.
 - To refresh the pinned Mathlib or langlib revision: update `rev` in `agent_system/docker/tfl_lean/lakefile.toml`,
   run `lake update` inside a container built from the *previous* image (or any Lean-4.33-compatible toolchain) to
-  regenerate `lake-manifest.json`, commit the new manifest, then rebuild the image.
+  regenerate `lake-manifest.json`, `docker cp` it out and commit it, then rebuild the image.
+- langlib's own source files declare `module` and import each other with `public import` — Lean 4's newer module
+  system, not just plain `import`. This works transparently from our side: `TflLean/Langlib.lean` is an ordinary
+  (non-`module`) file and its plain `import Langlib.Classes....` statements resolve langlib's public API — Ogden's
+  lemma and the pumping lemma included — with no special handling needed, and `lake env lean` on a downstream file
+  that only does `import TflLean` sees the same declarations. No incompatibility found; this was the one part of
+  the pin worth calling out since it's a newer Lean feature than the rest of this project's Lean usage.
 
 ---
 
@@ -519,7 +532,8 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 
 - **Python 3.12+** — `anthropic>=0.77`, `langgraph`, `python-dotenv` (declared in `pyproject.toml`), `pytest` for tests
 - **Graphviz `dot` binary** — rendering PDA state diagrams as inline SVG in HTML reports. Falls back to [Mermaid](https://mermaid.js.org/) via CDN if `dot` is absent. See [`cfl_system/CLAUDE.md`](cfl_system/CLAUDE.md) for install notes.
-- **Lean 4** (optional) — REG pipeline can emit Lean stubs via `agent_system/templates/*.lean`.
+- **Lean 4 + Docker** (optional) — `--formalize` type-checks generated proofs against the `tfl-lean4` image
+  (Lean/Mathlib v4.33.0 + langlib); see "R-Lean architecture" above.
 - **Anthropic API key** in `.env` for `--live` runs. Offline / mock mode needs no key.
 
 ---

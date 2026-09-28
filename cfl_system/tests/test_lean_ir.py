@@ -44,13 +44,13 @@ class TestGoldenAnBnCn(unittest.TestCase):
         )
         self.assertEqual(
             stmt.alphabet_decl,
-            "inductive Sym\n  | a | b | c\n  deriving DecidableEq, Fintype, Repr",
+            "inductive Letter\n  | a | b | c\n  deriving DecidableEq, Repr",
         )
         self.assertEqual(
             stmt.language_decl,
-            "def L : Language Sym := {w : List Sym | ∃ n : ℕ, "
-            "w = List.replicate n Sym.a ++ List.replicate n Sym.b "
-            "++ List.replicate n Sym.c ∧ n ≥ 0}",
+            "def L : Language Letter := {w : List Letter | ∃ n : ℕ, "
+            "w = List.replicate n Letter.a ++ List.replicate n Letter.b "
+            "++ List.replicate n Letter.c ∧ n ≥ 0}",
         )
         self.assertEqual(stmt.theorem_decl, "theorem tfl_main : ¬ L.IsContextFree")
 
@@ -73,9 +73,9 @@ class TestGoldenUnion(unittest.TestCase):
         stmt = render_statement(ir, "non_cfl")
         self.assertEqual(
             stmt.language_decl,
-            "def L : Language Sym := {w : List Sym | "
-            "(∃ n : ℕ, w = List.replicate n Sym.a ++ List.replicate n Sym.b ∧ n ≥ 0) "
-            "∨ (∃ n : ℕ, w = List.replicate n Sym.a ++ List.replicate (2 * n) Sym.b ∧ n ≥ 0)}",
+            "def L : Language Letter := {w : List Letter | "
+            "(∃ n : ℕ, w = List.replicate n Letter.a ++ List.replicate n Letter.b ∧ n ≥ 0) "
+            "∨ (∃ n : ℕ, w = List.replicate n Letter.a ++ List.replicate (2 * n) Letter.b ∧ n ≥ 0)}",
         )
 
 
@@ -109,25 +109,33 @@ class TestIdempotent(unittest.TestCase):
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
-class TestStatementCompilesWithoutLanglibImports(unittest.TestCase):
-    """The theorem *statement* itself (``Language.IsContextFree`` needs only
-    Mathlib) type-checks with `sorry`; the langlib pumping/Ogden imports a
-    real ``non_cfl`` proof body needs are a separate, not-yet-wired-in
-    dependency (see agent_system.lib.lean_ir's module docstring "Known gap")
-    -- so this strips them before compiling, same as validated manually
-    while writing this translator."""
+class TestGoldenStringsCompile(unittest.TestCase):
+    """The real statement -- real langlib pumping/Ogden imports included --
+    with `sorry` for <PROOF> should type-check with a sorry warning only.
+    langlib is a Lake dependency of ``agent_system/docker/tfl_lean`` and
+    built into the pinned image (see agent_system.lib.lean_ir's module
+    docstring, "langlib availability"), so this exercises the whole
+    pipeline, not a langlib-free substitute."""
 
-    def test_anbncn_statement_compiles(self):
-        ir = _load("eval/cfl-01.json")
-        stmt = render_statement(ir, "non_cfl")
-        mathlib_only = LeanStatement(
-            stmt.alphabet_decl,
-            stmt.language_decl,
-            stmt.theorem_decl,
-            [i for i in stmt.imports if "Langlib" not in i],
+    def _assert_valid_with_sorry(self, ir_name: str, direction: str) -> None:
+        ir = _load(ir_name)
+        stmt = render_statement(ir, direction)
+        self.assertIsNotNone(stmt, f"{ir_name}/{direction} did not render a statement")
+        result = check_lean(stmt.render("sorry"), timeout=180)
+        self.assertEqual(result["status"], "valid", f"{ir_name}/{direction}: {result}")
+        self.assertTrue(
+            result["warnings"] and any("sorry" in w.lower() for w in result["warnings"]),
+            f"{ir_name}/{direction}: expected a sorry warning, got {result['warnings']!r}",
         )
-        result = check_lean(mathlib_only.render("sorry"), timeout=180)
-        self.assertEqual(result["status"], "valid", result)
+
+    def test_anbncn_non_cfl_compiles(self):
+        self._assert_valid_with_sorry("eval/cfl-01.json", "non_cfl")
+
+    def test_anbncn_cfl_direction_compiles(self):
+        self._assert_valid_with_sorry("eval/cfl-01.json", "cfl")
+
+    def test_union_non_cfl_compiles(self):
+        self._assert_valid_with_sorry("eval/cfl-18.json", "non_cfl")
 
 
 if __name__ == "__main__":

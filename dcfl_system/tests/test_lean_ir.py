@@ -37,12 +37,15 @@ class TestGoldenSetBuilder(unittest.TestCase):
         )
         self.assertEqual(
             stmt.alphabet_decl,
-            "inductive Sym\n  | a | b | c\n  deriving DecidableEq, Fintype, Repr",
+            "inductive Letter\n  | a | b | c\n  deriving DecidableEq, Repr\n\n"
+            "instance : Fintype Letter where\n"
+            "  elems := {Letter.a, Letter.b, Letter.c}\n"
+            "  complete := by intro x; cases x <;> decide",
         )
         self.assertEqual(
             stmt.language_decl,
-            "def L : Language Sym := {w : List Sym | ∃ n_u n_v n_w : ℕ, "
-            "w = List.replicate n_u Sym.a ++ List.replicate n_v Sym.b ++ List.replicate n_w Sym.c "
+            "def L : Language Letter := {w : List Letter | ∃ n_u n_v n_w : ℕ, "
+            "w = List.replicate n_u Letter.a ++ List.replicate n_v Letter.b ++ List.replicate n_w Letter.c "
             "∧ n_u ≥ 1 ∧ n_v ≥ 1 ∧ n_w ≥ 1 ∧ n_u = n_v}",
         )
         self.assertEqual(stmt.theorem_decl, "theorem tfl_main : is_DCF L")
@@ -68,13 +71,19 @@ class TestGoldenGrammarExam04(unittest.TestCase):
                 "import Mathlib.Computability.ContextFreeGrammar",
             ],
         )
-        self.assertIn("inductive NT\n  | S | A\n  deriving DecidableEq, Fintype, Repr", stmt.language_decl)
         self.assertIn(
-            "⟨NT.S, [Symbol.terminal Sym.a, Symbol.nonterminal NT.S, "
-            "Symbol.nonterminal NT.S, Symbol.terminal Sym.b]⟩",
+            "instance : Fintype Letter where\n"
+            "  elems := {Letter.a, Letter.b}\n"
+            "  complete := by intro x; cases x <;> decide",
+            stmt.alphabet_decl,
+        )
+        self.assertIn("inductive NT\n  | S | A\n  deriving DecidableEq, Repr", stmt.language_decl)
+        self.assertIn(
+            "⟨NT.S, [Symbol.terminal Letter.a, Symbol.nonterminal NT.S, "
+            "Symbol.nonterminal NT.S, Symbol.terminal Letter.b]⟩",
             stmt.language_decl,
         )
-        self.assertTrue(stmt.language_decl.endswith("def L : Language Sym := g.language"))
+        self.assertTrue(stmt.language_decl.endswith("def L : Language Letter := g.language"))
         self.assertEqual(stmt.theorem_decl, "theorem tfl_main : is_DCF L")
 
 
@@ -110,25 +119,34 @@ class TestIdempotent(unittest.TestCase):
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
-class TestDeclsCompileWithoutLanglibImports(unittest.TestCase):
-    """``is_DCF`` itself needs langlib (no Mathlib alternative exists -- see
-    agent_system.lib.lean_ir's module docstring), so this checks only the
-    Sym/NT/grammar/set-builder declarations parse, against a trivial `L = L`
-    goal instead of the real theorem."""
+class TestGoldenStringsCompile(unittest.TestCase):
+    """The real statement -- real ``Langlib.Classes.DeterministicContextFree
+    .Definition`` import, real ``is_DCF`` theorem, real ``Fintype Letter``
+    instance -- with `sorry` for <PROOF> should type-check with a sorry
+    warning only. langlib is a Lake dependency of ``agent_system/docker/
+    tfl_lean`` and built into the pinned image (see agent_system.lib.lean_ir's
+    module docstring, "langlib availability"), so this exercises the whole
+    pipeline, not a langlib-free substitute."""
 
-    def _assert_decls_compile(self, ir_name: str) -> None:
+    def _assert_valid_with_sorry(self, ir_name: str, direction: str) -> None:
         ir = _load(ir_name)
-        stmt = render_statement(ir, "dcfl")
-        imports = [i for i in stmt.imports if "Langlib" not in i]
-        trivial = LeanStatement(stmt.alphabet_decl, stmt.language_decl, "theorem tfl_main : L = L", imports)
-        result = check_lean(trivial.render("rfl"), timeout=180)
-        self.assertEqual(result["status"], "valid", result)
+        stmt = render_statement(ir, direction)
+        self.assertIsNotNone(stmt, f"{ir_name}/{direction} did not render a statement")
+        result = check_lean(stmt.render("sorry"), timeout=180)
+        self.assertEqual(result["status"], "valid", f"{ir_name}/{direction}: {result}")
+        self.assertTrue(
+            result["warnings"] and any("sorry" in w.lower() for w in result["warnings"]),
+            f"{ir_name}/{direction}: expected a sorry warning, got {result['warnings']!r}",
+        )
 
-    def test_setbuilder_decls_compile(self):
-        self._assert_decls_compile("task_anbncm.json")
+    def test_setbuilder_compiles(self):
+        self._assert_valid_with_sorry("task_anbncm.json", "dcfl")
 
-    def test_grammar_decls_compile(self):
-        self._assert_decls_compile("task_grammar_aSSb.json")
+    def test_setbuilder_non_dcfl_compiles(self):
+        self._assert_valid_with_sorry("task_anbncm.json", "non_dcfl")
+
+    def test_grammar_compiles(self):
+        self._assert_valid_with_sorry("task_grammar_aSSb.json", "dcfl")
 
 
 if __name__ == "__main__":

@@ -160,6 +160,12 @@ class TestScenario3LeanVerified(unittest.TestCase):
         basis_agents = {b["agent"]: b for b in result["verdict_gate"]["basis"]}
         self.assertEqual(basis_agents["formalizer"]["trust"], "verified")
         self.assertEqual(basis_agents["formalizer"]["basis"], "lean_proof")
+        # The Lean proof itself (statement/proof_body/axioms/attempts) must
+        # be readable off the final result too, not just implied by the
+        # gate's basis entry -- otherwise a report built from `result` alone
+        # has no way to show what was actually proved.
+        self.assertEqual(result["evidence"]["formalization"]["status"], "proved")
+        self.assertEqual(result["evidence"]["formalization"]["axioms"], ["propext"])
 
     def test_lean_with_sorry_is_not_verified(self):
         """`has_sorry` must NOT reach the `verified` cap (TODO §1 ⚪, R1:
@@ -191,6 +197,20 @@ class TestScenario3LeanVerified(unittest.TestCase):
 
         self.assertEqual(result["status"], "partial")
         self.assertNotEqual(result["confidence"], CONFIDENCE_CAPS["verified"])
+        # Still surfaced (any non-None formalization dict is, whatever its
+        # status) -- a `not_formalizable` reason is useful in a report too.
+        self.assertEqual(
+            result["evidence"]["formalization"]["status"], "not_formalizable",
+        )
+
+    def test_no_formalization_leaves_evidence_untouched(self):
+        """`state["formalization"]` missing/`None` (formalize_node disabled
+        or skipped) must not add an `evidence["formalization"]` key at all --
+        distinct from an explicit `not_formalizable` status above."""
+        state = _state()
+        result = assemble_result_node(state)["result"]
+
+        self.assertNotIn("formalization", result["evidence"])
 
 
 # ---------------------------------------------------------------------------

@@ -13,23 +13,15 @@ Two layers:
 
 * always run (no Docker): each file is byte-identical to
   ``compose_lean_file(statement, body)`` for its statement, contains no
-  ``sorry``/``native_decide``/``admit``, and the few-shot ``proof_body``
-  strings quoted in the formalizer prompt are the ones compiled here;
-* Docker-conditional (skipped without the ``tfl-lean4`` image): each example
-  goes through ``check_lean_file`` with status ``proved``;
-  ``AnBnCnNotCF.lean`` needs langlib (``Language.IsContextFree.pumping``),
-  which the current image (Lean/Mathlib v4.18.0) does not have -- it is an
-  ``xfail`` until the image is rebuilt from the v4.33.0 + langlib pin, and
-  then must be ``proved``. Its Mathlib-only half (refuting the CF pumping
-  property) is ``AnBnCnPumpingCore.lean`` and is checked for real. Until then
-  its proof body is also compiled against a stub that declares langlib's
-  ``nTimes``/``^+^`` and ``Language.IsContextFree.pumping`` with their
-  verbatim signatures (pinned commit c5fb834) -- every step elaborates, and
-  the only axiom beyond the kernel's is the stub itself;
-* Docker-conditional: the lemma-based proof bodies quoted in the
-  ``TflLean/Lemmas.lean`` module doc compile against the ``AnBnNotRegular``
-  statement with ``Lemmas.lean``'s declarations inlined (the image does not
-  build ``TflLean.Lemmas`` as a module yet).
+  ``sorry``/``native_decide``/``admit``, the few-shot ``proof_body`` strings
+  quoted in the formalizer prompt are the ones compiled here, and the image
+  recipe actually ships ``TflLean.Lemmas`` behind ``import TflLean``;
+* Docker-conditional (skipped without the ``tfl-lean4`` image -- Lean/Mathlib
+  v4.33.0 + langlib @ c5fb834): every example goes through
+  ``check_lean_file`` with status ``proved`` (``AnBnCnNotCF.lean`` uses
+  langlib's ``Language.IsContextFree.pumping``), ``Lemmas.lean`` compiles, and
+  the lemma-based proof bodies quoted in its module doc compile against the
+  pipeline statements with nothing but ``import TflLean``.
 """
 
 from __future__ import annotations
@@ -50,12 +42,20 @@ from agent_system.lib.type_check import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-TFL_LEAN = ROOT / "docker" / "tfl_lean" / "TflLean"
+DOCKER_DIR = ROOT / "docker"
+TFL_LEAN = DOCKER_DIR / "tfl_lean" / "TflLean"
 EXAMPLES = TFL_LEAN / "Examples"
 LEMMAS = TFL_LEAN / "Lemmas.lean"
 PROMPT = ROOT / "prompts" / "formalizer.md"
 
-PRINT_AXIOMS = "\n\n#print axioms tfl_main\n"
+# A body that can never appear as a substring of the surrounding scaffold
+# text and trips none of `scan_proof_body`'s lexical patterns, used only to
+# locate the exact prefix/suffix `compose_lean_file` wraps a body in for a
+# given statement -- so `_proof_body` below stays correct however that
+# wrapping is built (e.g. the independent-replay block compose_lean_file
+# appends around `#print axioms`, docs/VERDICT_POLICY.md R-Lean) instead of
+# hard-coding its shape a second time here.
+_PROBE_BODY = "___TFL_EXAMPLE_PROBE_BODY___"
 
 _ANBN_IR = json.loads((ROOT / "examples" / "eval" / "reg-01.json").read_text(encoding="utf-8"))
 _ANBNCN_IR = {
@@ -84,10 +84,12 @@ def _statement(name: str) -> LeanStatement:
     if name == "EvenA_Regular.lean":
         # lean_ir has no IR kind for letter-count conditions yet (reg-03 style
         # descriptions render to None), so this statement is hand-built in the
-        # exact shape render_statement produces.
+        # exact shape render_statement produces (alphabet_decl is the
+        # renderer's own, taken from the aⁿbⁿ statement over the same {a, b}).
+        base = _statement("AnBnNotRegular.lean")
         return LeanStatement(
-            alphabet_decl="inductive Sym\n  | a | b\n  deriving DecidableEq, Fintype, Repr",
-            language_decl="def L : Language Sym := {w : List Sym | Even (w.count Sym.a)}",
+            alphabet_decl=base.alphabet_decl,
+            language_decl="def L : Language Letter := {w : List Letter | Even (w.count Letter.a)}",
             theorem_decl="theorem tfl_main : L.IsRegular",
             imports=["import TflLean"],
         )
@@ -97,7 +99,7 @@ def _statement(name: str) -> LeanStatement:
             alphabet_decl=base.alphabet_decl,
             language_decl=base.language_decl,
             theorem_decl=(
-                "theorem tfl_main : ¬ ∃ p : ℕ, ∀ w ∈ L, w.length ≥ p → ∃ u v x y z : List Sym,\n"
+                "theorem tfl_main : ¬ ∃ p : ℕ, ∀ w ∈ L, w.length ≥ p → ∃ u v x y z : List Letter,\n"
                 "    w = u ++ v ++ x ++ y ++ z ∧ (v ++ y).length > 0 ∧ (v ++ x ++ y).length ≤ p ∧\n"
                 "    ∀ i : ℕ, u ++ (List.replicate i v).flatten ++ x ++ "
                 "(List.replicate i y).flatten ++ z ∈ L"
@@ -129,8 +131,15 @@ EXAMPLE_NAMES = [
     "AnBnCnPumpingCore.lean",
     "AnBnCnNotCF.lean",
 ]
-MATHLIB_ONLY = ["AnBnNotRegular.lean", "EvenA_Regular.lean", "AnBnCnPumpingCore.lean"]
 FEW_SHOT = ["AnBnNotRegular.lean", "EvenA_Regular.lean"]
+
+LEMMA_NAMES = [
+    "count_replicate_self", "count_replicate_of_ne", "count_flatten_replicate",
+    "length_eq_sum_count", "replicate_append_replicate_inj", "evalFrom_cons",
+    "isRegular_of_dfa", "not_isRegular_of_distinguishable", "IsRegular.pumping",
+    "IsContextFree.cfPumping", "not_isContextFree_of_not_cfPumping",
+    "flatten_replicate_zero", "flatten_replicate_two",
+]
 
 
 def _read(name: str) -> str:
@@ -138,12 +147,19 @@ def _read(name: str) -> str:
 
 
 def _proof_body(name: str) -> str:
-    """The proof body exactly as the formalizer would return it."""
+    """The proof body exactly as the formalizer would return it, found by
+    locating `_PROBE_BODY` in `compose_lean_file`'s output for this
+    statement -- the prefix/suffix around it (imports, statement, the
+    appended independent-replay check and `#print axioms`) is whatever
+    compose_lean_file actually wraps a body in, not a second hard-coded
+    copy of its shape."""
+    scaffold = compose_lean_file(_statement(name), _PROBE_BODY)
+    probe_at = scaffold.index(_PROBE_BODY)
+    prefix, suffix = scaffold[:probe_at], scaffold[probe_at + len(_PROBE_BODY):]
     text = _read(name)
-    prefix = _statement(name).render("")[:-1]  # "... := by\n  "
     assert text.startswith(prefix), f"{name}: statement differs from the pipeline's rendering"
-    assert text.endswith(PRINT_AXIOMS), f"{name}: must end with `#print axioms tfl_main`"
-    return text[len(prefix):-len(PRINT_AXIOMS)]
+    assert text.endswith(suffix), f"{name}: must end with compose_lean_file's own appended check"
+    return text[len(prefix):len(text) - len(suffix)]
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +176,14 @@ def test_example_is_harness_composed(name):
     pipeline's own format, not a hand-tuned variant of it."""
     body = _proof_body(name)
     assert compose_lean_file(_statement(name), body) == _read(name)
+
+
+def test_anbn_statement_is_the_renderers():
+    """The aⁿbⁿ example uses render_statement verbatim (alphabet `Letter`,
+    no `Fintype` derive) -- if lean_ir's output changes, regenerate it."""
+    stmt = _statement("AnBnNotRegular.lean")
+    assert stmt.alphabet_decl.startswith("inductive Letter")
+    assert "Fintype" not in stmt.alphabet_decl
 
 
 @pytest.mark.parametrize("name", EXAMPLE_NAMES)
@@ -186,18 +210,19 @@ def test_few_shot_bodies_in_prompt_match_compiled_examples(name):
     assert json.dumps(_proof_body(name), ensure_ascii=False) in prompt
 
 
+def test_few_shot_statements_in_prompt_match_examples():
+    prompt = PROMPT.read_text(encoding="utf-8")
+    for name in FEW_SHOT:
+        stmt = _statement(name)
+        for field in ("alphabet_decl", "language_decl", "theorem_decl"):
+            value = getattr(stmt, field)
+            assert f'"{field}": {json.dumps(value, ensure_ascii=False)}' in prompt, (name, field)
+
+
 def test_prompt_lists_lemmas_that_exist_in_lemmas_file():
     prompt = PROMPT.read_text(encoding="utf-8")
     lemmas = LEMMAS.read_text(encoding="utf-8")
-    for name in (
-        "not_isRegular_of_distinguishable",
-        "IsRegular.pumping",
-        "isRegular_of_dfa",
-        "replicate_append_replicate_inj",
-        "count_flatten_replicate",
-        "length_eq_sum_count",
-        "CFPumping",
-    ):
+    for name in [*LEMMA_NAMES, "CFPumping"]:
         assert f"TflLean.{name}" in prompt, name
         assert (f"theorem {name}" in lemmas) or (f"def {name}" in lemmas), name
 
@@ -207,6 +232,15 @@ def test_lemmas_file_has_no_escape_hatches():
     code = text.split("-/", 1)[1]  # skip the module docstring
     for bad in ("sorry", "admit", "native_decide", "ofReduceBool", "\naxiom "):
         assert bad not in code, bad
+
+
+def test_image_recipe_ships_lemmas_behind_import_tfllean():
+    """Proof bodies only ever get `import TflLean`, so the image must build
+    TflLean.Lemmas and the root module must re-export it."""
+    root = (DOCKER_DIR / "tfl_lean" / "TflLean.lean").read_text(encoding="utf-8")
+    assert "import TflLean.Lemmas" in root
+    dockerfile = (DOCKER_DIR / "Dockerfile.lean4").read_text(encoding="utf-8")
+    assert "tfl_lean/TflLean/Lemmas.lean" in dockerfile
 
 
 # ---------------------------------------------------------------------------
@@ -225,16 +259,13 @@ def _assert_proved(result: dict, what: str) -> None:
 
 
 @functools.lru_cache(maxsize=1)
-def _langlib_available() -> bool:
-    probe = (
-        "import Langlib.Classes.ContextFree.Pumping.Pumping\n"
-        "#check @Language.IsContextFree.pumping\n"
-    )
+def _lemmas_in_image() -> bool:
+    probe = "import TflLean\n\n#check @TflLean.not_isContextFree_of_not_cfPumping\n"
     return check_lean_file(probe, timeout=300)["status"] == "proved"
 
 
 @docker
-@pytest.mark.parametrize("name", MATHLIB_ONLY)
+@pytest.mark.parametrize("name", EXAMPLE_NAMES)
 def test_example_proved(name):
     result = check_lean_file(_read(name), timeout=600)
     _assert_proved(result, name)
@@ -243,14 +274,8 @@ def test_example_proved(name):
 
 @docker
 def test_lemmas_file_compiles():
-    names = [
-        "count_replicate_self", "count_replicate_of_ne", "count_flatten_replicate",
-        "length_eq_sum_count", "replicate_append_replicate_inj", "evalFrom_cons",
-        "isRegular_of_dfa", "not_isRegular_of_distinguishable", "IsRegular.pumping",
-        "flatten_replicate_zero", "flatten_replicate_two",
-    ]
     text = LEMMAS.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + "\n".join(
-        f"#print axioms TflLean.{n}" for n in names
+        f"#print axioms TflLean.{n}" for n in LEMMA_NAMES
     ) + "\n"
     # check_lean_file reads the axiom list of the first `#print axioms` target;
     # any `sorry` anywhere would still surface as a warning -> has_sorry.
@@ -258,69 +283,8 @@ def test_lemmas_file_compiles():
     _assert_proved(result, "TflLean/Lemmas.lean")
 
 
-@docker
-def test_anbncn_not_cf_proved_with_langlib():
-    if not _langlib_available():
-        pytest.xfail(
-            "langlib is not in the tfl-lean4 image (Lean/Mathlib v4.18.0): "
-            "Language.IsContextFree.pumping is unavailable. The Mathlib-only half "
-            "(AnBnCnPumpingCore.lean) is proved; rebuild the image from the "
-            "v4.33.0 + langlib pin to check this file for real."
-        )
-    result = check_lean_file(_read("AnBnCnNotCF.lean"), timeout=600)
-    _assert_proved(result, "AnBnCnNotCF.lean")
-
-
 # ---------------------------------------------------------------------------
-# Docker: AnBnCnNotCF's proof body against langlib's API, stubbed
-# ---------------------------------------------------------------------------
-
-# Verbatim from langlib @ c5fb8340b42543713f79e1c283a3f6a929cb71ef:
-# src/Langlib/Classes/ContextFree/Pumping/Utils.lean (nTimes, ^+^) and
-# src/Langlib/Classes/ContextFree/Pumping/Pumping.lean
-# (Language.IsContextFree.pumping, stated here as an axiom). If the pin moves,
-# re-copy these signatures.
-_LANGLIB_PUMPING_STUB = """\
-def nTimes {α : Type _} (l : List α) (n : ℕ) : List α :=
-  (List.replicate n l).flatten
-
-infixl:69 " ^+^ " => nTimes
-
-axiom Language.IsContextFree.pumping {T : Type} {L : Language T} (hL : L.IsContextFree) :
-    ∃ p : ℕ, ∀ w ∈ L, w.length ≥ p → ∃ u v x y z : List T,
-      w = u ++ v ++ x ++ y ++ z ∧
-      (v ++ y).length > 0       ∧
-      (v ++ x ++ y).length ≤ p  ∧
-      ∀ i : ℕ, u ++ v^+^i ++ x ++ y^+^i ++ z ∈ L"""
-
-
-@docker
-def test_anbncn_not_cf_body_elaborates_against_langlib_stub():
-    """Not a proof (the stub is an axiom), but it pins down that every tactic
-    step of AnBnCnNotCF.lean's body elaborates against langlib's exact
-    pumping-lemma signature: no errors, no sorry, and the axiom list is the
-    kernel's plus the stub -- nothing else."""
-    base = _statement("AnBnCnNotCF.lean")
-    stub_stmt = LeanStatement(
-        alphabet_decl=_LANGLIB_PUMPING_STUB + "\n\n" + base.alphabet_decl,
-        language_decl=base.language_decl,
-        theorem_decl=base.theorem_decl,
-        imports=[i for i in base.imports if "Langlib" not in i],
-    )
-    text = compose_lean_file(stub_stmt, _proof_body("AnBnCnNotCF.lean"))
-    result = check_lean_file(text, timeout=600)
-    real_errors = [
-        e for e in result["errors"]
-        if "disallowed axioms" not in str(e.get("data", ""))
-    ]
-    assert not real_errors, result
-    assert result["status"] in ("error", "proved"), result
-    assert set(result["axioms"]) <= ALLOWED_AXIOMS | {"Language.IsContextFree.pumping"}, result
-    assert "Language.IsContextFree.pumping" in result["axioms"], result
-
-
-# ---------------------------------------------------------------------------
-# Docker: the lemma-based proof bodies quoted in Lemmas.lean's module doc
+# Docker: lemma-based proof bodies, with nothing but the pipeline statement
 # ---------------------------------------------------------------------------
 
 def _lemmas_doc_blocks() -> list[str]:
@@ -330,26 +294,28 @@ def _lemmas_doc_blocks() -> list[str]:
     return blocks
 
 
-def _lemmas_code_and_imports() -> tuple[str, list[str]]:
-    text = LEMMAS.read_text(encoding="utf-8")
-    head, code = text.split("-/", 1)
-    imports = [ln for ln in head.splitlines() if ln.startswith("import ")]
-    return code.strip(), imports
+def _require_lemmas_in_image() -> None:
+    if not _lemmas_in_image():
+        pytest.skip("tfl-lean4 image predates TflLean.Lemmas; rebuild it (README, Lean section)")
 
 
 @docker
 @pytest.mark.parametrize("idx", [0, 1], ids=["myhill_nerode", "pumping"])
 def test_lemmas_doc_proof_bodies_compile(idx):
-    block = _lemmas_doc_blocks()[idx]
-    body = block.strip("\n").replace("\n", "\n  ")
-    code, lemma_imports = _lemmas_code_and_imports()
-    base = _statement("AnBnNotRegular.lean")
-    imports = list(dict.fromkeys([*base.imports, *lemma_imports]))
-    stmt = LeanStatement(
-        alphabet_decl=code + "\n\n" + base.alphabet_decl,
-        language_decl=base.language_decl,
-        theorem_decl=base.theorem_decl,
-        imports=imports,
+    _require_lemmas_in_image()
+    body = _lemmas_doc_blocks()[idx].strip("\n").replace("\n", "\n  ")
+    text = compose_lean_file(_statement("AnBnNotRegular.lean"), body)
+    _assert_proved(check_lean_file(text, timeout=600), f"Lemmas.lean doc block {idx}")
+
+
+@docker
+def test_anbncn_not_cf_via_cfpumping_bridge():
+    """`apply TflLean.not_isContextFree_of_not_cfPumping` + the Mathlib-only
+    body of AnBnCnPumpingCore.lean proves the CFL statement too."""
+    _require_lemmas_in_image()
+    body = (
+        "apply TflLean.not_isContextFree_of_not_cfPumping\n  "
+        + _proof_body("AnBnCnPumpingCore.lean")
     )
-    result = check_lean_file(compose_lean_file(stmt, body), timeout=600)
-    _assert_proved(result, f"Lemmas.lean doc block {idx}")
+    text = compose_lean_file(_statement("AnBnCnNotCF.lean"), body)
+    _assert_proved(check_lean_file(text, timeout=600), "AnBnCnNotCF via CFPumping bridge")
