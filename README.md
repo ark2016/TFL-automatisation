@@ -34,6 +34,10 @@ pip install -e .                  # anthropic, langgraph, python-dotenv, ...
 pip install pytest                # for the test suite
 echo "ANTHROPIC_API_KEY=sk-..." > .env
 
+# `pip install -e .` also registers console scripts, so any of these work
+# from anywhere in the venv instead of `python -m ...`:
+#   tfl-lab   tfl-reg   tfl-cfl   tfl-dcfl   tfl-ll
+
 # Install Graphviz (for PDA state diagrams in HTML reports)
 #   Windows: https://graphviz.org/download/ (add bin/ to PATH)
 #   macOS:   brew install graphviz
@@ -111,6 +115,10 @@ flowchart TD
     style F fill:#4a3a1e,stroke:#d4a86a,color:#e6e8ec
 ```
 
+`formalizer` is disabled by default (it's an extra Opus call to turn the reasoning agent's proof sketch into a
+polished, structured Markdown proof). Enable it per run with `--formalize`, or for every run with
+`TFL_FORMALIZATION=1` (also `true`/`yes`/`on`).
+
 ### Key properties
 
 - **Fan-out parallelism.** All specialists are dispatched in one `Send()` burst and run concurrently in LangGraph's Pregel thread pool. End-to-end wall time ≈ max(specialist time), not sum.
@@ -131,7 +139,7 @@ flowchart TD
   |---|---|---|
   | `verified` | deterministic, complete check (LL(k) table, Lean proof w/o `sorry`, regex/DFA regularity) | 0.98 |
   | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, pumping checked for p ∈ {3,4,5}) | 0.85 |
-  | `well_formed` | structure only — fields present, JSON/words parsed | 0.60 |
+  | `well_formed` | structure only — fields present, JSON/words parsed | 0.55 |
   | `not_verified` | check impossible or fields missing (verdict must be `inconclusive`/`uncertain`) | 0.40 |
   | unresolved `contradiction` (constructive vs. destructive evidence) | — | 0.50 |
 
@@ -171,6 +179,23 @@ Opus response → _extract_json (3 strategies: whole / fenced / braces)
 - **Request parameters per model.** Opus 5.5 / Sonnet 5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; only legacy models (Haiku 4.5) get `temperature`. See `LiveRunner._build_request_kwargs()`.
 - **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-4-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
 - **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`).
+
+**Shared client (`agent_system/lib/llm_client.py`).** `cfl_system`/`dcfl_system`/`ll_system`'s `LiveRunner` are now
+thin wrappers around one `AnthropicClient`: `build_request_kwargs()` builds the thinking/effort/temperature kwargs
+described above, and `call()` does one streamed request and returns a typed `CallResult` (text, `stop_reason`,
+model, usage, refusal info). API errors are typed — `FatalAPIError` (400/401/403/404, never retried) vs
+`RetryableAPIError` (429/5xx/overloaded/a broken stream, retried with jittered backoff) — and concurrent calls
+across all four pipelines share one process-wide semaphore, sized by the `TFL_MAX_CONCURRENCY` env var. A
+`UsageTracker` accumulates tokens/cache-hit/cost per run (`as_dict()`) and is now wired into each pipeline's
+top-level result JSON and CLI `--verbose` output, so every run reports its own token/cost usage block.
+
+**Structured outputs.** Agent responses are parsed primarily via the Messages API's `output_config.format`
+(a closed per-agent JSON schema built by `build_agent_output_schema()` / `agent_output_schema.py` in each
+system), which sidesteps the old "first `{` to last `}`" heuristic breaking on set-builder notation like
+`{aⁿbⁿ | n≥0}` in prose. If the API rejects `output_config` itself (schema too large/unsupported), the call
+transparently falls back to the legacy brace/fence extraction + Haiku repair path described above. Agents whose
+output shape isn't a single fixed object (`input_parser`, `formalizer`, `ll_input_parser`) intentionally keep the
+legacy prose-extraction path only.
 
 ---
 
@@ -243,6 +268,14 @@ flowchart LR
 - **DCFL pumping lemma (Yu).** Works with *two* words `xy`, `xz ∈ L` sharing a long prefix `x` (|x| > p, first(y) = first(z)). At least one of two conditions must hold: **(1)** a *pair* of factors `x₂, x₄` — the pair may sit **anywhere** in `x`, only the window `|x₂x₃x₄| ≤ p` is bounded — pumps synchronously in both `xy` and `xz`; **(2)** a single factor in the *last* `p` symbols of `x` pumps synchronously with matching factors of `y` and `z`. Refuting **both** for every decomposition shows `L` is not DCFL. (A single-factor reading of condition (1) is unsound — it would wrongly reject DCFLs like {aⁿbⁿcᵐ}.)
 - **Shallit's theorem (Myhill–Nerode classes, [Sh] Thm 4.7.4).** If `L` is a DCFL, at least one Nerode-equivalence class of `L` is infinite. Contrapositive: if **all** classes are finite — every pair of distinct words separable by some suffix — then `L` is not DCFL. The argument only bites if the "dead" class `D = {x | no z: xz ∈ L}` is finite (usually `D = ∅`); an infinite dead class makes the theorem vacuously true and the method inapplicable (`not_applicable`), so it must be checked first.
 - **Continuation lemma.** For a DCFL `L`, `haspref(L) = {xy | x, xy ∈ L, y ≠ ε}` and `L_$ = {x$y | x, xy ∈ L}` are also DCFL. Since DCFL ⊆ CFL and DCFLs are closed under ∩ REG, showing `L_$ ∩ R` is not CFL for some regular `R` proves `L` is not DCFL — a route around languages where direct pumping/Shallit arguments are awkward.
+
+**Constructive DCFL certificate (R2′, [`docs/VERDICT_POLICY.md`](docs/VERDICT_POLICY.md)).** A positive (`dcfl`)
+verdict requires more than prose: `stack_strategy`'s `proof_sketch` must include an executable `dpda` field
+(states, start, accept states/mode, stack alphabet, initial stack, transitions with `read`/`top`/topmost-first
+`push`) alongside the word-strategy description. `dcfl_system/lib/dpda.py` runs a syntactic determinism check
+(at most one transition per `(state, top, letter)`, no ε/letter coexistence on the same `(state, top)`). No
+`dpda` field ⇒ `status: "uncertain"`/`"not_applicable"`, never a bare prose "strategy" standing in for a
+verdict.
 - **Inherent ambiguity.** Every DCFL has an unambiguous grammar, so an *inherently* ambiguous language (every CFG for it is ambiguous) is not DCFL. One ambiguous grammar proves nothing.
 - **Closure under complement (DCFL-specific).** DCFLs are closed under complement but CFLs are not — useful discriminator.
 
@@ -267,6 +300,12 @@ flowchart LR
 - **Closure.** LL languages are **not** closed under union or under intersection with a regular language: {aⁿbⁿ} and {aⁿcⁿ} are each LL(1), but their union is not LL(k) for any k (proved via the "branch" argument, §3.3); {aⁿw | w ∈ {b,c}ⁿ} is LL(1), yet intersecting it with the regular `a*b* ∪ a*c*` gives {aⁿbⁿ} ∪ {aⁿcⁿ}, which is not LL.
 - **Grammar transformations.** Left-recursion elimination, left-factoring — makes a non-LL(1) grammar potentially LL(1), detected by `ll_grammar_transformer`.
 - **First/Follow oracle.** Pure-function FIRST_k / FOLLOW_k computation used both for verification and as an independent source of truth against the LLM-proposed sets.
+- **Word oracle for `set_builder` IRs.** `ll_system/lib/word_oracle.py` (`oracle_from_ll_ir`/`generate_words`) turns a
+  `set_builder`-format language description (`nat`/`enum`/`word` variable domains, `rev(...)`, shared-variable
+  constraints) into a membership predicate and a word generator, so the `prefix_classes` claim-verifier step can
+  check membership semantically (`docs/VERDICT_POLICY.md` §4 step 2) instead of leaving trust at `well_formed`.
+  Only Format 1 (`set_builder`) is covered this way; Format 2/3 (grammar given explicitly) still has no semantic
+  check (`TODO.md` §1).
 
 ---
 
@@ -295,13 +334,16 @@ All four pipelines use the same three-tier model stack:
 - **Run bar:** `Mock Run` (free, no LLM) and `Live Run` (gated by an explicit "I confirm API spend" checkbox with red border). Start the server with `TFL_MODEL_OVERRIDE=claude-haiku-4-5` to make live runs cheap.
 - **Result pane:** four tabs — HTML (iframe of the rendered report with KaTeX + inline Graphviz SVG), JSON (formatted), Markdown (Preview ↔ Raw GitHub-style toggle), Log (streamed stderr, color-coded)
 
-Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/). No framework, no build step.
+Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS (`static/app.js`, no inline `<script>`) + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/) (served from cdnjs, not jsdelivr, so a strict `script-src` can allow-list a single host) + [DOMPurify](https://github.com/cure53/DOMPurify) to sanitize the rendered Markdown before it goes into `innerHTML`. No framework, no build step.
 
-Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a loopback `Host` header (DNS-rebinding guard), `POST /api/run` requires a same-origin `application/json` request (no cross-site "no-cors" posts starting paid runs), and files are served only by lookup in an index of the served directory.
+**Runs are bounded, not fire-and-forget:** at most `MAX_CONCURRENT_RUNS` (default 2, `TFL_LAB_MAX_CONCURRENT_RUNS` env var) pipeline subprocesses run at once — further runs queue; each run is killed if it exceeds `RUN_TIMEOUT_SECONDS` (`--run-timeout`, default 1800 s); `POST /api/runs/<run_id>/cancel` cancels a queued or running run on demand from the UI.
+
+Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a loopback `Host` header (DNS-rebinding guard), `POST /api/run` requires a same-origin `application/json` request (no cross-site "no-cors" posts starting paid runs), files are served only by lookup in an index of the served directory, and a `Content-Security-Policy` header (script/style/connect restricted to `'self'` + cdnjs, no inline scripts, iframe results rendered with `sandbox`) limits the blast radius of a compromised or malicious IR/report.
 
 ```bash
 .venv/Scripts/python -m ui_server.server --port 8765
 # → http://127.0.0.1:8765/
+.venv/Scripts/python -m ui_server.server --port 8765 --run-timeout 900
 ```
 
 ---
@@ -328,13 +370,21 @@ Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a 
 │   └── tests/              # guards, path confinement, CLI contract
 ├── pumping_lemma/          # Legacy pumping-lemma checker (reference, not maintained)
 ├── reverse_morfism/        # Legacy inverse-homomorphism solver
-├── pumping_len.py          # Min pumping-length finder for regex (experimental, see TODO.md)
+├── pumping_len.py          # Min pumping-length finder for regex (standalone, see below)
 ├── TODO.md                 # backlog: open audit findings
 ├── .env                    # ANTHROPIC_API_KEY (git-ignored)
 └── README.md               # you are here
 ```
 
 Each pipeline follows the same module split — `config.py` (models, effort), `prompts/`, `lib/` (pure functions, no LLM), orchestrator — so reading one makes the others easy to follow.
+
+`pumping_len.py` is a standalone script, unrelated to the four LLM pipelines above (no agents, no API calls): given a regex, it builds the minimal DFA (Thompson NFA → subset construction → Hopcroft minimization) and computes the *exact* minimum pumping length `p_min` per the Sipser definition — the smallest `p` such that every `w ∈ L` with `|w| ≥ p` has *some* split `w = xyz`, `|xy| ≤ p`, `|y| ≥ 1`, with `xyⁱz ∈ L` for all `i ≥ 0`. This is computed by an exact search (not the "shortest word with a repeated state" heuristic, which is only a sufficient, not necessary, condition and under-counts `p_min` on languages like `a*|bbbb`), so it also handles the empty and finite-language edge cases without special-casing. Regex syntax: `a-z`/`0-9` symbols, `|`, `*`, parentheses, `ε` or `()` for the empty-string language, `∅` for the empty language.
+
+```bash
+.venv/Scripts/python pumping_len.py "a*|bbbb" --witness   # p_min('a*|bbbb') = 5, plus a counterexample at p=4
+.venv/Scripts/python pumping_len.py "a*|bbbb" --json       # machine-readable output
+.venv/Scripts/python -m pytest tests -q                    # its own test suite (incl. brute-force cross-checks)
+```
 
 ---
 
@@ -351,6 +401,32 @@ Pure-function modules have pytest coverage; LLM-driven layers are covered by moc
 The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-lean4` image.
 
 > Run pytest with these explicit paths. A bare `pytest` from the repo root also collects the legacy `pumping_lemma/tests`, which **call the real API** with the key from `.env`.
+
+---
+
+## `tfl-eval` — accuracy and calibration over an eval set
+
+`tfl_eval/` runs the eval set described in [`docs/EVAL_SET.md`](docs/EVAL_SET.md) (74 tasks across all four
+pipelines, `agent_system|cfl_system|dcfl_system|ll_system/examples/eval/*.json` plus a handful of existing
+example IRs, indexed by `tfl_eval/manifest.json`) and reports how well each pipeline's verdict matches the
+expected one.
+
+```bash
+tfl-eval --systems cfl,ll                       # mock mode (default): free, no API calls
+tfl-eval --systems cfl,ll --ids cfl-01,cfl-02    # narrow to specific eval-set ids
+tfl-eval --live                                  # real API calls — only on request; forces Haiku unless overridden
+```
+
+Without `--live`, a task runs through its pipeline's `MockRunner` when the manifest names an existing mock
+fixture; otherwise it is reported `skipped` rather than guessed at. Metrics (`tfl_eval/metrics.py`): overall /
+per-system / trap-task accuracy, a Brier score for confidence calibration, the inconclusive rate, and the
+"false confident wrong" rate (confidence ≥ 0.6 but incorrect verdict). Results land under `.tfl_lab_runs/evals/`.
+This is what lets a prompt or model change be measured rather than eyeballed (`TODO.md` §7).
+
+The first `--live` run (24 trap tasks, Haiku, 2026-09-27) is written up in
+[`docs/EVAL_RESULTS.md`](docs/EVAL_RESULTS.md): 19/19 solved tasks correct, 0 false-confident-wrong, with
+per-task tables, per-pipeline token/cost usage, and the diagnoses that fed the DCFL certificate, R4′ and the
+structured-output fixes below. A full-74-task run and a re-run after those fixes are still open (`TODO.md` §7).
 
 ---
 

@@ -4,13 +4,48 @@ import http.client
 import json
 import shutil
 import subprocess
+import sys
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
 from ui_server import server as srv
+
+TERMINAL_STATUSES = {"completed", "error", "timeout", "cancelled"}
+
+
+def _sleep_command(seconds: float):
+    """A `build_command` replacement: a real subprocess (no orchestrator,
+    no API key needed) that just sleeps, so timeout/cancel/concurrency
+    tests control exactly how long a "run" stays alive."""
+    return lambda *a, **k: [sys.executable, "-c", f"import time; time.sleep({seconds})"]
+
+
+def _drain_run(run_id, timeout=5.0):
+    """Poll api_log until the run reaches a terminal status."""
+    deadline = time.time() + timeout
+    data = srv.api_log(run_id)
+    while time.time() < deadline and data["status"] not in TERMINAL_STATUSES:
+        time.sleep(0.02)
+        data = srv.api_log(run_id)
+    assert data["status"] in TERMINAL_STATUSES, (
+        f"run {run_id} stuck in {data['status']!r} after {timeout}s"
+    )
+    return data
+
+
+def _wait_for_status(run_id, status, timeout=2.0):
+    deadline = time.time() + timeout
+    seen = None
+    while time.time() < deadline:
+        seen = srv.api_log(run_id)["status"]
+        if seen == status:
+            return True
+        time.sleep(0.02)
+    return seen == status
 
 
 @pytest.fixture(scope="module")
@@ -144,3 +179,145 @@ def test_every_project_accepts_server_cli_contract(project, tmp_path, monkeypatc
     assert result_json.exists(), proc.stderr[-2000:]
     assert "verdict" in json.loads(result_json.read_text(encoding="utf-8"))
     assert (tmp_path / "input_result.html").exists()
+
+
+# ---------------------------------------------------------------------------
+# Concurrency limit, timeout, cancel (TODO §4)
+#
+# These drive `api_run`/`api_log`/`api_cancel` directly rather than through
+# HTTP: `build_command` is monkeypatched to a plain `time.sleep` subprocess,
+# so no orchestrator/API key is involved and run length is exact.
+# ---------------------------------------------------------------------------
+
+def _cleanup_runs(*run_ids):
+    for run_id in run_ids:
+        shutil.rmtree(srv.RUNS_DIR / run_id, ignore_errors=True)
+
+
+def test_concurrency_limit_queues_extra_runs(monkeypatch):
+    monkeypatch.setattr(srv, "MAX_CONCURRENT_RUNS", 1)
+    monkeypatch.setattr(srv, "build_command", _sleep_command(0.6))
+
+    r1 = srv.api_run({"project": "cfl_system", "ir": {}})
+    r2 = srv.api_run({"project": "cfl_system", "ir": {}})
+    id1, id2 = r1["run_id"], r2["run_id"]
+    try:
+        # With only one slot, run 1 must start and run 2 must queue behind it.
+        assert _wait_for_status(id1, "running", timeout=2.0)
+        assert srv.api_log(id2)["status"] == "queued"
+
+        _drain_run(id1, timeout=5.0)
+        # Freeing the slot lets the queued run start and finish too.
+        _drain_run(id2, timeout=5.0)
+    finally:
+        _cleanup_runs(id1, id2)
+
+
+def test_run_timeout_kills_process_and_marks_status(monkeypatch):
+    monkeypatch.setattr(srv, "RUN_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(srv, "build_command", _sleep_command(30))
+
+    r = srv.api_run({"project": "cfl_system", "ir": {}})
+    run_id = r["run_id"]
+    try:
+        data = _drain_run(run_id, timeout=5.0)
+        assert data["status"] == "timeout"
+        assert "timeout" in (data["error"] or "").lower()
+    finally:
+        _cleanup_runs(run_id)
+
+
+def test_cancel_running_run_via_http(port, monkeypatch):
+    monkeypatch.setattr(srv, "build_command", _sleep_command(30))
+
+    r = srv.api_run({"project": "cfl_system", "ir": {}})
+    run_id = r["run_id"]
+    try:
+        assert _wait_for_status(run_id, "running", timeout=2.0)
+
+        status, body = request(port, "POST", f"/api/runs/{run_id}/cancel", "{}", {
+            "Content-Type": "application/json",
+        })
+        assert status == 200
+        assert json.loads(body)["status"] in ("cancelling", "cancelled")
+
+        data = _drain_run(run_id, timeout=5.0)
+        assert data["status"] == "cancelled"
+    finally:
+        _cleanup_runs(run_id)
+
+
+def test_cancel_queued_run_never_launches_subprocess(monkeypatch):
+    monkeypatch.setattr(srv, "MAX_CONCURRENT_RUNS", 1)
+    monkeypatch.setattr(srv, "build_command", _sleep_command(1.0))
+
+    r1 = srv.api_run({"project": "cfl_system", "ir": {}})   # holds the only slot
+    r2 = srv.api_run({"project": "cfl_system", "ir": {}})   # stays queued
+    id1, id2 = r1["run_id"], r2["run_id"]
+    try:
+        assert _wait_for_status(id2, "queued", timeout=2.0)
+
+        result = srv.api_cancel(id2)
+        assert result["status"] in ("cancelling", "cancelled")
+
+        data = _drain_run(id2, timeout=3.0)
+        assert data["status"] == "cancelled"
+        assert data["result_json_url"] is None  # never ran
+
+        _drain_run(id1, timeout=3.0)
+    finally:
+        _cleanup_runs(id1, id2)
+
+
+def test_cancel_unknown_run_is_404():
+    with pytest.raises(FileNotFoundError):
+        srv.api_cancel("0" * 12)
+
+
+def test_cancel_already_finished_run_is_idempotent(monkeypatch):
+    monkeypatch.setattr(srv, "build_command", _sleep_command(0))
+    r = srv.api_run({"project": "cfl_system", "ir": {}})
+    run_id = r["run_id"]
+    try:
+        _drain_run(run_id, timeout=5.0)
+        result = srv.api_cancel(run_id)
+        assert result["status"] == srv.api_log(run_id)["status"]
+    finally:
+        _cleanup_runs(run_id)
+
+
+def test_cancel_requires_same_origin_json_guards(port):
+    # Guarded the same way as /api/run (see test_post_requires_json_content_type).
+    status, _ = request(port, "POST", "/api/runs/000000000000/cancel", "{}", {
+        "Content-Type": "text/plain",
+    })
+    assert status == 403
+
+
+# ---------------------------------------------------------------------------
+# CSP meta / sandboxed report iframe (TODO §4)
+# ---------------------------------------------------------------------------
+
+def test_csp_meta_present(port):
+    status, body = request(port, "GET", "/")
+    assert status == 200
+    assert b"Content-Security-Policy" in body
+    assert b"default-src 'self'" in body
+    assert b"script-src 'self' https://cdnjs.cloudflare.com" in body
+
+
+def test_result_iframe_is_sandboxed(port):
+    status, body = request(port, "GET", "/")
+    assert status == 200
+    assert b'id="result-iframe"' in body
+    assert b'sandbox="allow-scripts"' in body
+    # allow-same-origin would let a compromised report reach this page's DOM.
+    assert b"allow-same-origin" not in body
+
+
+def test_app_js_sanitizes_markdown_with_pinned_cdn(port):
+    status, body = request(port, "GET", "/static/app.js")
+    assert status == 200
+    assert b"DOMPurify.sanitize" in body
+    assert b"cdnjs.cloudflare.com" in body
+    assert b"integrity" in body and b"sha384-" in body

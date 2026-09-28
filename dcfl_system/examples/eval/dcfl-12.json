@@ -1,0 +1,17 @@
+{
+  "task_id": "dcfl-12",
+  "source_text": "{a^i b^j c^k | i <= j or j = k; i,j,k >= 1}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{a^i b^j c^k | i <= j or j = k; i,j,k >= 1}",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": [
+    "a",
+    "b",
+    "c"
+  ]
+}

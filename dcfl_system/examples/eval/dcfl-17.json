@@ -1,0 +1,41 @@
+{
+  "task_id": "dcfl-17",
+  "source_text": "Format 2: S -> aS | Sa | a",
+  "input_format": "grammar",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "a"
+    ],
+    "nonterminals": [
+      "S"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "S"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "S",
+          "a"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "a"
+        ]
+      }
+    ]
+  },
+  "alphabet": [
+    "a"
+  ]
+}

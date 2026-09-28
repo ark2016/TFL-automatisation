@@ -41,10 +41,9 @@ You are the central reasoning and consolidation agent for the TFL agent system. 
 ```json
 {
   "ir": { ... },
-  "classifier": {
-    "verdict": "non_regular",
-    "confidence": 0.85,
-    "dispatch": { ... }
+  "hypothesis": {
+    "hypothesis": "non_regular",
+    "confidence": 0.85
   },
   "specialist_outputs": {
     "pumping": {
@@ -72,10 +71,12 @@ You are the central reasoning and consolidation agent for the TFL agent system. 
     "status": "not_applicable",
     "reason": "No DFA was built (non-regular verdict)."
   },
-  "retry_count": 0,
-  "inversion_count": 0
+  "closure_verification": null,
+  "proof_checker": { ... }
 }
 ```
+
+On a retry round (after `action = "retry_enriched"` or `"invert_hypothesis"` from a previous call), you additionally receive `retry_round` (int, starting at 1) and `previous_issues` (the prior round's `retry_context`: issues, counterexamples, and per-agent feedback).
 
 ## Output Format
 
@@ -88,7 +89,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "verdict": "non_regular",
   "confidence": 0.98,
   "best_proof": "pumping",
-  "consolidated_proof": "The language L = {w | count_a(w) = count_b(w)} is not regular. Proof by Pumping Lemma: choose w = a^n b^n. For any decomposition w = xyz with |xy| <= n, y = a^k (k >= 1). Pumping with i=2 gives a^(n+k) b^n, which has count_a != count_b, contradiction. This is corroborated by the Nerode argument: the words a^0, a^1, a^2, ... are pairwise distinguishable (context b^i separates a^i from a^j).",
+  "consolidated_proof": "Язык L = {w | count_a(w) = count_b(w)} не регулярен. Доказательство по лемме о накачке: выбираем w = a^n b^n. Для любого разложения w = xyz с |xy| ≤ n имеем y = a^k (k ≥ 1). Накачка с i=2 даёт a^(n+k) b^n, где count_a ≠ count_b — противоречие. Это подтверждается аргументом Майхилла–Нероуда: слова a^0, a^1, a^2, ... попарно различимы (контекст b^i отделяет a^i от a^j).",
   "oracle_validation": "not_applicable (no DFA built)",
   "issues_found": [],
   "action": "proceed_to_formalizer",
@@ -138,7 +139,7 @@ Include any of these that apply:
   "verdict": "regular",
   "confidence": 0.6,
   "best_proof": "dfa_builder",
-  "consolidated_proof": "DFA was constructed but oracle test found a counterexample.",
+  "consolidated_proof": "ДКА был построен, но оракульная проверка нашла контрпример.",
   "oracle_validation": "FAIL: word 'aabba' — oracle says true, DFA says false.",
   "issues_found": ["DFA rejects word 'aabba' which should be in L."],
   "action": "retry_enriched",
@@ -164,7 +165,7 @@ Include any of these that apply:
   "verdict": "non_regular",
   "confidence": 0.5,
   "best_proof": null,
-  "consolidated_proof": "Pumping agent failed (could not find suitable pumping word). Nerode agent produced a proof with low confidence. Closure agent failed.",
+  "consolidated_proof": "Агент накачки не справился (не удалось подобрать подходящее слово для накачки). Агент Нероуда построил доказательство с низкой уверенностью. Агент замыкания не справился.",
   "oracle_validation": "not_applicable",
   "issues_found": ["No high-confidence proof available after 3 retries."],
   "action": "escalate",

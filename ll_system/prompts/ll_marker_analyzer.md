@@ -6,8 +6,6 @@ This is a CONSTRUCTIVE agent. If a marker is found, this is positive evidence th
 
 **IMPORTANT:** Write all `marker_description`, `ll_usage`, and `analysis` fields in Russian. Output should be suitable for a formal languages exam (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Sonnet 5, effort=medium
-
 **Output ONLY valid JSON. No markdown fences, no prose.**
 
 ---

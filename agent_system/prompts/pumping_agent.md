@@ -38,31 +38,34 @@ Quantifier order: FOR ALL n -> EXISTS w -> FOR ALL x,y,z -> EXISTS i.
   "hypothesis": {
     "hypothesis": "non_regular",
     "confidence": 0.85
+  },
+  "classifier": {
+    "verdict": "non_regular",
+    "confidence": 0.85,
+    "dispatch": { ... }
   }
 }
 ```
 
-## Solved Example (Few-Shot CoT)
+Sent only when applicable:
+
+- `grammar_facts`: for grammar-kind tasks, facts precomputed by the grammar preprocessor (`is_linear`, `has_nested_recursion`, generated words, `summary`, ...).
+- `student_notes`: the student's own comments/hypotheses, when the task provides them.
+- `retry_context`: on a retry round, the previous round's issues/counterexamples, plus an `agent_feedback` entry targeted at this agent and a `previous_output` field — YOUR OWN full output from the last round (the proof you gave) — so you can see exactly what you claimed before instead of re-deriving it blind.
+
+## Solved Example
 
 **Task:** Prove that L = {a^n b^n | n ≥ 0} is not regular.
-
-**Reasoning (Chain-of-Thought):**
-1. I need to find a word family parameterized by the pumping length p.
-2. Choose w = a^p b^p. This word is in L because it has equal a's and b's.
-3. |w| = 2p ≥ p, so the pumping lemma applies.
-4. For any decomposition w = xyz with |xy| ≤ p and |y| ≥ 1: since xy lies in the first p characters (all a's), y = a^k for some k ≥ 1.
-5. Pump with i = 2: xy²z = a^(p+k) b^p. Now count_a = p+k ≠ p = count_b, so xy²z ∉ L.
-6. This contradicts the pumping lemma. Therefore L is not regular.
 
 **Output:**
 {
   "status": "success",
   "proof": {
-    "word_choice": {"word": "a^p b^p", "word_parameterized": true, "parameter": "p", "membership_argument": "a^p b^p ∈ L since it has p a's and p b's (equal counts)."},
+    "word_choice": {"word": "a^p b^p", "word_parameterized": true, "parameter": "p", "membership_argument": "a^p b^p ∈ L, так как в нём p букв a и p букв b (равное количество)."},
     "length_argument": "|a^p b^p| = 2p ≥ p.",
-    "cut_analysis": {"method": "positional", "argument": "Since |xy| ≤ p, y lies entirely in the a-block: y = a^k, k ≥ 1.", "cases": [{"case": "y = a^k, k ≥ 1", "pumped_word": "xy²z = a^(p+k) b^p", "pump_value": 2, "contradiction": "count_a = p+k ≠ p = count_b, so a^(p+k) b^p ∉ L."}]},
+    "cut_analysis": {"method": "positional", "argument": "Так как |xy| ≤ p, y целиком лежит в блоке из a: y = a^k, k ≥ 1.", "cases": [{"case": "y = a^k, k ≥ 1", "pumped_word": "xy²z = a^(p+k) b^p", "pump_value": 2, "contradiction": "count_a = p+k ≠ p = count_b, значит a^(p+k) b^p ∉ L."}]},
     "pump_value": 2,
-    "conclusion": "By the Pumping Lemma, L = {a^n b^n | n ≥ 0} is not regular."
+    "conclusion": "По лемме о накачке L = {a^n b^n | n ≥ 0} не регулярен."
   },
   "confidence": 0.95
 }
@@ -80,23 +83,23 @@ Return **only** valid JSON. No markdown fences, no extra text.
       "word": "a^n b^n",
       "word_parameterized": true,
       "parameter": "n",
-      "membership_argument": "a^n b^n is in L because count_a = count_b = n."
+      "membership_argument": "a^n b^n ∈ L, так как count_a = count_b = n."
     },
-    "length_argument": "|a^n b^n| = 2n >= n for all n >= 1.",
+    "length_argument": "|a^n b^n| = 2n ≥ n при всех n ≥ 1.",
     "cut_analysis": {
       "method": "exhaustive",
-      "argument": "Since |xy| <= n, the prefix xy lies entirely within the a-block. Hence y = a^k for some k >= 1.",
+      "argument": "Так как |xy| ≤ n, префикс xy целиком лежит внутри блока из a. Значит y = a^k для некоторого k ≥ 1.",
       "cases": [
         {
-          "case": "y = a^k (1 <= k <= n)",
+          "case": "y = a^k (1 ≤ k ≤ n)",
           "pumped_word": "xy^2 z = a^(n+k) b^n",
           "pump_value": 2,
-          "contradiction": "count_a = n+k != n = count_b, so a^(n+k) b^n is not in L."
+          "contradiction": "count_a = n+k ≠ n = count_b, значит a^(n+k) b^n ∉ L."
         }
       ]
     },
     "pump_value": 2,
-    "conclusion": "For every n, the word a^n b^n cannot be pumped. By the Pumping Lemma, L is not regular."
+    "conclusion": "Для любого n слово a^n b^n нельзя накачать. По лемме о накачке L не регулярен."
   },
   "confidence": 0.95,
   "errors": null
@@ -115,7 +118,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
 
 ## Example with multiple cases
 
-For L = {w in {a,b}* | w is a palindrome}:
+Для L = {w ∈ {a,b}* | w — палиндром}:
 
 ```json
 {
@@ -126,23 +129,23 @@ For L = {w in {a,b}* | w is a palindrome}:
       "word": "a^n b a^n",
       "word_parameterized": true,
       "parameter": "n",
-      "membership_argument": "a^n b a^n is a palindrome since reversing it gives a^n b a^n."
+      "membership_argument": "a^n b a^n — палиндром, так как при развороте получается то же самое слово a^n b a^n."
     },
-    "length_argument": "|a^n b a^n| = 2n+1 >= n for n >= 1.",
+    "length_argument": "|a^n b a^n| = 2n+1 ≥ n при n ≥ 1.",
     "cut_analysis": {
       "method": "positional",
-      "argument": "Since |xy| <= n, y lies entirely in the first a-block. So y = a^k, k >= 1.",
+      "argument": "Так как |xy| ≤ n, y целиком лежит в первом блоке из a. Значит y = a^k, k ≥ 1.",
       "cases": [
         {
-          "case": "y = a^k, 1 <= k <= n",
+          "case": "y = a^k, 1 ≤ k ≤ n",
           "pumped_word": "xy^0 z = a^(n-k) b a^n",
           "pump_value": 0,
-          "contradiction": "a^(n-k) b a^n is not a palindrome since the a-blocks have different lengths (n-k != n)."
+          "contradiction": "a^(n-k) b a^n не является палиндромом, так как блоки из a имеют разную длину (n-k ≠ n)."
         }
       ]
     },
     "pump_value": 0,
-    "conclusion": "L is not regular by the Pumping Lemma."
+    "conclusion": "По лемме о накачке L не регулярен."
   },
   "confidence": 0.95,
   "errors": null

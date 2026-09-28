@@ -1,0 +1,45 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "S -> aSc | T, T -> bTc | eps  ({a^i b^j c^k | i + j = k})",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "a",
+      "b",
+      "c"
+    ],
+    "nonterminals": [
+      "S",
+      "T"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "S",
+          "c"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "T"
+        ]
+      },
+      {
+        "lhs": "T",
+        "rhs": [
+          "b",
+          "T",
+          "c"
+        ]
+      },
+      {
+        "lhs": "T",
+        "rhs": []
+      }
+    ]
+  }
+}

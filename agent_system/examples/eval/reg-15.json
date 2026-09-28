@@ -1,0 +1,11 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "{a^n | n mod 3 != 0}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a"
+    ],
+    "description": "{a^n | n mod 3 != 0}"
+  }
+}

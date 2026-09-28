@@ -1,0 +1,39 @@
+{
+  "task_type": "ll_check_grammar_lang",
+  "source_text": "Format 2: is the LANGUAGE of the ll-10 grammar LL, even though that grammar itself (E -> E + T | T, T -> i) is left-recursive and therefore not LL(k) for any k? [trap: grammar != language] The same left-recursive grammar as ll-10 is given here on purpose -- eliminating left recursion gives E -> T E', E' -> + T E' | eps, which IS LL(1), so the language is LL(1) even though this particular grammar is not.",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "+",
+      "i"
+    ],
+    "nonterminals": [
+      "E",
+      "T"
+    ],
+    "start": "E",
+    "rules": [
+      {
+        "lhs": "E",
+        "rhs": [
+          "E",
+          "+",
+          "T"
+        ]
+      },
+      {
+        "lhs": "E",
+        "rhs": [
+          "T"
+        ]
+      },
+      {
+        "lhs": "T",
+        "rhs": [
+          "i"
+        ]
+      }
+    ]
+  },
+  "question": "is_ll_language"
+}

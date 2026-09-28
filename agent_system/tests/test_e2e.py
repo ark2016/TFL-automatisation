@@ -152,11 +152,11 @@ class TestTask3RegexBackref(unittest.TestCase):
         """No oracle available (backreference regex) -> the destructive
         proofs (pumping/closure) can only reach `well_formed` trust
         (structural pass, no oracle to instantiate against), so the
-        verdict stands but confidence is capped at 0.60, per
+        verdict stands but confidence is capped at 0.55, per
         docs/VERDICT_POLICY.md §2/§4. Previously this asserted a flat
         "partial" regardless of evidence quality."""
         self.assertEqual(self.result["status"], "success")
-        self.assertLessEqual(self.result["confidence"], 0.60)
+        self.assertLessEqual(self.result["confidence"], 0.55)
 
 
 class TestPipelineWithoutMock(unittest.TestCase):

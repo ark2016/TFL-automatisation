@@ -1,0 +1,11 @@
+{
+  "agent_name": "inh_ambiguity",
+  "status": "not_applicable",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "L = {aⁿbⁿcᵐ | n,m>=1} задаётся однозначной грамматикой (S -> A C, A -> aAb | ab, C -> cC | c) — нет дизъюнкции ветвей, существенная неоднозначность не установлена"
+  ],
+  "confidence": 0.0,
+  "errors": []
+}

@@ -28,6 +28,7 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
+from dcfl_system.config import MAX_CALLS_PER_AGENT
 from dcfl_system.lib.dcfl_ir_schema import validate_dcfl_ir
 from dcfl_system.lib.hypothesis_module import analyze_dcfl_hypothesis
 from dcfl_system.lib.pattern_db import match_patterns
@@ -42,6 +43,23 @@ from dcfl_system.lib.oracle_verifier import (
 )
 from dcfl_system.lib.retry_logic import build_retry_plan
 
+# Shared Anthropic call machinery (TODO.md §3): kwargs building, streaming +
+# retry/backoff, typed errors, concurrency semaphore, usage tracking. See
+# agent_system/lib/llm_client.py -- LiveRunner below is a thin wrapper.
+from agent_system.lib.llm_client import (
+    AnthropicClient,
+    FatalAPIError,
+    RetryableAPIError,
+    UsageTracker,
+    _is_adaptive_model as _shared_is_adaptive_model,
+    estimate_cost_usd,
+    extract_json as _extract_json,
+    extract_json_with_error as _extract_json_with_error,
+    format_structured_output_flag as _format_structured_output_flag,
+    get_concurrency_semaphore,
+)
+from dcfl_system.lib.agent_output_schema import schema_for as _output_schema_for
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -49,6 +67,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 MAX_RETRIES = 2
+
+# docs/VERDICT_POLICY.md R3: when a contradiction is not resolved (R3' has no
+# cross-check wired into this orchestrator yet -- dcfl_system/lib/dpda.py DOES
+# provide an executable DCFL artifact (check_determinism + dpda_accepts over
+# stack_strategy's `dpda` proof_sketch field), but nothing here runs it
+# against the destructive proof's witness words the way cfl_system's R3'
+# cross-check does, so the plain rule below still applies), a `verified`
+# side still wins, but capped at 0.85, not the normal 0.98 ceiling.
+_CONTRADICTION_VERIFIED_CAP = 0.85
 
 DCFL_SPECIALIST_NAMES = (
     "stack_strategy", "closure_reduction", "dcfl_pumping", "shallit", "inh_ambiguity",
@@ -85,6 +112,10 @@ class DCFLState(TypedDict):
     specialist_outputs: Annotated[list, operator.add]      # [(name, output)]
     evidence: dict
     errors: Annotated[list, operator.add]
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): notes accumulated whenever a
+    # specialist's call cap is reached and a requested retry is skipped for
+    # it -- surfaced in the final verdict_gate.downgrades (reasoning_agent_node).
+    call_cap_notes: Annotated[list, operator.add]
     _specialist_name: str
     result: dict
 
@@ -110,43 +141,11 @@ class MockRunner:
         return None
 
 
-# ---------------------------------------------------------------------------
-# JSON extraction helper
-# ---------------------------------------------------------------------------
-
-def _extract_json(text: str) -> dict | None:
-    """Extract JSON object from LLM response text."""
-    import re as _re
-    text = text.strip()
-    if not text:
-        return None
-    # Strategy 1: whole text
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
-    # Strategy 2: fenced code block
-    fence_match = _re.search(r"```(?:json)?\s*\n(.*?)\n```", text, _re.DOTALL)
-    if fence_match:
-        try:
-            obj = json.loads(fence_match.group(1))
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-    # Strategy 3: first { to last }
-    first = text.find("{")
-    last = text.rfind("}")
-    if first != -1 and last > first:
-        try:
-            obj = json.loads(text[first:last + 1])
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-    return None
+# _extract_json / _extract_json_with_error now come from
+# agent_system.lib.llm_client (TODO.md §3 — shared across every pipeline).
+# dcfl's own copy used to give only "JSON parse failed (length=N)" on
+# retry, with no position or context, unlike cfl/ll — this brings it in
+# line with them (position + ±40 chars of context).
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +153,14 @@ def _extract_json(text: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 class LiveRunner:
-    """Run agents via Anthropic API using prompts from prompts/ directory."""
+    """Run agents via Anthropic API using prompts from prompts/ directory.
+
+    Thin wrapper (TODO.md §3): prompts/contracts/JSON-parsing/Haiku-repair
+    stay pipeline-specific; the actual model call goes through the shared
+    ``agent_system.lib.llm_client.AnthropicClient`` — kwargs building,
+    stream-and-collect, typed retry/backoff, the process-wide concurrency
+    semaphore, and usage tracking all live there now, not here.
+    """
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from dcfl_system.config import (
@@ -194,6 +200,15 @@ class LiveRunner:
         self.verbose = verbose
         self._prompt_cache: dict[str, str] = {}
         self._json_repair_model = "claude-haiku-4-5"
+        # Shared call machinery (TODO.md §3): kwargs building, streaming,
+        # retry/backoff, usage tracking. Not the SDK client itself — `self.
+        # client` stays the mutable attribute (tests swap it for a mock).
+        self.usage_tracker = UsageTracker()
+        self._shared = AnthropicClient(
+            default_effort=self.default_effort,
+            refusal_fallback=self.refusal_fallback,
+            usage_tracker=self.usage_tracker,
+        )
 
     def _load_prompt(self, agent_name: str) -> str:
         if agent_name in self._prompt_cache:
@@ -220,7 +235,7 @@ class LiveRunner:
     @classmethod
     def _is_adaptive_model(cls, model: str) -> bool:
         """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
-        return bool(model) and not cls._LEGACY_MODEL_RE.search(model)
+        return _shared_is_adaptive_model(model)
 
     def _build_request_kwargs(self, model: str, max_tokens: int,
                               temperature: float, system_prompt: str,
@@ -229,30 +244,23 @@ class LiveRunner:
 
         Thinking models get `thinking: adaptive` + an explicit effort level
         (Opus 5.5 would silently default to "medium"); legacy models get
-        `temperature` instead.
+        `temperature` instead. Delegates to the shared AnthropicClient so
+        every pipeline builds kwargs the same way (TODO.md §3).
         """
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_msg}],
-        }
-        if self._is_adaptive_model(model):
-            kwargs["thinking"] = {"type": "adaptive"}
-            kwargs["output_config"] = {"effort": effort or self.default_effort}
-            if self.refusal_fallback and model.startswith(self._FALLBACK_MODEL_PREFIXES):
-                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
-                kwargs["extra_body"] = {"fallbacks": "default"}
-        else:
-            kwargs["temperature"] = temperature
-        return kwargs
+        return self._shared.build_request_kwargs(
+            model, max_tokens, system_prompt, user_msg,
+            effort=effort, temperature=temperature,
+        )
 
     @staticmethod
-    def _refusal_error(agent_name: str, final_msg: Any) -> dict:
-        """agent_error dict for a safety-classifier decline (stop_reason="refusal")."""
-        details = getattr(final_msg, "stop_details", None)
-        category = getattr(details, "category", None) if details else None
-        explanation = getattr(details, "explanation", None) if details else None
+    def _refusal_error(agent_name: str, result: Any) -> dict:
+        """agent_error dict for a safety-classifier decline (stop_reason="refusal").
+
+        `result` is a ``llm_client.CallResult`` (or anything exposing the
+        same ``refusal_category`` / ``refusal_explanation`` attributes).
+        """
+        category = getattr(result, "refusal_category", None)
+        explanation = getattr(result, "refusal_explanation", None)
         msg = f"Model refused (stop_reason=refusal, category={category})"
         if explanation:
             msg += f": {explanation}"
@@ -275,15 +283,21 @@ class LiveRunner:
             "Return ONLY valid JSON, nothing else."
         )
         user_msg = f"Agent: {agent_name}\nRepair this:{truncation_note}\n```\n{raw_text}\n```"
+        request_kwargs = self._build_request_kwargs(
+            model=self._json_repair_model,
+            max_tokens=min(len(raw_text) // 2 + 2000, 8000),
+            temperature=0.0, system_prompt=system, user_msg=user_msg,
+        )
         try:
-            response = self.client.messages.create(**self._build_request_kwargs(
-                model=self._json_repair_model,
-                max_tokens=min(len(raw_text) // 2 + 2000, 8000),
-                temperature=0.0, system_prompt=system, user_msg=user_msg,
-            ))
+            with get_concurrency_semaphore():
+                response = self.client.messages.create(**request_kwargs)
         except Exception:
             return None
         repaired = "".join(b.text for b in response.content if hasattr(b, "text"))
+        self.usage_tracker.record(
+            getattr(response, "model", self._json_repair_model), getattr(response, "usage", None),
+            agent=agent_name, used_structured_output=False,
+        )
         return _extract_json(repaired)
 
     def run_agent(self, agent_name: str, input_data: dict | None = None) -> dict | None:
@@ -316,38 +330,64 @@ class LiveRunner:
             raw_text = ""
             stop_reason = None
             # Thinking models get adaptive thinking + this agent's effort;
-            # temperature is only sent to legacy models (Haiku 4.5).
-            request_kwargs = self._build_request_kwargs(
-                model=model, max_tokens=max_tokens,
-                temperature=temperature, system_prompt=system_prompt,
-                user_msg=user_msg, effort=effort,
-            )
+            # temperature is only sent to legacy models (Haiku 4.5). The
+            # shared client also retries a retryable error (429/5xx/network/
+            # broken stream) with backoff before giving up, and never
+            # retries a fatal one (400/401/403/404) — TODO.md §2/§3.
+            # output_schema (TODO.md §3 M): agents with a closed contract
+            # (`dcfl_system.lib.agent_output_schema.REQUIRED_KEYS`) get
+            # structured outputs instead of "extract JSON from prose";
+            # unavailable falls back to a plain call automatically.
             try:
-                with self.client.messages.stream(**request_kwargs) as stream:
-                    for chunk in stream.text_stream:
-                        raw_text += chunk
-                    final_msg = stream.get_final_message()
-                stop_reason = getattr(final_msg, "stop_reason", None)
-                tokens_in = final_msg.usage.input_tokens if final_msg.usage else 0
-                tokens_out = final_msg.usage.output_tokens if final_msg.usage else 0
-            except Exception as exc:
+                result = self._shared.call(
+                    self.client, model=model, max_tokens=max_tokens,
+                    system=system_prompt, user=user_msg,
+                    effort=effort, temperature=temperature,
+                    output_schema=_output_schema_for(agent_name),
+                    agent=agent_name,
+                )
+            except FatalAPIError as exc:
+                if exc.status_code == 400:
+                    # A 400 that isn't a schema rejection AnthropicClient.call
+                    # could itself recover from is a malformed *request* for
+                    # this one agent (prompt too long, ...), not a dead key
+                    # or missing model access -- report as this agent's
+                    # agent_error instead of aborting the whole pipeline run.
+                    elapsed = _time.monotonic() - t0
+                    logger.error("[%s] 400 BadRequest after %.1fs: %s", agent_name, elapsed, exc)
+                    return {"agent": agent_name, "status": "agent_error", "verdict": None,
+                            "confidence": 0.0, "evidence": {}, "errors": [f"API error: {exc}"]}
+                # 401/403/404: a dead key, no access to the model, or an
+                # unknown model ID -- fail fast, re-raised as the original
+                # SDK exception type for backward compatibility.
+                logger.error("[%s] fatal API error: %s", agent_name, exc)
+                raise (exc.original if exc.original is not None else exc)
+            except RetryableAPIError as exc:
                 elapsed = _time.monotonic() - t0
                 logger.error("[%s] API error after %.1fs: %s", agent_name, elapsed, exc)
                 return {"agent": agent_name, "status": "agent_error", "verdict": None,
                         "confidence": 0.0, "evidence": {}, "errors": [f"API error: {exc}"]}
 
+            raw_text = result.text
+            stop_reason = result.stop_reason
+            tokens_in = result.usage.input_tokens if result.usage else 0
+            tokens_out = result.usage.output_tokens if result.usage else 0
+
             elapsed = _time.monotonic() - t0
             if self.verbose:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
-                print(f"[{agent_name}] model={final_msg.model} effort={effort} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}",
+                cost = estimate_cost_usd(result.model or model, result.usage)
+                cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
+                so_str = _format_structured_output_flag(result)
+                print(f"[{agent_name}] model={result.model} effort={effort} tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{extra}{cost_str}{so_str}",
                       file=sys.stderr, flush=True)
 
             # A safety-classifier decline is not a parse problem: retrying or
             # JSON-repairing the (empty/partial) text cannot help.
             if stop_reason == "refusal":
-                return self._refusal_error(agent_name, final_msg)
+                return self._refusal_error(agent_name, result)
 
-            parsed = _extract_json(raw_text)
+            parsed, parse_error = _extract_json_with_error(raw_text)
             if parsed is not None:
                 return parsed
 
@@ -355,11 +395,30 @@ class LiveRunner:
             was_truncated = stop_reason == "max_tokens"
             repaired = self._repair_json_with_haiku(agent_name, raw_text, was_truncated)
             if repaired is not None:
+                if was_truncated:
+                    # The specialist hit max_tokens and Haiku patched the
+                    # JSON shape back together, but it never saw (and could
+                    # not reconstruct) the reasoning that was cut off — the
+                    # content is not trustworthy enough for a normal verdict.
+                    repaired["_truncated"] = True
+                    repaired["_repaired"] = True
+                    repaired["status"] = "inconclusive"
+                    repaired["confidence"] = min(
+                        _clamp_confidence(repaired.get("confidence", 0.0)), 0.40,
+                    )
                 return repaired
 
             if was_truncated:
+                last_error = (
+                    f"Response was truncated at max_tokens={max_tokens} "
+                    f"(tokens_out={tokens_out}); Haiku repair also failed. "
+                    f"Parse error: {parse_error}"
+                )
+                logger.error("[%s] attempt %d: %s", agent_name, attempt + 1, last_error)
                 break
-            last_error = f"JSON parse failed (length={len(raw_text)})"
+            # Position + ±40 chars of context, fed back to the model on
+            # retry (TODO.md §3 — this used to be a bare "length=N").
+            last_error = f"{parse_error} [response length={len(raw_text)}, Haiku repair also failed]"
             logger.warning("[%s] attempt %d: %s", agent_name, attempt + 1, last_error)
 
         return {"agent": agent_name, "status": "agent_error", "verdict": None,
@@ -549,64 +608,179 @@ def _apply_verdict_gate(
         # runs BEFORE the R1/R2 threshold check below (using the trust the
         # reasoning agent's own proposal actually has, not a post-R2 nulled
         # verdict) — a below-threshold constructive claim (e.g. stack_strategy
-        # at well_formed) contradicted by a real destructive artifact (e.g.
-        # dcfl_pumping at bounded_pass) must still resolve to the stronger
-        # (destructive) side, not fall through to a bare "inconclusive" that
-        # throws away real evidence sitting right there on the other side.
+        # at well_formed) next to a real destructive artifact (e.g.
+        # dcfl_pumping at bounded_pass) is NOT a contradiction at all: it
+        # resolves directly to the destructive side below, not through this
+        # branch (see the asymmetric threshold check just below — a
+        # well_formed constructive claim already fails R2 on its own, so it
+        # must never be treated as strong enough to contest anything).
         opp_direction = "destructive" if direction == "constructive" else "constructive"
         opp_name, opp_trust = _best_evidence(agent_results, oracle_verification, opp_direction)
         if opp_trust is not None:
-            own_rank = trust_rank(primary_trust)
-            opp_rank = trust_rank(opp_trust)
-            own_strong = own_rank >= trust_rank("bounded_pass")
-            opp_strong = opp_rank >= trust_rank("well_formed")
-            # symmetric: also fires if the OTHER side is the strong (>=bounded_pass) one
-            if (own_strong and opp_strong) or (
-                opp_rank >= trust_rank("bounded_pass") and own_rank >= trust_rank("well_formed")
+            if direction == "constructive":
+                constructive_name, constructive_trust_val = primary, primary_trust
+                destructive_name, destructive_trust_val = opp_name, opp_trust
+            else:
+                destructive_name, destructive_trust_val = primary, primary_trust
+                constructive_name, constructive_trust_val = opp_name, opp_trust
+
+            # docs/VERDICT_POLICY.md R3: a contradiction requires the
+            # CONSTRUCTIVE side to be at least bounded_pass AND the
+            # DESTRUCTIVE side at least well_formed -- this is NOT symmetric
+            # in "own"/"opp" (reviewer finding: the old symmetric check also
+            # fired when the constructive side was only well_formed and the
+            # destructive side bounded_pass+, throwing away a legitimate
+            # non_dcfl backed by a bounded_pass destructive proof just
+            # because a well_formed stack_strategy happened to sit on the
+            # other side -- a well_formed constructive claim never blocks
+            # non_dcfl on its own, it already fails R2).
+            if (
+                trust_rank(constructive_trust_val) >= trust_rank("bounded_pass")
+                and trust_rank(destructive_trust_val) >= trust_rank("well_formed")
             ):
                 contradiction = True
-                cap = min(cap, CONTRADICTION_CONFIDENCE_CAP)
-                if own_rank > opp_rank:
-                    winner_verdict = verdict
-                elif opp_rank > own_rank:
-                    winner_verdict = "non_dcfl" if direction == "constructive" else "dcfl"
+                # docs/VERDICT_POLICY.md R3 (post-R3' revision): "bounded_pass
+                # vs well_formed" no longer settles this by rank -- only a
+                # `verified` side wins (capped at 0.85, not 0.98); otherwise
+                # it stays inconclusive (R3': dcfl_system/lib/dpda.py now
+                # gives stack_strategy's `dpda` field an executable artifact
+                # (determinism check + simulation), but no cross-check against
+                # the destructive proof's witnesses is wired into this gate
+                # yet, so this falls back to the plain inconclusive rule
+                # rather than a real R3' check).
+                if constructive_trust_val == "verified" and destructive_trust_val != "verified":
+                    winner_verdict = "dcfl"
+                    cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
+                elif destructive_trust_val == "verified" and constructive_trust_val != "verified":
+                    winner_verdict = "non_dcfl"
+                    cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
                 else:
                     winner_verdict = None
+                    cap = min(cap, CONTRADICTION_CONFIDENCE_CAP)
                 downgrades.append(
-                    f"contradiction: '{primary}' ({primary_trust}) argues {verdict} "
-                    f"while '{opp_name}' ({opp_trust}) argues the opposite -> "
-                    f"verdict={winner_verdict!r}, confidence<=0.50 (R3)"
+                    f"contradiction: constructive={constructive_name}({constructive_trust_val}) "
+                    f"vs destructive={destructive_name}({destructive_trust_val}) -> "
+                    f"verdict={winner_verdict!r}, confidence<={cap} (R3)"
                 )
                 verdict = winner_verdict
                 action = "retry" if retry_count < max_retries else "done"
-                basis.append({"agent": primary, "trust": primary_trust})
-                basis.append({"agent": opp_name, "trust": opp_trust})
+                basis.append({"agent": constructive_name, "trust": constructive_trust_val})
+                basis.append({"agent": destructive_name, "trust": destructive_trust_val})
 
         if not contradiction:
             # docs/VERDICT_POLICY.md R2: a CONSTRUCTIVE verdict ("dcfl") needs
             # an artifact with trust >= bounded_pass -- well_formed is
             # structure-only and must not by itself carry a positive "dcfl"
-            # verdict (only inconclusive, capped by well_formed's own 0.60
+            # verdict (only inconclusive, capped by well_formed's own 0.55
             # ceiling once R1's "constructive_failure_only" gate has already
             # let it through as a verdict at all). A DESTRUCTIVE verdict
             # ("non_dcfl") still only needs trust >= well_formed per R1.
             required_trust = "bounded_pass" if direction == "constructive" else "well_formed"
 
-            if primary_trust == "refuted":
+            def _r4prime_rescue(reason: str) -> None:
+                """docs/VERDICT_POLICY.md R4' — the reasoning agent's proposal
+                on `direction` is inadmissible and no more retries are coming
+                for this decision. Instead of defaulting straight to
+                inconclusive, pick the STRONGEST ADMISSIBLE basis still
+                standing (fresh search across ALL agents, not just `primary`
+                or reasoning's chosen direction): a destructive claim >=
+                well_formed (not refuted) first, then a constructive
+                artifact >= bounded_pass, only then inconclusive. `failure`
+                stays reserved for technical failures, never for "reasoning
+                argued the wrong side" (precedent: cfl-07/cfl-12 eval
+                live-run ending in `failure 0.0` despite a well_formed
+                destructive proof on record).
+
+                Before picking a single side, R3 is re-checked over this same
+                fresh, all-agents search (not over `primary`, which may be
+                refuted or simply not the strongest artifact on its side):
+                the earlier R3 check above only ever compared `primary` — a
+                specific agent the reasoning agent named — against the best
+                opposing evidence, so a `primary` that is `refuted` (case A)
+                or weaker than another agent on its own side (case B) let a
+                real bounded_pass-vs-well_formed contradiction slip through
+                as a one-sided rescue (reviewer finding: non_dcfl/dcfl at
+                0.60 with contradiction=False when a bounded_pass
+                constructive artifact and a well_formed destructive one
+                coexisted). Recomputing over `_best_evidence` for both
+                directions here catches that regardless of which side
+                reasoning happened to name.
+                """
+                nonlocal action, verdict, cap, contradiction
+                action = "done"
+                d_name, d_trust = _best_evidence(agent_results, oracle_verification, "destructive")
+                c_name, c_trust = _best_evidence(agent_results, oracle_verification, "constructive")
+
+                if (
+                    c_trust is not None
+                    and d_trust is not None
+                    and trust_rank(c_trust) >= trust_rank("bounded_pass")
+                    and trust_rank(d_trust) >= trust_rank("well_formed")
+                ):
+                    # R3, recomputed over the strongest evidence on each side
+                    # rather than over `primary` alone (see docstring above).
+                    contradiction = True
+                    if c_trust == "verified" and d_trust != "verified":
+                        verdict = "dcfl"
+                        cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
+                    elif d_trust == "verified" and c_trust != "verified":
+                        verdict = "non_dcfl"
+                        cap = min(cap, _CONTRADICTION_VERIFIED_CAP)
+                    else:
+                        verdict = None
+                        cap = min(cap, CONTRADICTION_CONFIDENCE_CAP)
+                    basis.append({"agent": c_name, "trust": c_trust})
+                    basis.append({"agent": d_name, "trust": d_trust})
+                    downgrades.append(
+                        f"{reason} -> retry budget exhausted -> R3 contradiction recomputed over "
+                        f"best evidence: constructive={c_name}({c_trust}) vs "
+                        f"destructive={d_name}({d_trust}) -> verdict={verdict!r}, confidence<={cap} (R3/R4')"
+                    )
+                    return
+
+                if d_trust is not None and trust_at_least(d_trust, "well_formed"):
+                    verdict = "non_dcfl"
+                    cap = confidence_cap_for(d_trust)
+                    basis.append({"agent": d_name, "trust": d_trust})
+                    downgrades.append(
+                        f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                        f"destructive claim ({d_name}, trust={d_trust}) -> non_dcfl"
+                    )
+                    return
+                if c_trust is not None and trust_at_least(c_trust, "bounded_pass"):
+                    verdict = "dcfl"
+                    cap = confidence_cap_for(c_trust)
+                    basis.append({"agent": c_name, "trust": c_trust})
+                    downgrades.append(
+                        f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                        f"constructive artifact ({c_name}, trust={c_trust}) -> dcfl"
+                    )
+                    return
+                verdict, cap = None, 0.40
                 downgrades.append(
+                    f"{reason} -> retry budget exhausted -> strongest admissible basis: inconclusive"
+                )
+
+            if primary_trust == "refuted":
+                reason = (
                     f"reasoning proposed done/{verdict} on '{primary}' but its artifact "
-                    "is refuted by the oracle (R2) -> retry/inconclusive"
+                    "is refuted by the oracle (R2)"
                 )
                 if retry_count < max_retries:
+                    downgrades.append(f"{reason} -> retry/inconclusive -> retry")
                     action, verdict, cap = "retry", None, 0.25
                 else:
-                    action, verdict, cap = "done", None, 0.40
+                    _r4prime_rescue(reason)
             elif primary_trust is None or not trust_at_least(primary_trust, required_trust):
-                downgrades.append(
+                reason = (
                     f"reasoning proposed done/{verdict} with no {required_trust}+ {direction} "
-                    f"artifact (basis: constructive_failure_only, R1/R2) -> inconclusive"
+                    "artifact (basis: constructive_failure_only, R1/R2)"
                 )
-                action, verdict, cap = "done", None, 0.40
+                if retry_count < max_retries:
+                    downgrades.append(f"{reason} -> retry/inconclusive -> retry")
+                    action, verdict, cap = "retry", None, 0.25
+                else:
+                    _r4prime_rescue(reason)
             else:
                 basis.append({"agent": primary, "trust": primary_trust})
                 cap = confidence_cap_for(primary_trust)
@@ -718,8 +892,28 @@ def dispatch_all_agents_node(state: DCFLState) -> list[Send]:
 
 
 def run_specialist_node(state: DCFLState) -> dict:
-    """Run a single specialist agent. Invoked via Send() fan-out."""
+    """Run a single specialist agent. Invoked via Send() fan-out.
+
+    Cost ceiling: a specialist that has already been called
+    ``MAX_CALLS_PER_AGENT`` times for this task (counted from the full,
+    never-reset ``specialist_outputs`` history) is not called again -- the
+    retry planner may still have named it, but the call is skipped and a
+    note is recorded for ``verdict_gate.downgrades`` instead of making
+    another LLM call.
+    """
     agent_name = state["_specialist_name"]
+    prior_calls = sum(1 for n, _ in state.get("specialist_outputs", []) if n == agent_name)
+    if prior_calls >= MAX_CALLS_PER_AGENT:
+        log_msg(
+            state,
+            f"  specialist: {agent_name} call cap reached "
+            f"({prior_calls}/{MAX_CALLS_PER_AGENT}), skipping retry",
+        )
+        return {
+            "call_cap_notes": [
+                f"agent {agent_name} call cap reached ({MAX_CALLS_PER_AGENT} calls)"
+            ],
+        }
     log_msg(state, f"  specialist: {agent_name}...")
     inp = _build_specialist_input(state, agent_name)
     out = _run_agent(state, agent_name, inp)
@@ -749,9 +943,11 @@ def collect_specialists_node(state: DCFLState) -> dict:
 
     for name, out in latest_this_round.items():
         if out is None:
-            agent_results.pop(name, None)
-        else:
-            agent_results[name] = out
+            # agent_error on a retry round must not erase a valid result
+            # from an earlier round (root TODO.md §2) — keep the best
+            # (most recent non-error) result we have for this agent.
+            continue
+        agent_results[name] = out
 
     evidence = dict(state.get("evidence", {}))
     for name in DCFL_SPECIALIST_NAMES:
@@ -829,6 +1025,19 @@ def reasoning_agent_node(state: DCFLState) -> dict:
         retry_count=state.get("retry_count", 0),
         max_retries=MAX_RETRIES,
     )
+
+    # Surface any skipped-retry-due-to-call-cap notes (run_specialist_node)
+    # in the final verdict_gate.downgrades, deduplicated (the same agent may
+    # have been capped across more than one retry round).
+    cap_notes = state.get("call_cap_notes") or []
+    if cap_notes:
+        gate = dict(output.get("verdict_gate") or {})
+        existing = list(gate.get("downgrades") or [])
+        for note in cap_notes:
+            if note not in existing:
+                existing.append(note)
+        gate["downgrades"] = existing
+        output["verdict_gate"] = gate
 
     action = _get_action(output)
     log_msg(state, f"  action={action} verdict={output.get('verdict')}")
@@ -978,9 +1187,38 @@ def retry_planner_node(state: DCFLState) -> dict:
                     plan["hints"] = merged_hints
 
     agents_to_retry = plan.get("agents_to_retry", [])
-    # Recompute needs_retry from the MERGED list, not build_retry_plan's raw
-    # (pre-merge) one — otherwise a reasoning-agent override that adds agents
-    # to an empty plan would be silently dropped by setup_dispatch_node.
+
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): an agent already at its call
+    # cap must not be handed back to run_specialist_node only to be silently
+    # skipped there (a wasted graph round: dispatch, fan-out, fan-in, all for
+    # zero new specialist output) -- filter it out of the retry plan itself,
+    # counted the same way run_specialist_node counts it (from the full,
+    # never-reset `specialist_outputs` history). A plan made ENTIRELY of
+    # capped agents becomes an empty plan (needs_retry below already treats
+    # that as terminal). Each dropped agent is noted for
+    # verdict_gate.downgrades, same as a cap hit inside run_specialist_node.
+    call_cap_notes: list[str] = []
+    if agents_to_retry:
+        specialist_outputs = state.get("specialist_outputs", [])
+        filtered_agents = []
+        for a in agents_to_retry:
+            prior = sum(1 for n, _ in specialist_outputs if n == a)
+            if prior >= MAX_CALLS_PER_AGENT:
+                call_cap_notes.append(
+                    f"agent {a} call cap reached ({MAX_CALLS_PER_AGENT} calls), "
+                    "excluded from retry plan"
+                )
+            else:
+                filtered_agents.append(a)
+        if call_cap_notes:
+            log_msg(state, f"  retry_planner: capped, excluded from retry: {call_cap_notes}")
+        agents_to_retry = filtered_agents
+        plan["agents_to_retry"] = agents_to_retry
+
+    # Recompute needs_retry from the MERGED (and now cap-filtered) list, not
+    # build_retry_plan's raw (pre-merge) one — otherwise a reasoning-agent
+    # override that adds agents to an empty plan would be silently dropped by
+    # setup_dispatch_node.
     plan["needs_retry"] = bool(agents_to_retry)
     next_count = retry_count + 1
 
@@ -990,11 +1228,14 @@ def retry_planner_node(state: DCFLState) -> dict:
         f"needs_retry={plan.get('needs_retry')}",
     )
 
-    return {
+    result = {
         "agents_to_retry": agents_to_retry,
         "retry_plan": plan,
         "retry_count": next_count,
     }
+    if call_cap_notes:
+        result["call_cap_notes"] = call_cap_notes
+    return result
 
 
 def decide_after_retry_planner(state: DCFLState) -> str:
@@ -1298,6 +1539,7 @@ def run_pipeline(
         "specialist_outputs": [],
         "evidence": {},
         "errors": [],
+        "call_cap_notes": [],
         "_specialist_name": "",
         "result": {},
     }
@@ -1305,7 +1547,7 @@ def run_pipeline(
     final_state = graph.invoke(initial_state)
     result = final_state.get("result")
     if not result:
-        return {
+        result = {
             "task": ir.get("task_type"),
             "source_text": ir.get("source_text"),
             "verdict": "failure",
@@ -1314,6 +1556,11 @@ def run_pipeline(
             "retries": 0,
             "errors": ["Graph produced no result"],
         }
+    # Usage/cost block (TODO.md §3) -- additive, present even without a live
+    # agent_runner (an all-zero UsageTracker) so callers can rely on
+    # result["usage"] always existing.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
     return result
 
 
@@ -1321,7 +1568,8 @@ def run_pipeline(
 # CLI
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Run the DCFL analysis pipeline")
@@ -1363,6 +1611,8 @@ if __name__ == "__main__":
         agent_runner=agent,
         verbose=args.verbose,
     )
+    if args.verbose and agent is not None:
+        print(agent.usage_tracker.summary_line(), file=sys.stderr)
 
     # Determine output directory
     output_dir = Path(args.save or args.output_dir or "examples/output")
@@ -1412,3 +1662,7 @@ if __name__ == "__main__":
         sys.exit(2)
     else:  # failure / None / etc.
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

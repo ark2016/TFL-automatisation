@@ -1,0 +1,13 @@
+{
+  "task_type": "ll_check_language",
+  "source_text": "(ab)*c",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b",
+      "c"
+    ],
+    "description": "(ab)*c"
+  }
+}

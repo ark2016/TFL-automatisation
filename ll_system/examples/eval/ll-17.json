@@ -1,0 +1,30 @@
+{
+  "task_type": "ll_check_grammar",
+  "source_text": "Format 3: S -> aSb | eps. Is this grammar LL(1)?",
+  "grammar": {
+    "terminals": [
+      "a",
+      "b"
+    ],
+    "nonterminals": [
+      "S"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "S",
+          "b"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": []
+      }
+    ]
+  },
+  "question": "is_ll_k",
+  "k": 1
+}

@@ -1,20 +1,29 @@
 """
-Поиск минимальной длины накачки для регулярного языка.
+Поиск минимальной длины накачки для регулярного языка, заданного регулярным
+выражением (лемма о накачке для регулярных языков в форме Сипсера).
 
 Пайплайн:
-  regex (строка) -> AST -> NFA (Thompson) -> DFA (subset) -> min DFA (Hopcroft)
-  -> поиск минимальной длины накачки через BFS по парам (state, visited_set).
+  regex (строка) -> AST -> NFA (Thompson) -> DFA (subset) -> min DFA (Хопкрофт)
+  -> точный поиск p_min по определению (см. ``compute_min_pumping_length``).
 
-Минимальная длина накачки p определяется как длина кратчайшего слова w из L,
-такого что путь по w в минимальном ДКА содержит хотя бы одно повторное состояние
-(т.е. хотя бы один цикл). Это и есть минимальное p, для которого выполняется
-лемма о накачке.
+Определение (Сипсер). p валидно для L, если для всякого w ∈ L с |w| ≥ p
+существует разбиение w = xyz, |xy| ≤ p, |y| ≥ 1, такое что xyⁱz ∈ L для
+всех i ≥ 0. p_min(L) — наименьшее такое p.
+
+Важно: "в первых p символах слова есть повторное состояние" — ДОСТАТОЧНОЕ,
+но не необходимое условие накачиваемости конкретного слова (см. пример
+L = a⁺, w = aa, x = ε, y = a, z = a в ТЗ), поэтому наивная эвристика
+«кратчайшее слово с повтором состояния» даёт неверный p_min (например,
+2 вместо 5 для a*|bbbb). Здесь p_min ищется точно, разбором булевой
+комбинации регулярных условий (см. раздел 5), а не эвристикой.
 """
 
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 from collections import deque, defaultdict
+import argparse
+import json
 
 # ============================================================
 # 1. Парсер регулярного выражения
@@ -24,12 +33,26 @@ from collections import deque, defaultdict
 #   union     := concat ('|' concat)*
 #   concat    := star+
 #   star      := atom ('*')*
-#   atom      := SYMBOL | '(' regex ')' | 'ε'
-# Поддерживаются символы a..z, 0..9. Конкатенация неявная.
+#   atom      := SYMBOL | '(' regex ')' | EPS | EMPTY
+#
+# Поддерживаются символы ASCII a..z, 0..9 (проверяется по ``isalnum()`` и
+# ``isascii()``, так что EPS/EMPTY ниже не конфликтуют с алфавитом символов).
+# Конкатенация неявная (без явного оператора).
+#
+# EPS (язык {ε}) записывается как символ 'ε' либо как пустые скобки '()'
+# (пустая конкатенация внутри скобок — то же самое: `parse_concat` возвращает
+# `Node('eps')`, когда между '(' и ')' ничего нет). Выбраны оба варианта,
+# так как 'ε' удобен в коде/тестах, а '()' — в CLI, где ввести юникод-символ
+# не всегда удобно.
+#
+# EMPTY (язык ∅, пустой язык) записывается как символ '∅' (U+2205). В отличие
+# от EPS, для ∅ нет ASCII-альтернативы: язык ∅ не выразим комбинацией
+# */|/конкатенации без явного пустого атома (нет оператора дополнения или
+# пересечения), поэтому символ обязателен.
 
 @dataclass
 class Node:
-    kind: str                 # 'sym' | 'eps' | 'concat' | 'union' | 'star'
+    kind: str                 # 'sym' | 'eps' | 'empty' | 'concat' | 'union' | 'star'
     sym: Optional[str] = None
     left: Optional['Node'] = None
     right: Optional['Node'] = None
@@ -88,7 +111,13 @@ class Parser:
             inner = self.parse_union()
             self.eat(')')
             return inner
-        if c is not None and (c.isalnum()):
+        if c == 'ε':
+            self.i += 1
+            return Node('eps')
+        if c == '∅':
+            self.i += 1
+            return Node('empty')
+        if c is not None and c.isascii() and c.isalnum():
             self.i += 1
             return Node('sym', sym=c)
         raise ValueError(f"Неожиданный символ {c!r} в позиции {self.i}")
@@ -128,6 +157,12 @@ def build_nfa(node: Node) -> NFA:
         if n.kind == 'eps':
             s, t = nfa.new_state(), nfa.new_state()
             nfa.add(s, EPS, t)
+            return s, t
+        if n.kind == 'empty':
+            # Язык ∅: два несвязанных состояния — путь из s в t не существует,
+            # поэтому любая конструкция (concat/union/star) вокруг корректно
+            # ведёт себя как с обычным ∅ (star(∅) = {ε}, ∅·X = ∅, ∅|X = X).
+            s, t = nfa.new_state(), nfa.new_state()
             return s, t
         if n.kind == 'concat':
             s1, t1 = build(n.left)
@@ -302,14 +337,64 @@ def minimize_dfa(dfa: DFA) -> DFA:
 
 
 # ============================================================
-# 5. Поиск минимальной длины накачки
+# 4.5. Вспомогательные функции над DFA
 # ============================================================
-#
-# Минимальная p = длина кратчайшего слова w ∈ L, такого что путь по w в min-DFA
-# содержит повторное состояние (т.е. цикл).
-#
-# Важный трюк: нужно исключить из поиска пути, ведущие в "мёртвую ловушку"
-# (состояние, из которого нельзя попасть в accept). Иначе BFS найдёт бесполезные циклы.
+
+def collect_symbols(node: Node, acc: Optional[set[str]] = None) -> set[str]:
+    """Множество символов алфавита, реально используемых в AST (без ε/∅)."""
+    if acc is None:
+        acc = set()
+    if node.kind == 'sym':
+        acc.add(node.sym)
+    elif node.kind in ('eps', 'empty'):
+        pass
+    elif node.kind in ('concat', 'union'):
+        collect_symbols(node.left, acc)
+        collect_symbols(node.right, acc)
+    elif node.kind == 'star':
+        collect_symbols(node.child, acc)
+    else:
+        raise ValueError(f"Unknown node {node.kind}")
+    return acc
+
+
+def regex_to_min_dfa(regex: str, alphabet: Optional[list[str]] = None) -> DFA:
+    """Полный пайплайн: regex -> AST -> NFA -> DFA -> минимальный DFA.
+
+    Алфавит по умолчанию — символы, реально встречающиеся в regex (список
+    ``alphabet`` можно передать явно, например чтобы сравнивать два языка
+    над общим алфавитом).
+    """
+    tree = Parser(regex).parse()
+    if alphabet is None:
+        alphabet = sorted(collect_symbols(tree))
+    nfa = build_nfa(tree)
+    dfa = nfa_to_dfa(nfa, alphabet)
+    return minimize_dfa(dfa)
+
+
+def apply_string(dfa: DFA, state: int, s: str) -> Optional[int]:
+    """δ*(state, s) — состояние после чтения строки s из state.
+
+    Возвращает None, если s содержит символ вне алфавита dfa (для всех
+    остальных случаев автомат тотален — переход определён всегда, включая
+    мёртвое состояние). Внутри модуля вызывается только со строками над
+    dfa.alphabet, где None невозможен; публичная ``dfa_accepts`` допускает
+    произвольные слова.
+    """
+    for sym in s:
+        row = dfa.trans.get(state)
+        if row is None or sym not in row:
+            return None
+        state = row[sym]
+    return state
+
+
+def dfa_accepts(dfa: DFA, word: str) -> bool:
+    """word ∈ L(dfa)? (слово с символом вне алфавита — всегда не в языке)."""
+    state = apply_string(dfa, dfa.start, word)
+    return state is not None and state in dfa.accepts
+
 
 def live_states(dfa: DFA) -> set[int]:
     """Состояния, из которых достижимо принимающее."""
@@ -332,121 +417,271 @@ def live_states(dfa: DFA) -> set[int]:
     return live
 
 
-def min_pumping_length(dfa: DFA) -> tuple[int, str]:
-    """
-    Возвращает (p, пример_слова) — минимальную длину накачки и пример слова
-    длины p с циклом на пути.
+def _enumerate_live_words(dfa: DFA, length: int, live: set[int]):
+    """Все u ∈ Σ^length, достижимые из start и не проходящие через
+    состояние, из которого accept уже недостижим (такое u не может
+    продолжиться никаким z до слова из L — оно не участвует в поиске).
 
-    BFS по состояниям (node, has_cycle_in_prefix). Как только мы впервые
-    посещаем состояние дважды — отмечаем, что цикл был, и продолжаем.
-    Принимаем, когда дошли до accept с has_cycle=True.
+    Возвращает список (u_symbols, state_trace), где state_trace — кортеж
+    s_0..s_p состояний вдоль пути (s_0 = dfa.start), в порядке символов
+    алфавита (важно для детерминированного выбора свидетеля).
+    """
+    results: list[tuple[tuple[str, ...], tuple[int, ...]]] = []
+
+    def dfs(state: int, syms: list[str], states: list[int]):
+        if len(syms) == length:
+            results.append((tuple(syms), tuple(states)))
+            return
+        for sym in dfa.alphabet:
+            nxt = dfa.trans[state][sym]
+            if nxt in live:
+                dfs(nxt, syms + [sym], states + [nxt])
+
+    dfs(dfa.start, [], [dfa.start])
+    return results
+
+
+def _orbit(dfa: DFA, state: int, y: str) -> set[int]:
+    """S = {δ(state, yⁱ) : i ≥ 0} — конечная орбита состояния под накачкой y.
+
+    Считается до первого повтора: последовательность state, δ(state,y),
+    δ(state,y²), ... детерминированно рано или поздно зацикливается (не
+    более num_states шагов), и все посещённые состояния до первого повтора
+    — это и есть искомое множество S.
+    """
+    seen: set[int] = set()
+    cur = state
+    while cur not in seen:
+        seen.add(cur)
+        cur = apply_string(dfa, cur, y)
+    return seen
+
+
+def _splits_r_sets(dfa: DFA, u_syms: tuple[str, ...], u_states: tuple[int, ...]) -> list[frozenset[int]]:
+    """Для префикса u (длины p, state_trace u_states длины p+1) —
+    список R_split = {δ(t, y′) : t ∈ S} по всем разбиениям u = x·y·y′,
+    |y| ≥ 1 (см. модуль docstring и TODO.md §4 для вывода формулы).
+    """
+    p = len(u_syms)
+    splits: list[frozenset[int]] = []
+    for i in range(p):            # |x| = i
+        for j in range(i + 1, p + 1):   # |xy| = j, |y| = j - i ≥ 1
+            y = ''.join(u_syms[i:j])
+            y_prime = ''.join(u_syms[j:p])
+            s_x = u_states[i]
+            S = _orbit(dfa, s_x, y)
+            R = frozenset(apply_string(dfa, t, y_prime) for t in S)
+            splits.append(R)
+    return splits
+
+
+def _shortest_bad_suffix(dfa: DFA, s_p: int, splits_r: list[frozenset[int]]) -> Optional[str]:
+    """Кратчайшее z, такое что u·z плохое для данного u (s_p = δ(q0,u)):
+
+        z ∈ Lang(s_p)  ∩  ⋂_разбиений ⋃_{t∈R_split} complement(Lang(t))
+
+    т.е. u·z ∈ L, и для каждого разбиения найдётся t ∈ R_split с
+    t·z ∉ F (иначе это разбиение "спасло" бы слово накачкой).
+
+    Реализовано как BFS по продукт-автомату: один трек для s_p (условие
+    "u·z ∈ L") плюс по одному треку на каждое различное состояние,
+    встречающееся хоть в одном R_split (условие на разбиения). Раз все
+    треки — копии одного и того же DFA, читающие один и тот же z,
+    пространство состояний конечно (≤ num_states^(число треков)), и BFS
+    гарантированно завершается и находит кратчайший z, если он есть.
+    """
+    tracked = sorted(set().union(*splits_r)) if splits_r else []
+
+    def ok(main_state: int, r_of: dict) -> bool:
+        if main_state not in dfa.accepts:
+            return False
+        for R in splits_r:
+            if not any(r_of[t] not in dfa.accepts for t in R):
+                return False
+        return True
+
+    init_r = {t: t for t in tracked}
+    if ok(s_p, init_r):
+        return ""
+
+    start_key = (s_p, tuple(init_r[t] for t in tracked))
+    seen = {start_key}
+    queue = deque([(start_key, "")])
+    while queue:
+        (main_state, r_vec), z = queue.popleft()
+        for sym in dfa.alphabet:
+            new_main = dfa.trans[main_state][sym]
+            new_r_vec = tuple(dfa.trans[r][sym] for r in r_vec)
+            new_z = z + sym
+            r_of = dict(zip(tracked, new_r_vec))
+            if ok(new_main, r_of):
+                return new_z
+            key = (new_main, new_r_vec)
+            if key not in seen:
+                seen.add(key)
+                queue.append((key, new_z))
+    return None
+
+
+def find_bad_word(dfa: DFA, p: int, live: Optional[set[int]] = None) -> Optional[tuple[str, str]]:
+    """Ищет «плохое» слово w = u·z длины p + |z|, |u| = p, показывающее, что
+    p невалидно: u·z ∈ L, но ни одно разбиение u = x·y·y′ (|y| ≥ 1) не
+    накачивает его (см. docstring модуля и TODO.md §4).
+
+    Возвращает (u, z) с наименьшим |z| (среди всех u длины p, для которых
+    вообще нашлось плохое z; при равенстве |z| — лексикографически меньшее
+    (u, z), для детерминированности), либо None, если p валидно.
+    """
+    if live is None:
+        live = live_states(dfa)
+    best: Optional[tuple[str, str]] = None
+    for u_syms, u_states in _enumerate_live_words(dfa, p, live):
+        splits_r = _splits_r_sets(dfa, u_syms, u_states)
+        z = _shortest_bad_suffix(dfa, u_states[-1], splits_r)
+        if z is None:
+            continue
+        u = ''.join(u_syms)
+        if best is None or (len(z), u, z) < (len(best[1]), best[0], best[1]):
+            best = (u, z)
+    return best
+
+
+@dataclass
+class Witness:
+    """Свидетель невалидности p = p_min - 1: слово w = u + z ∈ L длины p_min-1
+    + |z|, для которого ни одно разбиение u = x·y·y′ не накачивает w."""
+    p: int
+    u: str
+    z: str
+
+    @property
+    def word(self) -> str:
+        return self.u + self.z
+
+    def explain(self) -> str:
+        return (
+            f"p={self.p} невалидно: слово {self.word!r} принадлежит L "
+            f"(u={self.u!r} — префикс длины {self.p}, z={self.z!r} — остаток), "
+            f"но для КАЖДОГО разбиения u = x·y·y′ (|y| ≥ 1) хотя бы одна "
+            f"итерация накачки y уводит из L (либо само xy⁰y′z ∉ L). "
+            f"Значит, p_min = {self.p + 1}."
+        )
+
+
+@dataclass
+class PumpingResult:
+    p_min: int
+    language_empty: bool
+    witness: Optional[Witness]
+
+
+def compute_min_pumping_length(dfa: DFA) -> PumpingResult:
+    """Точный p_min(L(dfa)) по определению Сипсера (см. docstring модуля).
+
+    Перебирает p = 0, 1, 2, ... и для каждого точно проверяет валидность
+    (см. ``find_bad_word``). p = n = num_states всегда валидно (для любого
+    слова длины ≥ n состояние повторяется в первых n символах — это и даёт
+    рабочее разбиение, значит переборный поиск заведомо завершается не
+    позже n итераций); поэтому цикл конечен и для бесконечных, и для
+    конечных языков — исключений не бросает.
     """
     live = live_states(dfa)
-    if dfa.start not in live:
-        raise ValueError("Язык пуст — лемма о накачке неприменима.")
+    n = dfa.num_states
+    last_bad: Optional[tuple[int, str, str]] = None
+    for p in range(n + 1):
+        bad = find_bad_word(dfa, p, live=live)
+        if bad is None:
+            witness = None
+            if last_bad is not None:
+                witness = Witness(p=last_bad[0], u=last_bad[1], z=last_bad[2])
+            return PumpingResult(p_min=p, language_empty=(p == 0), witness=witness)
+        last_bad = (p, bad[0], bad[1])
+    raise AssertionError(
+        f"p_min не найдено в пределах p ≤ n={n} — не должно происходить "
+        "(p=n доказуемо валидно для любого DFA)."
+    )
 
-    # BFS по (текущее состояние, множество_посещённых, флаг_цикла)
-    # Чтобы ограничить экспоненциальный взрыв, используем оптимизацию:
-    # на каждом шаге храним (state, has_cycle) и отдельно отслеживаем "был ли этот
-    # состояние посещено в текущем префиксе". Реально BFS по (state, path_states_set, flag)
-    # всё равно компактен, т.к. длины слов ограничены ~ числом состояний.
-    #
-    # Проще: BFS по конфигурациям (state, frozenset_visited). Принимаем, когда
-    # state ∈ accepts И при последнем переходе пришли в состояние, уже бывшее в visited
-    # (или когда в visited есть дубликат из-за прошлого шага).
-    #
-    # Оптимизация: вместо полного множества храним (state, has_cycle_flag).
-    # Но тогда теряем информацию о том, какие состояния посещались. Для корректности
-    # храним полный frozenset, но только до размера ≤ num_states (после чего любой
-    # переход даёт цикл). Это ограничивает пространство состояний.
 
-    # Состояние BFS: (current_state, visited_set_or_None, has_cycle)
-    # Когда has_cycle=True, visited уже не нужно отслеживать.
-    InitState = (dfa.start, frozenset([dfa.start]), False)
-    # parent: для восстановления слова
-    parent = {InitState: (None, None)}  # state -> (prev_state_key, symbol)
-    queue = deque([InitState])
-
-    while queue:
-        key = queue.popleft()
-        cur, visited, has_cycle = key
-        if has_cycle and cur in dfa.accepts:
-            # Восстанавливаем слово
-            word = []
-            k = key
-            while parent[k][0] is not None:
-                prev_k, sym = parent[k]
-                word.append(sym)
-                k = prev_k
-            word.reverse()
-            return len(word), ''.join(word)
-
-        for sym in dfa.alphabet:
-            nxt = dfa.trans[cur][sym]
-            if nxt not in live:
-                continue
-            if has_cycle:
-                new_key = (nxt, None, True)
-            else:
-                if nxt in visited:
-                    new_key = (nxt, None, True)
-                else:
-                    new_visited = visited | {nxt}
-                    new_key = (nxt, new_visited, False)
-            if new_key not in parent:
-                parent[new_key] = (key, sym)
-                queue.append(new_key)
-
-    # Если не нашли — язык конечен, накачка бесконечно велика (формально L конечен
-    # ⇒ можно взять p больше длины самого длинного слова).
-    # Но у нас язык бесконечен (иначе BFS нашёл бы цикл, т.к. бесконечный регулярный
-    # язык имеет цикл в min-DFA, достижимый из start и ведущий в accept).
-    raise ValueError("Цикл, ведущий в accept, не найден — язык конечен.")
+def min_pumping_length(regex: str, alphabet: Optional[list[str]] = None) -> PumpingResult:
+    """Удобная обёртка: regex -> min DFA -> p_min с полным разбором."""
+    dfa = regex_to_min_dfa(regex, alphabet)
+    return compute_min_pumping_length(dfa)
 
 
 # ============================================================
-# 6. Прогон
+# 6. CLI
 # ============================================================
 
-def analyze(regex: str, alphabet: list[str], label: str = ""):
-    print(f"\n{'='*60}")
-    print(f"Язык {label}: {regex}")
-    print('='*60)
-
-    tree = Parser(regex).parse()
-    nfa = build_nfa(tree)
-    print(f"NFA: {nfa.num_states} состояний")
-
-    dfa = nfa_to_dfa(nfa, alphabet)
-    print(f"DFA (subset): {dfa.num_states} состояний, accepts={sorted(dfa.accepts)}")
-
-    mdfa = minimize_dfa(dfa)
-    print(f"Минимальный DFA: {mdfa.num_states} состояний, accepts={sorted(mdfa.accepts)}")
-
-    # Выводим таблицу переходов
-    print("Таблица переходов min-DFA:")
-    header = "  state | " + " | ".join(f" {s} " for s in mdfa.alphabet) + " | accept"
+def _print_dfa_table(dfa: DFA) -> None:
+    header = "  state | " + " | ".join(f" {s} " for s in dfa.alphabet) + " | accept"
     print(header)
     print("  " + "-" * (len(header) - 2))
-    for s in range(mdfa.num_states):
-        row = f"  {'*' if s == mdfa.start else ' '}{s:>4} | "
-        row += " | ".join(f" {mdfa.trans[s][sym]} " for sym in mdfa.alphabet)
-        row += f" |   {'+' if s in mdfa.accepts else ' '}"
+    for s in range(dfa.num_states):
+        row = f"  {'*' if s == dfa.start else ' '}{s:>4} | "
+        row += " | ".join(f" {dfa.trans[s][sym]} " for sym in dfa.alphabet)
+        row += f" |   {'+' if s in dfa.accepts else ' '}"
         print(row)
 
-    try:
-        p, example = min_pumping_length(mdfa)
-        print(f"\n>>> Минимальная длина накачки p = {p}")
-        print(f">>> Пример слова длины {p} с циклом: {example!r}")
-    except ValueError as e:
-        print(f"\n>>> {e}")
+
+def main(argv: Optional[list[str]] = None) -> int:
+    import sys
+    # Регэксп/вывод может содержать символы вне текущей консольной кодовой
+    # страницы (например ∅/ε на Windows с cp1251) — переключаемся на UTF-8
+    # с заменой нераспечатываемых символов, чтобы CLI не падал на выводе.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    parser = argparse.ArgumentParser(
+        prog="pumping_len.py",
+        description="Минимальная длина накачки p_min(L) для регулярного языка, "
+                     "заданного регулярным выражением (лемма о накачке, форма Сипсера).",
+    )
+    parser.add_argument("regex", help="регулярное выражение: символы a-z/0-9, | * (), "
+                                       "ε или () для {ε}, ∅ для пустого языка")
+    parser.add_argument("--witness", action="store_true",
+                         help="напечатать свидетеля невалидности p_min - 1")
+    parser.add_argument("--table", action="store_true",
+                         help="напечатать таблицу переходов минимального DFA")
+    parser.add_argument("--json", action="store_true",
+                         help="машиночитаемый вывод (JSON)")
+    args = parser.parse_args(argv)
+
+    dfa = regex_to_min_dfa(args.regex)
+    result = compute_min_pumping_length(dfa)
+
+    if args.json:
+        payload = {
+            "regex": args.regex,
+            "p_min": result.p_min,
+            "language_empty": result.language_empty,
+        }
+        if result.witness is not None:
+            payload["witness"] = {
+                "p": result.witness.p,
+                "u": result.witness.u,
+                "z": result.witness.z,
+                "word": result.witness.word,
+                "explanation": result.witness.explain(),
+            }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.table:
+        _print_dfa_table(dfa)
+        print()
+    print(f"p_min({args.regex!r}) = {result.p_min}")
+    if result.language_empty:
+        print("Язык пуст: лемма выполняется тривиально для любого p (в т.ч. p=0).")
+    if args.witness:
+        if result.witness is None:
+            print("Свидетель не нужен: p_min - 1 не существует (p_min = 0).")
+        else:
+            print(result.witness.explain())
+    return 0
 
 
 if __name__ == '__main__':
-    # Задача: ((a|b)*bb(a|b)(a|b)) | (b(abaa)*|abb*)*
-    regex_full = '((a|b)*bb(a|b)(a|b))|(b(abaa)*|abb*)*'
-    analyze(regex_full, ['a', 'b'], 'полный')
-
-    # Разберём по частям для наглядности
-    analyze('(a|b)*bb(a|b)(a|b)', ['a', 'b'], 'часть A')
-    analyze('(b(abaa)*|abb*)*', ['a', 'b'], 'часть B')
+    raise SystemExit(main())

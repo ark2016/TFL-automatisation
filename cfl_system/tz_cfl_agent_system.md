@@ -325,12 +325,13 @@ assemble_result_node      assemble_early_failure
 {
   "verdict": "non_cfl",
   "confidence": 0.7,
-  "reasoning": "Repeated subword w1 at positions 1 and 3 with intervening w2 creates a copying dependency that CFGs cannot track",
-  "advisory_only": true
+  "reasoning": "Repeated subword w1 at positions 1 and 3 with intervening w2 creates a copying dependency that CFGs cannot track"
 }
 ```
 **Модель:** Sonnet 5 (effort=medium).
-**Роль:** Чисто рекомендательная. Dispatch не зависит от verdict.
+**Роль:** Чисто рекомендательная. Dispatch не зависит от verdict; `advisory_only` убран из контракта —
+никто его не читал (`TODO.md` §6), а advisory-статус и так закреплён отдельным полем `classifier_hint`
+в результате пайплайна.
 
 ### 4.4. Language Preprocess Node (pure fn)
 

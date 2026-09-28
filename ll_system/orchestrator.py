@@ -29,10 +29,28 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
+from ll_system.config import MAX_CALLS_PER_AGENT
 from ll_system.lib.ll_ir_schema import validate_ll_ir
 from ll_system.lib.preprocess import compute_preprocess_hints
 from ll_system.lib.ll_table_builder import check_ll_k, find_min_ll_k
 from ll_system.lib.claim_verifier import verify_ll_claim
+
+# Shared Anthropic call machinery (TODO.md §3): kwargs building, streaming +
+# retry/backoff, typed errors, concurrency semaphore, usage tracking. See
+# agent_system/lib/llm_client.py -- LiveRunner below is a thin wrapper.
+from agent_system.lib.llm_client import (
+    AnthropicClient,
+    FatalAPIError,
+    RetryableAPIError,
+    UsageTracker,
+    _is_adaptive_model as _shared_is_adaptive_model,
+    estimate_cost_usd,
+    extract_json as _extract_json,
+    extract_json_with_error as _extract_json_with_error,
+    format_structured_output_flag as _format_structured_output_flag,
+    get_concurrency_semaphore,
+)
+from ll_system.lib.agent_output_schema import schema_for as _output_schema_for
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +142,10 @@ class PipelineState(TypedDict):
 
     # -- Accumulated --
     errors: Annotated[list, operator.add]
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): notes accumulated whenever a
+    # specialist's call cap is reached and a requested retry is skipped for
+    # it -- surfaced in the final verdict_gate.downgrades (apply_verdict_gate).
+    call_cap_notes: Annotated[list, operator.add]
 
     # -- Fan-out helper --
     _specialist_name: str
@@ -153,7 +175,14 @@ class MockRunner:
 
 
 class LiveRunner:
-    """Run agents via Anthropic API using prompts from prompts/ directory."""
+    """Run agents via Anthropic API using prompts from prompts/ directory.
+
+    Thin wrapper (TODO.md §3): prompts/contracts/JSON-parsing/Haiku-repair
+    stay pipeline-specific; the actual model call goes through the shared
+    ``agent_system.lib.llm_client.AnthropicClient`` — kwargs building,
+    stream-and-collect, typed retry/backoff, the process-wide concurrency
+    semaphore, and usage tracking all live there now, not here.
+    """
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from ll_system.config import (
@@ -198,6 +227,15 @@ class LiveRunner:
         # conversion — ideal for turning "Opus wrote prose around its JSON"
         # into pure JSON.
         self._json_repair_model = "claude-haiku-4-5"
+        # Shared call machinery (TODO.md §3): kwargs building, streaming,
+        # retry/backoff, usage tracking. Not the SDK client itself — `self.
+        # client` stays the mutable attribute (tests swap it for a mock).
+        self.usage_tracker = UsageTracker()
+        self._shared = AnthropicClient(
+            default_effort=self.default_effort,
+            refusal_fallback=self.refusal_fallback,
+            usage_tracker=self.usage_tracker,
+        )
 
     # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
     # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
@@ -211,7 +249,7 @@ class LiveRunner:
     @classmethod
     def _is_adaptive_model(cls, model: str) -> bool:
         """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
-        return bool(model) and not cls._LEGACY_MODEL_RE.search(model)
+        return _shared_is_adaptive_model(model)
 
     def _build_request_kwargs(self, model: str, max_tokens: int,
                               temperature: float, system_prompt: str,
@@ -220,30 +258,23 @@ class LiveRunner:
 
         Thinking models get `thinking: adaptive` + an explicit effort level
         (Opus 5.5 would silently default to "medium"); legacy models get
-        `temperature` instead.
+        `temperature` instead. Delegates to the shared AnthropicClient so
+        every pipeline builds kwargs the same way (TODO.md §3).
         """
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_msg}],
-        }
-        if self._is_adaptive_model(model):
-            kwargs["thinking"] = {"type": "adaptive"}
-            kwargs["output_config"] = {"effort": effort or self.default_effort}
-            if self.refusal_fallback and model.startswith(self._FALLBACK_MODEL_PREFIXES):
-                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
-                kwargs["extra_body"] = {"fallbacks": "default"}
-        else:
-            kwargs["temperature"] = temperature
-        return kwargs
+        return self._shared.build_request_kwargs(
+            model, max_tokens, system_prompt, user_msg,
+            effort=effort, temperature=temperature,
+        )
 
     @staticmethod
-    def _refusal_error(agent_name: str, final_msg: Any) -> dict:
-        """agent_error dict for a safety-classifier decline (stop_reason="refusal")."""
-        details = getattr(final_msg, "stop_details", None)
-        category = getattr(details, "category", None) if details else None
-        explanation = getattr(details, "explanation", None) if details else None
+    def _refusal_error(agent_name: str, result: Any) -> dict:
+        """agent_error dict for a safety-classifier decline (stop_reason="refusal").
+
+        `result` is a ``llm_client.CallResult`` (or anything exposing the
+        same ``refusal_category`` / ``refusal_explanation`` attributes).
+        """
+        category = getattr(result, "refusal_category", None)
+        explanation = getattr(result, "refusal_explanation", None)
         msg = f"Model refused (stop_reason=refusal, category={category})"
         if explanation:
             msg += f": {explanation}"
@@ -289,12 +320,14 @@ class LiveRunner:
         )
 
         t0 = _time.monotonic()
+        request_kwargs = self._build_request_kwargs(
+            model=self._json_repair_model,
+            max_tokens=min(len(raw_text) // 2 + 2000, 8000),
+            temperature=0.0, system_prompt=system, user_msg=user_msg,
+        )
         try:
-            response = self.client.messages.create(**self._build_request_kwargs(
-                model=self._json_repair_model,
-                max_tokens=min(len(raw_text) // 2 + 2000, 8000),
-                temperature=0.0, system_prompt=system, user_msg=user_msg,
-            ))
+            with get_concurrency_semaphore():
+                response = self.client.messages.create(**request_kwargs)
         except Exception as exc:
             logger.warning("[%s] JSON repair (Haiku) failed: %s", agent_name, exc)
             return None
@@ -305,8 +338,12 @@ class LiveRunner:
             if hasattr(block, "text"):
                 repaired_text += block.text
 
+        usage = getattr(response, "usage", None)
+        self.usage_tracker.record(
+            getattr(response, "model", self._json_repair_model), usage,
+            agent=agent_name, used_structured_output=False,
+        )
         if self.verbose:
-            usage = response.usage
             t_in = usage.input_tokens if usage else 0
             t_out = usage.output_tokens if usage else 0
             print(
@@ -387,22 +424,44 @@ class LiveRunner:
             # when max_tokens x projected latency exceeds 10 minutes; streaming
             # lifts that cap and handles long proofs reliably.
             # Thinking models get adaptive thinking + this agent's effort;
-            # temperature is only sent to legacy models (Haiku 4.5).
-            request_kwargs = self._build_request_kwargs(
-                model=model, max_tokens=max_tokens,
-                temperature=temperature, system_prompt=system_prompt,
-                user_msg=user_msg, effort=effort,
-            )
+            # temperature is only sent to legacy models (Haiku 4.5). The
+            # shared client also retries a retryable error (429/5xx/network/
+            # broken stream) with backoff before giving up, and never
+            # retries a fatal one (400/401/403/404) — TODO.md §2/§3.
+            # output_schema (TODO.md §3 M): agents with a closed contract
+            # (`ll_system.lib.agent_output_schema.REQUIRED_KEYS`) get
+            # structured outputs instead of "extract JSON from prose";
+            # unavailable falls back to a plain call automatically.
             try:
-                with self.client.messages.stream(**request_kwargs) as stream:
-                    for chunk in stream.text_stream:
-                        raw_text += chunk
-                    final_msg = stream.get_final_message()
-                if final_msg.usage is not None:
-                    tokens_in = final_msg.usage.input_tokens
-                    tokens_out = final_msg.usage.output_tokens
-                stop_reason = getattr(final_msg, "stop_reason", None)
-            except Exception as exc:
+                result = self._shared.call(
+                    self.client, model=model, max_tokens=max_tokens,
+                    system=system_prompt, user=user_msg,
+                    effort=effort, temperature=temperature,
+                    output_schema=_output_schema_for(agent_name),
+                    agent=agent_name,
+                )
+            except FatalAPIError as exc:
+                if exc.status_code == 400:
+                    # A 400 that isn't a schema rejection AnthropicClient.call
+                    # could itself recover from is a malformed *request* for
+                    # this one agent (prompt too long, ...), not a dead key
+                    # or missing model access -- report as this agent's
+                    # agent_error instead of aborting the whole pipeline run.
+                    elapsed = _time.monotonic() - t0
+                    logger.error("[%s] 400 BadRequest after %.1fs: %s", agent_name, elapsed, exc)
+                    return {
+                        "agent": agent_name,
+                        "status": "agent_error",
+                        "verdict": None,
+                        "confidence": 0.0,
+                        "errors": [f"API error: {exc}"],
+                    }
+                # 401/403/404: a dead key, no access to the model, or an
+                # unknown model ID -- fail fast, re-raised as the original
+                # SDK exception type for backward compatibility.
+                logger.error("[%s] fatal API error: %s", agent_name, exc)
+                raise (exc.original if exc.original is not None else exc)
+            except RetryableAPIError as exc:
                 elapsed = _time.monotonic() - t0
                 logger.error("[%s] API error after %.1fs: %s", agent_name, elapsed, exc)
                 return {
@@ -413,6 +472,12 @@ class LiveRunner:
                     "errors": [f"API error: {exc}"],
                 }
 
+            raw_text = result.text
+            stop_reason = result.stop_reason
+            if result.usage is not None:
+                tokens_in = result.usage.input_tokens
+                tokens_out = result.usage.output_tokens
+
             elapsed = _time.monotonic() - t0
 
             if self.verbose:
@@ -421,17 +486,20 @@ class LiveRunner:
                     if stop_reason and stop_reason != "end_turn"
                     else ""
                 )
+                cost = estimate_cost_usd(result.model or model, result.usage)
+                cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
+                so_str = _format_structured_output_flag(result)
                 print(
-                    f"[{agent_name}] model={final_msg.model} effort={effort} "
+                    f"[{agent_name}] model={result.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
-                    f"time={elapsed:.1f}s max={max_tokens}{extra}",
+                    f"time={elapsed:.1f}s max={max_tokens}{extra}{cost_str}{so_str}",
                     file=sys.stderr, flush=True,
                 )
 
             # A safety-classifier decline is not a parse problem: retrying or
             # JSON-repairing the (empty/partial) text cannot help.
             if stop_reason == "refusal":
-                return self._refusal_error(agent_name, final_msg)
+                return self._refusal_error(agent_name, result)
 
             parsed, parse_error = _extract_json_with_error(raw_text)
             if parsed is not None:
@@ -441,6 +509,25 @@ class LiveRunner:
             was_truncated = stop_reason == "max_tokens"
             repaired = self._repair_json_with_haiku(agent_name, raw_text, was_truncated)
             if repaired is not None:
+                if was_truncated:
+                    # The agent's real reasoning was cut off mid-output — Haiku
+                    # only patched the JSON *syntax* of a partial answer, so
+                    # its semantic content cannot be trusted as a full result.
+                    # Mark it and cap confidence rather than passing it on as
+                    # if the agent had actually finished.
+                    repaired["_truncated"] = True
+                    repaired["_repaired"] = True
+                    repaired["status"] = "inconclusive"
+                    try:
+                        capped = min(float(repaired.get("confidence", 0.0) or 0.0), 0.40)
+                    except (TypeError, ValueError):
+                        capped = 0.40
+                    repaired["confidence"] = capped
+                    logger.warning(
+                        "[%s] response truncated at max_tokens; Haiku-repaired "
+                        "JSON accepted as inconclusive (confidence<=0.40)",
+                        agent_name,
+                    )
                 return repaired
 
             if was_truncated:
@@ -468,93 +555,10 @@ class LiveRunner:
         }
 
 
-# ---------------------------------------------------------------------------
-# JSON extraction helpers
-# ---------------------------------------------------------------------------
-
-def _extract_json(text: str) -> dict | None:
-    """Extract JSON object from LLM response text (back-compat wrapper)."""
-    parsed, _ = _extract_json_with_error(text)
-    return parsed
-
-
-def _extract_json_with_error(text: str) -> tuple[dict | None, str | None]:
-    """Extract JSON object and return (parsed, error_detail).
-
-    error_detail is None on success, otherwise a human-readable string
-    describing what went wrong at which position. Tries three strategies:
-      1) whole text as JSON
-      2) content of a ```json fenced block
-      3) substring between first '{' and last '}'
-    """
-    text = text.strip()
-    if not text:
-        return None, "response was empty"
-
-    last_err: json.JSONDecodeError | None = None
-    last_strategy: str = ""
-    fence_match = None
-    first_brace = -1
-    last_brace = -1
-
-    # Strategy 1: whole text
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return obj, None
-        return None, f"parsed as JSON but top-level is {type(obj).__name__}, not object"
-    except json.JSONDecodeError as e:
-        last_err, last_strategy = e, "whole text"
-
-    # Strategy 2: fenced code block
-    fence_match = _re.search(r"```(?:json)?\s*\n(.*?)\n```", text, _re.DOTALL)
-    if fence_match:
-        try:
-            obj = json.loads(fence_match.group(1))
-            if isinstance(obj, dict):
-                return obj, None
-            return None, f"fenced block parsed but top-level is {type(obj).__name__}"
-        except json.JSONDecodeError as e:
-            last_err, last_strategy = e, "fenced block"
-
-    # Strategy 3: first-brace to last-brace
-    first_brace = text.find("{")
-    last_brace = text.rfind("}")
-    if first_brace != -1 and last_brace > first_brace:
-        substring = text[first_brace:last_brace + 1]
-        try:
-            obj = json.loads(substring)
-            if isinstance(obj, dict):
-                return obj, None
-            return None, f"brace-substring parsed but top-level is {type(obj).__name__}"
-        except json.JSONDecodeError as e:
-            last_err, last_strategy = e, "brace substring"
-
-    if last_err is not None:
-        msg = last_err.msg
-        line = last_err.lineno
-        col = last_err.colno
-        pos = last_err.pos
-
-        src = text
-        if last_strategy == "fenced block" and fence_match:
-            src = fence_match.group(1)
-        elif last_strategy == "brace substring" and first_brace != -1:
-            src = text[first_brace:last_brace + 1]
-
-        start = max(0, pos - 30)
-        end = min(len(src), pos + 30)
-        context = src[start:end].replace("\n", "\\n")
-        pointer_offset = pos - start
-        pointer = " " * pointer_offset + "^"
-
-        return None, (
-            f"{msg} at line {line} column {col} (char {pos}) "
-            f"— tried strategy: {last_strategy}. "
-            f"Context around failure:\n  {context}\n  {pointer}"
-        )
-
-    return None, "no JSON object found in response (no '{' / '}' delimiters)"
+# _extract_json / _extract_json_with_error now come from
+# agent_system.lib.llm_client (TODO.md §3 — shared across every pipeline so
+# the JSON-retry error message stays uniform: position + ±40 chars of
+# context, not a bare "length=N" like dcfl's old copy had drifted to).
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +680,10 @@ def preprocess_node(state: PipelineState) -> dict:
         # ("finite"/"regex_pattern") — cap at well_formed's ceiling either way,
         # and never raise a less-confident heuristic up to 0.95 (docs/VERDICT_POLICY.md §2).
         trust = "verified" if regularity_method in ("finite", "regex_pattern") else "well_formed"
-        trust_cap = 0.98 if trust == "verified" else 0.60
+        # well_formed capped at 0.55 (not 0.60): without a machine check,
+        # confidence must not reach 0.6, tfl-eval's "confident" threshold
+        # (docs/VERDICT_POLICY.md §2, 2026-09-27).
+        trust_cap = 0.98 if trust == "verified" else 0.55
         confidence = min(
             0.95,
             trust_cap,
@@ -865,8 +872,28 @@ def dispatch_to_specialists(state: PipelineState) -> list[Send]:
 
 
 def run_specialist_node(state: PipelineState) -> dict:
-    """Run a single specialist agent. Invoked via Send() fan-out."""
+    """Run a single specialist agent. Invoked via Send() fan-out.
+
+    Cost ceiling: a specialist that has already been called
+    ``MAX_CALLS_PER_AGENT`` times for this task (counted from the full,
+    never-reset ``specialist_outputs`` history) is not called again -- the
+    retry planner may still have named it, but the call is skipped and a
+    note is recorded for ``verdict_gate.downgrades`` instead of making
+    another LLM call.
+    """
     agent_name = state["_specialist_name"]
+    prior_calls = sum(1 for n, _ in state.get("specialist_outputs", []) if n == agent_name)
+    if prior_calls >= MAX_CALLS_PER_AGENT:
+        log_msg(
+            state,
+            f"  specialist: {agent_name} call cap reached "
+            f"({prior_calls}/{MAX_CALLS_PER_AGENT}), skipping retry",
+        )
+        return {
+            "call_cap_notes": [
+                f"agent {agent_name} call cap reached ({MAX_CALLS_PER_AGENT} calls)"
+            ],
+        }
     log_msg(state, f"  specialist: {agent_name}...")
 
     inp: dict[str, Any] = {
@@ -1244,26 +1271,72 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     if action not in ("done", "retry"):
         action = "done"
 
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): shared by every retry
+    # proposal below (the reasoning agent's own retry_plan just here, and
+    # every _apply_downgrade call further down) -- an agent already at its
+    # call cap must not be handed back to run_specialist_node only to be
+    # silently skipped there, counted the same way run_specialist_node
+    # counts it (from the full, never-reset `specialist_outputs` history).
+    # `downgrades` is declared here (not at its original spot further down)
+    # so this early branch can record cap exclusions into the same list the
+    # rest of this function's downgrades end up in.
+    specialist_outputs = state.get("specialist_outputs", [])
+    downgrades: list[str] = []
+
+    def _prior_calls(agent_name: str) -> int:
+        return sum(1 for n, _ in specialist_outputs if n == agent_name)
+
+    def _filter_capped(agents: list) -> list:
+        """`agents` with any already-capped one dropped (noted in
+        `downgrades`)."""
+        kept = []
+        for a in agents:
+            if _prior_calls(a) >= MAX_CALLS_PER_AGENT:
+                downgrades.append(
+                    f"agent {a} call cap reached ({MAX_CALLS_PER_AGENT} calls), "
+                    "excluded from retry plan"
+                )
+            else:
+                kept.append(a)
+        return kept
+
     if action == "retry" and budget_left:
         # R7: attach trust + counterexamples to whatever retry_plan reasoning
         # itself proposed. Nothing to gate on verdict/confidence -- there
         # isn't a final one yet this round.
         retry_plan = dict(reasoning.get("retry_plan") or {})
         agents_to_retry = retry_plan.get("agents_to_retry")
-        if isinstance(agents_to_retry, list) and agents_to_retry:
-            hints = dict(retry_plan.get("hints") or {})
-            for name in agents_to_retry:
-                if isinstance(name, str) and not (isinstance(hints.get(name), dict) and hints[name]):
-                    hints[name] = _agent_retry_hint(claim_verification, name)
-            retry_plan["hints"] = hints
-            reasoning["retry_plan"] = retry_plan
-        reasoning["action"] = "retry"
-        return {
-            "reasoning_output": reasoning,
-            "verdict_gate": {
-                "basis": [], "contradiction": False, "downgrades": [], "confidence_cap": None,
-            },
-        }
+        named_agents = isinstance(agents_to_retry, list) and bool(agents_to_retry)
+        if named_agents:
+            agents_to_retry = _filter_capped(agents_to_retry)
+
+        if not named_agents or agents_to_retry:
+            # Either the planner named no specific agents (retry everything
+            # -- unaffected by the cap check) or at least one named agent
+            # survived the cap filter.
+            if named_agents:
+                hints = dict(retry_plan.get("hints") or {})
+                for name in agents_to_retry:
+                    if isinstance(name, str) and not (isinstance(hints.get(name), dict) and hints[name]):
+                        hints[name] = _agent_retry_hint(claim_verification, name)
+                retry_plan["hints"] = hints
+                retry_plan["agents_to_retry"] = agents_to_retry
+                reasoning["retry_plan"] = retry_plan
+            reasoning["action"] = "retry"
+            return {
+                "reasoning_output": reasoning,
+                "verdict_gate": {
+                    "basis": [], "contradiction": False, "downgrades": downgrades,
+                    "confidence_cap": None,
+                },
+            }
+        # Every explicitly named agent was already at its call cap -- fall
+        # through to the normal done/verdict gating below (same as the
+        # budget-exhausted case) instead of retrying a now-explicitly-empty
+        # list, which handle_retry_node would otherwise silently
+        # reinterpret as "retry everything"
+        # (`agents_to_retry or list(LL_SPECIALIST_NAMES)`).
+        action = "done"
 
     if action == "retry" and not budget_left:
         # Reasoning wants another round but the retry budget is exhausted
@@ -1333,12 +1406,20 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     has_destructive = destructive_trust is not None and _trust_rank(destructive_trust) >= _TRUST_RANK["well_formed"]
 
     basis: list[dict] = []
-    downgrades: list[str] = []
+    # `downgrades` was already declared above (shared with the early
+    # retry-proposal branch's cap-exclusion notes) -- not reinitialized here.
     confidence_cap = 0.40  # docs/VERDICT_POLICY.md §2: only-LLM self-assessment ceiling
 
     def _apply_downgrade(reason: str, agents: list) -> None:
         nonlocal action, verdict, confidence_cap
         agents = [a for a in agents if a]
+        # Cost ceiling (config.MAX_CALLS_PER_AGENT): drop any agent already
+        # at its call cap from this retry proposal -- if that empties
+        # `agents` entirely, the branch below naturally falls to the "no
+        # retry" else (same treatment as retry budget exhausted: pick the
+        # strongest admissible basis instead of spending a graph round on a
+        # dispatch that would produce no new specialist output).
+        agents = _filter_capped(agents)
         if budget_left and agents:
             downgrades.append(f"{reason} -> retry")
             action = "retry"
@@ -1349,9 +1430,38 @@ def apply_verdict_gate(state: PipelineState) -> dict:
                 "reason": downgrades[-1],
             }
         else:
-            downgrades.append(f"{reason} -> inconclusive")
-            verdict = "uncertain"
-            confidence_cap = 0.40
+            # docs/VERDICT_POLICY.md R4' -- retry budget exhausted (or
+            # nothing left worth retrying this round): pick the STRONGEST
+            # ADMISSIBLE basis still standing instead of defaulting straight
+            # to `uncertain` -- destructive >= well_formed (not refuted)
+            # first, then constructive >= bounded_pass, only then
+            # inconclusive. `failure` stays reserved for technical failures,
+            # never for "reasoning argued the wrong side" (precedent:
+            # cfl-07/cfl-12 eval live-run ending in `failure 0.0` despite a
+            # well_formed destructive proof on record).
+            if has_destructive:
+                verdict = "not_ll"
+                # well_formed capped at 0.55, not 0.60 (docs/VERDICT_POLICY.md §2).
+                confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.55
+                basis.append({"agent": destructive_agent, "trust": destructive_trust})
+                downgrades.append(
+                    f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                    f"destructive claim ({destructive_agent}, trust={destructive_trust}) -> not_ll"
+                )
+            elif has_constructive:
+                verdict = "ll"
+                confidence_cap = 0.98 if constructive_trust == "verified" else 0.85
+                basis.append({"agent": constructive_agent, "trust": constructive_trust})
+                downgrades.append(
+                    f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                    f"constructive artifact ({constructive_agent}, trust={constructive_trust}) -> ll"
+                )
+            else:
+                downgrades.append(
+                    f"{reason} -> retry budget exhausted -> strongest admissible basis: inconclusive"
+                )
+                verdict = "uncertain"
+                confidence_cap = 0.40
 
     if verdict == "ll":
         if has_constructive:
@@ -1387,8 +1497,9 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     elif verdict == "not_ll":
         if has_destructive:
             # R2: destructive not_ll by agent >= well_formed; oracle-checked
-            # words raise the ceiling from 0.60 to 0.85.
-            confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.60
+            # words raise the ceiling from 0.55 to 0.85 (well_formed itself
+            # capped at 0.55, not 0.60 -- docs/VERDICT_POLICY.md §2).
+            confidence_cap = 0.85 if destructive_trust == "bounded_pass" else 0.55
             basis = [{"agent": destructive_agent, "trust": destructive_trust}]
         else:
             # R1: a failed/refuted constructive attempt is never, by itself,
@@ -1404,19 +1515,29 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     # exclusive with the downgrade branches above in practice (those only
     # fire when has_constructive/has_destructive is False for the claimed
     # side), so it never fights with an already-decided retry.
+    #
+    # docs/VERDICT_POLICY.md R3 (post-R3' revision): "bounded_pass vs
+    # well_formed" no longer settles this by rank comparison alone (fix
+    # precedent: wwvvR on Haiku 2026-09-27 in cfl_system, where a sample-
+    # based bounded_pass grammar outranked a correct well_formed destructive
+    # proof and won the dispute wrongly) -- only a `verified` side wins an
+    # unresolved contradiction, capped at 0.85 (not the normal 0.98 ceiling);
+    # otherwise it stays `uncertain`, capped at 0.50.
     contradiction = has_constructive and has_destructive
     if contradiction:
-        if _trust_rank(constructive_trust) > _trust_rank(destructive_trust):
+        if constructive_trust == "verified" and destructive_trust != "verified":
             verdict = "ll"
-        elif _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
+            confidence_cap = 0.85
+        elif destructive_trust == "verified" and constructive_trust != "verified":
             verdict = "not_ll"
+            confidence_cap = 0.85
         else:
             verdict = "uncertain"
-        confidence_cap = 0.50
+            confidence_cap = 0.50
         downgrades.append(
             f"contradiction: constructive={constructive_agent}({constructive_trust}) vs "
             f"destructive={destructive_agent}({destructive_trust}) -> {verdict}, "
-            "confidence <= 0.50 (docs/VERDICT_POLICY.md R3)"
+            f"confidence <= {confidence_cap} (docs/VERDICT_POLICY.md R3)"
         )
         basis = [
             {"agent": constructive_agent, "trust": constructive_trust},
@@ -1428,6 +1549,13 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     reasoning["action"] = action
     reasoning["verdict"] = verdict
     reasoning["confidence"] = confidence
+
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): surface any skipped-retry-
+    # due-to-call-cap notes (run_specialist_node) here too, deduplicated (the
+    # same agent may have been capped across more than one retry round).
+    for note in state.get("call_cap_notes") or []:
+        if note not in downgrades:
+            downgrades.append(note)
 
     verdict_gate = {
         "basis": basis,
@@ -2056,6 +2184,7 @@ def run_pipeline(
         "retry_round": 0,
         "retry_context": {},
         "errors": [],
+        "call_cap_notes": [],
         "_specialist_name": "",
         "result": {},
     }
@@ -2090,6 +2219,12 @@ def run_pipeline(
             "retries": 0,
         }
 
+    # Usage/cost block (TODO.md §3) -- additive, present even without a live
+    # agent_runner (an all-zero UsageTracker) so callers can rely on
+    # result["usage"] always existing.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+
     # Optionally render outputs
     if output_dir and result:
         try:
@@ -2105,11 +2240,42 @@ def run_pipeline(
 # CLI
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def _parse_text_to_ir(text: str, verbose: bool) -> dict:
+    """Run the input_parser agent to turn a raw problem statement into an IR.
+
+    Requires a live LLM runner — the agent is an LLM call, there is no
+    offline fallback. Raises RuntimeError with a clear message on any
+    failure (agent error, unparsable JSON, or an IR that fails validation).
+    """
+    runner = LiveRunner(verbose=verbose)
+    output = runner.run_agent("input_parser", {"source_text": text})
+    if output is None or output.get("status") == "agent_error":
+        errs = (output or {}).get("errors") or ["input_parser produced no output"]
+        raise RuntimeError(f"--text parsing failed: {'; '.join(errs)}")
+    ir = output.get("ir")
+    if not isinstance(ir, dict):
+        raise RuntimeError("--text parsing failed: input_parser returned no 'ir' object")
+    parse_errors = output.get("parse_errors") or []
+    if parse_errors:
+        raise RuntimeError(f"--text parsing failed: {'; '.join(parse_errors)}")
+    ir_errors = validate_ll_ir(ir)
+    if ir_errors:
+        raise RuntimeError(f"--text produced an invalid IR: {'; '.join(ir_errors)}")
+    return ir
+
+
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Run the LL(k) analysis pipeline")
-    parser.add_argument("input", help="IR JSON file")
+    parser.add_argument("input", nargs="?", help="IR JSON file (omit when using --text)")
+    parser.add_argument(
+        "--text", metavar="TEXT",
+        help="Problem statement in natural language; builds the IR via the "
+             "input_parser agent instead of reading an IR JSON file. "
+             "Requires --live (the parser is itself an LLM call).",
+    )
     parser.add_argument("--mock", metavar="DIR", help="Mock responses directory")
     parser.add_argument("--live", action="store_true", help="Use live LLM (requires API key)")
     parser.add_argument("--out", metavar="DIR", help="Output directory")
@@ -2142,10 +2308,28 @@ if __name__ == "__main__":
         print("Error: --mock and --live are mutually exclusive", file=sys.stderr)
         sys.exit(1)
 
-    with open(args.input, encoding="utf-8") as f:
-        ir = json.load(f)
+    if args.text and not args.input:
+        if not args.live:
+            print(
+                "Error: --text requires --live (it runs the input_parser agent; "
+                "there is no offline/--mock path for free-text input)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            ir = _parse_text_to_ir(args.text, verbose=args.verbose)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        task_name = args.task or "text_input"
+    elif args.input:
+        with open(args.input, encoding="utf-8") as f:
+            ir = json.load(f)
+        task_name = args.task or Path(args.input).stem
+    else:
+        print("Error: provide an IR JSON file, or --text \"<problem statement>\"", file=sys.stderr)
+        sys.exit(1)
 
-    task_name = args.task or Path(args.input).stem
     mock_runner = MockRunner(args.mock, task_name) if args.mock else None
     agent_runner = LiveRunner(verbose=args.verbose) if args.live else None
 
@@ -2157,6 +2341,8 @@ if __name__ == "__main__":
         output_dir=args.out,
         task_name=task_name,
     )
+    if args.verbose and agent_runner is not None:
+        print(agent_runner.usage_tracker.summary_line(), file=sys.stderr)
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -2184,3 +2370,7 @@ if __name__ == "__main__":
         sys.exit(2)
     else:
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

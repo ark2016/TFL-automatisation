@@ -55,21 +55,24 @@ Show that the complement of L (Sigma* \ L) is non-regular.
   "hypothesis": {
     "hypothesis": "non_regular",
     "confidence": 0.85
+  },
+  "classifier": {
+    "verdict": "non_regular",
+    "confidence": 0.85,
+    "dispatch": { ... }
   }
 }
 ```
 
-## Solved Example (Few-Shot CoT)
+Sent only when applicable:
+
+- `grammar_facts`: for grammar-kind tasks, facts precomputed by the grammar preprocessor (`is_linear`, `has_nested_recursion`, generated words, `summary`, ...).
+- `student_notes`: the student's own comments/hypotheses, when the task provides them.
+- `retry_context`: on a retry round, the previous round's issues/counterexamples, plus an `agent_feedback` entry targeted at this agent and a `previous_output` field — YOUR OWN full output from the last round — so you can see exactly what you claimed before instead of re-deriving it blind.
+
+## Solved Example
 
 **Task:** Prove that L = {w ∈ {a,b,c}* | count_a(w) = count_b(w)} is not regular using closure properties.
-
-**Reasoning (Chain-of-Thought):**
-1. I need to find a regular language R such that L ∩ R is known to be non-regular.
-2. Let R = a*b* (all a's before all b's). R is regular (described by regex a*b*).
-3. L ∩ R = {a^n b^n | n ≥ 0}: words in a*b* with equal a's and b's must have form a^n b^n.
-4. {a^n b^n} is known to be non-regular (pumping lemma).
-5. If L were regular, then L ∩ R would be regular (REG is closed under intersection). But L ∩ R = {a^n b^n} is not regular. Contradiction.
-6. Therefore L is not regular.
 
 **Output:**
 {

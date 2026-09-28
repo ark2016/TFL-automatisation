@@ -1,0 +1,28 @@
+{
+  "task_id": "dcfl-16",
+  "source_text": "{u3 a u4 | |u3| >= |u4|}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "u3au4",
+    "variables": [
+      {"name": "u3", "domain": null, "quantifier": "forall"},
+      {"name": "u4", "domain": null, "quantifier": "forall"}
+    ],
+    "constraints": [
+      {
+        "kind": "length_cmp",
+        "args": {
+          "left": "u3",
+          "op": ">=",
+          "right": "u4"
+        }
+      }
+    ]
+  },
+  "alphabet": [
+    "a",
+    "b"
+  ]
+}

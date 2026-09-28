@@ -48,8 +48,16 @@ def is_epsilon_rhs(rhs: list[str]) -> bool:
     return rhs == [] or rhs == ["ε"]
 
 
+# Symbols reserved by the LL(k) machinery itself: '$' marks end-of-input in
+# FIRST/FOLLOW_k and the parse table, 'ε' marks the empty production. Neither
+# may be declared as an actual terminal or nonterminal — that would silently
+# collide with the oracle's own bookkeeping.
+RESERVED_SYMBOLS = frozenset({"$", "ε"})
+
+
 def validate_grammar_symbols(grammar: dict) -> list[str]:
-    """Check grammar consistency: start in nonterminals, no symbol overlap.
+    """Check grammar consistency: start in nonterminals, no symbol overlap,
+    no use of the reserved symbols ('$', 'ε') as declared terminals/nonterminals.
 
     Returns list of error strings (empty = OK).
     """
@@ -67,6 +75,14 @@ def validate_grammar_symbols(grammar: dict) -> list[str]:
     if overlap:
         errors.append(
             f"symbols appear in both nonterminals and terminals: {sorted(overlap)}"
+        )
+
+    reserved_used = (nonterminals | terminals) & RESERVED_SYMBOLS
+    if reserved_used:
+        errors.append(
+            f"symbols {sorted(reserved_used)} are reserved (end-of-input marker "
+            "'$' and epsilon 'ε') and cannot be declared as terminals or "
+            "nonterminals"
         )
 
     return errors

@@ -1,0 +1,16 @@
+{
+  "task_id": "dcfl-07",
+  "source_text": "{a^i b^j | i != j}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{a^i b^j | i != j}",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": [
+    "a",
+    "b"
+  ]
+}

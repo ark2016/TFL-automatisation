@@ -231,8 +231,12 @@ class TestClosureScanExamples:
             assert "confidence" in strategy
             assert isinstance(strategy["confidence"], float)
 
-    def test_all_four_examples_loaded(self):
-        assert len(self._example_files) == 4, (
-            f"Expected 4 example JSON files, found {len(self._example_files)}: "
+    def test_all_five_examples_loaded(self):
+        # dcfl_system/CLAUDE.md tracks the exam_01-04 examples (task_wvaavRwR,
+        # task_u1au2_u3au4, task_anb_cnbn, task_grammar_aSSb) plus
+        # task_anbncm (docs/VERDICT_POLICY.md R2' -- a real DPDA certificate
+        # for a genuine DCFL, dcfl_exam_anbncm mock set).
+        assert len(self._example_files) == 5, (
+            f"Expected 5 example JSON files, found {len(self._example_files)}: "
             f"{[p.name for p in self._example_files]}"
         )

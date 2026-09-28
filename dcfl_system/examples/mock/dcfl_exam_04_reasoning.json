@@ -1,19 +1,13 @@
 {
-  "agent_name": "reasoning",
-  "status": "success",
+  "action": "done",
   "verdict": "dcfl",
-  "proof_sketch": {
-    "action": "done",
-    "primary_evidence": "stack_strategy",
-    "supporting_agents": ["stack_strategy"],
-    "conflicting_agents": []
-  },
-  "evidence": [
-    "stack_strategy agent returned verdict=dcfl with confidence=0.55",
-    "No strong conflicting evidence from other agents",
-    "dcfl_pumping agent failed (no counter-evidence)",
-    "Final verdict: dcfl with low confidence (action=done)"
+  "confidence": 0.85,
+  "primary_evidence": "stack_strategy",
+  "summary": "L(G) ∈ DCFL (docs/THEORY.md §1.10): построен профильный НМПА N (недетерминизм только в выборе «лист-a / узел»), доказан height-determinism (все вычисления N на одном входе имеют одну и ту же высоту стека h(u) = |u|_a - |u|_b) ⇒ N — rhpda [NS, Def. 2] ⇒ по [NS, Theorem 4] (rhCFL = rdCFL) N детерминизуем; построенный ДМПА (345 состояний, 5835 переходов) синтаксически детерминирован и совпадает с перебором по грамматике на проверенных словах. Ни одна деструктивная техника пайплайна не могла сработать здесь, и это ожидаемо, а не провал агентов: лемма Ю (§1.1) не даёт контрпримера, так как L ∈ DCFL (доказано выше), и необходимое условие леммы выполнено для любых пар xy, xz ∈ L; теорема Шаллита (§1.2) неприменима — мёртвый класс бесконечен (bbΣ* ∩ Pref(L) = ∅); существенная неоднозначность исключена, так как язык DCFL ⇒ однозначен — неоднозначность самой грамматики G ничего не значит про язык. Итог: dcfl, confidence=0.85 (потолок bounded_pass по R2').",
+  "retry_plan": null,
+  "hints_for_human": [
+    "Компактный ДМПА «вручную» (без машинного построения) не выведен — не требуется для вердикта, см. TODO.md",
+    "stack_strategy — единственный содержательный специалист; dcfl_pumping/shallit/inh_ambiguity/closure_reduction структурно неприменимы для этого языка"
   ],
-  "confidence": 0.55,
   "errors": []
 }

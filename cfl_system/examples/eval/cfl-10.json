@@ -1,0 +1,11 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "{a^(2^n) | n >= 0}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a"
+    ],
+    "description": "{a^(2^n) | n >= 0}"
+  }
+}

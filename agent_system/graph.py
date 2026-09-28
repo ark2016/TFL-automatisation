@@ -17,8 +17,12 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import operator
+import os
+import queue
 import sys
+import threading
 import time as _time
 from pathlib import Path
 from typing import Any, Annotated, TypedDict
@@ -26,12 +30,14 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
+from .config import MAX_CALLS_PER_AGENT
 from .lib.ir_schema import validate_ir
 from .lib.oracle import oracle_from_ir
 from .lib.oracle_test import oracle_test as run_oracle_test
 from .lib.dfa_runner import validate_dfa, run_dfa
 from .lib.hypothesis_module import analyze_hypothesis
 from .lib.type_check import check_lean
+from .lib.llm_client import UsageTracker
 
 
 # ---------------------------------------------------------------------------
@@ -40,10 +46,24 @@ from .lib.type_check import check_lean
 
 MAX_SPECIALIST_RETRIES = 2
 MAX_INVERSIONS = 1
+#: Level 1 retry (tz_tfl_agent_system.md §5.2): oracle-test counterexample
+#: -> enriched retry to DFA/RE builder, re-tested each time, max 2 retries.
+MAX_LEVEL1_RETRIES = 2
 
-# Set to True to enable Lean 4 formalization + type checking.
-# Disabled while Lean templates are under active development.
-FORMALIZATION_ENABLED = False
+def _formalization_enabled_default() -> bool:
+    """Default for FORMALIZATION_ENABLED: TFL_FORMALIZATION=1/true/yes/on
+    enables it; unset or anything else keeps it disabled (the current
+    value) while Lean templates are under active development. A run can
+    also enable/disable it per-call via ``run_pipeline(..., formalize=...)``
+    / the CLI's ``--formalize`` flag, which takes priority over this
+    default (see `formalize_node`)."""
+    return os.environ.get("TFL_FORMALIZATION", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Whether Lean 4 formalization + type checking runs by default. Tests patch
+# this module attribute directly; `run_pipeline`'s `formalize` argument (and
+# the CLI's `--formalize`) override it per-call via state["formalize"].
+FORMALIZATION_ENABLED = _formalization_enabled_default()
 
 SPECIALIST_NAMES = (
     "re_builder", "dfa_builder", "pumping",
@@ -63,6 +83,7 @@ class PipelineState(TypedDict):
     mock_runner: Any
     agent_runner: Any
     verbose: bool
+    formalize: bool | None                               # None = use FORMALIZATION_ENABLED
 
     # -- Pipeline data --
     hypothesis: dict
@@ -85,6 +106,7 @@ class PipelineState(TypedDict):
     closure_verification: dict
     claim_verification: dict
     test_result: dict
+    dfa: dict | None                                     # DFA behind test_result (R3' cross-check)
 
     # -- Reasoning & retry --
     reasoning_output: dict
@@ -92,10 +114,15 @@ class PipelineState(TypedDict):
     retry_round: int
     inversions_done: int
     retry_context: dict
+    retry_plan: dict                                     # {should_invert, has_retry} — see decide_after_retry_planner
 
     # -- Accumulated --
     evidence: dict
     errors: Annotated[list, operator.add]
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): notes accumulated whenever a
+    # specialist's call cap is reached and a requested retry is skipped for
+    # it -- surfaced in the final verdict_gate.downgrades (assemble_result_node).
+    call_cap_notes: Annotated[list, operator.add]
 
     # -- Fan-out helper --
     _specialist_name: str
@@ -135,13 +162,25 @@ def run_agent(state: PipelineState, agent_name: str,
         t0 = _time.monotonic()
         out = agent_runner.run_agent(agent_name, input_data)
         elapsed = _time.monotonic() - t0
-        if out is not None:
+        if out is not None and out.get("status") == "agent_error":
+            log_msg(state, f"{agent_name}: agent_error ({elapsed:.1f}s): {out.get('errors')}")
+        elif out is not None:
             log_msg(state, f"{agent_name}: done ({elapsed:.1f}s)")
         else:
             log_msg(state, f"{agent_name}: FAILED ({elapsed:.1f}s)")
         return out
 
     return None
+
+
+def _agent_error_messages(agent_name: str, out: dict | None) -> list[str] | None:
+    """When *out* is an ``agent_error`` dict (llm_client.py / TODO.md §2),
+    return its errors prefixed with the agent name for state["errors"];
+    ``None`` otherwise (out is a real result, or the agent was skipped)."""
+    if out is None or out.get("status") != "agent_error":
+        return None
+    err_msgs = out.get("errors") or [f"{agent_name} returned agent_error"]
+    return [f"{agent_name}: {m}" for m in err_msgs]
 
 
 def get_alphabet(ir: dict) -> list[str]:
@@ -155,9 +194,50 @@ def get_alphabet(ir: dict) -> list[str]:
 
 
 def extract_dfa(agent_output: dict) -> dict | None:
-    """Extract a DFA dict from a dfa_builder agent output."""
-    evidence = agent_output.get("evidence", {})
+    """Extract a DFA dict from a dfa_builder agent output.
+
+    A structured-output response matches the closed `dfa_builder` schema
+    (`agent_system/lib/agent_output_schema.py`), which has no 'evidence' key
+    at all -- `dfa` sits at the top level alongside module/status/confidence.
+    Fall back to the output itself so that shape is read correctly too.
+    """
+    evidence = agent_output.get("evidence", agent_output)
     return evidence.get("dfa")
+
+
+def _bounded_previous_output(prev_output: Any, max_chars: int = 6000) -> Any:
+    """Cap a retried agent's own previous artifact (`build_specialist_input`'s
+    `retry_context.previous_output`) at `max_chars` of serialized JSON.
+
+    An unbounded previous_output (the full grammar/proof/DFA from the last
+    attempt, embedded verbatim so the retried agent has memory of what it
+    built -- see `_summarize_agent_output`'s docstring) is the likeliest
+    source of a 400 "prompt is too long" on a retry round: it grows every
+    round, and can on its own be large enough to blow the context window
+    together with the rest of the prompt (agent_system/lib/llm_client.py
+    turns a 400 like that into an agent_error rather than aborting the
+    pipeline, but avoiding it here is cheaper than one wasted call).
+    Returns `prev_output` unchanged when it already fits; otherwise a
+    compact summary (`_summarize_agent_output`) plus a truncated verbatim
+    excerpt, so the retried agent still sees roughly what it built last
+    time instead of nothing.
+    """
+    try:
+        serialized = json.dumps(prev_output, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return prev_output
+    if len(serialized) <= max_chars:
+        return prev_output
+    return {
+        "truncated": True,
+        "reason": (
+            f"previous_output was {len(serialized)} chars, over the "
+            f"{max_chars}-char retry budget -- truncated to avoid a 400 "
+            f"'prompt is too long'"
+        ),
+        "summary": _summarize_agent_output(prev_output),
+        "excerpt": serialized[:max_chars],
+    }
 
 
 def build_specialist_input(state: PipelineState, agent_name: str) -> dict:
@@ -182,9 +262,41 @@ def build_specialist_input(state: PipelineState, agent_name: str) -> dict:
         fb = ctx.get("feedback", {})
         if agent_name in fb:
             ctx["agent_feedback"] = fb[agent_name]
+        # TODO.md §2 / retry planner spec: a retried agent must see its OWN
+        # previous artifact/proof, not just the counterexample/feedback —
+        # otherwise it "fixes" the issue blind, with no memory of what it
+        # built last time.
+        prev_output = state.get("evidence", {}).get(agent_name)
+        if prev_output is not None:
+            ctx["previous_output"] = _bounded_previous_output(prev_output)
         inp["retry_context"] = ctx
 
     return inp
+
+
+def _summarize_agent_output(agent_output: Any, max_chars: int = 400) -> dict | None:
+    """Compact summary of a specialist's output for the retry planner.
+
+    The planner needs enough to judge whether an agent's prior result was
+    right, not the full artifact (that goes to the retried agent itself via
+    `build_specialist_input`'s `previous_output` -- see docs/VERDICT_POLICY.md
+    R7 / TODO.md §2). Returns ``None`` when there is nothing to summarize.
+    """
+    if not agent_output or not isinstance(agent_output, dict):
+        return None
+    ev = agent_output.get("evidence", agent_output)
+    verdict = ev.get("verdict") if isinstance(ev, dict) else None
+    if isinstance(ev, (dict, list)):
+        text = json.dumps(ev, ensure_ascii=False, default=str)
+    else:
+        text = str(ev)
+    if len(text) > max_chars:
+        text = text[: max_chars - 1] + "…"
+    summary: dict[str, Any] = {"status": agent_output.get("status")}
+    if verdict is not None:
+        summary["verdict"] = verdict
+    summary["summary"] = text
+    return summary
 
 
 def _make_result(
@@ -210,32 +322,39 @@ def _estimate_index_with_timeout(
     timeout: float = 120,
     state: PipelineState | None = None,
 ) -> dict:
-    """Run estimate_index in a daemon thread with a hard timeout.
+    """Run estimate_index in a fresh daemon thread with a hard timeout.
 
-    Uses a daemon thread so the process is not blocked if the
-    computation exceeds *timeout* seconds — the thread is abandoned
-    and will be cleaned up when the process exits.
+    A plain daemon thread per call, NOT a shared `ThreadPoolExecutor`
+    (TODO.md §2): a non-daemon pool's worker threads are joined by Python at
+    interpreter exit, so a computation that is still running when `timeout`
+    elapses keeps the whole process alive until it finishes -- for a
+    long-running server (TFL Lab) that can mean forever. A bounded pool also
+    lets one runaway computation fill the queue and starve later, unrelated
+    calls, which then time out after waiting the full `timeout` without ever
+    starting. A daemon thread sidesteps both: it is simply abandoned (never
+    joined) if it outlives `timeout`, and every call gets its own thread
+    instead of competing for a fixed-size pool.
 
     Returns the result dict on success, or a fallback dict with
-    confidence=0 on timeout.
+    confidence=0 on timeout. Any exception raised by the computation itself
+    propagates to the caller once ``timeout`` has not yet elapsed.
     """
-    import threading
     from .lib.congruence import estimate_index
 
     if state:
         log_msg(state, f"  estimate_index(depth={max_depth}, timeout={timeout}s)...")
 
-    result_box: dict[str, Any] = {}
+    result_queue: queue.Queue = queue.Queue(maxsize=1)
 
     def _worker() -> None:
         try:
-            result_box["result"] = estimate_index(oracle, alphabet, max_depth)
-        except Exception as exc:
-            result_box["error"] = exc
+            result_queue.put(("ok", estimate_index(oracle, alphabet, max_depth)))
+        except BaseException as exc:  # noqa: BLE001 -- re-raised in the caller's thread
+            result_queue.put(("error", exc))
 
-    thread = threading.Thread(target=_worker, daemon=True)
+    thread = threading.Thread(target=_worker, name="tfl-estimate-index", daemon=True)
     thread.start()
-    thread.join(timeout=timeout)
+    thread.join(timeout)
 
     if thread.is_alive():
         if state:
@@ -247,10 +366,10 @@ def _estimate_index_with_timeout(
             "reason": f"Timed out after {timeout}s",
         }
 
-    if "error" in result_box:
-        raise result_box["error"]
-
-    return result_box["result"]
+    status, payload = result_queue.get()
+    if status == "error":
+        raise payload
+    return payload
 
 
 def _verify_closure_claim(
@@ -310,16 +429,18 @@ def _verify_closure_claim(
                 f"{idx} (confidence {conf}) — intersection is regular!",
             )
 
+            # Any word the ORACLE (not a hardcoded a^n b^n literal count —
+            # this must generalize to the IR's actual language/alphabet,
+            # TODO.md §2) places in L ∩ R is a valid witness that the
+            # intersection is inhabited and (per the index estimate above)
+            # regular, contradicting the closure agent's non-regular claim.
             from .lib.word_generator import generate_exhaustive
             counterexamples = []
             for w in generate_exhaustive(alphabet, max_len=8):
                 if intersection_oracle(w):
-                    a_count = sum(1 for c in w if c == "a")
-                    b_count = sum(1 for c in w if c == "b")
-                    if a_count != b_count and len(w) > 0:
-                        counterexamples.append(w)
-                        if len(counterexamples) >= 3:
-                            break
+                    counterexamples.append(w)
+                    if len(counterexamples) >= 3:
+                        break
 
             return {
                 "status": "disproved",
@@ -424,20 +545,29 @@ def run_classifier_node(state: PipelineState) -> dict:
         classifier_input["student_notes"] = ir["student_notes"]
 
     classifier_output = run_agent(state, "classifier", classifier_input)
+    err_msgs = _agent_error_messages("classifier", classifier_output)
 
     evidence = dict(state.get("evidence", {}))
-    if classifier_output is not None:
+    if err_msgs:
+        log_msg(state, f"  classifier agent_error: {err_msgs}")
+    elif classifier_output is not None:
         evidence["classifier"] = classifier_output
-        verdict = classifier_output.get("evidence", {}).get("verdict", "?")
+        # The classifier's closed structured-output schema has no
+        # 'evidence' key -- verdict/dispatch/... sit at the top level, so
+        # fall back to the output itself when 'evidence' is absent.
+        verdict = classifier_output.get("evidence", classifier_output).get("verdict", "?")
         log_msg(state, f"  classifier verdict: {verdict}")
 
-    classifier_evidence = (classifier_output or {}).get("evidence", {})
+    classifier_evidence = (classifier_output or {}).get("evidence", classifier_output or {})
 
-    return {
+    result: dict[str, Any] = {
         "classifier_output": classifier_output or {},
         "classifier_evidence": classifier_evidence,
         "evidence": evidence,
     }
+    if err_msgs:
+        result["errors"] = err_msgs
+    return result
 
 
 def grammar_preprocess_node(state: PipelineState) -> dict:
@@ -532,10 +662,33 @@ def dispatch_to_specialists(state: PipelineState) -> list[Send]:
 
 
 def run_specialist_node(state: PipelineState) -> dict:
-    """Run a single specialist agent.  Invoked via Send() fan-out."""
+    """Run a single specialist agent.  Invoked via Send() fan-out.
+
+    Cost ceiling: a specialist that has already been called
+    ``MAX_CALLS_PER_AGENT`` times for this task (counted from the full,
+    never-reset ``specialist_outputs`` history) is not called again -- the
+    retry planner may still have named it, but the call is skipped and a
+    note is recorded for ``verdict_gate.downgrades`` instead of making
+    another LLM call.
+    """
     agent_name = state["_specialist_name"]
+    prior_calls = sum(1 for n, _ in state.get("specialist_outputs", []) if n == agent_name)
+    if prior_calls >= MAX_CALLS_PER_AGENT:
+        log_msg(
+            state,
+            f"  {agent_name}: call cap reached ({prior_calls}/{MAX_CALLS_PER_AGENT}), skipping retry",
+        )
+        return {
+            "call_cap_notes": [
+                f"agent {agent_name} call cap reached ({MAX_CALLS_PER_AGENT} calls)"
+            ],
+        }
     inp = build_specialist_input(state, agent_name)
     out = run_agent(state, agent_name, inp)
+    err_msgs = _agent_error_messages(agent_name, out)
+    if err_msgs:
+        log_msg(state, f"  {agent_name} agent_error: {err_msgs}")
+        return {"specialist_outputs": [], "errors": err_msgs}
     if out is not None:
         return {"specialist_outputs": [(agent_name, out)]}
     return {"specialist_outputs": []}
@@ -592,9 +745,24 @@ def build_oracle_node(state: PipelineState) -> dict:
 
 
 def verify_closure_node(state: PipelineState) -> dict:
-    """Step 5b: verify closure agent's intersection claim."""
+    """Step 5b: verify closure agent's intersection claim.
+
+    Runs once per round, not on every graph step (TODO.md §2): the check
+    calls `estimate_index`, which can run up to 120s, so a retry round
+    where the planner did NOT re-dispatch `closure` (its claim did not
+    change) reuses the previous round's verification instead of paying for
+    the same expensive oracle-backed check again.
+    """
     oracle_ok = state.get("oracle_ok", False)
     evidence = dict(state.get("evidence", {}))
+    dispatch = state.get("dispatch", {})
+    is_retry_round = state.get("retry_round", 0) > 0
+    already_verified = (
+        state.get("closure_verification") or evidence.get("closure_verification")
+    )
+
+    if is_retry_round and not dispatch.get("closure") and already_verified is not None:
+        return {}
 
     if oracle_ok and "closure" in evidence:
         closure_check = _verify_closure_claim(
@@ -724,24 +892,36 @@ def oracle_test_node(state: PipelineState) -> dict:
         )
 
     # --- Level 1 retry: Oracle counterexample → re-run DFA/RE builder ---
+    # tz_tfl_agent_system.md §5.2: "Max 2 retries" -- loop bounded by
+    # MAX_LEVEL1_RETRIES, re-testing the rebuilt DFA/regex against the
+    # oracle after EVERY attempt (not just when dfa_builder itself was
+    # re-dispatched: a re_builder-only retry still gets its new regex
+    # converted to a DFA and re-tested, TODO.md §2).
     has_runner = (
         state.get("agent_runner") is not None
         or state.get("mock_runner") is not None
     )
-    if (
+    level1_attempts = 0
+    while (
         test_result
         and test_result.get("status") == "fail"
         and test_result.get("counterexample")
         and retry_round == 0
         and has_runner
+        and level1_attempts < MAX_LEVEL1_RETRIES
     ):
+        level1_attempts += 1
         ce = test_result["counterexample"]
         log_msg(
             state,
             f"  oracle counterexample: '{ce.get('word')}' "
             f"(oracle={ce.get('oracle_says')}, dfa={ce.get('automaton_says')})",
         )
-        log_msg(state, "  → Level 1 retry: re-running DFA/RE builders with counterexample")
+        log_msg(
+            state,
+            f"  → Level 1 retry {level1_attempts}/{MAX_LEVEL1_RETRIES}: "
+            "re-running DFA/RE builders with counterexample",
+        )
 
         enriched_input = {
             **build_specialist_input(state, "re_builder"),
@@ -758,35 +938,69 @@ def oracle_test_node(state: PipelineState) -> dict:
             },
         }
 
+        new_regex = None
         if dispatch.get("re_builder"):
             re_out = run_agent(state, "re_builder", enriched_input)
-            if re_out is not None:
+            re_err = _agent_error_messages("re_builder", re_out)
+            if re_err:
+                log_msg(state, f"  re_builder agent_error: {re_err}")
+                errors.extend(re_err)
+            elif re_out is not None:
                 evidence["re_builder"] = re_out
+                re_ev2 = re_out.get("evidence", re_out)
+                new_regex = re_ev2.get("regex")
 
+        new_dfa = None
         if dispatch.get("dfa_builder"):
             new_dfa_out = run_agent(state, "dfa_builder", enriched_input)
-            if new_dfa_out is not None:
+            dfa_err = _agent_error_messages("dfa_builder", new_dfa_out)
+            if dfa_err:
+                log_msg(state, f"  dfa_builder agent_error: {dfa_err}")
+                errors.extend(dfa_err)
+            elif new_dfa_out is not None:
                 dfa_builder_output = new_dfa_out
                 evidence["dfa_builder"] = new_dfa_out
-                dfa2 = extract_dfa(new_dfa_out)
-                if dfa2 is not None and oracle_ok:
-                    dfa_errs2 = validate_dfa(dfa2)
-                    if not dfa_errs2:
-                        test_result = run_oracle_test(
-                            state["oracle_fn"], dfa2, get_alphabet(ir),
-                            strategies=["exhaustive_k"], max_exhaustive=7,
-                        )
-                        evidence["oracle_test"] = test_result
-                        log_msg(
-                            state,
-                            f"  oracle re-test: {test_result.get('status')} "
-                            f"({test_result.get('tested', 0)} words)",
-                        )
+                new_dfa = extract_dfa(new_dfa_out)
+
+        if new_dfa is None and new_regex and oracle_ok:
+            # re_builder-only retry (dfa_builder wasn't dispatched this
+            # round) -- build a DFA from the freshly rebuilt regex so it
+            # still gets re-tested, instead of silently keeping the old
+            # (already-failing) oracle_test result.
+            try:
+                from .lib.dfa_builder import build_dfa_from_regex
+                new_dfa = build_dfa_from_regex(new_regex)
+            except Exception as exc:
+                log_msg(state, f"  DFA from retried regex failed: {exc}")
+
+        if new_dfa is None or not oracle_ok:
+            # Nothing new to re-test with this attempt — stop retrying.
+            break
+
+        dfa_errs2 = validate_dfa(new_dfa)
+        if dfa_errs2:
+            log_msg(state, f"  retried DFA invalid: {dfa_errs2}")
+            break
+
+        dfa = new_dfa
+        test_result = run_oracle_test(
+            state["oracle_fn"], dfa, get_alphabet(ir),
+            strategies=["exhaustive_k"], max_exhaustive=7,
+        )
+        evidence["oracle_test"] = test_result
+        log_msg(
+            state,
+            f"  oracle re-test: {test_result.get('status')} "
+            f"({test_result.get('tested', 0)} words)",
+        )
 
     updates: dict[str, Any] = {
         "test_result": test_result,
         "evidence": evidence,
         "dfa_builder_output": dfa_builder_output,
+        # R3' cross-check (assemble_result_node): needs the actual DFA dict
+        # tested against test_result, not just the pass/fail summary.
+        "dfa": dfa,
     }
     if errors:
         updates["errors"] = errors
@@ -824,6 +1038,10 @@ def run_proof_checker_node(state: PipelineState) -> dict:
         checker_input["student_notes"] = student_notes
 
     checker_output = run_agent(state, "proof_checker", checker_input)
+    err_msgs = _agent_error_messages("proof_checker", checker_output)
+    if err_msgs:
+        log_msg(state, f"  proof_checker agent_error: {err_msgs}")
+        return {"errors": err_msgs}
 
     if checker_output is not None:
         new_evidence = dict(evidence)
@@ -862,15 +1080,21 @@ def run_reasoning_node(state: PipelineState) -> dict:
         reasoning_input["previous_issues"] = state.get("retry_context")
 
     reasoning_output = run_agent(state, "reasoning", reasoning_input)
+    err_msgs = _agent_error_messages("reasoning", reasoning_output)
+    if err_msgs:
+        log_msg(state, f"  reasoning agent_error: {err_msgs}")
 
     new_evidence = dict(evidence)
-    if reasoning_output is not None:
+    if reasoning_output is not None and not err_msgs:
         new_evidence["reasoning"] = reasoning_output
 
-    return {
+    result: dict[str, Any] = {
         "reasoning_output": reasoning_output,
         "evidence": new_evidence,
     }
+    if err_msgs:
+        result["errors"] = err_msgs
+    return result
 
 
 def decide_retry(state: PipelineState) -> str:
@@ -945,11 +1169,29 @@ def run_retry_planner_node(state: PipelineState) -> dict:
 
     docs/VERDICT_POLICY.md R7: the planner input carries each dispatched
     specialist's deterministic `trust` (from the pumping/nerode step-2
-    checks and the closure Nerode-index estimate) plus the oracle
-    counterexamples behind a `refuted` verdict -- from
-    `pumping_verification`/`nerode_verification`/`test_result` -- not just
-    status/verdict strings, so the planner can tell "failed honestly" apart
-    from "produced a proof the oracle disproves".
+    checks and the closure Nerode-index estimate) plus a compact
+    `previous_output` summary and the oracle counterexamples behind a
+    `refuted` verdict -- from `pumping_verification`/`nerode_verification`/
+    `test_result` -- not just status/verdict strings, so the planner can
+    tell "failed honestly" apart from "produced a proof the oracle
+    disproves".
+
+    TODO.md §2 / spec: the planner may ADD an agent that never ran this
+    round (`agents_to_retry` is not restricted to `dispatched`), may
+    request hypothesis inversion via `should_invert_hypothesis` (subject to
+    `MAX_INVERSIONS`), and an explicitly EMPTY `agents_to_retry` is a
+    terminal decision (nothing more to run) -- never silently re-read as
+    "no preference, retry everything" (`decide_after_retry_planner`).
+
+    Cost ceiling (config.MAX_CALLS_PER_AGENT): any agent the planner names
+    that has already used up its call budget is dropped from
+    `agents_to_retry` right here, not left for `run_specialist_node` to
+    silently no-op on -- a plan made ENTIRELY of capped agents becomes an
+    empty plan, which is the terminal case above, instead of spending a
+    whole extra graph round (dispatch + fan-out + fan-in) for zero new
+    specialist output. Each dropped agent is noted in `call_cap_notes` for
+    `verdict_gate.downgrades`, same as a cap hit inside
+    `run_specialist_node` itself.
     """
     reasoning_output = state.get("reasoning_output")
     r_ev = (reasoning_output or {}).get("evidence", reasoning_output or {})
@@ -994,6 +1236,7 @@ def run_retry_planner_node(state: PipelineState) -> dict:
                     .get("evidence", evidence[k])
                     .get("verdict", "?"),
                 "trust": _specialist_trust(k, evidence),
+                "previous_output": _summarize_agent_output(evidence[k]),
             }
             for k in dispatched
             if k in evidence
@@ -1003,18 +1246,72 @@ def run_retry_planner_node(state: PipelineState) -> dict:
     }
 
     planner_output = run_agent(state, "retry_planner", planner_input)
+    err_msgs = _agent_error_messages("retry_planner", planner_output)
+    if err_msgs:
+        log_msg(state, f"  retry_planner agent_error: {err_msgs}")
     p_ev = (planner_output or {}).get("evidence", planner_output or {})
 
-    agents_to_retry = p_ev.get("agents_to_retry", dispatched)
+    # should_invert_hypothesis: honored here (TODO.md §2) with the same
+    # MAX_INVERSIONS budget as the reasoning-agent-triggered inversion
+    # (decide_retry). When it fires we hand off to invert_hypothesis_node
+    # unconditionally -- it resets hypothesis/dispatch/retry_context/evidence
+    # itself -- so nothing else in this function needs to run, and
+    # retry_round must NOT also be bumped here (invert_hypothesis_node bumps
+    # it once itself; bumping it in both places would double-count a single
+    # planner decision against the retry budget).
+    should_invert = bool(p_ev.get("should_invert_hypothesis", False))
+    inversions_done = state.get("inversions_done", 0)
+    if should_invert and inversions_done < MAX_INVERSIONS:
+        log_msg(state, "  retry_planner: requests hypothesis inversion")
+        result: dict[str, Any] = {
+            "retry_plan": {"should_invert": True, "has_retry": False},
+        }
+        if err_msgs:
+            result["errors"] = err_msgs
+        return result
+
+    # agents_to_retry may name agents that never ran this round at all --
+    # the planner can ADD a specialist, not just narrow the existing set.
+    # Filter to known specialist names (typo/hallucination safety) and drop
+    # grammar_analyzer when this isn't a grammar-kind task.
+    valid_agents = set(SPECIALIST_NAMES)
+    if state.get("lang_kind", "") != "grammar":
+        valid_agents = valid_agents - {"grammar_analyzer"}
+    requested_retry = [
+        a for a in p_ev.get("agents_to_retry", dispatched) if a in valid_agents
+    ]
     feedback_map = p_ev.get("feedback", {})
     skip_agents = set(p_ev.get("skip_agents", []))
 
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): an agent already at its call
+    # cap must not be handed back to run_specialist_node only to be silently
+    # skipped there (a wasted graph round: dispatch, fan-out, fan-in, all for
+    # zero new specialist output) -- filter it out of the retry plan itself,
+    # counted the same way run_specialist_node counts it (from the full,
+    # never-reset `specialist_outputs` history), and note the exclusion for
+    # verdict_gate.downgrades the same way a cap hit inside
+    # run_specialist_node already does.
+    capped_notes = []
+    filtered_retry = []
+    for a in requested_retry:
+        prior = sum(1 for n, _ in state.get("specialist_outputs", []) if n == a)
+        if prior >= MAX_CALLS_PER_AGENT:
+            capped_notes.append(
+                f"agent {a} call cap reached ({MAX_CALLS_PER_AGENT} calls), "
+                "excluded from retry plan"
+            )
+        else:
+            filtered_retry.append(a)
+    requested_retry = filtered_retry
+
     log_msg(
         state,
-        f"  retry_planner: retry {agents_to_retry}, skip {list(skip_agents)}",
+        f"  retry_planner: retry {requested_retry}, skip {list(skip_agents)}"
+        + (f", capped {capped_notes}" if capped_notes else ""),
     )
 
-    new_dispatch = {k: (k in agents_to_retry) for k in dispatched}
+    all_names = set(dispatched) | set(requested_retry)
+    new_dispatch = {k: (k in requested_retry) for k in all_names}
     retry_round = state.get("retry_round", 0) + 1
 
     retry_context = {
@@ -1028,11 +1325,40 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         ),
     }
 
-    return {
+    result = {
         "dispatch": new_dispatch,
         "retry_round": retry_round,
         "retry_context": retry_context,
+        # An explicitly empty agents_to_retry is a TERMINAL decision (the
+        # planner found nothing worth re-running), not "no preference" --
+        # decide_after_retry_planner routes it straight to formalize/assemble
+        # instead of cycling back through setup_dispatch_node, which would
+        # otherwise fall through to a full re-dispatch of every specialist
+        # (setup_dispatch_node treats an all-False dispatch dict as "not yet
+        # configured").
+        "retry_plan": {"should_invert": False, "has_retry": bool(requested_retry)},
     }
+    if capped_notes:
+        result["call_cap_notes"] = capped_notes
+    if err_msgs:
+        result["errors"] = err_msgs
+    return result
+
+
+def decide_after_retry_planner(state: PipelineState) -> str:
+    """Conditional edge after run_retry_planner_node.
+
+    Mirrors dcfl_system's `decide_after_retry_planner` (docs/VERDICT_POLICY.md
+    §3, R7): an empty retry plan is terminal (render as-is), and a plan that
+    asked for hypothesis inversion routes there instead of back through
+    setup_dispatch_node.
+    """
+    plan = state.get("retry_plan") or {}
+    if plan.get("should_invert"):
+        return "invert"
+    if plan.get("has_retry"):
+        return "retry"
+    return "terminal"
 
 
 def invert_hypothesis_node(state: PipelineState) -> dict:
@@ -1094,12 +1420,17 @@ def formalize_node(state: PipelineState) -> dict:
     and an agent/mock runner is available.  Type-checks the resulting
     Lean 4 code via Docker.
 
-    Disabled by default (``FORMALIZATION_ENABLED = False``).  Set the flag
-    to ``True`` once Lean templates are stable.
+    Disabled by default (``FORMALIZATION_ENABLED``, itself defaulted from
+    the ``TFL_FORMALIZATION`` env var).  A per-call override --
+    ``run_pipeline(..., formalize=...)`` / the CLI's ``--formalize`` --
+    takes priority via ``state["formalize"]``.  Set it once Lean templates
+    are stable.
     """
     log_msg(state, "Step 8/9: formalization...")
 
-    if not FORMALIZATION_ENABLED:
+    formalize_override = state.get("formalize")
+    enabled = FORMALIZATION_ENABLED if formalize_override is None else formalize_override
+    if not enabled:
         log_msg(state, "  formalization: disabled")
         return {}
 
@@ -1166,6 +1497,10 @@ def formalize_node(state: PipelineState) -> dict:
 
     log_msg(state, f"  formalizer: template={template_name}")
     formalizer_output = run_agent(state, "formalizer", formalizer_input)
+    err_msgs = _agent_error_messages("formalizer", formalizer_output)
+    if err_msgs:
+        log_msg(state, f"  formalizer agent_error: {err_msgs}")
+        return {"errors": err_msgs}
     if formalizer_output is None:
         log_msg(state, "  formalizer: no output")
         return {}
@@ -1254,6 +1589,107 @@ def formalize_node(state: PipelineState) -> dict:
     return {"evidence": evidence}
 
 
+def _set_reasoning_verdict(evidence: dict, verdict: str | None) -> None:
+    """Overwrite the verdict inside `evidence['reasoning']` (both the flat
+    shape and the nested `reasoning['evidence']` shape reasoning prompts
+    also use) so downstream readers of the top-level result (`orchestrator.
+    _result_verdict`, `tfl_eval.runners.extract('reg')`) see the verdict
+    gate's own decision, not whatever the reasoning agent originally
+    proposed before R1-R3/R3' were applied. Mutates a copy, never the
+    dict `state["reasoning_output"]` still holds."""
+    reasoning_copy = dict(evidence.get("reasoning") or {})
+    inner = reasoning_copy.get("evidence")
+    if isinstance(inner, dict):
+        inner = dict(inner)
+        inner["verdict"] = verdict
+        reasoning_copy["evidence"] = inner
+    reasoning_copy["verdict"] = verdict
+    evidence["reasoning"] = reasoning_copy
+
+
+def _cross_check_r3prime_reg(
+    state: PipelineState,
+    dfa: dict | None,
+    destructive_witnesses: list[dict],
+) -> dict[str, Any]:
+    """docs/VERDICT_POLICY.md R3' for REG — deterministic cross-check tried
+    before falling back to an unresolved R3 contradiction.
+
+    Mirrors cfl_system.orchestrator._cross_check_r3prime, simplified to
+    REG's single constructive-artifact channel (the DFA behind
+    `test_result` — there is no separate "which agent produced it" choice
+    the way CFL has cfg_builder vs pda_builder): runs the destructive
+    proof's own witness words (already instantiated by `verify_pumping_
+    claim`/`verify_nerode_claim`'s step-2 checks — reused via
+    `evidence["pumping_verification"|"nerode_verification"]["witnesses"]`,
+    never re-derived) through both the task's language oracle and the DFA:
+      (a) a witness the destructive proof claims is NOT in L, but the DFA
+          accepts (or claims IN L, but the DFA rejects) -> the DFA
+          (constructive side) is `refuted`.
+      (b) a witness whose claimed membership disagrees with what the
+          oracle itself says -> the destructive proof is `refuted`.
+    Never raises; missing evidence (no witnesses, no oracle, no DFA) just
+    leaves `performed=False` and nothing gets refuted.
+    """
+    result: dict[str, Any] = {
+        "performed": False,
+        "constructive_refuted": False,
+        "destructive_refuted": False,
+        "constructive_reason": None,
+        "destructive_reason": None,
+        "counterexamples": [],
+    }
+    if not destructive_witnesses or dfa is None:
+        return result
+    oracle_fn = state.get("oracle_fn")
+    if oracle_fn is None:
+        return result
+
+    result["performed"] = True
+
+    for w in destructive_witnesses:
+        if not isinstance(w, dict):
+            continue
+        word = w.get("word")
+        expected_in_l = w.get("expected_in_l")
+        if not isinstance(word, str) or not word or not isinstance(expected_in_l, bool):
+            continue
+        try:
+            oracle_says = bool(oracle_fn(word))
+        except Exception:
+            continue
+
+        if not result["destructive_refuted"] and oracle_says != expected_in_l:
+            result["destructive_refuted"] = True
+            result["destructive_reason"] = (
+                f"witness '{word}' (source: {w.get('source')}) claimed "
+                f"{'in L' if expected_in_l else 'NOT in L'}, but the oracle says "
+                f"{'in L' if oracle_says else 'NOT in L'}"
+            )
+            result["counterexamples"].append({"word": word, "issue": result["destructive_reason"]})
+
+        if not result["constructive_refuted"] and oracle_says == expected_in_l:
+            # Only test the DFA against a witness the oracle itself just
+            # confirmed -- an oracle-refuted witness says nothing about it.
+            try:
+                dfa_says = bool(run_dfa(dfa, word))
+            except Exception:
+                continue
+            if dfa_says != expected_in_l:
+                result["constructive_refuted"] = True
+                verb = "rejects" if expected_in_l else "accepts"
+                result["constructive_reason"] = (
+                    f"DFA {verb} '{word}' (source: {w.get('source')}), which the "
+                    f"oracle says is {'in L' if expected_in_l else 'NOT in L'}"
+                )
+                result["counterexamples"].append({"word": word, "issue": result["constructive_reason"]})
+
+        if result["constructive_refuted"] and result["destructive_refuted"]:
+            break
+
+    return result
+
+
 def assemble_result_node(state: PipelineState) -> dict:
     """Step 9: assemble the final result dict.
 
@@ -1329,7 +1765,37 @@ def assemble_result_node(state: PipelineState) -> dict:
         destructive_trust = destructive["trust"]
         destructive_ok = destructive_trust not in (None, "refuted", "not_verified")
 
-        if lean_verified:
+        # docs/VERDICT_POLICY.md R3: a Lean-verified proof formalizes whatever
+        # `reasoning_verdict` claimed, so it only counts as the "verified"
+        # side of a contradiction check when that claim actually opposes a
+        # standing artifact on the other side (a Lean-verified `non_regular`
+        # next to a passing oracle_test, or vice versa) -- otherwise it is
+        # uncontested and reaches the full 0.98 ceiling as before.
+        lean_contradicts_constructive = (
+            lean_verified and reasoning_verdict == "non_regular"
+            and constructive_trust == "bounded_pass"
+        )
+        lean_contradicts_destructive = (
+            lean_verified and reasoning_verdict == "regular" and destructive_ok
+        )
+
+        if lean_contradicts_constructive or lean_contradicts_destructive:
+            # R3' has no cross-check to run here (Lean already IS the
+            # deterministic proof) -- a `verified` side still wins an
+            # unresolved contradiction, but capped at 0.85, not the normal
+            # 0.98 `verified` ceiling (docs/VERDICT_POLICY.md R3).
+            contradiction = True
+            status = "success"
+            confidence = _bounded(reasoning_confidence, 0.85)
+            basis.append({"agent": "formalizer", "trust": "verified"})
+            opposing = "oracle_test (bounded_pass)" if lean_contradicts_constructive else f"a destructive proof ({destructive_trust})"
+            downgrades.append(
+                f"contradiction: Lean-verified {reasoning_verdict} vs {opposing} also "
+                "standing -> verified side wins, confidence capped at 0.85 "
+                "(VERDICT_POLICY.md R3)"
+            )
+
+        elif lean_verified:
             # R6: Lean without `sorry` -> verified, 0.98.
             status = "success"
             confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["verified"])
@@ -1337,16 +1803,66 @@ def assemble_result_node(state: PipelineState) -> dict:
 
         elif constructive_trust == "bounded_pass" and destructive_ok:
             # R3: a passing constructive artifact AND a standing destructive
-            # proof cannot both be right — flag the contradiction instead of
-            # silently picking one.
-            contradiction = True
-            status = "partial"
-            confidence = _bounded(reasoning_confidence, 0.50)
-            downgrades.append(
-                "contradiction: oracle_test passed (constructive bounded_pass) "
-                f"while a destructive proof ({destructive_trust}) also stands "
-                "-> confidence capped at 0.50 (VERDICT_POLICY.md R3)"
-            )
+            # proof cannot both be right. R3' first: try to resolve it
+            # deterministically by running the destructive proof's own
+            # witness words (reused from claim_verifier's step-2 checks,
+            # never re-derived) through the language oracle AND the DFA
+            # behind test_result.
+            destructive_witnesses: list[dict] = []
+            for agent_info in destructive["agents"]:
+                det = agent_info.get("details") or {}
+                w = det.get("witnesses")
+                if isinstance(w, list):
+                    destructive_witnesses.extend(w)
+            cross_check = _cross_check_r3prime_reg(state, state.get("dfa"), destructive_witnesses)
+
+            if cross_check["destructive_refuted"] and not cross_check["constructive_refuted"]:
+                # R3' resolved it: the DFA survives, the destructive proof
+                # itself doesn't -> regular, capped at its own bounded_pass
+                # ceiling (not the 0.50 unresolved-contradiction cap).
+                # `contradiction` stays False -- it was raised and resolved
+                # deterministically, not left standing (mirrors
+                # cfl_system.orchestrator.apply_verdict_gate's R3' branch).
+                status = "success"
+                confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
+                basis.append({"agent": "r3prime_cross_check", "trust": "bounded_pass"})
+                downgrades.append(
+                    "R3' cross-check refuted destructive claim: "
+                    f"{cross_check['destructive_reason']} -> regular "
+                    "(VERDICT_POLICY.md R3')"
+                )
+                _set_reasoning_verdict(evidence, "regular")
+            elif cross_check["constructive_refuted"] and not cross_check["destructive_refuted"]:
+                # R3' resolved it the other way: the DFA itself is wrong ->
+                # non_regular, capped at the destructive proof's own ceiling.
+                # `contradiction` stays False (see comment above).
+                status = "success"
+                confidence = _bounded(reasoning_confidence, _cap(destructive_trust))
+                basis.append({"agent": "r3prime_cross_check", "trust": destructive_trust})
+                downgrades.append(
+                    "R3' cross-check refuted constructive artifact (DFA): "
+                    f"{cross_check['constructive_reason']} -> non_regular "
+                    "(VERDICT_POLICY.md R3')"
+                )
+                _set_reasoning_verdict(evidence, "non_regular")
+            else:
+                # Unresolved (neither refuted, both refuted, or the
+                # cross-check couldn't run at all) -- stays inconclusive.
+                # Neither side is `verified` here (that case is handled
+                # above), so rank never settles this (docs/VERDICT_POLICY.md
+                # R3 fix: "bounded_pass vs well_formed" is never resolved by
+                # rank). The reasoning agent's own proposed verdict must not
+                # leak through as if it were confirmed (reviewer finding).
+                contradiction = True
+                status = "partial"
+                confidence = _bounded(reasoning_confidence, 0.50)
+                downgrades.append(
+                    "contradiction: oracle_test passed (constructive bounded_pass) "
+                    f"while a destructive proof ({destructive_trust}) also stands, "
+                    "unresolved by R3' cross-check -> confidence capped at 0.50 "
+                    "(VERDICT_POLICY.md R3)"
+                )
+                _set_reasoning_verdict(evidence, None)
 
         elif reasoning_verdict == "non_regular":
             # docs/VERDICT_POLICY.md R1/R2 fix (reviewer finding): the gate
@@ -1366,6 +1882,23 @@ def assemble_result_node(state: PipelineState) -> dict:
                         f"destructive proof ({destructive_trust}) supports non_regular "
                         "-> success instead of failure 0.0 (VERDICT_POLICY.md R6)"
                     )
+            elif constructive_trust == "bounded_pass":
+                # docs/VERDICT_POLICY.md R4' — reasoning's own non_regular
+                # proposal has no destructive proof reaching >= well_formed,
+                # but oracle_test actually passed: the gate does not default
+                # straight to inconclusive. It picks the strongest admissible
+                # basis still standing -- here, the constructive side --
+                # rather than reporting `failure`/inconclusive (precedent:
+                # cfl-07/cfl-12 eval live-run ending in `failure 0.0` despite
+                # deterministic evidence being on record).
+                status = "success"
+                confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
+                downgrades.append(
+                    "reasoning proposed non_regular without a >= well_formed destructive "
+                    "proof, but oracle_test passed -> retry budget exhausted -> strongest "
+                    "admissible basis: regular (bounded_pass) (VERDICT_POLICY.md R4')"
+                )
+                _set_reasoning_verdict(evidence, "regular")
             else:
                 status = "partial"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
@@ -1380,10 +1913,25 @@ def assemble_result_node(state: PipelineState) -> dict:
             # Symmetric direction check: a "regular" verdict needs the
             # constructive artifact (oracle_test) to have actually passed —
             # a destructive proof standing next to it (or a refuted/absent
-            # oracle_test) is never evidence FOR regular.
+            # oracle_test) is never evidence FOR regular on its own.
             if constructive_trust == "bounded_pass":
                 status = "success"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
+            elif destructive_ok:
+                # docs/VERDICT_POLICY.md R4' — reasoning's own regular
+                # proposal is unearned (oracle_test refuted/absent), but a
+                # destructive proof >= well_formed does stand: the gate
+                # picks that strongest admissible basis instead of
+                # defaulting to inconclusive (same precedent as above).
+                status = "success"
+                confidence = _bounded(reasoning_confidence, _cap(destructive_trust))
+                downgrades.append(
+                    "reasoning proposed regular without oracle_test passing, but a "
+                    f"destructive proof ({destructive_trust}) stands -> retry budget "
+                    "exhausted -> strongest admissible basis: non_regular "
+                    "(VERDICT_POLICY.md R4')"
+                )
+                _set_reasoning_verdict(evidence, "non_regular")
             else:
                 status = "partial"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
@@ -1434,7 +1982,7 @@ def assemble_result_node(state: PipelineState) -> dict:
             confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["well_formed"])
             downgrades.append(
                 "reasoning verdict has no deterministic evidence behind it "
-                "-> capped at well_formed 0.60 (VERDICT_POLICY.md §2)"
+                "-> capped at well_formed 0.55 (VERDICT_POLICY.md §2)"
             )
 
         elif errors:
@@ -1449,6 +1997,13 @@ def assemble_result_node(state: PipelineState) -> dict:
             )
 
     log_msg(state, f"  final: status={status}, confidence={confidence}")
+
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): surface any skipped-retry-
+    # due-to-call-cap notes (run_specialist_node) here too, deduplicated (the
+    # same agent may have been capped across more than one retry round).
+    for note in state.get("call_cap_notes") or []:
+        if note not in downgrades:
+            downgrades.append(note)
 
     verdict_gate = {
         "basis": basis,
@@ -1553,8 +2108,16 @@ def build_full_pipeline_graph() -> Any:
         },
     )
 
-    # retry planner → back to dispatch (cycle)
-    graph.add_edge("run_retry_planner_node", "setup_dispatch_node")
+    # retry planner → conditional: retry (cycle) / invert / terminal
+    graph.add_conditional_edges(
+        "run_retry_planner_node",
+        decide_after_retry_planner,
+        {
+            "retry": "setup_dispatch_node",
+            "invert": "invert_hypothesis_node",
+            "terminal": "formalize_node",
+        },
+    )
 
     # invert hypothesis → back to dispatch (cycle)
     graph.add_edge("invert_hypothesis_node", "setup_dispatch_node")
@@ -1575,6 +2138,7 @@ def run_pipeline(
     mock_runner: Any = None,
     agent_runner: Any = None,
     verbose: bool | None = None,
+    formalize: bool | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline and return the result dict.
 
@@ -1587,6 +2151,10 @@ def run_pipeline(
         agent_runner: Optional LLMRunner for production.
         verbose: Override verbose mode.  Defaults to True when
                  agent_runner is provided.
+        formalize: Override for Lean 4 formalization (`formalize_node`).
+                   ``None`` (default) uses ``FORMALIZATION_ENABLED``
+                   (itself defaulted from the ``TFL_FORMALIZATION`` env
+                   var); ``True``/``False`` force it on/off for this run.
 
     Returns:
         Structured result per section 5.3 output contract.
@@ -1601,6 +2169,7 @@ def run_pipeline(
         "mock_runner": mock_runner,
         "agent_runner": agent_runner,
         "verbose": verbose,
+        "formalize": formalize,
         # Initialise accumulator fields
         "hypothesis": {},
         "classifier_output": {},
@@ -1616,16 +2185,25 @@ def run_pipeline(
         "closure_verification": {},
         "claim_verification": {},
         "test_result": None,
+        "dfa": None,
         "reasoning_output": None,
         "proof_checker_output": None,
         "retry_round": 0,
         "inversions_done": 0,
         "retry_context": {},
+        "retry_plan": {},
         "evidence": {},
         "errors": [],
+        "call_cap_notes": [],
         "_specialist_name": "",
         "result": {},
     }
 
     final_state = graph.invoke(initial_state)
-    return final_state.get("result", _make_result("failure", errors=["Graph produced no result"]))
+    result = final_state.get("result", _make_result("failure", errors=["Graph produced no result"]))
+    # Usage/cost block (TODO.md §3) -- additive: never replaces existing
+    # result keys. Present even without a live agent_runner (an all-zero
+    # UsageTracker) so callers can rely on result["usage"] always existing.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+    return result

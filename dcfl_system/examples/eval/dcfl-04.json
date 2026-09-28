@@ -1,0 +1,17 @@
+{
+  "task_id": "dcfl-04",
+  "source_text": "{a^n b^n c^m | n, m >= 0}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{a^n b^n c^m | n, m >= 0}",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": [
+    "a",
+    "b",
+    "c"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "task_id": "dcfl-19",
+  "source_text": "{w in {a,b}* | w != x x for every decomposition w = x x}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{w in {a,b}* | w != x x for every decomposition w = x x}",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": [
+    "a",
+    "b"
+  ]
+}

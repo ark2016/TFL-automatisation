@@ -1,0 +1,12 @@
+{
+  "task_type": "ll_check_language",
+  "source_text": "{a^i b^j | i <= j}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b"
+    ],
+    "description": "{a^i b^j | i <= j}"
+  }
+}

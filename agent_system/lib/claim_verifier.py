@@ -28,10 +28,13 @@ from typing import Any, Callable
 _TRUST_RANK = {"not_verified": 0, "well_formed": 1, "bounded_pass": 2, "verified": 3}
 
 #: Confidence ceiling per trust level (docs/VERDICT_POLICY.md §2).
+#: well_formed capped at 0.55 (not 0.60): without a machine check, confidence
+#: must not reach 0.6, the threshold at which tfl-eval treats a verdict as
+#: "confident" (docs/VERDICT_POLICY.md §2, 2026-09-27).
 CONFIDENCE_CAPS: dict[str, float] = {
     "verified": 0.98,
     "bounded_pass": 0.85,
-    "well_formed": 0.60,
+    "well_formed": 0.55,
     "not_verified": 0.40,
 }
 
@@ -115,6 +118,19 @@ def verify_claims(
     }
 
 
+def _alphabet_charclass(alphabet: list[str] | None) -> str:
+    """Build a `[...]` regex character class from the IR's terminal
+    alphabet, instead of a hardcoded ``[ab]`` -- a proof over any other
+    terminal set (e.g. {a,b,c}) is then scanned too. Falls back to 'ab'
+    when the alphabet is missing or every symbol is multi-character (a
+    `[...]` class can only hold single characters; REG/CFL alphabets here
+    are single lowercase letters in practice)."""
+    chars = sorted({s for s in (alphabet or []) if isinstance(s, str) and len(s) == 1})
+    if not chars:
+        chars = ["a", "b"]
+    return "".join(re.escape(c) for c in chars)
+
+
 def _extract_text(agent_output: dict) -> str:
     """Recursively extract all text from an agent output dict."""
     parts: list[str] = []
@@ -154,18 +170,28 @@ _NEGATIVE_MARKERS = {"∉", "\\notin", "not in", "NOT IN", "∉ l", "∉ L",
 
 
 def _extract_claims(text: str, alphabet: list[str]) -> list[dict]:
-    """Extract concrete word membership claims from text."""
-    alpha_set = set("".join(alphabet))
+    """Extract concrete word membership claims from text.
+
+    The word charclass and the ``alpha_set`` filter are both derived from
+    *alphabet* (the IR's actual terminal set) instead of a hardcoded
+    ``[ab]``, and every marker is word-bounded (``\\b``) on both sides so
+    e.g. "in L" doesn't fire inside "in length", and "in L" doesn't fire
+    on the tail of "within L" either.
+    """
+    charclass = _alphabet_charclass(alphabet)
+    alpha_set = set(alphabet) if alphabet else {"a", "b"}
     claims: list[dict] = []
     seen: set[tuple[str, bool]] = set()
 
+    word_group = rf"[{charclass}]{{2,12}}"
+
     # Pattern 1: concrete words like "aabb ∈ L" or "aaaabb не порождается"
     for match in re.finditer(
-        r'["\']?([ab]{2,12})["\']?\s*'
+        rf'["\']?({word_group})["\']?\s*'
         r'(∈|∉|\\in|\\notin|'
-        r'NOT\s+IN\s+L|not\s+in\s+L|IN\s+L|in\s+L|'
-        r'не\s+порождается|не\s+принадлежит|принадлежит|'
-        r'НЕ\s+порождается|НЕ\s+принадлежит)',
+        r'\bNOT\s+IN\s+L\b|\bnot\s+in\s+L\b|\bIN\s+L\b|\bin\s+L\b|'
+        r'\bне\s+порождается\b|\bне\s+принадлежит\b|\bпринадлежит\b|'
+        r'\bНЕ\s+порождается\b|\bНЕ\s+принадлежит\b)',
         text,
         re.IGNORECASE,
     ):
@@ -189,9 +215,9 @@ def _extract_claims(text: str, alphabet: list[str]) -> list[dict]:
 
     # Pattern 2: "слово a⁴b² = aaaabb НЕ порождается"
     for match in re.finditer(
-        r'(?:слово|word)\s+[^=]*?=\s*([ab]{2,12})\s+'
+        rf'(?:слово|word)\s+[^=]*?=\s*({word_group})\s+'
         r'(НЕ\s+порождается|не\s+порождается|порождается|'
-        r'NOT\s+in\s+L|in\s+L)',
+        r'NOT\s+in\s+L\b|in\s+L\b)',
         text,
         re.IGNORECASE,
     ):
@@ -288,17 +314,41 @@ def instantiate_word_pattern(pattern: str, var_name: str, value: int) -> str | N
     return "".join(out)
 
 
+def _witness_collector(cap: int = 30) -> tuple[list[dict], Any]:
+    """Return (witnesses, add_fn) -- a small dedup-by-word accumulator for
+    the concrete words a pumping/nerode step-2 check actually instantiates,
+    reused by docs/VERDICT_POLICY.md R3' -- graph.py's `assemble_result_node`
+    cross-checks these against the DFA behind `test_result` when a
+    contradiction arises, mirroring cfl_system.lib.claim_verifier's
+    `_witness_collector`/`destructive_witnesses` and cfl_system.orchestrator.
+    `_cross_check_r3prime`."""
+    witnesses: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(word: str, expected_in_l: bool, source: str) -> None:
+        if word in seen or len(witnesses) >= cap:
+            return
+        seen.add(word)
+        witnesses.append({"word": word, "expected_in_l": expected_in_l, "source": source})
+
+    return witnesses, _add
+
+
 def _find_pumpable_partition(
     word: str,
     p: int,
     oracle: Callable[[str], bool],
     iters: tuple[int, ...] = (0, 2),
+    add_witness: Callable[[str, bool, str], None] | None = None,
 ) -> tuple[str, str, str] | None:
     """Brute-force every xyz split of *word* with |xy| <= p, |y| >= 1.
 
     Returns the first split where pumping to every i in *iters* stays in L
     (i.e. the proof's claim that some i escapes L is wrong for that
-    split), or None if all splits are closed (the proof holds).
+    split), or None if all splits are closed (the proof holds). When
+    *add_witness* is given, every pumped word found NOT in L along the way
+    is recorded as a destructive witness (docs/VERDICT_POLICY.md R3') --
+    these are the concrete words that "close" the proof at each split.
     """
     n = len(word)
     max_xy = min(p, n)
@@ -308,10 +358,15 @@ def _find_pumpable_partition(
             if not y:
                 continue
             try:
-                if all(oracle(x + y * i + z) for i in iters):
-                    return (x, y, z)
+                in_l = {i: oracle(x + y * i + z) for i in iters}
             except Exception:
                 continue
+            if all(in_l.values()):
+                return (x, y, z)
+            if add_witness is not None:
+                for i, was_in_l in in_l.items():
+                    if not was_in_l:
+                        add_witness(x + y * i + z, False, f"reg pumping p={p} x={x!r} y={y!r} i={i}")
     return None
 
 
@@ -357,6 +412,7 @@ def verify_pumping_claim(
     if var_name is None:
         return {"trust": "well_formed", "reason": "could not detect a single free variable"}
 
+    witnesses, add_witness = _witness_collector()
     checked_p: list[int] = []
     for p in (2, 3, 4):
         word = instantiate_word_pattern(word_family, var_name, p)
@@ -371,18 +427,27 @@ def verify_pumping_claim(
                 "trust": "refuted",
                 "reason": f"chosen word is not in L for p={p}",
                 "counterexample": {"p": p, "word": word},
+                "witnesses": witnesses,
             }
-        pumpable = _find_pumpable_partition(word, p, oracle)
+        add_witness(word, True, f"word_family p={p}")
+        pumpable = _find_pumpable_partition(word, p, oracle, add_witness=add_witness)
         if pumpable is not None:
             x, y, z = pumpable
             return {
                 "trust": "refuted",
                 "reason": f"partition x={x!r} y={y!r} z={z!r} pumps within L at p={p}",
                 "counterexample": {"p": p, "word": word, "x": x, "y": y, "z": z},
+                "witnesses": witnesses,
             }
         checked_p.append(p)
 
-    return {"trust": "bounded_pass", "checked_p": checked_p}
+    # docs/VERDICT_POLICY.md R3': `witnesses` are the concrete instantiated/
+    # pumped words this check actually tested and their oracle-confirmed
+    # membership -- reusable by a cross-check against a constructive
+    # artifact (DFA) instead of re-deriving them, the same way
+    # cfl_system.orchestrator._cross_check_r3prime reuses cfl_system.lib.
+    # claim_verifier's `destructive_witnesses`.
+    return {"trust": "bounded_pass", "checked_p": checked_p, "witnesses": witnesses}
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +520,7 @@ def verify_nerode_claim(
             ),
         }
 
+    witnesses, add_witness = _witness_collector()
     checked_pairs: list[list[int]] = []
     for m, n in ((2, 3), (2, 4), (3, 4)):
         w_i = instantiate_word_pattern(pattern_i, var_i, m)
@@ -475,10 +541,15 @@ def verify_nerode_claim(
                     f"(both {'in' if in_i else 'not in'} L)"
                 ),
                 "counterexample": {"i": m, "j": n, "w_i": w_i, "w_j": w_j, "context": ctx},
+                "witnesses": witnesses,
             }
+        add_witness(w_i + ctx, in_i, f"nerode pair i={m} j={n} (w_i side)")
+        add_witness(w_j + ctx, in_j, f"nerode pair i={m} j={n} (w_j side)")
         checked_pairs.append([m, n])
 
-    return {"trust": "bounded_pass", "checked_pairs": checked_pairs}
+    # docs/VERDICT_POLICY.md R3' -- see the matching comment in
+    # verify_pumping_claim above.
+    return {"trust": "bounded_pass", "checked_pairs": checked_pairs, "witnesses": witnesses}
 
 
 # ---------------------------------------------------------------------------

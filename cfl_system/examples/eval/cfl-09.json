@@ -1,0 +1,65 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "S -> aSb | A | B, A -> aA | a, B -> bB | b  ({a^i b^j | i != j})",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "a",
+      "b"
+    ],
+    "nonterminals": [
+      "S",
+      "A",
+      "B"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "S",
+          "b"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "A"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "B"
+        ]
+      },
+      {
+        "lhs": "A",
+        "rhs": [
+          "a",
+          "A"
+        ]
+      },
+      {
+        "lhs": "A",
+        "rhs": [
+          "a"
+        ]
+      },
+      {
+        "lhs": "B",
+        "rhs": [
+          "b",
+          "B"
+        ]
+      },
+      {
+        "lhs": "B",
+        "rhs": [
+          "b"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "task_id": "dcfl-11",
+  "source_text": "{$ a^n b^n c^m} union {d a^m b^n c^n}, n,m >= 1",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{$ a^n b^n c^m} union {d a^m b^n c^n}, n,m >= 1",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": [
+    "$",
+    "d",
+    "a",
+    "b",
+    "c"
+  ]
+}

@@ -15,6 +15,23 @@ from dcfl_system.lib.retry_logic import build_retry_plan, MAX_RETRIES
 # All agents success -> no retry
 # ---------------------------------------------------------------------------
 
+def test_null_confidence_does_not_raise():
+    """root TODO.md §2: `confidence: null` (JSON null -> Python None) used to
+    crash `build_retry_plan` with `float(None)`; it must instead be treated
+    as confidence 0.0, so a low-confidence 'fail' agent is retried rather
+    than the whole pipeline raising."""
+    agent_results = {
+        "stack_strategy": {"status": "fail", "verdict": None, "confidence": None},
+        "closure_reduction": {"status": "not_applicable", "verdict": None, "confidence": None},
+        "dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "confidence": 0.9},
+        "shallit": {"status": "not_applicable", "verdict": None, "confidence": None},
+        "inh_ambiguity": {"status": "not_applicable", "verdict": None, "confidence": None},
+    }
+    plan = build_retry_plan(agent_results)
+    assert plan["needs_retry"] is True
+    assert "stack_strategy" in plan["agents_to_retry"]
+
+
 def test_all_success_no_retry():
     agent_results = {
         "stack_strategy": {"status": "success", "verdict": "dcfl", "confidence": 0.9},

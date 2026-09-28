@@ -17,6 +17,7 @@ from typing import Callable
 
 from cfl_system.lib.cnf import to_cnf
 from cfl_system.lib.cyk import cyk_parse
+from cfl_system.lib.exponent_pattern import parse_exponent_pattern
 from cfl_system.lib.pda_simulator import pda_accepts
 
 # Try importing the base oracle for predicate delegation
@@ -470,6 +471,25 @@ def _try_decomposition_split(
 
 
 # ---------------------------------------------------------------------------
+# Exponent-notation fallback (docs/VERDICT_POLICY.md §4)
+# ---------------------------------------------------------------------------
+
+def _try_exponent_pattern_oracle(spec: dict) -> Callable[[str], bool] | None:
+    """Best-effort fallback for kinds whose ``description``/``word_pattern``
+    text turns out to be exponent notation (e.g. ``"{a^i b^j c^k d^l | i = 0
+    or j = k = l}"``) even though the kind itself (``natural`` and friends)
+    has no other automated oracle. ``None`` if neither field is present, or
+    if ``exponent_pattern.parse_exponent_pattern`` can't parse it (prose,
+    etc.) -- callers then fall back to their existing behaviour."""
+    text = spec.get("description")
+    if not isinstance(text, str) or not text.strip():
+        text = spec.get("word_pattern")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return parse_exponent_pattern(text)
+
+
+# ---------------------------------------------------------------------------
 # Public API: dispatch by kind
 # ---------------------------------------------------------------------------
 
@@ -494,6 +514,9 @@ def cfl_oracle_from_ir(ir: dict) -> Callable[[str], bool]:
     # (e.g. build_oracle_node) can handle this as "no oracle available"
     # cleanly instead of as an unexpected exception.
     if kind in ("natural", "arithmetic_index"):
+        pattern_oracle = _try_exponent_pattern_oracle(spec)
+        if pattern_oracle is not None:
+            return pattern_oracle
         raise UnsupportedOracleKindError(
             f"No automated oracle for language_spec kind={kind!r}"
         )
@@ -518,7 +541,14 @@ def cfl_oracle_from_ir(ir: dict) -> Callable[[str], bool]:
         try:
             return _base_oracle_from_ir(ir)
         except ValueError as exc:
+            pattern_oracle = _try_exponent_pattern_oracle(spec)
+            if pattern_oracle is not None:
+                return pattern_oracle
             raise UnsupportedOracleKindError(str(exc)) from exc
+
+    pattern_oracle = _try_exponent_pattern_oracle(spec)
+    if pattern_oracle is not None:
+        return pattern_oracle
 
     raise UnsupportedOracleKindError(
         f"Unsupported language_spec kind for CFL oracle: {kind}"

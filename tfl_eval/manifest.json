@@ -1,0 +1,791 @@
+[
+  {
+    "id": "cfl-01",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-01.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl Bar-Hillel pumping"
+  },
+  {
+    "id": "cfl-02",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-02.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl union of two CFLs; inherently ambiguous"
+  },
+  {
+    "id": "cfl-03",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-03.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl pumping on a^p b^p a^p b^p"
+  },
+  {
+    "id": "cfl-04",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-04.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl S -> aSa | bSb | eps"
+  },
+  {
+    "id": "cfl-05",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-05.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl pumping z = a^p b^p c^p"
+  },
+  {
+    "id": "cfl-06",
+    "system": "cfl",
+    "path": "cfl_system/examples/task_w1w2w1w3.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#cfl THEORY.md §2: R = a+b+ac.a+b+ac [trap: false intersection with a+b+a+c+]",
+    "mock_task": "task_w1w2w1w3"
+  },
+  {
+    "id": "cfl-07",
+    "system": "cfl",
+    "path": "cfl_system/examples/task_grammar_filter_49.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#cfl THEORY.md §2.3 (Ogden) [trap: 'counter filter is regular']",
+    "mock_task": "task_grammar_filter_49"
+  },
+  {
+    "id": "cfl-08",
+    "system": "cfl",
+    "path": "cfl_system/examples/task_wwvvR.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#cfl THEORY.md §2.5 [trap: 'L = Sigma*']",
+    "mock_task": "task_wwvvR"
+  },
+  {
+    "id": "cfl-09",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-09.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl {a^i b^j | i != j}"
+  },
+  {
+    "id": "cfl-10",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-10.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl unary CFL = regular; Parikh"
+  },
+  {
+    "id": "cfl-11",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-11.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#cfl same as cfl-01 [trap: factor 6]"
+  },
+  {
+    "id": "cfl-12",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-12.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#cfl Ogden's lemma (standard pumping fails) [trap: Ogden]"
+  },
+  {
+    "id": "cfl-13",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-13.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl S -> (S)S | eps"
+  },
+  {
+    "id": "cfl-14",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-14.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl {a^n b^m | n >= m}"
+  },
+  {
+    "id": "cfl-15",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-15.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl {a^i b^j c^k | i + j = k}"
+  },
+  {
+    "id": "cfl-16",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-16.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl weighted counter on the stack"
+  },
+  {
+    "id": "cfl-17",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-17.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#cfl CFL intersect REG [trap: the filter is regular here]"
+  },
+  {
+    "id": "cfl-18",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-18.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl union of two CFLs (not DCFL, see dcfl-05)"
+  },
+  {
+    "id": "cfl-19",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-19.json",
+    "expected": {
+      "verdict": "cfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#cfl [trap: looks like a copy language]"
+  },
+  {
+    "id": "cfl-20",
+    "system": "cfl",
+    "path": "cfl_system/examples/eval/cfl-20.json",
+    "expected": {
+      "verdict": "non_cfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#cfl same as a^n b^n c^n"
+  },
+  {
+    "id": "dcfl-01",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-01.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl stack"
+  },
+  {
+    "id": "dcfl-02",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-02.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl unique marker"
+  },
+  {
+    "id": "dcfl-03",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-03.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.2 (Thm 4.7.4)"
+  },
+  {
+    "id": "dcfl-04",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-04.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#dcfl [trap: an old formulation of Yu's lemma used to reject this]"
+  },
+  {
+    "id": "dcfl-05",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-05.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.1 (Yu's lemma) / §1.3 (L_$)"
+  },
+  {
+    "id": "dcfl-06",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-06.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl inherent ambiguity"
+  },
+  {
+    "id": "dcfl-07",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-07.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl DPDA: mismatched counters"
+  },
+  {
+    "id": "dcfl-08",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/task_wvaavRwR.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.6 [trap: 'aa is a separator'; reference fixed 2026-09-27] (exam_01)",
+    "mock_task": "dcfl_exam_01"
+  },
+  {
+    "id": "dcfl-09",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/task_u1au2_u3au4.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.7 [reference fixed] (exam_02)",
+    "mock_task": "dcfl_exam_02"
+  },
+  {
+    "id": "dcfl-10",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/task_anb_cnbn.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.8 (Yu's lemma; NOT ambiguity) [trap: branches are disjoint] (exam_03)",
+    "mock_task": "dcfl_exam_03"
+  },
+  {
+    "id": "dcfl-11",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-11.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl first symbol selects the mode (course, 2025_22)"
+  },
+  {
+    "id": "dcfl-12",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-12.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl Yu's lemma (course, 2025_22; x = a^n)"
+  },
+  {
+    "id": "dcfl-13",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-13.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl stack"
+  },
+  {
+    "id": "dcfl-14",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-14.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl stack with a remainder"
+  },
+  {
+    "id": "dcfl-15",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-15.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.7 (L1) [trap: paired with dcfl-16]"
+  },
+  {
+    "id": "dcfl-16",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-16.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.7 (L2: all Nerode classes finite)"
+  },
+  {
+    "id": "dcfl-17",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-17.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#dcfl L = a+ is regular [trap: ambiguous grammar, but the language is DCFL]"
+  },
+  {
+    "id": "dcfl-18",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-18.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl haspref(L) = {a^n b^m c^n | m >= n} not in CFL (THEORY.md §1.3)"
+  },
+  {
+    "id": "dcfl-19",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-19.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl complement intersect ... = {xx} not in CFL (Sh Ex. 4.7.2)"
+  },
+  {
+    "id": "dcfl-20",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/eval/dcfl-20.json",
+    "expected": {
+      "verdict": "non_dcfl"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#dcfl complement intersect a*b*c* = {a^n b^n c^n} not in CFL"
+  },
+  {
+    "id": "dcfl-21",
+    "system": "dcfl",
+    "path": "dcfl_system/examples/task_grammar_aSSb.json",
+    "expected": {
+      "verdict": "dcfl"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#dcfl THEORY.md §1.10 (profile NPDA + height-determinism, [NS, Thm 4]) [trap: grammar is ambiguous and not LR(k) -- tempting to conclude non_dcfl] (exam_04)",
+    "mock_task": "dcfl_exam_04"
+  },
+  {
+    "id": "ll-01",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-01.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 1
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll S -> aSb | eps"
+  },
+  {
+    "id": "ll-02",
+    "system": "ll",
+    "path": "ll_system/examples/format1_anbn_union_ancn.json",
+    "expected": {
+      "verdict": "not_ll",
+      "k": null
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll THEORY.md §3.3 (C) -- DCFL, not LL",
+    "mock_task": "anbn_ancn"
+  },
+  {
+    "id": "ll-03",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-03.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 1
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll S -> aSa | bSb | c"
+  },
+  {
+    "id": "ll-04",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-04.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 1
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll S -> aSa | bT, T -> c | aSab | bTb (THEORY.md §3.4)",
+    "mock_task": "wbcwR"
+  },
+  {
+    "id": "ll-05",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-05.json",
+    "expected": {
+      "verdict": "not_ll",
+      "k": null
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#ll THEORY.md §3.4 (limited flexibility) [trap: looks like ll-04]"
+  },
+  {
+    "id": "ll-06",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-06.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 1
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll S -> TB, T -> aTb | eps, B -> bB | eps"
+  },
+  {
+    "id": "ll-07",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-07.json",
+    "expected": {
+      "verdict": "not_ll",
+      "k": null
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#ll THEORY.md §3.4 [trap: mirror of ll-06]"
+  },
+  {
+    "id": "ll-08",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-08.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 2,
+      "is_sll_k": {
+        "2": false,
+        "3": true
+      },
+      "notes": "LL(2), not SLL(2); SLL(3)"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#ll Aho-Ullman [trap: strong vs LL]"
+  },
+  {
+    "id": "ll-09",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-09.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 3,
+      "is_ll_k": {
+        "2": false,
+        "3": true
+      },
+      "notes": "not LL(2), LL(3): sigma(A) = {{aa, ba}}"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#ll [trap: flat sigma]"
+  },
+  {
+    "id": "ll-10",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-10.json",
+    "expected": {
+      "verdict": "not_ll",
+      "k": null,
+      "left_recursive": true
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll certificate of left recursion; language itself -- see ll-11"
+  },
+  {
+    "id": "ll-11",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-11.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 1
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#ll [trap: grammar != language]"
+  },
+  {
+    "id": "ll-12",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-12.json",
+    "expected": {
+      "verdict": "not_ll",
+      "k": null
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll THEORY.md §3.3 (second example)"
+  },
+  {
+    "id": "ll-13",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-13.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 1
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll regular => LL(1)"
+  },
+  {
+    "id": "ll-14",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-14.json",
+    "expected": {
+      "verdict": "not_ll",
+      "k": null
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll inherently ambiguous => not LL"
+  },
+  {
+    "id": "ll-15",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-15.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 12,
+      "is_ll_k": {
+        "11": false,
+        "12": true
+      },
+      "notes": "k > 10: enumerating k <= 10 is not conclusive"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#ll [trap: k > 10 -- enumerating k <= 10 is not conclusive]"
+  },
+  {
+    "id": "ll-16",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-16.json",
+    "expected": {
+      "verdict": "not_ll",
+      "k": null
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll not DCFL => not LL (THEORY.md §1.2)"
+  },
+  {
+    "id": "ll-17",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-17.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 1
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#ll conflict-free table"
+  },
+  {
+    "id": "ll-18",
+    "system": "ll",
+    "path": "ll_system/examples/eval/ll-18.json",
+    "expected": {
+      "verdict": "ll",
+      "k": 2,
+      "is_ll_k": {
+        "1": false,
+        "2": true
+      },
+      "notes": "FIRST_1 of both rules = {a}; k=2 resolves the conflict"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#ll [trap: right recursion with no conflict at k=2]"
+  },
+  {
+    "id": "reg-01",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-01.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg (pumping/Nerode)"
+  },
+  {
+    "id": "reg-02",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-02.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg (intersect a*b* = {a^n b^n})"
+  },
+  {
+    "id": "reg-03",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-03.json",
+    "expected": {
+      "verdict": "regular"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#reg [trap: counters, but mod] DFA on 2 states"
+  },
+  {
+    "id": "reg-04",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-04.json",
+    "expected": {
+      "verdict": "regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg regex"
+  },
+  {
+    "id": "reg-05",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-05.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg Nerode: a^i distinguished by suffix b^i"
+  },
+  {
+    "id": "reg-06",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-06.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg pumping on a^n b a^n"
+  },
+  {
+    "id": "reg-07",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-07.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#reg [trap: unary] unary language is not periodic"
+  },
+  {
+    "id": "reg-08",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-08.json",
+    "expected": {
+      "verdict": "regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg DFA for substring"
+  },
+  {
+    "id": "reg-09",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-09.json",
+    "expected": {
+      "verdict": "regular"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#reg [trap: looks like counting] a*b* intersect (Sigma Sigma)*"
+  },
+  {
+    "id": "reg-10",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-10.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg complement intersect a*b* = {a^n b^n}"
+  },
+  {
+    "id": "reg-11",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-11.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg Nerode (also not CFL)"
+  },
+  {
+    "id": "reg-12",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-12.json",
+    "expected": {
+      "verdict": "regular"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#reg [trap: not right-linear, language a*b* is still regular]"
+  },
+  {
+    "id": "reg-13",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-13.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg {a^n b^n, n>=1}"
+  },
+  {
+    "id": "reg-14",
+    "system": "reg",
+    "path": "agent_system/examples/task2_grammar_sasb.json",
+    "expected": {
+      "verdict": "non_regular"
+    },
+    "trap": true,
+    "source": "docs/EVAL_SET.md#reg THEORY.md §0: L intersect a*b* = {a^m b^k | m == k (mod 2), m <= 3k+2} [trap: false '= {a^n b^n}']",
+    "mock_task": "task2_grammar_sasb"
+  },
+  {
+    "id": "reg-15",
+    "system": "reg",
+    "path": "agent_system/examples/eval/reg-15.json",
+    "expected": {
+      "verdict": "regular"
+    },
+    "trap": false,
+    "source": "docs/EVAL_SET.md#reg DFA on 3 states"
+  }
+]

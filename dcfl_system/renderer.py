@@ -30,6 +30,21 @@ def _esc(text: Any) -> str:
     return html_module.escape(str(text))
 
 
+def _usage_summary_line(result: dict) -> str | None:
+    """One-line usage/cost summary from ``result["usage"]`` (TODO.md §3),
+    or ``None`` when the block is absent/empty."""
+    usage = result.get("usage")
+    if not usage:
+        return None
+    calls = usage.get("calls", 0)
+    if not calls:
+        return None
+    tokens = usage.get("total_tokens", 0)
+    cost = usage.get("estimated_cost_usd")
+    cost_s = f"${cost:.4f}" if cost is not None else "n/a"
+    return f"{calls} calls, {tokens} tokens, estimated cost ≈ {cost_s}"
+
+
 _VERDICT_LABELS: dict[str, str] = {
     "dcfl": "ДКСЯ (детерминированный)",
     "non_dcfl": "не ДКСЯ (недетерминированный)",
@@ -180,6 +195,17 @@ def _render_proof_sketch_md(sketch: dict | None, method: str | None) -> str:
                 parts.append(f"**Суффиксы:** {', '.join(str(s) for s in suffixes)}\n")
             else:
                 parts.append(f"**Суффиксы:** {suffixes}\n")
+        word_instances = sketch.get("word_instances")
+        if isinstance(word_instances, dict) and word_instances:
+            parts.append("**Конкретные инстансы (n = p + 2, docs/VERDICT_POLICY.md §4):**\n")
+            for p_key in ("2", "3"):
+                entry = word_instances.get(p_key)
+                if isinstance(entry, dict):
+                    parts.append(
+                        f"- p={p_key}: w = {entry.get('w', '')}, "
+                        f"w' = {entry.get('w_prime', '')}, |x| = {entry.get('x_length', '')}"
+                    )
+            parts.append("")
 
     elif method == "shallit" or "infinite_set" in sketch or "infinite_set_description" in sketch:
         fields = [
@@ -188,7 +214,7 @@ def _render_proof_sketch_md(sketch: dict | None, method: str | None) -> str:
             ("infinite_set", "Бесконечное множество"),
             ("separating_context", "Разделяющий контекст"),
             ("two_elements", "Два элемента"),
-            ("dead_class_finite", "Мёртвый класс D конечен"),
+            ("dead_class_status", "Статус мёртвого класса D"),
             ("distinguishing_suffix", "Разделяющий суффикс"),
             ("separation_argument", "Аргумент разделения"),
             ("derived_language", "Производный язык"),
@@ -309,6 +335,22 @@ def _render_proof_sketch_html(sketch: dict | None, method: str | None) -> str:
             else:
                 suf_str = _esc(suffixes)
             parts.append(f'<div class="s-p"><strong>Суффиксы:</strong> {suf_str}</div>')
+        word_instances = sketch.get("word_instances")
+        if isinstance(word_instances, dict) and word_instances:
+            rows = []
+            for p_key in ("2", "3"):
+                entry = word_instances.get(p_key)
+                if isinstance(entry, dict):
+                    rows.append(
+                        f"<li>p={_esc(p_key)}: w = {_esc(entry.get('w', ''))}, "
+                        f"w&prime; = {_esc(entry.get('w_prime', ''))}, "
+                        f"|x| = {_esc(entry.get('x_length', ''))}</li>"
+                    )
+            if rows:
+                parts.append(
+                    '<div class="s-p"><strong>Конкретные инстансы (n = p + 1):</strong>'
+                    f'<ul>{"".join(rows)}</ul></div>'
+                )
 
     elif method == "shallit" or "infinite_set" in sketch or "infinite_set_description" in sketch:
         fields = [
@@ -317,7 +359,7 @@ def _render_proof_sketch_html(sketch: dict | None, method: str | None) -> str:
             ("infinite_set", "Бесконечное множество"),
             ("separating_context", "Разделяющий контекст"),
             ("two_elements", "Два элемента"),
-            ("dead_class_finite", "Мёртвый класс D конечен"),
+            ("dead_class_status", "Статус мёртвого класса D"),
             ("distinguishing_suffix", "Разделяющий суффикс"),
             ("separation_argument", "Аргумент разделения"),
             ("derived_language", "Производный язык"),
@@ -501,6 +543,10 @@ def render_markdown(result: dict) -> str:
         if retries:
             sections.append(f"*Повторных попыток: {retries}*")
 
+    usage_line = _usage_summary_line(result)
+    if usage_line:
+        sections.append(f"*Usage: {usage_line}*")
+
     return "\n".join(sections)
 
 
@@ -640,6 +686,22 @@ def _panel_dcfl_pumping(output: dict) -> str:
             ("condition1_argument", "Условие (1): пара (x2, x4) в любом месте x"),
             ("condition2_argument", "Условие (2): x2 в последних p символах x"),
         ], parts)
+        word_instances = sketch.get("word_instances")
+        if isinstance(word_instances, dict) and word_instances:
+            rows = []
+            for p_key in ("2", "3"):
+                entry = word_instances.get(p_key)
+                if isinstance(entry, dict):
+                    rows.append(
+                        f"<li>p={_esc(p_key)}: w = {_esc(entry.get('w', ''))}, "
+                        f"w&prime; = {_esc(entry.get('w_prime', ''))}, "
+                        f"|x| = {_esc(entry.get('x_length', ''))}</li>"
+                    )
+            if rows:
+                parts.append(
+                    '<div class="s-p"><strong>Конкретные инстансы (n = p + 1):</strong>'
+                    f'<ul>{"".join(rows)}</ul></div>'
+                )
     _render_evidence_steps(output, parts)
     _render_errors(output, parts)
     return "\n".join(parts)
@@ -654,7 +716,7 @@ def _panel_shallit(output: dict) -> str:
             ("infinite_set_description", "Бесконечное множество"),
             ("separating_context", "Разделяющий контекст"),
             ("two_elements", "Два элемента"),
-            ("dead_class_finite", "Мёртвый класс D конечен"),
+            ("dead_class_status", "Статус мёртвого класса D"),
             ("distinguishing_suffix", "Разделяющий суффикс"),
             ("separation_argument", "Аргумент разделения"),
             ("derived_language", "Производный язык"),
@@ -1045,6 +1107,10 @@ def render_html(result: dict) -> str:
         "{left:'\\\\(',right:'\\\\)',display:false}"
         '],throwOnError:false});"></script>'
     )
+
+    usage_line = _usage_summary_line(result)
+    if usage_line:
+        parts.append(f'<div class="s-meta">Usage: {_esc(usage_line)}</div>')
 
     parts.append("</body></html>")
     return "\n".join(parts)

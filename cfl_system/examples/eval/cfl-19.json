@@ -1,0 +1,43 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "S -> aSa | B, B -> bB | eps  ({a^n b^m a^n | n,m >= 0})",
+  "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+      "a",
+      "b"
+    ],
+    "nonterminals": [
+      "S",
+      "B"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "a",
+          "S",
+          "a"
+        ]
+      },
+      {
+        "lhs": "S",
+        "rhs": [
+          "B"
+        ]
+      },
+      {
+        "lhs": "B",
+        "rhs": [
+          "b",
+          "B"
+        ]
+      },
+      {
+        "lhs": "B",
+        "rhs": []
+      }
+    ]
+  }
+}

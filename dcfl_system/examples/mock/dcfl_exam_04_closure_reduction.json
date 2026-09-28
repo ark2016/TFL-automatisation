@@ -3,7 +3,9 @@
   "status": "not_applicable",
   "verdict": null,
   "proof_sketch": null,
-  "evidence": [],
+  "evidence": [
+    "Вердикт для этого языка получен прямой конструкцией (профильный НМПА + height-determinism + [NS, Thm 4], §1.10), а не сведением к другому языку через замкнутость DCFL относительно ~/h⁻¹/∩REG — такое сведение здесь не строилось и не требуется."
+  ],
   "confidence": 0.0,
   "errors": []
 }

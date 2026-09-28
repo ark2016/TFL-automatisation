@@ -1,0 +1,51 @@
+{
+  "task_type": "ll_check_grammar",
+  "source_text": "Format 3: S -> AB, A -> eps | b, B -> aa | ba. Is this grammar LL(2)? LL(3)?",
+  "grammar": {
+    "terminals": [
+      "a",
+      "b"
+    ],
+    "nonterminals": [
+      "S",
+      "A",
+      "B"
+    ],
+    "start": "S",
+    "rules": [
+      {
+        "lhs": "S",
+        "rhs": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "lhs": "A",
+        "rhs": []
+      },
+      {
+        "lhs": "A",
+        "rhs": [
+          "b"
+        ]
+      },
+      {
+        "lhs": "B",
+        "rhs": [
+          "a",
+          "a"
+        ]
+      },
+      {
+        "lhs": "B",
+        "rhs": [
+          "b",
+          "a"
+        ]
+      }
+    ]
+  },
+  "question": "is_ll_k",
+  "k": 3
+}

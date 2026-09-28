@@ -1,0 +1,11 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "{a^(n^2) | n >= 0}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a"
+    ],
+    "description": "{a^(n^2) | n >= 0}"
+  }
+}

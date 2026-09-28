@@ -249,6 +249,7 @@ class Pipeline:
         ir: dict,
         mock_runner: MockRunner | None = None,
         agent_runner: Any | None = None,
+        formalize: bool | None = None,
     ) -> dict[str, Any]:
         """Run the full end-to-end pipeline per §5.1.
 
@@ -261,6 +262,13 @@ class Pipeline:
 
         Both MockRunner and LLMRunner implement ``run_agent(name, data)``.
 
+        Args:
+            formalize: Override for Lean 4 formalization. ``None`` (default)
+                       uses ``graph.FORMALIZATION_ENABLED`` (itself defaulted
+                       from the ``TFL_FORMALIZATION`` env var); pass
+                       ``True``/``False`` to force it on/off for this run
+                       (the CLI's ``--formalize`` does this).
+
         Returns:
             Structured result per §5.3 output contract.
         """
@@ -270,6 +278,7 @@ class Pipeline:
             ir,
             mock_runner=mock_runner,
             agent_runner=agent_runner,
+            formalize=formalize,
         )
 
         # Sync instance attributes for backward compatibility
@@ -280,156 +289,6 @@ class Pipeline:
         self.test_result = ev.get("oracle_test")
 
         return result
-
-    def _run_formalizer(
-        self,
-        ir: dict,
-        evidence: dict,
-        best_proof: str,
-        consolidated: str,
-        _run: Callable,
-        _log: Callable,
-        errors: list[str],
-    ) -> str | None:
-        """Run formalizer agent with template + type check + retry."""
-        # Pick template
-        reasoning = evidence.get("reasoning", {})
-        r_ev = reasoning.get("evidence", reasoning)
-        verdict = (r_ev.get("verdict")
-                   or reasoning.get("verdict")
-                   or self.hypothesis.get("hypothesis", "unknown"))
-
-        if verdict == "regular":
-            template_name = "prove_regular_via_dfa"
-        elif best_proof == "nerode":
-            template_name = "prove_non_regular_via_nerode"
-        else:
-            template_name = "prove_non_regular_via_pumping"
-
-        template = self.get_template(template_name)
-        if not template:
-            _log(f"  template '{template_name}' not found, skipping")
-            return None
-
-        # Build formalizer input
-        specialist_key = best_proof if best_proof in evidence else None
-        if not specialist_key:
-            for k in ("pumping", "nerode", "closure", "dfa_builder", "re_builder"):
-                if k in evidence:
-                    specialist_key = k
-                    break
-
-        specialist_out = evidence.get(specialist_key, {}) if specialist_key else {}
-        spec_ev = specialist_out.get("evidence", specialist_out)
-
-        formalizer_input = {
-            "consolidated_proof": consolidated,
-            "best_proof": best_proof,
-            "template_type": template_name,
-            "template_code": template,
-            "specialist_output": spec_ev,
-            "ir": ir,
-            "dfa": evidence.get("dfa_builder", {}).get("evidence", {}).get("dfa"),
-        }
-
-        _log(f"  formalizer: template={template_name}")
-        formalizer_output = _run("formalizer", formalizer_input)
-
-        if formalizer_output is None:
-            _log("  formalizer: no output")
-            return None
-
-        # Formalizer returns plain Lean code (not JSON-wrapped)
-        f_ev = formalizer_output.get("evidence", formalizer_output)
-        lean_code = None
-
-        # The output might be the raw Lean code as a string in evidence
-        if isinstance(f_ev, str):
-            lean_code = f_ev
-        elif isinstance(f_ev, dict):
-            lean_code = (f_ev.get("lean_code")
-                         or f_ev.get("code")
-                         or f_ev.get("output"))
-
-        # Fallback: the formalizer prompt says "output only Lean 4 code"
-        # so the raw response text might be in the module's output
-        if not lean_code:
-            _log("  formalizer: could not extract Lean code from output")
-            evidence["formalization"] = {
-                "status": "skipped",
-                "message": "Formalizer did not produce Lean code",
-            }
-            return None
-
-        _log(f"  formalizer: got {len(lean_code)} chars of Lean code")
-
-        # Type check with retry
-        max_retries = 2
-        for attempt in range(1 + max_retries):
-            _log(f"  type_check: attempt {attempt + 1}/{1 + max_retries}...")
-            tc_result = check_lean(lean_code)
-            tc_status = tc_result.get("status", "skipped")
-            _log(f"  type_check: {tc_status} ({tc_result.get('time_seconds', 0)}s)")
-
-            if tc_status == "valid":
-                evidence["formalization"] = {
-                    "status": "valid",
-                    "lean_verified": True,
-                    "sorry_count": _count_sorry(lean_code),
-                    "time_seconds": tc_result.get("time_seconds", 0),
-                    "warnings": tc_result.get("warnings"),
-                }
-                return lean_code
-
-            if tc_status == "skipped":
-                evidence["formalization"] = {
-                    "status": "skipped",
-                    "message": tc_result.get("message", "Docker not available"),
-                }
-                return lean_code  # save anyway
-
-            if tc_status in ("invalid", "timeout") and attempt < max_retries:
-                # Retry: send errors back to formalizer
-                tc_errors = tc_result.get("errors", [])
-                _log(f"  type_check errors: {tc_errors[:3]}")
-                retry_input = {
-                    "consolidated_proof": consolidated,
-                    "best_proof": best_proof,
-                    "template_type": template_name,
-                    "template_code": template,
-                    "previous_attempt": lean_code,
-                    "lean_errors": tc_errors,
-                    "instruction": (
-                        "Your previous Lean 4 code had errors. "
-                        "Fix the errors and return the corrected COMPLETE Lean 4 file. "
-                        "Output ONLY Lean 4 code, no markdown."
-                    ),
-                }
-                retry_output = _run("formalizer", retry_input)
-                if retry_output:
-                    r_ev2 = retry_output.get("evidence", retry_output)
-                    new_code = None
-                    if isinstance(r_ev2, str):
-                        new_code = r_ev2
-                    elif isinstance(r_ev2, dict):
-                        new_code = (r_ev2.get("lean_code")
-                                    or r_ev2.get("code")
-                                    or r_ev2.get("output"))
-                    if new_code:
-                        lean_code = new_code
-                        continue
-
-            # Final failure
-            evidence["formalization"] = {
-                "status": tc_status,
-                "lean_verified": False,
-                "sorry_count": _count_sorry(lean_code),
-                "errors": tc_result.get("errors"),
-                "time_seconds": tc_result.get("time_seconds", 0),
-            }
-            return lean_code
-
-        return lean_code
 
     def get_prompt(self, name: str = "input_parser") -> str | None:
         """Read a prompt file from the prompts/ directory.
@@ -511,130 +370,6 @@ def _generate_lean_stub(result: dict, pipeline: Pipeline) -> str | None:
     return header + "\n" + template
 
 
-def _verify_closure_claim(
-    closure_output: dict,
-    oracle: Any,
-    alphabet: list[str],
-    _log: Any,
-) -> dict | None:
-    """Verify closure agent's intersection claim via oracle.
-
-    If the closure agent claims L ∩ R is non-regular, we compute L ∩ R
-    empirically and check whether its Nerode index is actually infinite.
-    """
-    clo_ev = closure_output.get("evidence", closure_output)
-    if closure_output.get("status") == "failure":
-        return None
-
-    # Extract the regex for the regular language R
-    details = clo_ev.get("details") or {}
-    reg = details.get("regular_language") or {}
-    regex = reg.get("regex")
-    if not regex:
-        return None
-
-    _log(f"  verifying closure claim: L ∩ {regex}...")
-
-    try:
-        import threading
-        from .lib.dfa_builder import build_dfa_from_regex
-        from .lib.dfa_runner import run_dfa
-        from .lib.congruence import estimate_index
-
-        r_dfa = build_dfa_from_regex(regex)
-
-        # Build memoized oracle for L ∩ R
-        _oracle_cache: dict[str, bool] = {}
-
-        def intersection_oracle(word: str) -> bool:
-            if word not in _oracle_cache:
-                _oracle_cache[word] = oracle(word) and run_dfa(r_dfa, word)
-            return _oracle_cache[word]
-
-        # Adaptive depth: |Σ|=2 → depth 7, |Σ|=3 → depth 4, |Σ|≥4 → depth 3
-        _alphabet_depth = {2: 7, 3: 5, 4: 3}
-        depth = _alphabet_depth.get(len(alphabet), 3)
-
-        # Estimate Nerode index with hard timeout (daemon thread)
-        _timeout = 120
-        _log(f"  estimate_index(depth={depth}, timeout={_timeout}s)...")
-        result_box: dict[str, Any] = {}
-
-        def _worker() -> None:
-            try:
-                result_box["result"] = estimate_index(
-                    intersection_oracle, alphabet, depth,
-                )
-            except Exception as exc:
-                result_box["error"] = exc
-
-        thread = threading.Thread(target=_worker, daemon=True)
-        thread.start()
-        thread.join(timeout=_timeout)
-
-        if thread.is_alive():
-            _log(f"  estimate_index TIMED OUT after {_timeout}s")
-            return None
-        if "error" in result_box:
-            raise result_box["error"]
-        est = result_box["result"]
-        idx = est.get("estimated_index")
-        conf = est.get("confidence", 0)
-
-        if idx != "infinite" and conf >= 0.8:
-            _log(f"  CLOSURE CLAIM WRONG: L ∩ {regex} has finite index "
-                 f"{idx} (confidence {conf}) — intersection is regular!")
-
-            # Find concrete counterexample to "L ∩ R = {aⁿbⁿ}"
-            # by listing words in L ∩ R that aren't of form aⁿbⁿ
-            from .lib.word_generator import generate_exhaustive
-            counterexamples = []
-            for w in generate_exhaustive(alphabet, max_len=8):
-                if intersection_oracle(w):
-                    # Check if this word disproves {aⁿbⁿ} claim
-                    a_count = sum(1 for c in w if c == 'a')
-                    b_count = sum(1 for c in w if c == 'b')
-                    if a_count != b_count and len(w) > 0:
-                        counterexamples.append(w)
-                        if len(counterexamples) >= 3:
-                            break
-
-            return {
-                "status": "disproved",
-                "claim": f"L ∩ {regex} is non-regular",
-                "actual": f"L ∩ {regex} has finite Nerode index {idx}",
-                "counterexamples": counterexamples,
-                "message": (
-                    f"Closure agent's claim is WRONG. "
-                    f"L ∩ {regex} appears regular (index={idx}). "
-                    f"Words in L ∩ {regex} with count_a ≠ count_b: "
-                    f"{counterexamples}"
-                ),
-            }
-        elif idx == "infinite" and conf >= 0.8:
-            _log(f"  closure claim verified: L ∩ {regex} is non-regular "
-                 f"(index=infinite, confidence {conf})")
-            return {"status": "verified", "claim": f"L ∩ {regex} is non-regular",
-                    "confidence": conf}
-        elif idx == "infinite":
-            _log(f"  closure claim plausible but unconfirmed "
-                 f"(index=infinite, confidence {conf} < 0.8)")
-            return {"status": "plausible", "claim": f"L ∩ {regex} is non-regular",
-                    "confidence": conf}
-        else:
-            _log(f"  closure claim inconclusive (index={idx}, confidence {conf})")
-            return None
-
-    except Exception as exc:
-        _log(f"  closure verification failed: {exc}")
-        return None
-
-
-def _count_sorry(lean_code: str) -> int:
-    """Count the number of 'sorry' occurrences in Lean code."""
-    return lean_code.count("sorry")
-
-
 def _extract_dfa(agent_output: dict) -> dict | None:
     """Extract a DFA dict from a dfa_builder agent output."""
     evidence = agent_output.get("evidence", {})
@@ -700,6 +435,10 @@ def main() -> None:
                              "(common CLI contract used by TFL Lab)")
     parser.add_argument("--verbose", action="store_true",
                         help="Accepted for CLI parity with the other pipelines")
+    parser.add_argument("--formalize", action="store_true",
+                        help="Force-enable Lean 4 formalization for this run "
+                             "(default: TFL_FORMALIZATION env var, currently "
+                             "disabled while Lean templates are in progress)")
 
     args = parser.parse_args()
 
@@ -717,20 +456,23 @@ def main() -> None:
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     pipeline = Pipeline()
+    formalize = True if args.formalize else None
 
     if args.mock is not None:
         task_prefix = Path(args.ir_json).stem
         mock_runner = MockRunner(args.mock, task_prefix=task_prefix)
-        result = pipeline.run_full_pipeline(ir, mock_runner=mock_runner)
+        result = pipeline.run_full_pipeline(ir, mock_runner=mock_runner, formalize=formalize)
 
     elif args.live:
         from .lib.llm_client import LLMRunner
         try:
-            llm = LLMRunner()
+            llm = LLMRunner(verbose=args.verbose)
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
-        result = pipeline.run_full_pipeline(ir, agent_runner=llm)
+        result = pipeline.run_full_pipeline(ir, agent_runner=llm, formalize=formalize)
+        if args.verbose:
+            print(llm.usage_tracker.summary_line(), file=sys.stderr)
 
     else:
         dfa = None
@@ -791,7 +533,7 @@ def main() -> None:
         lean_path = out_dir / f"{ir_stem}.lean"
         ev = result.get("evidence", {})
 
-        # Priority 1: formalizer-produced code (from _run_formalizer)
+        # Priority 1: formalizer-produced code (from graph.py's formalize_node)
         if ev.get("lean_code"):
             lean_path.write_text(ev["lean_code"], encoding="utf-8")
             lean_saved = True
@@ -842,8 +584,22 @@ def main() -> None:
 
 
 def _result_verdict(result: dict) -> str | None:
-    """Verdict of the reasoning agent (falls back to the hypothesis)."""
+    """Verdict of the reasoning agent (falls back to the hypothesis).
+
+    docs/VERDICT_POLICY.md R3/R1 (reviewer finding): an unresolved
+    contradiction leaves `status == "partial"` with `verdict_gate.
+    contradiction == True` (graph.py's `assemble_result_node`), but that
+    node never clears the reasoning agent's own proposed regular/
+    non_regular verdict field -- only its confidence gets capped. Reading
+    straight through to `reasoning.verdict` here would leak that
+    unconfirmed verdict out as the pipeline's top-level result (and
+    `tfl_eval.runners.extract('reg')` duplicates this same lookup, so it
+    needs the identical guard).
+    """
     evidence = result.get("evidence", {}) or {}
+    gate = evidence.get("verdict_gate") or result.get("verdict_gate") or {}
+    if result.get("status") == "partial" and gate.get("contradiction"):
+        return None
     reasoning = evidence.get("reasoning", {}) or {}
     r_ev = reasoning.get("evidence", reasoning) if isinstance(reasoning, dict) else {}
     return (r_ev.get("verdict")

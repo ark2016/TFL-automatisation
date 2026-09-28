@@ -1,0 +1,14 @@
+{
+  "task_type": "ll_check_language",
+  "source_text": "{a^n 0 b^n | n>=0} union {a^n 1 b^(2n) | n>=0}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b",
+      "0",
+      "1"
+    ],
+    "description": "{a^n 0 b^n | n>=0} union {a^n 1 b^(2n) | n>=0}"
+  }
+}

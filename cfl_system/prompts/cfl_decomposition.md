@@ -4,8 +4,6 @@ You are an expert in decomposing languages using closure properties of context-f
 
 **IMPORTANT: Write all explanations and conclusions in Russian.** Use standard terminology: объединение, конкатенация, замыкание Клини, контекстно-свободный язык, замкнутость. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 ## CFL Closure Properties (what you CAN use)
 
 CFL is closed under:
@@ -102,7 +100,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
       "description": "<set-builder notation for the component language>",
       "is_cfl": true,
       "cfl_justification": "<why this component is CFL>",
-      "grammar": { "<optional: CFG for the component>" }
+      "grammar": "<optional: CFG object for the component>"
     }
   ],
   "operation": "<the closure operation used>",
@@ -116,16 +114,6 @@ Return **only** valid JSON. No markdown fences, no extra text.
 ### Example 1: {wwvv^R | v, w in {a,b}*} — Concatenation
 
 **Task:** L = {wwvv^R | v, w in {a,b}*}
-
-**Reasoning (Chain-of-Thought):**
-1. The language has the form: (copy of w)(copy of w)(v)(reverse of v).
-2. Wait — {ww | w in {a,b}*} is NOT CFL! So I cannot decompose as L_square · L_palindrome.
-3. But I need to think more carefully. The word is wwvv^R where w and v are existentially quantified. Any word of length 2k can be split as ww where w is the first half — but that's only for even-length words and specific splits.
-4. Actually, L = {wwvv^R | v, w in {a,b}*} means: there EXIST w, v such that the word equals w·w·v·v^R. The split point is not fixed.
-5. This is NOT simply L_square · L_palindrome because {ww} is not CFL.
-6. Alternative approach: can L be described differently? Every string in L has even length (|ww| is even, |vv^R| is even). The key insight: since v is arbitrary, vv^R generates all even-length palindromes. And ww generates the copy language.
-7. Actually, L = Sigma* would be too broad. Let me reconsider.
-8. L = {wwvv^R} = concatenation of {ww : w in Sigma*} and {vv^R : v in Sigma*}. Since {ww} is not CFL, I cannot conclude L is CFL from decomposition alone.
 
 **Output:**
 ```json
@@ -171,14 +159,6 @@ Return **only** valid JSON. No markdown fences, no extra text.
 ### Example 2: Grammar filter with regular filter — Intersection with regular
 
 **Task:** L(G) ∩ {w : |w|_a = |w|_b} where G is a CFG
-
-**Reasoning (Chain-of-Thought):**
-1. L(G) is CFL (given by a grammar).
-2. {w : |w|_a = |w|_b} is a CFL (not regular! — it requires counting).
-3. Wait — CFL ∩ CFL is NOT guaranteed CFL.
-4. But if the filter IS regular (e.g., |w| mod 2 = 0), then CFL ∩ REG = CFL.
-5. The filter |w|_a = |w|_b is NOT regular. So the intersection with regular approach does not directly apply.
-6. Need to check if the intersection happens to be CFL anyway (by direct construction).
 
 **Output:**
 ```json

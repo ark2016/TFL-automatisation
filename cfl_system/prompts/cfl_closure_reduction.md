@@ -4,8 +4,6 @@ You are an expert in applying closure properties to prove that languages are not
 
 **IMPORTANT: Write all proof text, arguments, and conclusions in Russian.** Use standard terminology: замкнутость, пересечение с регулярным языком, контекстно-свободный язык, регулярное выражение, лемма о накачке. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 ## The Closure Argument
 
 **Theorem:** CFL is closed under intersection with regular languages. That is, if L is CFL and R is regular, then L ∩ R is CFL.
@@ -135,40 +133,6 @@ set-builder description.
 
 **Task:** L = {w1w2w1w3 | w2 in {b,c}*, w1 in {a,b}*, w3 in {a,c}*, |wi| > 0}
 
-**Reasoning (Chain-of-Thought):**
-1. The naive restriction R = a+ · b+ · a+ · c+ (regex a+b+a+c+) does NOT force the two w1 copies to
-   have equal length: extra a's after the second w1 simply fall into w3, since w3 in {a,c}+. E.g.
-   abaac is in L with w1=a, w2=b, w3=aac. In fact L ∩ a+b+a+c+ = {a^n b^m a^j c^k | j >= n} — this
-   IS context-free (j is unbounded above n), so this R proves nothing about non-CFL.
-2. Fix this by pinning down w1 completely, including its very last symbol, so nothing can leak into
-   w3: let R = a+ · b+ · a · c · a+ · b+ · a · c (regex a+b+aca+b+ac). Each copy of the pattern ends
-   the a-block with a single 'a' immediately followed by 'c' — this marker leaves w3 no room to
-   absorb stray a's.
-3. R is regular (explicit regex a+b+aca+b+ac).
-4. L ∩ R = {a^n · b^m · a · c · a^n · b^m · a · c | n >= 1, m >= 1}. Justification by exhausting how
-   w1 (in {a,b}+) can start inside R's first "a+b+ac" chunk:
-   - w1 = a^i, i < n1 (a proper prefix of the first a-block): then w2 must start with 'a' — but
-     w2 in {b,c}+, impossible.
-   - w1 = a^n1 exactly (stops right before the b-block): then w2 = b^j, and the second copy of w1
-     must start right after the b-block, i.e. at "a c a…" — so the second w1 can be at most 'a'
-     (length 1, since {a,b}+ cannot include 'c'), forcing n1 = 1 and leaving 'c' + the rest as w3 —
-     but the rest still contains the second copy's b-block, which is not in {a,c}+. Impossible.
-   - w1 = a^n1 b^j, j <= m1 (straddling into the b-block): the second copy of w1 would have to start
-     with "ac" — impossible, w1 in {a,b}+ excludes 'c'.
-   - The only surviving split: w1 = a^n b^m a (whole first a-block, whole b-block, and the separator
-     'a'), w2 = c, second w1 = a^n b^m a (forces n2=n, m2=m by literal equality of the two copies),
-     w3 = c. Checked exhaustively for 1 <= n1,m1,n2,m2 <= 4 (brute force).
-5. Now pump L ∩ R. Choose z = a^p b^p ac · a^p b^p ac (n=m=p in both copies). |z| = 4p+4 >= p.
-6. For any decomposition z = uvwxy, |vwx| <= p, |vx| >= 1, use a SINGLE pump value i=0 that works
-   for every decomposition (pumping UP is unsafe here too — see cfl_pumping.md — so pump DOWN):
-   - If vx touches the 'c' or the lone separator 'a' immediately before it, removing it (i=0)
-     destroys one of the two "ac" markers, so uwy is not even in R (R requires exactly two of them).
-   - Otherwise vx lies entirely inside at most one a-block and/or one b-block of a SINGLE copy —
-     the window |vwx| <= p cannot reach the same-named block of the other copy (they are separated
-     by at least the rest of the first copy, length > p). Removing vx (i=0) either empties that
-     block (uwy leaves R's structure) or shortens it, breaking n1=n2 or m1=m2.
-7. Every decomposition leaves L ∩ R; checked exhaustively at p=3 (233 decompositions).
-
 **Output:**
 ```json
 {
@@ -238,6 +202,13 @@ If the filter is NOT regular, closure reduction with a different regular languag
 
 ## Common pitfalls to avoid
 
+- **The a⁺b⁺a⁺c⁺ trap (for L = {w1w2w1w3}, w1 in {a,b}*, w2 in {b,c}*, w3 in {a,c}*):** the naive
+  R = a⁺b⁺a⁺c⁺ does NOT pin the two w1-copies to equal length — extra a's after the second w1-copy
+  simply fall into w3 (w3 in {a,c}⁺), e.g. abaac in L with w1=a, w2=b, w3=aac. In fact
+  L ∩ a⁺b⁺a⁺c⁺ = {aⁿbᵐaʲcᵏ | j ≥ n}, which IS still context-free — this R proves nothing. Fix: pin
+  down w1's last symbol with an explicit marker so nothing can leak into w3: R = a⁺b⁺aca⁺b⁺ac. Only
+  one decomposition then survives: w1 = aⁿbᵐa (whole first a-block, whole b-block, and the separator
+  'a'), w2 = c — forcing L ∩ R = {aⁿbᵐac·aⁿbᵐac | n,m ≥ 1}. See Example 1 above.
 - Do NOT claim L ∩ R = K without verifying the intersection carefully. This is the most common error.
 - Do NOT forget to prove R is regular. Give the regex or DFA.
 - Do NOT forget to prove L ∩ R is not CFL. A full pumping argument is needed.

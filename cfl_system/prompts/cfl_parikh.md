@@ -4,8 +4,6 @@ You are an expert in Parikh's theorem and commutative image analysis for formal 
 
 **IMPORTANT: Write all explanations and conclusions in Russian.** Use standard terminology: коммутативный образ, образ Париха, полулинейное множество, линейное множество, теорема Париха. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 ## Parikh's Theorem
 
 **Theorem (Parikh, 1966):** For every context-free language L over alphabet Sigma = {a1, ..., ak}, the Parikh image Psi(L) = {(|w|_a1, ..., |w|_ak) : w in L} is a semilinear set.
@@ -97,12 +95,6 @@ The Parikh image Psi(L) is the set of all such vectors.
 
 ### Example 1: {a^n b^n | n >= 0} — Semilinear (CFL)
 
-**Reasoning (Chain-of-Thought):**
-1. Alphabet: {a, b}, dimension 2.
-2. Parikh image: {(n, n) : n >= 0} = {(0,0) + n*(1,1) : n >= 0}.
-3. This is a single linear set with base (0,0) and period (1,1).
-4. Semilinear: YES. Consistent with CFL (and indeed {a^n b^n} is CFL).
-
 **Output:**
 ```json
 {
@@ -122,13 +114,6 @@ The Parikh image Psi(L) is the set of all such vectors.
 ```
 
 ### Example 2: {a^(2^n) | n >= 0} — Non-semilinear (NOT CFL)
-
-**Reasoning (Chain-of-Thought):**
-1. Alphabet: {a}, dimension 1.
-2. Parikh image: {2^n : n >= 0} = {1, 2, 4, 8, 16, ...}.
-3. A semilinear set in dimension 1 is a finite union of arithmetic progressions.
-4. {2^n} grows exponentially, so it cannot be a finite union of arithmetic progressions.
-5. Non-semilinear: YES. Therefore NOT CFL by Parikh's theorem.
 
 **Output:**
 ```json
@@ -151,17 +136,6 @@ The Parikh image Psi(L) is the set of all such vectors.
 ### Example 3: {w1w2w1w3} — Semilinear but non-CFL
 
 **Task:** L = {w1w2w1w3 | w2 in {b,c}*, w1 in {a,b}*, w3 in {a,c}*, |wi| > 0}
-
-**Reasoning (Chain-of-Thought):**
-1. Alphabet: {a, b, c}, dimension 3.
-2. Parikh vector: (|w|_a, |w|_b, |w|_c).
-3. Since w1 in {a,b}*, w2 in {b,c}*, w3 in {a,c}*, and w1 appears twice:
-   - |w|_a = 2*|w1|_a + |w3|_a (w1 contributes a's twice, w3 also has a's)
-   - |w|_b = 2*|w1|_b + |w2|_b (w1 contributes b's twice, w2 also has b's)
-   - |w|_c = |w2|_c + |w3|_c
-4. With |w1| >= 1, |w2| >= 1, |w3| >= 1, and allowing various distributions.
-5. The Parikh image is complex but is a projection of a linear combination of non-negative integer variables, hence semilinear.
-6. Semilinearity does not help — the language is known to be non-CFL (copying dependency).
 
 **Output:**
 ```json

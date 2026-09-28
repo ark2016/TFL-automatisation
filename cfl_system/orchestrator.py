@@ -29,12 +29,30 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
+from cfl_system.config import MAX_CALLS_PER_AGENT
 from cfl_system.lib.cfl_ir_schema import validate_cfl_ir
 from cfl_system.lib.cfl_hypothesis import analyze_cfl_hypothesis
 from cfl_system.lib.language_preprocess import preprocess_language
-from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
+from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir, grammar_oracle, pda_oracle
 from cfl_system.lib.cfl_oracle_test import normalize_agent_pda, oracle_test
 from cfl_system.lib.claim_verifier import verify_agent_claims
+
+# Shared Anthropic call machinery (TODO.md §3): kwargs building, streaming +
+# retry/backoff, typed errors, concurrency semaphore, usage tracking. See
+# agent_system/lib/llm_client.py -- LiveRunner below is a thin wrapper.
+from agent_system.lib.llm_client import (
+    AnthropicClient,
+    FatalAPIError,
+    RetryableAPIError,
+    UsageTracker,
+    _is_adaptive_model as _shared_is_adaptive_model,
+    estimate_cost_usd,
+    extract_json as _extract_json,
+    extract_json_with_error as _extract_json_with_error,
+    format_structured_output_flag as _format_structured_output_flag,
+    get_concurrency_semaphore,
+)
+from cfl_system.lib.agent_output_schema import schema_for as _output_schema_for
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +83,22 @@ _DESTRUCTIVE_AGENTS = (
 _TRUST_RANK = {"not_verified": 0, "well_formed": 1, "bounded_pass": 2, "verified": 3}
 
 # docs/VERDICT_POLICY.md §2: confidence ceiling by strongest supporting basis.
+# well_formed capped at 0.55 (not 0.60): without a machine check, confidence
+# must not reach 0.6, the threshold at which tfl-eval treats a verdict as
+# "confident" (docs/VERDICT_POLICY.md §2, 2026-09-27).
 _CONFIDENCE_CAP_BY_TRUST = {
     "verified": 0.98,
     "bounded_pass": 0.85,
-    "well_formed": 0.60,
+    "well_formed": 0.55,
     "not_verified": 0.40,
 }
 _CONTRADICTION_CONFIDENCE_CAP = 0.50
+# docs/VERDICT_POLICY.md R3: when a contradiction survives R3' cross-check,
+# the "verified" side still wins, but capped at 0.85 (not the full 0.98 of
+# an uncontested `verified` basis) -- the fact that a real contradiction was
+# raised at all keeps some doubt alive even when one side is deterministically
+# fully proven.
+_CONTRADICTION_VERIFIED_CAP = 0.85
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +148,10 @@ class PipelineState(TypedDict):
     # -- Accumulated --
     evidence: dict
     errors: Annotated[list, operator.add]
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): notes accumulated whenever a
+    # specialist's call cap is reached and a requested retry is skipped for
+    # it -- surfaced in the final verdict_gate.downgrades (apply_verdict_gate).
+    call_cap_notes: Annotated[list, operator.add]
 
     # -- Fan-out helper --
     _specialist_name: str
@@ -150,7 +181,14 @@ class MockRunner:
 
 
 class LiveRunner:
-    """Run agents via Anthropic API using prompts from prompts/ directory."""
+    """Run agents via Anthropic API using prompts from prompts/ directory.
+
+    Thin wrapper (TODO.md §3): prompts/contracts/JSON-parsing/Haiku-repair
+    stay pipeline-specific; the actual model call goes through the shared
+    ``agent_system.lib.llm_client.AnthropicClient`` — kwargs building,
+    stream-and-collect, typed retry/backoff, the process-wide concurrency
+    semaphore, and usage tracking all live there now, not here.
+    """
 
     def __init__(self, api_key: str | None = None, verbose: bool = False):
         from cfl_system.config import (
@@ -196,6 +234,15 @@ class LiveRunner:
         # into pure JSON. One repair call ≈ $0.01 vs ≈ $0.25 for a full
         # Opus retry, and it's faster too (~2s vs ~30s).
         self._json_repair_model = "claude-haiku-4-5"
+        # Shared call machinery (TODO.md §3): kwargs building, streaming,
+        # retry/backoff, usage tracking. Not the SDK client itself — `self.
+        # client` stays the mutable attribute (tests swap it for a mock).
+        self.usage_tracker = UsageTracker()
+        self._shared = AnthropicClient(
+            default_effort=self.default_effort,
+            refusal_fallback=self.refusal_fallback,
+            usage_tracker=self.usage_tracker,
+        )
 
     # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
     # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
@@ -209,7 +256,7 @@ class LiveRunner:
     @classmethod
     def _is_adaptive_model(cls, model: str) -> bool:
         """Whether `model` runs adaptive thinking (and rejects `temperature`)."""
-        return bool(model) and not cls._LEGACY_MODEL_RE.search(model)
+        return _shared_is_adaptive_model(model)
 
     def _build_request_kwargs(self, model: str, max_tokens: int,
                               temperature: float, system_prompt: str,
@@ -218,30 +265,23 @@ class LiveRunner:
 
         Thinking models get `thinking: adaptive` + an explicit effort level
         (Opus 5.5 would silently default to "medium"); legacy models get
-        `temperature` instead.
+        `temperature` instead. Delegates to the shared AnthropicClient so
+        every pipeline builds kwargs the same way (TODO.md §3).
         """
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_msg}],
-        }
-        if self._is_adaptive_model(model):
-            kwargs["thinking"] = {"type": "adaptive"}
-            kwargs["output_config"] = {"effort": effort or self.default_effort}
-            if self.refusal_fallback and model.startswith(self._FALLBACK_MODEL_PREFIXES):
-                kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
-                kwargs["extra_body"] = {"fallbacks": "default"}
-        else:
-            kwargs["temperature"] = temperature
-        return kwargs
+        return self._shared.build_request_kwargs(
+            model, max_tokens, system_prompt, user_msg,
+            effort=effort, temperature=temperature,
+        )
 
     @staticmethod
-    def _refusal_error(agent_name: str, final_msg: Any) -> dict:
-        """agent_error dict for a safety-classifier decline (stop_reason="refusal")."""
-        details = getattr(final_msg, "stop_details", None)
-        category = getattr(details, "category", None) if details else None
-        explanation = getattr(details, "explanation", None) if details else None
+    def _refusal_error(agent_name: str, result: Any) -> dict:
+        """agent_error dict for a safety-classifier decline (stop_reason="refusal").
+
+        `result` is a ``llm_client.CallResult`` (or anything exposing the
+        same ``refusal_category`` / ``refusal_explanation`` attributes).
+        """
+        category = getattr(result, "refusal_category", None)
+        explanation = getattr(result, "refusal_explanation", None)
         msg = f"Model refused (stop_reason=refusal, category={category})"
         if explanation:
             msg += f": {explanation}"
@@ -300,7 +340,8 @@ class LiveRunner:
             temperature=0.0, system_prompt=system, user_msg=user_msg,
         )
         try:
-            response = self.client.messages.create(**request_kwargs)
+            with get_concurrency_semaphore():
+                response = self.client.messages.create(**request_kwargs)
         except Exception as exc:
             logger.warning("[%s] JSON repair (Haiku) failed: %s", agent_name, exc)
             return None
@@ -311,8 +352,12 @@ class LiveRunner:
             if hasattr(block, "text"):
                 repaired_text += block.text
 
+        usage = getattr(response, "usage", None)
+        self.usage_tracker.record(
+            getattr(response, "model", self._json_repair_model), usage,
+            agent=agent_name, used_structured_output=False,
+        )
         if self.verbose:
-            usage = response.usage
             t_in = usage.input_tokens if usage else 0
             t_out = usage.output_tokens if usage else 0
             print(
@@ -337,6 +382,12 @@ class LiveRunner:
         if not path.exists():
             raise FileNotFoundError(f"Prompt file not found: {path}")
         text = path.read_text(encoding="utf-8")
+        # cfl_classifier.md states how many specialists are always dispatched
+        # regardless of its (advisory) verdict — substitute the count instead
+        # of hardcoding it in the prompt text, so adding/removing a
+        # specialist can't silently make the prompt lie (docs/TODO.md §6).
+        if "{{N_SPECIALISTS}}" in text:
+            text = text.replace("{{N_SPECIALISTS}}", str(len(CFL_SPECIALIST_NAMES)))
         self._prompt_cache[agent_name] = text
         return text
 
@@ -400,22 +451,49 @@ class LiveRunner:
             # when max_tokens × projected latency exceeds 10 minutes; streaming
             # lifts that cap and handles long proofs / audits reliably.
             # Thinking models get adaptive thinking + this agent's effort;
-            # temperature is only sent to legacy models (Haiku 4.5).
-            request_kwargs = self._build_request_kwargs(
-                model=model, max_tokens=max_tokens,
-                temperature=temperature, system_prompt=system_prompt,
-                user_msg=user_msg, effort=effort,
-            )
+            # temperature is only sent to legacy models (Haiku 4.5). The
+            # shared client also retries a retryable error (429/5xx/network/
+            # broken stream) with backoff before giving up, and never
+            # retries a fatal one (400/401/403/404) — TODO.md §2/§3.
+            # output_schema (TODO.md §3 M): agents with a closed contract
+            # (`cfl_system.lib.agent_output_schema.REQUIRED_KEYS`) get
+            # structured outputs instead of "extract JSON from prose";
+            # unavailable falls back to a plain call automatically.
             try:
-                with self.client.messages.stream(**request_kwargs) as stream:
-                    for chunk in stream.text_stream:
-                        raw_text += chunk
-                    final_msg = stream.get_final_message()
-                if final_msg.usage is not None:
-                    tokens_in = final_msg.usage.input_tokens
-                    tokens_out = final_msg.usage.output_tokens
-                stop_reason = getattr(final_msg, "stop_reason", None)
-            except Exception as exc:
+                result = self._shared.call(
+                    self.client, model=model, max_tokens=max_tokens,
+                    system=system_prompt, user=user_msg,
+                    effort=effort, temperature=temperature,
+                    output_schema=_output_schema_for(agent_name),
+                    agent=agent_name,
+                )
+            except FatalAPIError as exc:
+                if exc.status_code == 400:
+                    # A 400 that isn't a schema rejection AnthropicClient.call
+                    # could itself recover from (that already retried once
+                    # without the schema) is a malformed *request* for this
+                    # one agent -- prompt too long, a rejected refusal-fallback
+                    # header, ... -- not a dead key or missing model access.
+                    # Report it as this agent's agent_error (like a
+                    # RetryableAPIError below) instead of aborting the whole
+                    # pipeline run.
+                    elapsed = _time.monotonic() - t0
+                    logger.error("[%s] 400 BadRequest after %.1fs: %s", agent_name, elapsed, exc)
+                    return {
+                        "agent": agent_name,
+                        "status": "agent_error",
+                        "verdict": None,
+                        "confidence": 0.0,
+                        "evidence": {},
+                        "errors": [f"API error: {exc}"],
+                    }
+                # 401/403/404: a dead key, no access to the model, or an
+                # unknown model ID -- fail fast instead of treating this as
+                # one agent's problem; re-raised as the original SDK
+                # exception type for backward compatibility.
+                logger.error("[%s] fatal API error: %s", agent_name, exc)
+                raise (exc.original if exc.original is not None else exc)
+            except RetryableAPIError as exc:
                 elapsed = _time.monotonic() - t0
                 logger.error("[%s] API error after %.1fs: %s", agent_name, elapsed, exc)
                 # Return an agent_error dict (not None) so downstream nodes
@@ -430,21 +508,30 @@ class LiveRunner:
                     "errors": [f"API error: {exc}"],
                 }
 
+            raw_text = result.text
+            stop_reason = result.stop_reason
+            if result.usage is not None:
+                tokens_in = result.usage.input_tokens
+                tokens_out = result.usage.output_tokens
+
             elapsed = _time.monotonic() - t0
 
             if self.verbose:
                 extra = f" stop={stop_reason}" if stop_reason and stop_reason != "end_turn" else ""
+                cost = estimate_cost_usd(result.model or model, result.usage)
+                cost_str = f" cost≈${cost:.4f}" if cost is not None else ""
+                so_str = _format_structured_output_flag(result)
                 print(
-                    f"[{agent_name}] model={final_msg.model} effort={effort} "
+                    f"[{agent_name}] model={result.model} effort={effort} "
                     f"tokens_in={tokens_in} tokens_out={tokens_out} "
-                    f"time={elapsed:.1f}s max={max_tokens}{extra}",
+                    f"time={elapsed:.1f}s max={max_tokens}{extra}{cost_str}{so_str}",
                     file=sys.stderr, flush=True,
                 )
 
             # A safety-classifier decline is not a parse problem: retrying or
             # JSON-repairing the (empty/partial) text cannot help.
             if stop_reason == "refusal":
-                return self._refusal_error(agent_name, final_msg)
+                return self._refusal_error(agent_name, result)
 
             parsed, parse_error = _extract_json_with_error(raw_text)
             if parsed is not None:
@@ -458,6 +545,23 @@ class LiveRunner:
             was_truncated = stop_reason == "max_tokens"
             repaired = self._repair_json_with_haiku(agent_name, raw_text, was_truncated)
             if repaired is not None:
+                repaired["_repaired"] = True
+                if was_truncated:
+                    # A response that hit max_tokens and had to be patched
+                    # back into shape by Haiku is not a full agent output —
+                    # the model never finished its reasoning/proof. Flag it
+                    # and cap its trustworthiness (docs/TODO.md §2,
+                    # docs/VERDICT_POLICY.md §2 "not_verified" ceiling)
+                    # instead of letting it pass downstream as a normal
+                    # "success"/"verified" result.
+                    repaired["_truncated"] = True
+                    repaired["status"] = "inconclusive"
+                    conf = repaired.get("confidence")
+                    try:
+                        conf = float(conf)
+                    except (TypeError, ValueError):
+                        conf = 0.40
+                    repaired["confidence"] = min(conf, 0.40)
                 return repaired
 
             # Distinguish truncation (max_tokens) from other parse failures.
@@ -491,89 +595,10 @@ class LiveRunner:
         }
 
 
-def _extract_json(text: str) -> dict | None:
-    """Extract JSON object from LLM response text (back-compat wrapper)."""
-    parsed, _ = _extract_json_with_error(text)
-    return parsed
-
-
-def _extract_json_with_error(text: str) -> tuple[dict | None, str | None]:
-    """Extract JSON object and return (parsed, error_detail).
-
-    error_detail is None on success, otherwise a human-readable string
-    describing what went wrong at which position, to be fed back to the
-    LLM on retry. Tries three strategies in order:
-      1) whole text as JSON
-      2) content of a ```json fenced block
-      3) substring between first '{' and last '}'
-    """
-    text = text.strip()
-    if not text:
-        return None, "response was empty"
-
-    last_err: json.JSONDecodeError | None = None
-    last_strategy: str = ""
-
-    # Strategy 1: whole text
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return obj, None
-        return None, f"parsed as JSON but top-level is {type(obj).__name__}, not object"
-    except json.JSONDecodeError as e:
-        last_err, last_strategy = e, "whole text"
-
-    # Strategy 2: fenced code block
-    fence_match = _re.search(r"```(?:json)?\s*\n(.*?)\n```", text, _re.DOTALL)
-    if fence_match:
-        try:
-            obj = json.loads(fence_match.group(1))
-            if isinstance(obj, dict):
-                return obj, None
-            return None, f"fenced block parsed but top-level is {type(obj).__name__}"
-        except json.JSONDecodeError as e:
-            last_err, last_strategy = e, "fenced block"
-
-    # Strategy 3: first-brace to last-brace
-    first_brace = text.find("{")
-    last_brace = text.rfind("}")
-    if first_brace != -1 and last_brace > first_brace:
-        substring = text[first_brace:last_brace + 1]
-        try:
-            obj = json.loads(substring)
-            if isinstance(obj, dict):
-                return obj, None
-            return None, f"brace-substring parsed but top-level is {type(obj).__name__}"
-        except json.JSONDecodeError as e:
-            last_err, last_strategy = e, "brace substring"
-
-    if last_err is not None:
-        # Build a precise error string with position and local context
-        msg = last_err.msg
-        line = last_err.lineno
-        col = last_err.colno
-        pos = last_err.pos
-
-        # Show ~60 chars around the failure point to help the LLM locate it
-        src = text
-        if last_strategy == "fenced block" and fence_match:
-            src = fence_match.group(1)
-        elif last_strategy == "brace substring" and first_brace != -1:
-            src = text[first_brace:last_brace + 1]
-
-        start = max(0, pos - 30)
-        end = min(len(src), pos + 30)
-        context = src[start:end].replace("\n", "\\n")
-        pointer_offset = pos - start
-        pointer = " " * pointer_offset + "^"
-
-        return None, (
-            f"{msg} at line {line} column {col} (char {pos}) "
-            f"— tried strategy: {last_strategy}. "
-            f"Context around failure:\n  {context}\n  {pointer}"
-        )
-
-    return None, "no JSON object found in response (no '{' / '}' delimiters)"
+# _extract_json / _extract_json_with_error now come from
+# agent_system.lib.llm_client (TODO.md §3 — shared across every pipeline so
+# the JSON-retry error message stays uniform: position + ±40 chars of
+# context, not a bare "length=N" like dcfl's old copy had drifted to).
 
 
 # ---------------------------------------------------------------------------
@@ -593,8 +618,19 @@ def _run_agent(state: PipelineState, agent_name: str, input_data: dict | None = 
     except NotImplementedError:
         return None
     except Exception as exc:
+        # Do not swallow this silently: a runner exception (network error,
+        # bad mock file, etc.) must surface the same way an `agent_error`
+        # status does, so the caller records it in state["errors"] instead
+        # of the agent looking merely "not dispatched" (TODO.md §2).
         logger.warning("Agent '%s' failed: %s", agent_name, exc)
-        return None
+        return {
+            "agent": agent_name,
+            "status": "agent_error",
+            "verdict": None,
+            "confidence": 0.0,
+            "evidence": {},
+            "errors": [f"runner exception: {exc}"],
+        }
 
 
 def log_msg(state: PipelineState, msg: str) -> None:
@@ -676,23 +712,46 @@ def _build_reasoning_input(state: PipelineState) -> dict:
 
 
 def _collect_failed_agents(state: PipelineState) -> list[dict]:
-    """Return list of {agent, error} for agents that were dispatched but failed.
+    """Return list of {agent, error} for agents that are *currently* failed.
 
-    Used to tell the reasoning agent explicitly which specialists did not
-    contribute, so it doesn't silently assume coverage it doesn't have.
+    `state["errors"]` is append-only across the whole run (Annotated with
+    `operator.add`), so it still holds a round-1 failure message for an
+    agent that succeeded on a later retry. Scanning it naively (as this
+    function used to) would keep such an agent in `agents_failed` forever
+    (docs/TODO.md §2: "агент, успешный при ретрае, не остаётся в
+    agents_failed"). Instead: derive the *last* error message per agent
+    from the log (latest round wins), then only report agents that have
+    no successful result in the current state — i.e. specialists missing
+    from `agent_results`, and `proof_checker`/`formalizer` missing from
+    their own per-round output slots.
     """
-    failed: list[dict] = []
-    seen: set[str] = set()
+    last_error_by_agent: dict[str, str] = {}
     for err in state.get("errors", []):
         if not isinstance(err, str) or ":" not in err:
             continue
         name, _, msg = err.partition(":")
         name = name.strip()
-        if name in seen:
-            continue
         if name in CFL_SPECIALIST_NAMES or name in ("proof_checker", "formalizer"):
-            failed.append({"agent": name, "error": msg.strip()})
-            seen.add(name)
+            # Overwrite on each occurrence so the *latest* round's message
+            # (not the first) is what ends up attached to the agent.
+            last_error_by_agent[name] = msg.strip()
+
+    agent_results = state.get("agent_results", {})
+    proof_checker_ok = bool(state.get("proof_checker_output"))
+    formalizer_ok = bool(state.get("evidence", {}).get("formalizer"))
+
+    failed: list[dict] = []
+    for name, msg in last_error_by_agent.items():
+        if name in CFL_SPECIALIST_NAMES:
+            currently_ok = name in agent_results
+        elif name == "proof_checker":
+            currently_ok = proof_checker_ok
+        elif name == "formalizer":
+            currently_ok = formalizer_ok
+        else:
+            currently_ok = False
+        if not currently_ok:
+            failed.append({"agent": name, "error": msg})
     return failed
 
 
@@ -751,6 +810,86 @@ def _normalize_oracle_test(raw: dict | None) -> dict:
     if orig_status != normalized["status"]:
         normalized["raw_status"] = orig_status
     return normalized
+
+
+def _normalize_retry_hints(hints_raw: Any) -> dict:
+    """Normalize ``retry_planner.hints`` / ``reasoning.retry_plan.hints`` to
+    the ``{agent_name: {...hint fields...}}`` dict every downstream consumer
+    (this function's own caller, ``run_retry_planner_node``) expects.
+
+    Accepts two shapes:
+
+    - a **dict** keyed by specialist name (``{"pumping_cfl": {...}, ...}``)
+      -- what the prompt's own "## Output Format" documents, and what the
+      legacy prose-extraction fallback path (no ``output_config.format``)
+      still produces, unchanged;
+    - a **list** of ``{"agent": "<name>", ...hint fields...}`` objects --
+      what a genuine ``output_config.format`` structured-outputs call now
+      produces (``agent_output_schema._RETRY_HINTS_SCHEMA``): the API caps
+      how many *union-typed* (nullable/anyOf) parameters a schema may carry
+      (separately from its optional-parameter cap -- both confirmed live,
+      see ``agent_system/lib/testing/schema_checks.py``'s module
+      docstring), and a *map* with one subschema copy per specialist
+      multiplies either kind of per-field flexibility by 9 copies; an
+      *array* of one shared item schema does not -- the schema is walked
+      once regardless of how many elements the model actually returns. The
+      trade-off is that a structured-outputs call must now name the agent
+      explicitly inside each hint object instead of as its dict key, so
+      this immediately restores the dict shape every consumer already
+      expects, before any of them see it.
+
+    Anything else (not a dict, not a list, a list entry missing ``"agent"``
+    or not a dict at all) is dropped rather than raising -- the LLM may
+    still produce malformed JSON via the legacy path, same as before this
+    normalization existed.
+    """
+    if isinstance(hints_raw, dict):
+        return hints_raw
+    if isinstance(hints_raw, list):
+        return {
+            item["agent"]: item for item in hints_raw
+            if isinstance(item, dict) and isinstance(item.get("agent"), str)
+        }
+    return {}
+
+
+def _normalize_morphism_mapping(out: dict | None) -> dict | None:
+    """Normalize ``morphism``'s ``evidence.morphism.mapping`` back to the
+    ``{symbol: image}`` dict every worked example in ``cfl_morphism.md`` and
+    every consumer downstream (the renderer's generic evidence panel)
+    expects, immediately after parsing -- same idea as
+    ``_normalize_retry_hints`` for ``reasoning``/``retry_planner``'s
+    ``hints``.
+
+    A genuine ``output_config.format`` call now produces an **array** of
+    ``{"symbol": ..., "image": ...}`` objects instead (see
+    ``cfl_system.lib.agent_output_schema._MORPHISM_MAPPING_SCHEMA``'s
+    docstring for why: ``additionalProperties: false`` can't leave open a
+    key set that varies per task, so the mapping had no schema at all until
+    it was remodelled as an array of a fixed shape). The legacy
+    prose-extraction fallback path (no schema) still produces the ``{symbol:
+    image}`` dict shape unchanged, so this only touches the array shape;
+    anything else (missing/not-a-dict `evidence`, `evidence.morphism`,
+    or `mapping`, or a list entry missing `symbol`/`image`) is left alone
+    rather than raising -- the LLM may still emit malformed JSON via the
+    legacy path, same as before this normalization existed."""
+    if not isinstance(out, dict):
+        return out
+    evidence = out.get("evidence")
+    if not isinstance(evidence, dict):
+        return out
+    morphism = evidence.get("morphism")
+    if not isinstance(morphism, dict):
+        return out
+    mapping = morphism.get("mapping")
+    if not isinstance(mapping, list):
+        return out
+    morphism["mapping"] = {
+        item["symbol"]: item["image"] for item in mapping
+        if isinstance(item, dict) and isinstance(item.get("symbol"), str)
+        and isinstance(item.get("image"), str)
+    }
+    return out
 
 
 def _normalize_claim_verification(raw: dict | None) -> dict:
@@ -815,13 +954,29 @@ def _collect_agent_trust(state: PipelineState) -> dict[str, str]:
     the shared oracle_test trust (there is one oracle_test per round, covering
     whichever of cfg_builder/pda_builder produced an artifact); every other
     agent gets its own claim_verification trust.
+
+    A constructive agent only gets the shared oracle_test trust when it
+    actually contributed the artifact that trust describes: `status ==
+    "success"` AND a usable grammar/PDA is present. Without this guard, a
+    `pda_builder` that errored out (or never produced a PDA) would still be
+    stamped with cfg_builder's `bounded_pass`/`refuted` verdict just because
+    both names are in `agent_results` -- which then lets a refuted
+    cfg_builder hide behind pda_builder's borrowed trust in the R3'
+    cross-check below (reviewer finding: contradiction stuck at `None`/0.5
+    instead of resolving to `non_cfl`).
     """
     trust: dict[str, str] = {}
     agent_results = state.get("agent_results") or {}
     ot_trust = _oracle_trust(state.get("oracle_test_result"))
     for name in _CONSTRUCTIVE_AGENTS:
-        if name in agent_results:
-            trust[name] = ot_trust
+        output = agent_results.get(name)
+        if not isinstance(output, dict) or output.get("status") != "success":
+            continue
+        if name == "cfg_builder" and not _agent_grammar(output):
+            continue
+        if name == "pda_builder" and not _agent_pda(output)[0]:
+            continue
+        trust[name] = ot_trust
     # claim_verification has a generic not_verified fallback entry for ANY
     # dispatched agent without a dedicated verifier (cfg_builder, pda_builder
     # included) — that fallback must never clobber the oracle-derived trust
@@ -893,6 +1048,175 @@ def _strongest_destructive_trust(
     return _strongest_trust(trust_map, eligible)
 
 
+def _agent_grammar(output: dict | None) -> dict | None:
+    """cfg_builder's grammar, wherever it landed (flat or evidence-wrapped —
+    same lookup as `assemble_result_node`/`assemble_early_failure`)."""
+    if not isinstance(output, dict):
+        return None
+    return output.get("grammar") or (output.get("evidence") or {}).get("grammar")
+
+
+def _agent_pda(output: dict | None) -> tuple[dict | None, str | None]:
+    """pda_builder's pda + acceptance_mode, wherever they landed."""
+    if not isinstance(output, dict):
+        return None, None
+    evidence = output.get("evidence") or {}
+    pda = output.get("pda") or evidence.get("pda")
+    mode = output.get("acceptance_mode") or evidence.get("acceptance_mode")
+    return pda, mode
+
+
+def _constructive_artifact_oracle(agent_results: dict, agent_name: str):
+    """Build a membership oracle from the constructive artifact `agent_name`
+    actually produced (grammar -> CYK, PDA -> simulator), or None if it isn't
+    usable. Never raises."""
+    output = agent_results.get(agent_name)
+    try:
+        if agent_name == "cfg_builder":
+            grammar = _agent_grammar(output)
+            if not grammar:
+                return None
+            return grammar_oracle(grammar)
+        if agent_name == "pda_builder":
+            pda, mode = _agent_pda(output)
+            if not pda:
+                return None
+            return pda_oracle(normalize_agent_pda(pda, acceptance_mode=mode))
+    except Exception:
+        return None
+    return None
+
+
+def _cross_check_r3prime(
+    state: PipelineState,
+    trust_map: dict[str, str],
+    constructive_trust: str,
+    destructive_trust: str,
+) -> dict[str, Any]:
+    """docs/VERDICT_POLICY.md R3' — deterministic cross-check attempted before
+    falling back to an unresolved R3 contradiction.
+
+    Runs the destructive proof's own witness words (already instantiated by
+    the step-2 semantic checks in claim_verifier.py — reused here via
+    `claim_verification[agent]["details"]["destructive_witnesses"]`, never
+    re-derived) through both the task's language oracle and EVERY
+    constructive artifact still in play (grammar via CYK / PDA via the
+    simulator) — not just the first one found. A shared oracle_test trust
+    can cover more than one constructive agent (cfg_builder AND pda_builder
+    both bounded_pass), and testing only the first by iteration order would
+    let a genuinely-wrong second artifact hide behind the first's refutation
+    instead of being refuted itself (reviewer finding):
+      (a) a witness the destructive proof claims is NOT in L, but a
+          constructive artifact accepts -> THAT artifact is `refuted`;
+          a witness claimed IN L that it rejects -> also `refuted`. Each
+          constructive agent is checked independently.
+      (b) a witness claimed NOT in L that the oracle actually says IS in L
+          (or vice versa) -> the destructive proof itself is `refuted`.
+    Never raises; any missing evidence (no witnesses, no oracle, no usable
+    artifact) just leaves `performed=False` and nothing gets refuted.
+    """
+    result: dict[str, Any] = {
+        "performed": False,
+        "constructive_agents": [],
+        "destructive_agent": None,
+        "constructive_refuted_agents": [],
+        "destructive_refuted": False,
+        "constructive_reasons": {},
+        "destructive_reason": None,
+        "counterexamples": [],
+    }
+
+    # Every constructive agent that currently clears its threshold (not
+    # already refuted) and actually has a usable artifact -- each is tested
+    # on its own merits, not just the first match.
+    constructive_agents = [
+        a for a in _CONSTRUCTIVE_AGENTS
+        if trust_map.get(a) not in (None, "refuted")
+        and _constructive_artifact_oracle(state.get("agent_results") or {}, a) is not None
+    ]
+    destructive_agent = next(
+        (
+            a for a in _DESTRUCTIVE_AGENTS
+            if trust_map.get(a) == destructive_trust and _destructive_agent_argues_non_cfl(state, a)
+        ),
+        None,
+    )
+    result["constructive_agents"] = constructive_agents
+    result["destructive_agent"] = destructive_agent
+    if not constructive_agents or not destructive_agent:
+        return result
+
+    claim_verification = state.get("claim_verification") or {}
+    witnesses = ((claim_verification.get(destructive_agent) or {}).get("details") or {}).get(
+        "destructive_witnesses"
+    )
+    if not isinstance(witnesses, list) or not witnesses:
+        return result
+
+    try:
+        lang_oracle = cfl_oracle_from_ir(state.get("ir") or {})
+    except Exception:
+        return result
+    if getattr(lang_oracle, "is_approximate", False):
+        return result
+
+    artifact_oracles = {
+        a: _constructive_artifact_oracle(state.get("agent_results") or {}, a)
+        for a in constructive_agents
+    }
+    artifact_oracles = {a: o for a, o in artifact_oracles.items() if o is not None}
+    if not artifact_oracles:
+        return result
+
+    result["performed"] = True
+
+    for w in witnesses:
+        if not isinstance(w, dict):
+            continue
+        word = w.get("word")
+        expected_in_l = w.get("expected_in_l")
+        if not isinstance(word, str) or not word or not isinstance(expected_in_l, bool):
+            continue
+        try:
+            oracle_says = bool(lang_oracle(word))
+        except Exception:
+            continue
+
+        if not result["destructive_refuted"] and oracle_says != expected_in_l:
+            result["destructive_refuted"] = True
+            result["destructive_reason"] = (
+                f"witness '{word}' (source: {w.get('source')}) claimed "
+                f"{'in L' if expected_in_l else 'NOT in L'}, but the oracle says "
+                f"{'in L' if oracle_says else 'NOT in L'}"
+            )
+            result["counterexamples"].append({"word": word, "issue": result["destructive_reason"]})
+
+        if oracle_says == expected_in_l:
+            # Only test artifacts against a witness the oracle itself just
+            # confirmed -- an oracle-refuted witness says nothing about them.
+            for agent, artifact_oracle in artifact_oracles.items():
+                if agent in result["constructive_refuted_agents"]:
+                    continue
+                try:
+                    artifact_says = bool(artifact_oracle(word))
+                except Exception:
+                    continue
+                if artifact_says != expected_in_l:
+                    result["constructive_refuted_agents"].append(agent)
+                    verb = "rejects" if expected_in_l else "accepts"
+                    reason = (
+                        f"artifact {verb} '{word}' (source: {w.get('source')}), which the "
+                        f"oracle says is {'in L' if expected_in_l else 'NOT in L'}"
+                    )
+                    result["constructive_reasons"][agent] = reason
+                    result["counterexamples"].append({"word": word, "issue": reason})
+
+        if result["destructive_refuted"] and len(result["constructive_refuted_agents"]) == len(artifact_oracles):
+            break
+
+    return result
+
+
 def apply_verdict_gate(state: PipelineState) -> dict:
     """Deterministic gate applied to the reasoning agent's proposed verdict.
 
@@ -916,9 +1240,6 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     constructive_trust, constructive_refuted = _strongest_trust(trust_map, _CONSTRUCTIVE_AGENTS)
     destructive_trust, destructive_refuted = _strongest_destructive_trust(state, trust_map)
 
-    basis: list[dict] = [
-        {"agent": name, "trust": t} for name, t in sorted(trust_map.items())
-    ]
     downgrades: list[str] = []
     basis_note: str | None = None
 
@@ -930,9 +1251,48 @@ def apply_verdict_gate(state: PipelineState) -> dict:
         if budget_left:
             downgrades.append(f"{reason} -> retry")
             action = "retry"
+            return
+        # docs/VERDICT_POLICY.md R4' — retry budget exhausted (or the
+        # reasoning agent's proposal is inadmissible and there is no budget
+        # left to fix it): the gate does NOT default straight to
+        # inconclusive. It picks the strongest admissible basis still
+        # standing — destructive claim >= well_formed (not refuted) first,
+        # then a constructive artifact >= bounded_pass, only then
+        # inconclusive. `failure` stays reserved for technical failures
+        # (API errors, invalid input), never for "reasoning argued the
+        # wrong side" (precedent: cfl-07/cfl-12 eval live-run ending in
+        # `failure 0.0` despite a well_formed destructive proof being on
+        # record). The confidence ceiling by trust (§2, applied further
+        # below from the unchanged constructive_trust/destructive_trust)
+        # takes care of the cap; this function only picks the verdict.
+        action = "done"
+        # docs/VERDICT_POLICY.md R4' — `destructive_trust`/`constructive_trust`
+        # (from `_strongest_trust`/`_strongest_destructive_trust`) are already
+        # computed over only the NON-refuted agents on each side; the
+        # `_refuted` flags mean "at least one agent on this side is refuted"
+        # (any agent, not necessarily the one behind the best trust), so
+        # gating on them here on top of the rank check would wrongly throw
+        # away a real admissible basis whenever some OTHER, unrelated agent
+        # on the same side happened to be refuted (reviewer finding:
+        # ogden=refuted + pumping_cfl=well_formed was being read as "no
+        # admissible destructive basis" even though pumping_cfl's own
+        # well_formed claim is exactly what R1/R2 asks for).
+        if _trust_rank(destructive_trust) >= _trust_rank("well_formed"):
+            verdict = "non_cfl"
+            downgrades.append(
+                f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                f"destructive claim (trust={destructive_trust}) -> non_cfl"
+            )
+        elif _trust_rank(constructive_trust) >= _trust_rank("bounded_pass"):
+            verdict = "cfl"
+            downgrades.append(
+                f"{reason} -> retry budget exhausted -> strongest admissible basis: "
+                f"constructive artifact (trust={constructive_trust}) -> cfl"
+            )
         else:
-            downgrades.append(f"{reason} -> inconclusive")
-            action = "done"
+            downgrades.append(
+                f"{reason} -> retry budget exhausted -> strongest admissible basis: inconclusive"
+            )
             verdict = None
             confidence = min(confidence, 0.40)
 
@@ -958,36 +1318,103 @@ def apply_verdict_gate(state: PipelineState) -> dict:
                 "reasoning proposed done/non_cfl without a >= well_formed destructive claim"
             )
 
-    # R3: contradiction — both sides clear their threshold (destructive_trust/
-    # constructive_trust already exclude any individually-refuted agent, per
-    # _strongest_trust). Flagged regardless of whether one side outranks the
-    # other; confidence stays capped at 0.50 while unresolved.
+    # R3/R3': contradiction — both sides clear their threshold (destructive_
+    # trust/constructive_trust already exclude any individually-refuted
+    # agent, per _strongest_trust).
     contradiction = (
         _trust_rank(constructive_trust) >= _trust_rank("bounded_pass")
         and _trust_rank(destructive_trust) >= _trust_rank("well_formed")
     )
+    contradiction_details: dict[str, Any] | None = None
+    resolved_cap = _CONTRADICTION_CONFIDENCE_CAP
     if contradiction:
+        orig_constructive_trust = constructive_trust
+        orig_destructive_trust = destructive_trust
+
+        # R3' — try to resolve the contradiction deterministically before
+        # falling back to "inconclusive": run the destructive proof's own
+        # witness words (reused from claim_verifier's step-2 checks) through
+        # the language oracle AND the constructive artifact.
+        cross_check = _cross_check_r3prime(state, trust_map, constructive_trust, destructive_trust)
+
+        constructive_any_refuted = bool(cross_check["constructive_refuted_agents"])
+        if constructive_any_refuted:
+            for agent in cross_check["constructive_refuted_agents"]:
+                trust_map[agent] = "refuted"
+                downgrades.append(
+                    f"R3' cross-check refuted constructive artifact "
+                    f"({agent}): {cross_check['constructive_reasons'][agent]}"
+                )
+            constructive_trust, constructive_refuted = _strongest_trust(trust_map, _CONSTRUCTIVE_AGENTS)
+        if cross_check["destructive_refuted"]:
+            trust_map[cross_check["destructive_agent"]] = "refuted"
+            downgrades.append(
+                f"R3' cross-check refuted destructive claim "
+                f"({cross_check['destructive_agent']}): {cross_check['destructive_reason']}"
+            )
+            destructive_trust, destructive_refuted = _strongest_destructive_trust(state, trust_map)
+
+        contradiction_details = {
+            "constructive": {"agent": cross_check["constructive_agents"], "trust": orig_constructive_trust},
+            "destructive": {"agent": cross_check["destructive_agent"], "trust": orig_destructive_trust},
+            "cross_check": {k: v for k, v in cross_check.items()
+                             if k not in ("constructive_agents", "destructive_agent")},
+        }
+
+        contradiction = (
+            _trust_rank(constructive_trust) >= _trust_rank("bounded_pass")
+            and _trust_rank(destructive_trust) >= _trust_rank("well_formed")
+        )
+
+        if not contradiction:
+            # R3' resolved it: the surviving side wins, capped by its OWN
+            # trust tier (not the 0.50 unresolved-contradiction cap).
+            if constructive_any_refuted and not cross_check["destructive_refuted"]:
+                verdict = "non_cfl"
+                basis_note = "r3prime_cross_check"
+            elif cross_check["destructive_refuted"] and not constructive_any_refuted:
+                verdict = "cfl"
+                basis_note = "r3prime_cross_check"
+            else:
+                # Both refuted by cross-check (or cross-check never ran) --
+                # no valid basis left either way.
+                verdict = None
+                basis_note = "r3prime_both_refuted" if cross_check["performed"] else basis_note
+                resolved_cap = _CONFIDENCE_CAP_BY_TRUST["not_verified"]
+            action = "done"
+
+    if contradiction:
+        # docs/VERDICT_POLICY.md R3 (post-R3'): "bounded_pass vs well_formed"
+        # no longer settles the dispute by rank -- only a `verified` side
+        # wins (capped at 0.85, not 0.98), otherwise it stays inconclusive.
         downgrades.append(
             "contradiction: constructive artifact (trust="
             f"{constructive_trust}) and destructive claim (trust="
-            f"{destructive_trust}) both clear their threshold"
+            f"{destructive_trust}) both clear their threshold, unresolved by R3' cross-check"
         )
-        if _trust_rank(constructive_trust) > _trust_rank(destructive_trust):
+        if constructive_trust == "verified" and destructive_trust != "verified":
             verdict = "cfl"
-        elif _trust_rank(destructive_trust) > _trust_rank(constructive_trust):
+            resolved_cap = _CONTRADICTION_VERIFIED_CAP
+        elif destructive_trust == "verified" and constructive_trust != "verified":
             verdict = "non_cfl"
+            resolved_cap = _CONTRADICTION_VERIFIED_CAP
         else:
             verdict = None
             basis_note = basis_note or "contradiction"
-        confidence = min(confidence, _CONTRADICTION_CONFIDENCE_CAP)
+            resolved_cap = _CONTRADICTION_CONFIDENCE_CAP
+        confidence = min(confidence, resolved_cap)
 
     # §2: confidence ceiling by the strongest basis actually behind the
     # (possibly just-adjusted) verdict.
     strongest = constructive_trust if _trust_rank(constructive_trust) >= _trust_rank(destructive_trust) else destructive_trust
     cap = _CONFIDENCE_CAP_BY_TRUST.get(strongest, 0.40)
     if contradiction:
-        cap = min(cap, _CONTRADICTION_CONFIDENCE_CAP)
+        cap = min(cap, resolved_cap)
     confidence = min(confidence, cap)
+
+    basis: list[dict] = [
+        {"agent": name, "trust": t} for name, t in sorted(trust_map.items())
+    ]
 
     # proof_verified must come only from these deterministic trust levels,
     # never from proof_checker's own self-assessment (docs/VERDICT_POLICY.md §3).
@@ -1028,6 +1455,13 @@ def apply_verdict_gate(state: PipelineState) -> dict:
             "reason": downgrades[-1] if downgrades else "verdict_gate",
         }
 
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): surface any skipped-retry-
+    # due-to-call-cap notes (run_specialist_node) here too, deduplicated (the
+    # same agent may have been capped across more than one retry round).
+    for note in state.get("call_cap_notes") or []:
+        if note not in downgrades:
+            downgrades.append(note)
+
     verdict_gate: dict[str, Any] = {
         "basis": basis,
         "basis_trust": basis_trust,
@@ -1038,6 +1472,11 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     }
     if basis_note:
         verdict_gate["basis_note"] = basis_note
+    if contradiction_details is not None:
+        # docs/VERDICT_POLICY.md §5/R3': both sides' trust and the R3'
+        # cross-check outcome, so the report always shows both proofs when
+        # a contradiction was raised (whether or not it got resolved).
+        verdict_gate["contradiction_details"] = contradiction_details
 
     return {"reasoning_output": reasoning, "trust": trust_map, "verdict_gate": verdict_gate}
 
@@ -1203,11 +1642,32 @@ def run_specialist_node(state: PipelineState) -> dict:
     Emits a tuple (agent_name, output_or_None). `None` signals that the
     retried agent failed (either runner returned None, or output was
     agent_error). This lets `collect_specialists_node` drop stale results.
+
+    Cost ceiling: a specialist that has already been called
+    ``MAX_CALLS_PER_AGENT`` times for this task (counted from the full,
+    never-reset ``specialist_outputs`` history) is not called again -- the
+    retry planner may still have named it, but the call is skipped and a
+    note is recorded for ``verdict_gate.downgrades`` instead of making
+    another LLM call.
     """
     agent_name = state["_specialist_name"]
+    prior_calls = sum(1 for n, _ in state.get("specialist_outputs", []) if n == agent_name)
+    if prior_calls >= MAX_CALLS_PER_AGENT:
+        log_msg(
+            state,
+            f"  specialist: {agent_name} call cap reached "
+            f"({prior_calls}/{MAX_CALLS_PER_AGENT}), skipping retry",
+        )
+        return {
+            "call_cap_notes": [
+                f"agent {agent_name} call cap reached ({MAX_CALLS_PER_AGENT} calls)"
+            ],
+        }
     log_msg(state, f"  specialist: {agent_name}...")
     inp = _build_specialist_input(state, agent_name)
     out = _run_agent(state, agent_name, inp)
+    if agent_name == "morphism":
+        out = _normalize_morphism_mapping(out)
 
     # Treat agent_error as a failed run — emit None marker so collect
     # can drop previous stale results for this agent on retry. Also
@@ -1693,13 +2153,18 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         should_invert = bool(r_plan.get("should_invert_hypothesis", False))
         max_retries_remaining = r_plan.get("max_retries_remaining")
 
-    # Validate and coerce types defensively (LLM may produce malformed JSON)
-    if not isinstance(hints_raw, dict):
-        log_msg(state, f"  hints is not a dict (type={type(hints_raw).__name__}), ignoring")
-        hints = {}
-    else:
-        # Ensure per-agent hints are also dicts
-        hints = {k: v for k, v in hints_raw.items() if isinstance(v, dict)}
+    # Validate and coerce types defensively (LLM may produce malformed JSON).
+    # `hints_raw` may be the legacy per-agent dict OR (a genuine
+    # output_config.format call) a list of {"agent": ..., ...} objects --
+    # see `_normalize_retry_hints`.
+    hints_dict = _normalize_retry_hints(hints_raw)
+    if hints_raw and not hints_dict:
+        log_msg(
+            state,
+            f"  hints in unrecognized shape (type={type(hints_raw).__name__}), ignoring",
+        )
+    # Ensure per-agent hints are also dicts
+    hints = {k: v for k, v in hints_dict.items() if isinstance(v, dict)}
 
     if max_retries_remaining is not None:
         try:
@@ -1723,6 +2188,32 @@ def run_retry_planner_node(state: PipelineState) -> dict:
             log_msg(state, f"  WARNING: unknown agents in retry list: {invalid}")
         agents_to_retry = valid_agents
 
+    # Cost ceiling (config.MAX_CALLS_PER_AGENT): an agent already at its call
+    # cap must not be handed back to run_specialist_node only to be silently
+    # skipped there (a wasted graph round: dispatch, fan-out, fan-in, all for
+    # zero new specialist output) -- filter it out of the retry plan itself,
+    # counted the same way run_specialist_node counts it (from the full,
+    # never-reset `specialist_outputs` history). A plan made ENTIRELY of
+    # capped agents becomes an empty plan, which the terminal check below
+    # already treats as "give up". Each dropped agent is noted for
+    # verdict_gate.downgrades, same as a cap hit inside run_specialist_node.
+    call_cap_notes: list[str] = []
+    if isinstance(agents_to_retry, list) and agents_to_retry:
+        specialist_outputs = state.get("specialist_outputs", [])
+        filtered_agents = []
+        for a in agents_to_retry:
+            prior = sum(1 for n, _ in specialist_outputs if n == a)
+            if prior >= MAX_CALLS_PER_AGENT:
+                call_cap_notes.append(
+                    f"agent {a} call cap reached ({MAX_CALLS_PER_AGENT} calls), "
+                    "excluded from retry plan"
+                )
+            else:
+                filtered_agents.append(a)
+        if call_cap_notes:
+            log_msg(state, f"  retry_planner: capped, excluded from retry: {call_cap_notes}")
+        agents_to_retry = filtered_agents
+
     # Terminal condition: planner returns empty retry list, max_retries_remaining<=0,
     # OR retry_round will exceed MAX_RETRIES, and no USABLE inversion requested → give up.
     # An inversion is usable only if we haven't already exhausted MAX_INVERSIONS.
@@ -1740,7 +2231,7 @@ def run_retry_planner_node(state: PipelineState) -> dict:
         f"should_invert={should_invert}, terminal={terminal}",
     )
 
-    return {
+    result = {
         "agents_to_retry": agents_to_retry,
         "retry_params": hints,
         "retry_round": next_round,
@@ -1751,6 +2242,9 @@ def run_retry_planner_node(state: PipelineState) -> dict:
             "terminal": terminal,
         },
     }
+    if call_cap_notes:
+        result["call_cap_notes"] = call_cap_notes
+    return result
 
 
 def decide_after_retry_planner(state: PipelineState) -> str:
@@ -1851,6 +2345,10 @@ def formalize_node(state: PipelineState) -> dict:
 
     evidence = dict(state.get("evidence", {}))
     evidence["formalizer"] = output
+    # "markdown" is no longer part of the contract (docs/TODO.md §6: the
+    # proof was being generated twice — structured proof_document plus a
+    # near-duplicate free-form render); kept here only as a fallback for
+    # older mocks/live outputs that still include it.
     proof = output.get("proof_document") or output.get("markdown")
     if proof:
         evidence["formatted_proof"] = proof
@@ -2138,6 +2636,7 @@ def run_pipeline(
         "retry_params": {},
         "evidence": {},
         "errors": [],
+        "call_cap_notes": [],
         "_specialist_name": "",
         "result": {},
     }
@@ -2145,7 +2644,7 @@ def run_pipeline(
     final_state = graph.invoke(initial_state)
     result = final_state.get("result")
     if not result:
-        return {
+        result = {
             "task": ir.get("task_type"),
             "source_text": ir.get("source_text"),
             "verdict": "failure",
@@ -2159,6 +2658,11 @@ def run_pipeline(
             "inversions": 0,
             "errors": ["Graph produced no result"],
         }
+    # Usage/cost block (TODO.md §3) -- additive, present even without a live
+    # agent_runner (an all-zero UsageTracker) so callers can rely on
+    # result["usage"] always existing.
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
     return result
 
 
@@ -2166,7 +2670,8 @@ def run_pipeline(
 # CLI
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Run the CFL analysis pipeline")
@@ -2204,6 +2709,8 @@ if __name__ == "__main__":
         live = LiveRunner(verbose=args.verbose)
 
     result = run_pipeline(ir_data, mock_runner=mock, agent_runner=live, verbose=args.verbose)
+    if args.verbose and live is not None:
+        print(live.usage_tracker.summary_line(), file=sys.stderr)
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -2235,3 +2742,7 @@ if __name__ == "__main__":
         sys.exit(2)
     else:  # failure / None / etc.
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

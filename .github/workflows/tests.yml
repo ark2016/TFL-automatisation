@@ -8,6 +8,10 @@ on:
   # Allow manual trigger from the Actions tab
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # Tests only need to read the repository.
 permissions:
   contents: read
@@ -16,6 +20,7 @@ jobs:
   pytest:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -33,13 +38,17 @@ jobs:
       - name: Install project + test deps
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
-          pip install pytest
+          pip install -e .[dev]
+
+      - name: Lint (ruff, non-blocking)
+        continue-on-error: true
+        run: ruff check .
 
       - name: Run pytest suites for all four pipelines + TFL Lab server
         env:
-          # A real key is never needed — tests use mocks only. Placeholder keeps
-          # any accidental anthropic.Anthropic() constructor from erroring on init.
+          # A real key is never needed — tests use mocks only, and the root
+          # conftest.py also strips this var and blocks live anthropic.*
+          # calls for the whole session as a safety net.
           ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
         run: |
           python -m pytest \
@@ -48,4 +57,38 @@ jobs:
             dcfl_system/tests \
             ll_system/tests \
             ui_server/tests \
-            -q --color=yes
+            tests \
+            -q --color=yes \
+            --cov=agent_system --cov=cfl_system --cov=dcfl_system \
+            --cov=ll_system --cov=ui_server --cov-report=term-missing
+
+  build:
+    name: build wheel + smoke import
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist/
+
+      - name: Install wheel and smoke-import every pipeline
+        run: |
+          pip install dist/*.whl
+          python -c "
+          import agent_system.orchestrator
+          import cfl_system.orchestrator
+          import dcfl_system.orchestrator
+          import ll_system.orchestrator
+          import ui_server.server
+          import tfl_eval.cli
+          print('smoke import OK')
+          "

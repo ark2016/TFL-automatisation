@@ -18,6 +18,9 @@ from collections import deque
 from random import Random
 from typing import Any
 
+from cfl_system.lib.cfl_oracle import grammar_oracle
+from cfl_system.lib.exponent_pattern import parse_exponent_pattern
+
 # ---------------------------------------------------------------------------
 # Internal RNG (deterministic seed for reproducibility)
 # ---------------------------------------------------------------------------
@@ -301,6 +304,126 @@ def build_set_builder_membership_oracle(
             return None
 
     return oracle
+
+
+def build_grammar_membership_oracle(
+    spec: dict,
+    alphabet: list[str],
+    max_word_len: int = 60,
+) -> Any:
+    """Build a membership oracle ``word -> bool | None`` for a ``grammar``
+    ``language_spec`` (docs/VERDICT_POLICY.md R2'/§4 "оракул грамматики"),
+    via CYK on the grammar's CNF form: ``cfl_system.lib.cfl_oracle
+    .grammar_oracle`` (dcfl_system MAY import from cfl_system, root
+    CLAUDE.md). Mirrors ``build_set_builder_membership_oracle``'s contract:
+    ``None`` (never a guess) when the spec has no usable rules/start symbol,
+    when CNF conversion fails (malformed grammar), or when the word exceeds
+    ``max_word_len`` -- CYK is O(n^3 * |rules|), so the cap keeps per-word
+    cost bounded for callers that only ever query short simulation words.
+    """
+    if not spec.get("rules") or not spec.get("start"):
+        return None
+    try:
+        cyk_oracle = grammar_oracle(spec)
+    except Exception:
+        return None
+
+    def oracle(word: str) -> bool | None:
+        if not isinstance(word, str) or len(word) > max_word_len:
+            return None
+        try:
+            return cyk_oracle(word)
+        except Exception:
+            return None
+
+    return oracle
+
+
+def _build_exponent_pattern_membership_oracle(
+    spec: dict,
+    max_word_len: int = 60,
+) -> Any:
+    """Build a membership oracle ``word -> bool | None`` from a spec whose
+    ``word_pattern``/``description`` text is exponent notation (e.g.
+    ``"{a^n b^n c^m | n, m >= 0}"``), via
+    ``cfl_system.lib.exponent_pattern.parse_exponent_pattern`` (dcfl_system
+    MAY import from cfl_system, root CLAUDE.md). ``None`` when neither field
+    is a parseable pattern (prose, plain set-builder notation like
+    ``"u1 a u2"``, etc.) -- never a guess.
+    """
+    text = spec.get("word_pattern")
+    if not isinstance(text, str) or not text.strip():
+        text = spec.get("description")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    pattern = parse_exponent_pattern(text)
+    if pattern is None:
+        return None
+
+    def oracle(word: str) -> bool | None:
+        if not isinstance(word, str) or len(word) > max_word_len:
+            return None
+        try:
+            result = pattern(word)
+        except Exception:
+            return None
+        # `pattern` (an ExponentPattern/_UnionPattern) already returns None
+        # for "unknown" -- e.g. len(word) > its OWN max_word_len (40),
+        # tighter than this bridge's own `max_word_len` (default 60) -- so
+        # coercing with bool() must not turn that into a guessed False
+        # (root CLAUDE.md item 3 / docs/VERDICT_POLICY.md §4).
+        return result if result is None else bool(result)
+
+    return oracle
+
+
+def build_membership_oracle_from_ir(
+    ir: dict,
+    max_word_len: int = 60,
+) -> Any:
+    """Single entry point for building a ``word -> bool | None`` membership
+    oracle straight from a DCFL task IR (root CLAUDE.md "единая точка
+    построения оракула по IR", docs/VERDICT_POLICY.md §4), dispatching on
+    ``input_format`` / ``language_spec.kind``:
+
+    (a) ``set_builder`` with a populated ``variables`` list -- the existing
+        segment-matching oracle (``build_set_builder_membership_oracle``).
+    (b) ``set_builder`` (no/empty ``variables``) or ``natural`` whose
+        ``word_pattern``/``description`` is exponent notation --
+        ``cfl_system.lib.exponent_pattern`` (via
+        ``_build_exponent_pattern_membership_oracle`` above).
+    (c) ``grammar`` (either ``input_format`` or ``language_spec.kind``) --
+        ``build_grammar_membership_oracle`` (CYK on the grammar's CNF form;
+        wired into ``oracle_verifier`` for ``input_format: "grammar"``
+        since round C3).
+
+    Callers (``oracle_verifier``'s stack_strategy/dpda simulation and its
+    other semantic checks) should use THIS function rather than picking
+    a builder by hand, so every kind/format combination the oracle layer
+    supports is exercised uniformly. Returns ``None`` (never a guess) when
+    nothing above applies or the spec doesn't parse into a usable oracle.
+    """
+    spec: dict = ir.get("language_spec") or {}
+    input_format: str = ir.get("input_format", "")
+    kind = spec.get("kind", "")
+    alphabet: list[str] = ir.get("alphabet", [])
+
+    if input_format == "grammar" or kind == "grammar":
+        return build_grammar_membership_oracle(spec, alphabet, max_word_len=max_word_len)
+
+    if input_format == "set_builder" or kind == "set_builder":
+        if spec.get("variables"):
+            oracle = build_set_builder_membership_oracle(
+                spec, alphabet, max_word_len=max_word_len,
+            )
+            if oracle is not None:
+                return oracle
+        return _build_exponent_pattern_membership_oracle(spec, max_word_len=max_word_len)
+
+    if kind == "natural":
+        return _build_exponent_pattern_membership_oracle(spec, max_word_len=max_word_len)
+
+    return None
 
 
 # ===================================================================
@@ -679,6 +802,53 @@ def generate_negative_examples(
 
 
 # ===================================================================
+# Brute-force enumeration fallback (plain oracle function, no `variables`)
+# ===================================================================
+
+def _sample_by_enumeration(
+    oracle: Any,
+    alphabet: list[str],
+    count: int = 20,
+    max_len: int = 10,
+    call_budget: int = 300_000,
+) -> tuple[list[dict], list[dict]]:
+    """Brute-force fallback for ``sample_words`` when no structured sampler
+    applies (no ``variables``, not a grammar) but a plain membership oracle
+    (``word -> bool | None``) IS available -- e.g. a ``set_builder``/
+    ``natural`` spec whose pattern only ``build_membership_oracle_from_ir``'s
+    exponent-notation path understands (root CLAUDE.md item 3). Enumerates
+    words over *alphabet* by length, up to *max_len* (kept to 8-10 by the
+    caller), classifying each with the oracle, until *count* positives AND
+    *count* negatives are found or the search budget runs out. Words the
+    oracle can't decide (``None``) are skipped, never guessed.
+    """
+    positives: list[dict] = []
+    negatives: list[dict] = []
+    if not alphabet:
+        return positives, negatives
+    calls = 0
+    for length in range(0, max_len + 1):
+        if len(positives) >= count and len(negatives) >= count:
+            break
+        for combo in itertools.product(alphabet, repeat=length):
+            if calls >= call_budget:
+                return positives, negatives
+            calls += 1
+            word = "".join(combo)
+            try:
+                verdict = oracle(word)
+            except Exception:
+                continue
+            if verdict is True and len(positives) < count:
+                positives.append(_sample_word(word, in_language=True, source="enumeration"))
+            elif verdict is False and len(negatives) < count:
+                negatives.append(_sample_word(word, in_language=False, source="enumeration"))
+            if len(positives) >= count and len(negatives) >= count:
+                break
+    return positives, negatives
+
+
+# ===================================================================
 # Top-level public API
 # ===================================================================
 
@@ -714,26 +884,87 @@ def sample_words(
     input_format: str = ir.get("input_format", "")
     spec: dict = ir.get("language_spec", {})
     alphabet: list[str] = ir.get("alphabet", ["a", "b"])
+    kind = spec.get("kind", "")
+
+    # Single entry point for a membership oracle on THIS ir, built once and
+    # reused both by the enumeration fallback below and by negative-example
+    # verification (root CLAUDE.md item 3 / docs/VERDICT_POLICY.md §4).
+    oracle = build_membership_oracle_from_ir(ir, max_word_len=max(max_len, 10))
+
+    oracle_negatives: list[dict] = []
 
     positive: list[dict]
-    if input_format == "set_builder":
+    if input_format == "set_builder" and spec.get("variables"):
         positive = sample_from_set_builder(spec, alphabet, count=count, max_len=max_len)
-    elif input_format == "grammar":
+    elif input_format == "grammar" or kind == "grammar":
         positive = sample_from_grammar(spec, count=count, max_len=max_len)
     else:
-        # Unknown format — generate random words with unknown membership.
-        rng = Random(_DEFAULT_SEED)
-        positive = [
-            _sample_word(
-                "".join(rng.choice(alphabet) for _ in range(rng.randint(0, max_len))),
-                in_language=None,
-                source="random",
+        # No structured sampler applies (e.g. set_builder/natural with an
+        # exponent-notation pattern and no `variables`) — fall back to the
+        # plain membership oracle, when one can be built, and enumerate
+        # words by length (root CLAUDE.md item 3) instead of guessing.
+        positive = []
+        if oracle is not None:
+            positive, oracle_negatives = _sample_by_enumeration(
+                oracle, alphabet, count=count, max_len=min(max_len, 10),
             )
-            for _ in range(count)
-        ]
+        if not positive:
+            # Still nothing usable — generate random words with unknown
+            # membership rather than claiming a verdict we can't back up.
+            rng = Random(_DEFAULT_SEED)
+            positive = [
+                _sample_word(
+                    "".join(rng.choice(alphabet) for _ in range(rng.randint(0, max_len))),
+                    in_language=None,
+                    source="random",
+                )
+                for _ in range(count)
+            ]
 
-    # Generate negative examples (roughly half the positive count).
+    # Generate negative examples (roughly half the positive count),
+    # preferring oracle-decided negatives (if any) over synthetic ones.
     neg_count = max(count // 2, 5)
-    negatives = generate_negative_examples(ir, positive, count=neg_count)
+    negatives = oracle_negatives[:neg_count]
+    if len(negatives) < neg_count:
+        needed = neg_count - len(negatives)
+        if oracle is not None:
+            # generate_negative_examples only MUTATES positive words
+            # (adjacent swap / truncate / extra symbol) -- for a dense
+            # language (e.g. dcfl-15/16's {u1 a u2 | |u1|<=|u2|}) a mutated
+            # positive word can easily still be in L, so verify every
+            # candidate against the IR's own oracle instead of trusting the
+            # heuristic label blindly. Oversample since some candidates get
+            # dropped (oracle says True) or are unknown (oracle says None)
+            # — never guessed.
+            candidates = generate_negative_examples(ir, positive, count=needed * 4)
+            for cand in candidates:
+                if len(negatives) >= neg_count:
+                    break
+                if oracle(cand["word"]) is False:
+                    negatives.append(cand)
+            if len(negatives) < neg_count:
+                # Some languages are dense enough that mutating a positive
+                # word (adjacent swap / truncate / +1 symbol) almost always
+                # keeps it in L -- e.g. dcfl-15's {u1 a u2 | |u1| <= |u2|}
+                # accepts any word with an 'a' in its first half, which
+                # nearly every mutation of a positive word still has.
+                # Fall back to checking random words against the oracle
+                # directly rather than giving up with zero verified
+                # negatives.
+                rng = Random(_DEFAULT_SEED)
+                seen = {sw["word"] for sw in positive} | {sw["word"] for sw in negatives}
+                attempts = 0
+                max_attempts = max((neg_count - len(negatives)) * 300, 500)
+                while len(negatives) < neg_count and attempts < max_attempts:
+                    attempts += 1
+                    length = rng.randint(0, max_len)
+                    word = "".join(rng.choice(alphabet) for _ in range(length))
+                    if word in seen:
+                        continue
+                    seen.add(word)
+                    if oracle(word) is False:
+                        negatives.append(_sample_word(word, in_language=False, source="random"))
+        else:
+            negatives = negatives + generate_negative_examples(ir, positive, count=needed)
 
     return positive + negatives

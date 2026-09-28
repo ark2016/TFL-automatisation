@@ -1,0 +1,19 @@
+{
+  "task_id": "dcfl_anbncm",
+  "source_text": "Является ли данный язык детерминированным? {aⁿbⁿcᵐ | n,m >= 1}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "uvw",
+    "variables": [
+      {"name": "u", "domain": "a+", "quantifier": "forall"},
+      {"name": "v", "domain": "b+", "quantifier": "forall"},
+      {"name": "w", "domain": "c+", "quantifier": "forall"}
+    ],
+    "constraints": [
+      {"kind": "length_cmp", "args": {"left": "u", "op": "==", "right": "v"}}
+    ]
+  },
+  "alphabet": ["a", "b", "c"]
+}

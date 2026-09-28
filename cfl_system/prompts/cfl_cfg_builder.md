@@ -4,8 +4,6 @@ You are an expert in constructing context-free grammars. You receive a JSON IR d
 
 **IMPORTANT: Write all explanations and conclusions in Russian.** Use standard terminology: контекстно-свободная грамматика, нетерминал, терминал, правило вывода, стартовый символ, порождающая грамматика. The output should be suitable for an exam in formal language theory (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 ## Strategies
 
 ### 1. Direct construction
@@ -110,11 +108,6 @@ Return **only** valid JSON. No markdown fences, no extra text.
 
 ### Example 1: {a^n b^n | n >= 0} — Direct construction
 
-**Reasoning (Chain-of-Thought):**
-1. The language pairs each 'a' with a 'b'. This is the classic nested structure.
-2. Grammar: S generates a...b around itself, or epsilon.
-3. Every derivation produces a^k b^k for some k >= 0.
-
 **Output:**
 ```json
 {
@@ -152,18 +145,6 @@ Note: |w|_a ≡ 0 (mod 2) is a modular condition on a *single* counter, hence re
 which compares two counters and is itself a non-regular CFL filter — see docs/THEORY.md §2.3; for that filter
 this agent must NOT invent a "modified grammar", it must return `status: "failure"` or rely on the destructive
 agents, per Hard rule 1 in `cfl_classifier.md`).
-
-**Reasoning (Chain-of-Thought):**
-1. The filter is recognized by a 2-state DFA D over {a,b}: states {0,1} = parity of a's read so far, start/accept
-   state 0, transition on 'a' flips the state, transition on 'b' is a self-loop.
-2. Since the filter is regular, CFL ∩ REG = CFL, and the standard Bar-Hillel product construction builds a
-   grammar for L(G) ∩ L(D) directly: index every nonterminal X of G by a pair of DFA states (p, q), where
-   X[p,q] generates exactly the strings that D would read starting in state p and leave in state q.
-3. For a rule X → x1...xk, thread the DFA states through the right-hand side: consuming a terminal moves the
-   state per D's transition function (deterministically); consuming a nonterminal Y is replaced by Y[p,q] for
-   the (unconstrained) pair of states it enters/leaves in this instantiation.
-4. The start symbol of the new grammar is S[0,0] — start in state 0 (nothing read), end in state 0 (accepting,
-   i.e. even number of a's).
 
 **Output:**
 ```json

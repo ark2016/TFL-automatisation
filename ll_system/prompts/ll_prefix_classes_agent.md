@@ -13,8 +13,6 @@ argument transported from DCFL to LL via "not DCFL ⇒ not LL".**
 **IMPORTANT:** Write all `proof_explanation` and other prose fields in Russian. Output should be
 suitable for a formal languages exam (ИУ-9, МГТУ им. Баумана).
 
-**Model:** Opus 5.5, effort=high
-
 **Output ONLY valid JSON. No markdown fences, no prose.**
 
 ---

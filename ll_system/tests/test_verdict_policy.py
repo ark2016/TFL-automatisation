@@ -21,11 +21,13 @@ from __future__ import annotations
 import pytest
 
 from ll_system.orchestrator import (
+    MAX_CALLS_PER_AGENT,
     MAX_RETRIES,
     apply_verdict_gate,
     assemble_result_node,
     preprocess_node,
     first_follow_oracle_node,
+    run_specialist_node,
     verdict_gate_node,
 )
 from ll_system.lib.claim_verifier import verify_substitution_claim
@@ -101,7 +103,10 @@ class TestScenario1ConstructiveFailureIsNotDestructiveEvidence:
 
 class TestScenario2Contradiction:
     """Constructive bounded_pass + destructive well_formed at the same time ->
-    contradiction: true, confidence <= 0.50, verdict goes to the stronger side."""
+    contradiction: true, confidence <= 0.50. docs/VERDICT_POLICY.md R3 (post-
+    R3' revision): "bounded_pass vs well_formed" no longer settles this by
+    rank -- only a `verified` side wins (see TestScenario2VerifiedWins
+    below); otherwise it stays `uncertain`."""
 
     def test_contradiction_detected_and_capped(self):
         state = _state(
@@ -134,8 +139,48 @@ class TestScenario2Contradiction:
         gate = result["verdict_gate"]
         assert gate["contradiction"] is True
         assert result["confidence"] <= 0.50
-        # bounded_pass (rank 2) outranks well_formed (rank 1) -> constructive side wins
-        assert result["verdict"] == "ll"
+        # No longer resolved by rank -- neither side is `verified`, so this
+        # stays `uncertain` (docs/VERDICT_POLICY.md R3 fix).
+        assert result["verdict"] == "uncertain"
+
+
+class TestScenario2VerifiedWins:
+    """A `verified` side still wins an unresolved contradiction, but capped
+    at 0.85, not the normal 0.98 `verified` ceiling (docs/VERDICT_POLICY.md
+    R3)."""
+
+    def test_verified_destructive_side_wins_capped_at_085(self):
+        state = _state(
+            agent_results={
+                "ll_grammar_builder": {
+                    "verdict": "ll",
+                    "confidence": 0.9,
+                    "proof_sketch": {"method": "ll_grammar_construction", "k": 1, "grammar": {}},
+                },
+                "substitution_agent": {
+                    "verdict": "not_ll",
+                    "confidence": 0.85,
+                    "proof_sketch": {"method": "substitution", "for_all_k": True},
+                },
+            },
+            claim_verification={
+                "ll_grammar_builder": {"trust": "bounded_pass", "verification_status": "bounded_pass"},
+                "substitution_agent": {"trust": "verified", "verification_status": "verified"},
+            },
+            reasoning_output={
+                "action": "done",
+                "verdict": "ll",
+                "confidence": 0.99,
+                "primary_agent": "ll_grammar_builder",
+                "summary": "test",
+            },
+        )
+        out = assemble_result_node(state)
+        result = out["result"]
+        gate = result["verdict_gate"]
+        assert gate["contradiction"] is True
+        assert result["verdict"] == "not_ll"
+        assert result["confidence"] == 0.85
 
     def test_contradiction_tie_is_uncertain(self):
         state = _state(
@@ -169,7 +214,7 @@ class TestScenario2Contradiction:
         # is NOT a contradiction — it falls through to the plain R2 well_formed
         # ceiling for the constructive verdict instead.
         assert result["verdict_gate"]["contradiction"] is False
-        assert result["confidence"] <= 0.60
+        assert result["confidence"] <= 0.55
 
 
 # ---------------------------------------------------------------------------
@@ -215,11 +260,11 @@ class TestScenario3VerifiedFullTest:
 
 
 # ---------------------------------------------------------------------------
-# §6.4 — only a well_formed proof is admissible but capped at 0.60
+# §6.4 — only a well_formed proof is admissible but capped at 0.55
 # ---------------------------------------------------------------------------
 
 class TestScenario4WellFormedIsAdmissibleButCapped:
-    def test_well_formed_destructive_capped_at_060(self):
+    def test_well_formed_destructive_capped_at_055(self):
         state = _state(
             agent_results={
                 "substitution_agent": {
@@ -242,8 +287,8 @@ class TestScenario4WellFormedIsAdmissibleButCapped:
         out = assemble_result_node(state)
         result = out["result"]
         assert result["verdict"] == "not_ll"
-        assert result["confidence"] <= 0.60
-        assert result["verdict_gate"]["confidence_cap"] == 0.60
+        assert result["confidence"] <= 0.55
+        assert result["verdict_gate"]["confidence_cap"] == 0.55
 
     def test_oracle_checked_destructive_raises_cap_to_085(self):
         state = _state(
@@ -277,7 +322,7 @@ class TestScenario4WellFormedIsAdmissibleButCapped:
         threshold as every other system's constructive direction. A bare
         well_formed constructive claim (no equivalence oracle ran at all)
         must NOT stand as an accepted 'll' verdict at any confidence — it
-        downgrades to 'uncertain' <= 0.40, not 'll' <= 0.60 (that used to be
+        downgrades to 'uncertain' <= 0.40, not 'll' <= 0.55 (that used to be
         the bug this test locked in; see VERDICT_POLICY.md §2)."""
         state = _state(
             agent_results={
@@ -326,9 +371,9 @@ class TestRegularityShortcutHonorsHeuristicConfidence:
         out = preprocess_node({"ir": ir, "log": []})
         result = out["result"]
         # "trivial_constraint" is a heuristic (well_formed trust, §1), so it is
-        # additionally capped at well_formed's 0.60 ceiling (§2) — lower than
+        # additionally capped at well_formed's 0.55 ceiling (§2) — lower than
         # both the heuristic's own 0.75 and the 0.95 hard ceiling.
-        assert result["confidence"] == 0.60
+        assert result["confidence"] == 0.55
         assert result["confidence"] < hints["regularity_confidence"]
 
     def test_regex_kind_reaches_095(self):
@@ -485,7 +530,7 @@ class TestFirstFollowOracleDoesNotOverrideRefutedGrammar:
         # well_formed (no equivalence oracle available) must not be silently
         # promoted to bounded_pass just because the LL(k) table happened to
         # confirm the CANDIDATE grammar's own LL(k)-ness.
-        assert result["verdict"] != "ll" or result["confidence"] <= 0.60
+        assert result["verdict"] != "ll" or result["confidence"] <= 0.55
 
     def test_bounded_pass_grammar_source_supports_ll_at_085(self):
         state = self._state_with_ff_found("bounded_pass")
@@ -614,6 +659,180 @@ class TestReasoningProposedRetryAtExhaustedBudget:
         state["retry_round"] = 0
         gate = apply_verdict_gate(state)
         assert gate["reasoning_output"]["action"] == "retry"
+
+
+# ---------------------------------------------------------------------------
+# Cost ceiling (config.MAX_CALLS_PER_AGENT): apply_verdict_gate must not hand
+# a fully-capped agent back for another wasted graph round -- neither via the
+# reasoning agent's own retry_plan, nor via a gate-triggered _apply_downgrade.
+# ---------------------------------------------------------------------------
+
+class TestApplyVerdictGateRespectsCallCap:
+    def _capped(self, agent: str) -> list[tuple[str, dict]]:
+        return [(agent, {"agent": agent, "status": "success"})] * MAX_CALLS_PER_AGENT
+
+    def test_reasoning_proposed_retry_of_a_fully_capped_agent_falls_through_to_done(self):
+        """Budget IS left (retry_round=0), but the only agent reasoning
+        named is already at its call cap -- must not be honored as
+        action=='retry' (handle_retry_node would otherwise reinterpret the
+        resulting empty agents_to_retry as "retry everything"); falls
+        through to the normal done/verdict gating instead, and the
+        exclusion is recorded for verdict_gate.downgrades."""
+        state = _state(
+            retry_round=0,
+            specialist_outputs=self._capped("ll_grammar_builder"),
+            reasoning_output={
+                "action": "retry",
+                "retry_plan": {"agents_to_retry": ["ll_grammar_builder"], "hints": {}},
+                "summary": "test",
+            },
+        )
+        gate = apply_verdict_gate(state)
+
+        assert gate["reasoning_output"]["action"] == "done"
+        notes = " ".join(gate["verdict_gate"]["downgrades"])
+        assert "ll_grammar_builder" in notes and "call cap reached" in notes
+
+    def test_reasoning_proposed_retry_keeps_the_non_capped_agent(self):
+        """Only the capped agent is dropped from reasoning's own retry_plan
+        -- a co-proposed agent still under budget is retried normally."""
+        state = _state(
+            retry_round=0,
+            specialist_outputs=self._capped("ll_grammar_builder"),
+            reasoning_output={
+                "action": "retry",
+                "retry_plan": {
+                    "agents_to_retry": ["ll_grammar_builder", "substitution_agent"],
+                    "hints": {},
+                },
+                "summary": "test",
+            },
+        )
+        gate = apply_verdict_gate(state)
+
+        assert gate["reasoning_output"]["action"] == "retry"
+        agents = gate["reasoning_output"]["retry_plan"]["agents_to_retry"]
+        assert agents == ["substitution_agent"]
+        assert any("ll_grammar_builder" in n for n in gate["verdict_gate"]["downgrades"])
+
+    def test_apply_downgrade_with_every_candidate_agent_capped_ends_retries(self):
+        """`reasoning` proposed done/ll with no constructive artifact at
+        all -- normally `_apply_downgrade` retries every constructive
+        agent (budget permitting); with ALL of them already at their call
+        cap, it must fall to the same "no retry left" treatment as a
+        budget-exhausted gate instead, not spend a round retrying nothing
+        new."""
+        state = _state(
+            retry_round=0,
+            specialist_outputs=(
+                self._capped("ll_grammar_builder")
+                + self._capped("marker_analyzer")
+                + self._capped("grammar_transformer")
+            ),
+            reasoning_output={
+                "action": "done", "verdict": "ll", "confidence": 0.9,
+                "primary_agent": "", "summary": "test",
+            },
+        )
+        gate = apply_verdict_gate(state)
+
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "uncertain"
+        notes = " ".join(gate["verdict_gate"]["downgrades"])
+        assert "call cap reached" in notes
+        for agent in ("ll_grammar_builder", "marker_analyzer", "grammar_transformer"):
+            assert agent in notes
+
+
+# ---------------------------------------------------------------------------
+# R4' — retry budget exhausted: the gate picks the strongest admissible
+# basis instead of defaulting straight to `uncertain`. Precedent: live-run
+# eval 2026-09-27, cfl-07/cfl-12 ended `failure 0.0` despite a well_formed
+# destructive proof on record.
+# ---------------------------------------------------------------------------
+
+class TestR4PrimeStrongestAdmissibleBasis:
+    def test_destructive_well_formed_rescues_unsupported_ll_proposal(self):
+        """reasoning proposes done/ll with no constructive artifact at all;
+        retries are exhausted; substitution_agent is well_formed and argues
+        not_ll -> not_ll <= 0.55, not `uncertain` and not `failure`."""
+        state = _state(
+            retry_round=MAX_RETRIES,
+            agent_results={
+                "substitution_agent": {
+                    "verdict": "not_ll",
+                    "confidence": 0.8,
+                    "proof_sketch": {"method": "substitution", "for_all_k": True},
+                },
+            },
+            claim_verification={
+                "substitution_agent": {"trust": "well_formed", "verification_status": "well_formed"},
+            },
+            reasoning_output={
+                "action": "done",
+                "verdict": "ll",
+                "confidence": 0.9,
+                "primary_agent": None,
+                "summary": "reasoning claims ll with no constructive artifact at all",
+            },
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "not_ll"
+        assert gate["reasoning_output"]["confidence"] <= 0.55
+        assert any("strongest admissible basis" in d and "not_ll" in d for d in vg["downgrades"])
+
+    def test_no_admissible_basis_either_side_stays_uncertain_not_failure(self):
+        state = _state(
+            retry_round=MAX_RETRIES,
+            agent_results={},
+            claim_verification={},
+            reasoning_output={
+                "action": "done",
+                "verdict": "ll",
+                "confidence": 0.9,
+                "primary_agent": None,
+                "summary": "no evidence at all",
+            },
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "uncertain"
+        assert gate["reasoning_output"]["confidence"] <= 0.40
+        assert any("strongest admissible basis: inconclusive" in d for d in vg["downgrades"])
+
+    def test_constructive_bounded_pass_rescues_unsupported_not_ll_proposal(self):
+        """Symmetric case: reasoning proposes done/not_ll without adequate
+        destructive evidence, retries exhausted, but a constructive artifact
+        clears bounded_pass -> the gate falls back to ll, not uncertain."""
+        state = _state(
+            retry_round=MAX_RETRIES,
+            agent_results={
+                "ll_grammar_builder": {
+                    "verdict": "ll",
+                    "confidence": 0.9,
+                    "proof_sketch": {"method": "ll_grammar_construction", "k": 1, "grammar": {}},
+                },
+            },
+            claim_verification={
+                "ll_grammar_builder": {"trust": "bounded_pass", "verification_status": "bounded_pass"},
+            },
+            reasoning_output={
+                "action": "done",
+                "verdict": "not_ll",
+                "confidence": 0.9,
+                "primary_agent": None,
+                "summary": "reasoning claims not_ll with no destructive claim at all",
+            },
+        )
+        gate = apply_verdict_gate(state)
+        vg = gate["verdict_gate"]
+        assert gate["reasoning_output"]["action"] == "done"
+        assert gate["reasoning_output"]["verdict"] == "ll"
+        assert gate["reasoning_output"]["confidence"] <= 0.85
+        assert any("strongest admissible basis" in d and "-> ll" in d for d in vg["downgrades"])
 
 
 # ---------------------------------------------------------------------------
@@ -808,3 +1027,90 @@ class TestSubstitutionStep2FirstKEquality:
             _substitution_proof_sketch("a^n b^1", "a^n c^1"), _ALL_STRINGS_IR,
         )
         assert out["trust"] == "well_formed"
+
+
+# ---------------------------------------------------------------------------
+# Cost ceiling (TODO.md backlog round C2): config.MAX_CALLS_PER_AGENT — the
+# orchestrator must never call the same specialist more than this many times
+# for one task. Precedent: live cfl-12 eval run, cfg_builder alone was
+# called 6 times across retries (130 706 output tokens, $0.80).
+# ---------------------------------------------------------------------------
+
+class _CountingRunner:
+    """A mock runner that records every agent name it was actually asked to
+    run — used to assert the call cap is enforced at the call site itself,
+    not just in whatever the runner happens to return."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run_agent(self, agent_name, input_data=None):
+        self.calls.append(agent_name)
+        return {
+            "agent": agent_name, "status": "success", "verdict": "not_ll",
+            "confidence": 0.5, "evidence": {},
+        }
+
+
+def _specialist_state(agent_name: str, specialist_outputs: list, runner: _CountingRunner) -> dict:
+    return {
+        "_specialist_name": agent_name,
+        "specialist_outputs": specialist_outputs,
+        "mock_runner": runner,
+        "agent_runner": None,
+        "verbose": False,
+        "ir": {},
+        "preprocess_hints": {},
+        "classifier_output": {},
+        "retry_context": {},
+    }
+
+
+class TestCallCapAtSpecialistCallSite:
+    def test_specialist_skipped_once_cap_reached(self):
+        runner = _CountingRunner()
+        history = [("substitution_agent", {"status": "success"})] * MAX_CALLS_PER_AGENT
+        state = _specialist_state("substitution_agent", history, runner)
+        result = run_specialist_node(state)
+        assert runner.calls == []  # no LLM call made
+        assert "specialist_outputs" not in result
+        assert any(
+            "substitution_agent" in note and "call cap reached" in note
+            for note in result.get("call_cap_notes", [])
+        )
+
+    def test_specialist_still_called_below_cap(self):
+        runner = _CountingRunner()
+        history = [("substitution_agent", {"status": "success"})] * (MAX_CALLS_PER_AGENT - 1)
+        state = _specialist_state("substitution_agent", history, runner)
+        result = run_specialist_node(state)
+        assert runner.calls == ["substitution_agent"]
+        assert "call_cap_notes" not in result
+
+    def test_mock_retry_scenario_never_exceeds_cap(self):
+        """Simulate the retry planner asking for the SAME agent every round
+        (the cfl-12 precedent) across more rounds than the cap allows — the
+        runner must never see more than MAX_CALLS_PER_AGENT actual calls."""
+        runner = _CountingRunner()
+        specialist_outputs: list = []
+        for _ in range(MAX_CALLS_PER_AGENT + 4):  # far more "retry rounds" than the cap
+            state = _specialist_state("substitution_agent", specialist_outputs, runner)
+            result = run_specialist_node(state)
+            specialist_outputs = specialist_outputs + list(result.get("specialist_outputs", []))
+        assert runner.calls.count("substitution_agent") == MAX_CALLS_PER_AGENT
+
+    def test_call_cap_note_surfaces_in_verdict_gate_downgrades(self):
+        state = _state(
+            retry_round=MAX_RETRIES,
+            agent_results={},
+            first_follow_result={},
+            reasoning_output={"action": "done", "verdict": "ll", "confidence": 0.9},
+            call_cap_notes=[
+                "agent substitution_agent call cap reached (3 calls)",
+                "agent substitution_agent call cap reached (3 calls)",  # duplicate
+            ],
+        )
+        gate = apply_verdict_gate(state)
+        downgrades = gate["verdict_gate"]["downgrades"]
+        matches = [d for d in downgrades if "substitution_agent call cap reached" in d]
+        assert len(matches) == 1

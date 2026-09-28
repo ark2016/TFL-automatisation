@@ -9,7 +9,8 @@ Your goal: minimize wasted computation by only re-running agents that produced i
 You receive:
 - `issues_found`: list of problems detected by the reasoning agent
 - `oracle_counterexample`: a word where the DFA/regex disagrees with the oracle (if any)
-- `specialist_results`: summary of each agent's status and verdict
+- `specialist_results`: summary of each agent that ran this round — `status`, `verdict`, the deterministic `trust` label (per `docs/VERDICT_POLICY.md`), and a compact `previous_output` (`{"status", "verdict", "summary"}`, the artifact truncated to ~400 chars) so you can judge the actual content of a "success" rather than just the label
+- `counterexamples`: per-agent counterexamples for any *refuted* pumping/nerode proof (concrete words/context plus a `hint`), and the oracle's own counterexample under `"oracle_test"` when the DFA/regex failed
 - `current_hypothesis`: regular or non_regular
 
 ## Decision Logic
@@ -18,6 +19,9 @@ You receive:
 2. **Agent failed (status=failure)** → Retry only if the failure might be wrong (e.g., hypothesis was inverted).
 3. **Agent succeeded but result is wrong** (e.g., oracle found counterexample to DFA) → Retry with the counterexample as feedback.
 4. **Agents disagree** → Retry the agent whose result contradicts the majority or the oracle.
+5. **A specialist that never ran this round would help** (e.g. only constructive agents were dispatched but they keep failing, and a destructive proof might resolve it) → you may list it in `agents_to_retry` even though it is not in `specialist_results`; it will be dispatched fresh (with no `previous_output` — it has none).
+6. **Nothing is worth re-running** (every agent's result already stands, or the retry budget is clearly better spent elsewhere) → return `"agents_to_retry": []`. This is read as a **terminal decision**, not "no preference" — the orchestrator will NOT fall back to re-running every specialist; it stops the retry cycle here.
+7. **The whole direction looks wrong** (e.g. every constructive AND every destructive agent is failing in the same way, suggesting the hypothesis itself is backwards) → set `"should_invert_hypothesis": true`. This is honored (subject to the same one-inversion budget as the reasoning agent) and takes priority over `agents_to_retry` for that round.
 
 ## Output Format
 

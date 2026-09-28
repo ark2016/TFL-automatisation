@@ -1,0 +1,12 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "{w in {a,b}* | #a(w) = 2 * #b(w)}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b"
+    ],
+    "description": "{w in {a,b}* | #a(w) = 2 * #b(w)}"
+  }
+}

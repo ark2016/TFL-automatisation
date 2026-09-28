@@ -37,6 +37,24 @@ def _agent_trust(oracle_verification: dict[str, Any], name: str) -> str | None:
     return entry.get("trust") or entry.get("verification_status")
 
 
+def _clamp_confidence(value: Any) -> float:
+    """Clamp any value (including ``None`` from ``confidence: null``) to [0.0, 1.0].
+
+    Mirrors ``dcfl_system.orchestrator._clamp_confidence``; duplicated here
+    (rather than imported) to avoid a circular import — ``orchestrator``
+    imports ``build_retry_plan`` from this module.
+    """
+    try:
+        c = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if c < 0.0:
+        return 0.0
+    if c > 1.0:
+        return 1.0
+    return c
+
+
 def build_retry_plan(
     agent_results: dict[str, Any],
     oracle_verification: dict[str, Any] | None = None,
@@ -70,7 +88,7 @@ def build_retry_plan(
             continue
 
         status = output.get("status", "unknown")
-        confidence = float(output.get("confidence", 0.0))
+        confidence = _clamp_confidence(output.get("confidence", 0.0))
 
         # Rule: Don't retry not_applicable agents
         if status == "not_applicable":

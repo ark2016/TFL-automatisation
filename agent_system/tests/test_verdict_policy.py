@@ -8,7 +8,7 @@ Covers the §6 policy scenarios that apply to the regularity pipeline:
      contradiction: true, confidence <= 0.50.
   3. Lean verified (status=="valid", sorry_count==0) -> confidence may be 0.98.
   4. destructive proof with well_formed trust only (no oracle) -> verdict
-     stands, confidence <= 0.60.
+     stands, confidence <= 0.55.
   5. test_result.fail on the correct non_regular verdict, but a destructive
      proof with oracle-verified words (bounded_pass) exists -> success
      capped at 0.85, not "failure 0.0" (R6).
@@ -21,7 +21,8 @@ pair/context instantiation) and the destructive-trust combinator.
 import unittest
 from unittest.mock import patch
 
-from agent_system.graph import assemble_result_node, run_retry_planner_node
+from agent_system.config import MAX_CALLS_PER_AGENT
+from agent_system.graph import assemble_result_node, run_retry_planner_node, run_specialist_node
 from agent_system.lib.claim_verifier import (
     CONFIDENCE_CAPS,
     closure_trust_from_verification,
@@ -111,6 +112,31 @@ class TestScenario2Contradiction(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# §6 scenario 2b — contradiction where one side is `verified`: a Lean-checked
+# non_regular proof (no `sorry`) next to a constructive artifact that still
+# passes its (sample-based, bounded_pass) oracle_test. docs/VERDICT_POLICY.md
+# R3: the `verified` side still wins, but capped at 0.85, not the normal 0.98
+# `verified` ceiling.
+# ---------------------------------------------------------------------------
+
+class TestScenario2VerifiedWins(unittest.TestCase):
+
+    def test_lean_verified_destructive_wins_over_bounded_pass_capped_at_085(self):
+        state = _state(
+            test_result={"status": "pass", "tested": 200},
+            evidence={
+                "formalization": {"status": "valid", "sorry_count": 0, "lean_verified": True},
+            },
+            reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.99}},
+        )
+        result = assemble_result_node(state)["result"]
+
+        self.assertTrue(result["verdict_gate"]["contradiction"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["confidence"], 0.85)
+
+
+# ---------------------------------------------------------------------------
 # §6 scenario 3 — Lean verified (status=="valid" and sorry_count==0)
 # ---------------------------------------------------------------------------
 
@@ -143,12 +169,12 @@ class TestScenario3LeanVerified(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # §6 scenario 4 — destructive proof with well_formed trust only (no oracle)
-# -> verdict stands, confidence <= 0.60
+# -> verdict stands, confidence <= 0.55
 # ---------------------------------------------------------------------------
 
 class TestScenario4WellFormedOnly(unittest.TestCase):
 
-    def test_well_formed_destructive_caps_at_060(self):
+    def test_well_formed_destructive_caps_at_055(self):
         state = _state(
             evidence={
                 "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
@@ -374,7 +400,7 @@ class TestComputeDestructiveTrust(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # docs/VERDICT_POLICY.md R1/R2 fix (reviewer finding, verdict-gate branch):
-# assemble_result_node used to grant success<=0.60 to ANY reasoning verdict
+# assemble_result_node used to grant success<=0.55 to ANY reasoning verdict
 # with no deterministic evidence at all, and separately ignored which
 # DIRECTION the reasoning verdict claimed — a destructive proof supporting
 # non_regular was silently treated as backing whatever verdict reasoning
@@ -385,7 +411,7 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
 
     def test_non_regular_with_refuted_destructive_and_no_dfa_is_partial(self):
         """Probe 1: DFA never built, pumping_verification refuted, reasoning
-        claims non_regular 0.92 -> must NOT be success 0.6 (nor any success)."""
+        claims non_regular 0.92 -> must NOT be success 0.55 (nor any success)."""
         state = _state(
             evidence={
                 "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
@@ -400,7 +426,7 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
 
     def test_no_evidence_at_all_with_reasoning_verdict_is_partial(self):
         """Probe 2: zero evidence anywhere, reasoning still proposes a
-        verdict -> must NOT be an unconditional success 0.6."""
+        verdict -> must NOT be an unconditional success 0.55."""
         state = _state(
             reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.9}},
         )
@@ -411,8 +437,13 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
     def test_regular_verdict_not_backed_by_refuted_dfa_is_partial(self):
         """Probe 3 (R2 violation): DFA refuted, reasoning says 'regular',
         pumping well_formed (argues non_regular) -> the 'regular' claim must
-        downgrade, not ride along on the (wrongly-directed) destructive
-        evidence as success 0.6."""
+        downgrade, not ride along UNCHANGED on the (wrongly-directed)
+        destructive evidence as a 'regular' success 0.55. docs/VERDICT_POLICY.md
+        R4' (this node always runs post-retry, i.e. with the budget already
+        exhausted): the gate does not just null the verdict here -- a
+        well_formed destructive proof IS the strongest admissible basis
+        still standing, so it flips the verdict itself to non_regular
+        (capped at well_formed's own 0.55 ceiling), not 'regular'."""
         state = _state(
             test_result={
                 "status": "fail",
@@ -425,8 +456,73 @@ class TestReasoningVerdictDirectionIsChecked(unittest.TestCase):
             reasoning_output={"evidence": {"verdict": "regular", "confidence": 0.9}},
         )
         result = assemble_result_node(state)["result"]
-        self.assertNotEqual(result["status"], "success")
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "non_regular")
+        self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["well_formed"])
+        self.assertTrue(
+            any("strongest admissible basis" in d for d in result["verdict_gate"]["downgrades"])
+        )
+
+
+# ---------------------------------------------------------------------------
+# docs/VERDICT_POLICY.md R4' — retry budget exhausted (assemble_result_node
+# always runs post-retry): the gate picks the strongest admissible basis
+# instead of defaulting straight to inconclusive/`failure`. Precedent:
+# live-run eval 2026-09-27, cfl-07/cfl-12 ended `failure 0.0` despite a
+# well_formed destructive proof on record.
+# ---------------------------------------------------------------------------
+
+class TestR4PrimeStrongestAdmissibleBasis(unittest.TestCase):
+
+    def test_destructive_well_formed_rescues_unsupported_regular_proposal(self):
+        """reasoning proposes 'regular' with no passing oracle_test at all
+        (test_result never ran); pumping is well_formed and argues
+        non_regular -> non_regular <= 0.55, not inconclusive/`failure`."""
+        state = _state(
+            test_result=None,
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "well_formed", "reason": "no oracle available"},
+            },
+            reasoning_output={"evidence": {"verdict": "regular", "confidence": 0.9}},
+        )
+        result = assemble_result_node(state)["result"]
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "non_regular")
+        self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["well_formed"])
+        self.assertTrue(
+            any("strongest admissible basis" in d for d in result["verdict_gate"]["downgrades"])
+        )
+
+    def test_no_destructive_evidence_stays_partial_not_failure(self):
+        """Same unsupported 'regular' proposal, but with no destructive proof
+        of any kind on record -> partial/inconclusive, confidence <= 0.40,
+        never `failure`."""
+        state = _state(
+            test_result=None,
+            evidence={},
+            reasoning_output={"evidence": {"verdict": "regular", "confidence": 0.9}},
+        )
+        result = assemble_result_node(state)["result"]
+        self.assertEqual(result["status"], "partial")
         self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["not_verified"])
+
+    def test_constructive_bounded_pass_rescues_unsupported_non_regular_proposal(self):
+        """Symmetric case: reasoning proposes 'non_regular' with no
+        destructive proof at all, but oracle_test passed -> the gate falls
+        back to 'regular', not inconclusive."""
+        state = _state(
+            test_result={"status": "pass", "tested": 200},
+            evidence={},
+            reasoning_output={"evidence": {"verdict": "non_regular", "confidence": 0.9}},
+        )
+        result = assemble_result_node(state)["result"]
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "regular")
+        self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["bounded_pass"])
+        self.assertTrue(
+            any("strongest admissible basis" in d for d in result["verdict_gate"]["downgrades"])
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +702,221 @@ class TestNerodeContextSharedVariable(unittest.TestCase):
         }
         result = verify_nerode_claim(proof, oracle=lambda w: True)
         self.assertEqual(result["trust"], "well_formed")
+
+
+# ---------------------------------------------------------------------------
+# Reviewer finding fix: an unresolved contradiction must not leak the
+# reasoning agent's own proposed regular/non_regular verdict through as if
+# it were the pipeline's actual verdict -- only its confidence used to be
+# capped; the verdict field itself was left untouched in evidence.reasoning,
+# and orchestrator._result_verdict / tfl_eval.runners.extract('reg') both
+# read straight through to it.
+# ---------------------------------------------------------------------------
+
+class TestContradictionDoesNotLeakReasoningVerdict(unittest.TestCase):
+
+    def test_unresolved_contradiction_nulls_reasoning_verdict(self):
+        state = _state(
+            test_result={"status": "pass", "tested": 200},
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "well_formed", "reason": "no oracle"},
+                "reasoning": {"verdict": "regular", "confidence": 0.9},
+            },
+            reasoning_output={"verdict": "regular", "confidence": 0.9},
+        )
+        result = assemble_result_node(state)["result"]
+
+        self.assertTrue(result["verdict_gate"]["contradiction"])
+        self.assertEqual(result["status"], "partial")
+        self.assertLessEqual(result["confidence"], 0.50)
+        # The gate must null the verdict it just refused to confirm -- not
+        # just cap confidence and leave "regular" sitting in evidence.reasoning.
+        self.assertIsNone(result["evidence"]["reasoning"]["verdict"])
+
+
+# ---------------------------------------------------------------------------
+# docs/VERDICT_POLICY.md R3' for REG (reviewer finding): the destructive
+# proof's own witness words (reused from claim_verifier's step-2 checks) run
+# through the language oracle AND the DFA behind test_result before falling
+# back to an unresolved R3 contradiction.
+# ---------------------------------------------------------------------------
+
+_ACCEPT_ALL_DFA = {
+    "states": ["q0"], "alphabet": ["a", "b"],
+    "transitions": {"q0": {"a": "q0", "b": "q0"}},
+    "start": "q0", "accept": ["q0"],
+}
+
+
+class TestR3PrimeCrossCheckReg(unittest.TestCase):
+
+    def test_cross_check_refutes_overgenerating_dfa_resolves_non_regular(self):
+        """The DFA (accept-everything) over-generates: it wrongly accepts
+        'aaabb', which the destructive proof's own witness correctly claims
+        is NOT in L (oracle-confirmed) -> the DFA is refuted, not the proof."""
+        witnesses = [
+            {"word": "aabb", "expected_in_l": True, "source": "word_family p=2"},
+            {"word": "aaabb", "expected_in_l": False, "source": "reg pumping p=2 x='a' i=2"},
+        ]
+        state = _state(
+            oracle_fn=_anbn_oracle,
+            dfa=_ACCEPT_ALL_DFA,
+            test_result={"status": "pass", "tested": 50},
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "bounded_pass", "witnesses": witnesses},
+            },
+            reasoning_output={"verdict": "regular", "confidence": 0.9},
+        )
+        result = assemble_result_node(state)["result"]
+        vg = result["verdict_gate"]
+
+        # Resolved deterministically, not left standing (mirrors
+        # cfl_system.orchestrator's R3' convention).
+        self.assertFalse(vg["contradiction"])
+        self.assertEqual(result["status"], "success")
+        self.assertLessEqual(result["confidence"], CONFIDENCE_CAPS["bounded_pass"])
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "non_regular")
+        self.assertTrue(
+            any("R3' cross-check refuted constructive artifact" in d for d in vg["downgrades"])
+        )
+
+    def test_cross_check_refutes_wrong_destructive_witness_resolves_regular(self):
+        """The reverse: the destructive proof's own witness claim disagrees
+        with the real oracle -> the proof itself is refuted, and the DFA
+        (which never gets contradicted) wins instead."""
+        witnesses = [
+            # 'aaabb' is NOT in L = {a^n b^n} per the real oracle, but this
+            # (synthetically wrong) proof claims it IS.
+            {"word": "aaabb", "expected_in_l": True, "source": "synthetic bad witness"},
+        ]
+        state = _state(
+            oracle_fn=_anbn_oracle,
+            dfa=_ACCEPT_ALL_DFA,
+            test_result={"status": "pass", "tested": 50},
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "bounded_pass", "witnesses": witnesses},
+            },
+            reasoning_output={"verdict": "non_regular", "confidence": 0.9},
+        )
+        result = assemble_result_node(state)["result"]
+        vg = result["verdict_gate"]
+
+        self.assertFalse(vg["contradiction"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["evidence"]["reasoning"]["verdict"], "regular")
+        self.assertTrue(
+            any("R3' cross-check refuted destructive claim" in d for d in vg["downgrades"])
+        )
+
+    def test_no_witnesses_falls_back_to_unresolved_contradiction(self):
+        """Without witnesses (e.g. an older well_formed-only check that never
+        ran step-2), R3' cannot run at all -- falls back to the plain R3
+        rule: unresolved, verdict nulled, confidence <= 0.50."""
+        state = _state(
+            oracle_fn=_anbn_oracle,
+            dfa=_ACCEPT_ALL_DFA,
+            test_result={"status": "pass", "tested": 50},
+            evidence={
+                "pumping": {"status": "success", "evidence": {"verdict": "non_regular"}},
+                "pumping_verification": {"trust": "bounded_pass"},  # no "witnesses" key
+            },
+            reasoning_output={"verdict": "regular", "confidence": 0.9},
+        )
+        result = assemble_result_node(state)["result"]
+        vg = result["verdict_gate"]
+
+        self.assertTrue(vg["contradiction"])
+        self.assertEqual(result["status"], "partial")
+        self.assertLessEqual(result["confidence"], 0.50)
+        self.assertIsNone(result["evidence"]["reasoning"]["verdict"])
+
+
+# ---------------------------------------------------------------------------
+# Cost ceiling (TODO.md backlog round C2): config.MAX_CALLS_PER_AGENT — the
+# orchestrator must never call the same specialist more than this many times
+# for one task. Precedent: live cfl-12 eval run, cfg_builder alone was
+# called 6 times across retries (130 706 output tokens, $0.80).
+# ---------------------------------------------------------------------------
+
+class _CountingRunner:
+    """A mock runner that records every agent name it was actually asked to
+    run — used to assert the call cap is enforced at the call site itself,
+    not just in whatever the runner happens to return."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def run_agent(self, agent_name, input_data=None):
+        self.calls.append(agent_name)
+        return {
+            "agent": agent_name, "status": "success", "evidence": {"verdict": "non_regular"},
+        }
+
+
+class TestCallCapAtSpecialistCallSite(unittest.TestCase):
+    def _specialist_state(self, agent_name, specialist_outputs, runner):
+        return {
+            "_specialist_name": agent_name,
+            "specialist_outputs": specialist_outputs,
+            "mock_runner": runner,
+            "agent_runner": None,
+            "verbose": False,
+            "ir": {},
+            "hypothesis": {},
+            "classifier_evidence": {},
+            "retry_context": {},
+        }
+
+    def test_specialist_skipped_once_cap_reached(self):
+        runner = _CountingRunner()
+        history = [("pumping", {"status": "success"})] * MAX_CALLS_PER_AGENT
+        state = self._specialist_state("pumping", history, runner)
+        result = run_specialist_node(state)
+        self.assertEqual(runner.calls, [])  # no LLM call made
+        self.assertNotIn("specialist_outputs", result)
+        self.assertTrue(any(
+            "pumping" in note and "call cap reached" in note
+            for note in result.get("call_cap_notes", [])
+        ))
+
+    def test_specialist_still_called_below_cap(self):
+        runner = _CountingRunner()
+        history = [("pumping", {"status": "success"})] * (MAX_CALLS_PER_AGENT - 1)
+        state = self._specialist_state("pumping", history, runner)
+        result = run_specialist_node(state)
+        self.assertEqual(runner.calls, ["pumping"])
+        self.assertNotIn("call_cap_notes", result)
+
+    def test_mock_retry_scenario_never_exceeds_cap(self):
+        """Simulate the retry planner asking for the SAME agent every round
+        (the cfl-12 precedent) across more rounds than the cap allows — the
+        runner must never see more than MAX_CALLS_PER_AGENT actual calls."""
+        runner = _CountingRunner()
+        specialist_outputs: list = []
+        for _ in range(MAX_CALLS_PER_AGENT + 4):
+            state = self._specialist_state("pumping", specialist_outputs, runner)
+            result = run_specialist_node(state)
+            specialist_outputs = specialist_outputs + list(result.get("specialist_outputs", []))
+        self.assertEqual(runner.calls.count("pumping"), MAX_CALLS_PER_AGENT)
+
+    def test_call_cap_note_surfaces_in_verdict_gate_downgrades(self):
+        state = _state(
+            test_result={
+                "status": "fail",
+                "counterexample": {"word": "ab", "oracle_says": True, "automaton_says": False},
+            },
+            call_cap_notes=[
+                "agent pumping call cap reached (3 calls)",
+                "agent pumping call cap reached (3 calls)",  # duplicate
+            ],
+        )
+        result = assemble_result_node(state)["result"]
+        downgrades = result["verdict_gate"]["downgrades"]
+        matches = [d for d in downgrades if "pumping call cap reached" in d]
+        self.assertEqual(len(matches), 1)
 
 
 if __name__ == "__main__":

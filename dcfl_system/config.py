@@ -69,6 +69,23 @@ MAX_TOKENS_PER_AGENT: dict[str, int] = {}
 LLM_JSON_RETRIES = 2
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+# Cost ceiling (TODO.md backlog round C2): the retry planner must never call
+# the same specialist more than this many times for one task -- precedent:
+# live cfl-12 eval run, cfg_builder alone was called 6 times across retries,
+# 130 706 output tokens / $0.80 for a single agent. run_specialist_node
+# enforces the cap itself (skips the call, logs a note) as a last-resort
+# backstop, but until round C5 the retry planner did not know about it: a
+# plan made entirely of already-capped agents was still dispatched as a
+# whole extra graph round that produced no new specialist output, and only
+# MAX_RETRIES eventually ended it. Since round C5, retry_planner_node
+# filters capped agents out of its own proposal first -- a proposal that is
+# ENTIRELY capped agents ends retries immediately instead of spending that
+# round, and each exclusion is logged as an "agent X call cap reached ...,
+# excluded from retry plan" note in verdict_gate.downgrades (in addition to
+# run_specialist_node's own backstop note, for an agent that still slips
+# through some other path).
+MAX_CALLS_PER_AGENT = 3
+
 PROMPT_FILES: dict[str, str] = {
     "input_parser":       "input_parser.md",
     "classifier":         "classifier.md",

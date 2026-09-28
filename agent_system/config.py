@@ -85,3 +85,21 @@ ORACLE_MAX_EXHAUSTIVE = 7
 # Retry counts
 LLM_JSON_RETRIES = 1        # retry if LLM returns non-JSON
 FORMALIZER_RETRIES = 2       # retry if Lean type check fails (§5.2 Level 4)
+
+# Cost ceiling (TODO.md backlog round C2): the retry planner must never call
+# the same specialist more than this many times for one task -- precedent:
+# live cfl-12 eval run, cfg_builder alone was called 6 times across retries,
+# 130 706 output tokens / $0.80 for a single agent. run_specialist_node
+# enforces the cap itself (skips the call, logs a note) as a last-resort
+# backstop, but until round C5 the retry planner did not know about it: a
+# plan made entirely of already-capped agents was still dispatched as a
+# whole extra graph round that produced no new specialist output, and only
+# MAX_RETRIES eventually ended it. Since round C5, the retry planner
+# (`run_retry_planner_node` / `retry_planner_node` / `apply_verdict_gate`)
+# filters capped agents out of its own proposal first -- a proposal that is
+# ENTIRELY capped agents ends retries immediately instead of spending that
+# round, and each exclusion is logged as an "agent X call cap reached ...,
+# excluded from retry plan" note in verdict_gate.downgrades (in addition to
+# run_specialist_node's own backstop note, for an agent that still slips
+# through some other path).
+MAX_CALLS_PER_AGENT = 3

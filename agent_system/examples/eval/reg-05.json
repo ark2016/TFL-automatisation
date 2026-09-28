@@ -1,0 +1,12 @@
+{
+  "task_type": "classify_and_prove",
+  "source_text": "{a^n b^m | n >= m >= 0}",
+  "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+      "a",
+      "b"
+    ],
+    "description": "{a^n b^m | n >= m >= 0}"
+  }
+}
