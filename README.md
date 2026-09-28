@@ -404,6 +404,42 @@ The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-le
 
 ---
 
+## Lean 4 + Mathlib in Docker: how to build and check a file
+
+`agent_system/lib/type_check.py` (used by the REG pipeline's `formalizer` agent and by `agent_system/tests/test_phase3.py`)
+type-checks Lean 4 code inside the `tfl-lean4` Docker image rather than requiring a local Lean install. The image
+bundles a small pinned lake project, `agent_system/docker/tfl_lean/` (`lakefile.toml`, `lean-toolchain` =
+`leanprover/lean4:v4.18.0`, `lake-manifest.json` pinning Mathlib to tag `v4.18.0`, `TflLean.lean` importing
+`Mathlib.Computability.DFA` and `Mathlib.Computability.RegularExpressions` — the two modules the formalizer prompt
+and the LL(k) live-run Lean examples under `ll_system/examples/live_outputs/*.lean` depend on), built with
+`lake exe cache get` + `lake build` so Mathlib's `.olean` cache is baked into the image instead of being recompiled
+on every check.
+
+```bash
+# Build the image (native on both amd64 and arm64 — e.g. Apple Silicon / Windows-on-ARM under
+# Docker Desktop's WSL2 backend build Lean natively, no emulation). Downloads Mathlib's source
+# (~250 MB) and precompiled .olean cache (~1-2 GB); the resulting image is several GB.
+docker compose -f agent_system/docker/docker-compose.yml build lean4
+# or: agent_system/docker/build.sh (bash) / build.ps1 (PowerShell)
+
+# Check a single file (Mathlib on LEAN_PATH via `lake env`, run from the tfl_lean project dir):
+agent_system/docker/run_check.sh path/to/file.lean          # bash
+# PowerShell / Windows Git Bash: pass MSYS_NO_PATHCONV=1 (or run from PowerShell directly) —
+# otherwise Git Bash rewrites /home/lean/... container paths in the docker run arguments.
+```
+
+Notes:
+- `agent_system/lib/type_check.py`'s `check_lean()` runs `docker run ... -w /home/lean/tfl_lean tfl-lean4 lake env lean /home/lean/check.lean`
+  and is a no-op (`status: "skipped"`) when Docker or the image isn't available — mock-mode tests stay green without it.
+- Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
+  leading UTF-8 BOM. PowerShell's `Set-Content -Encoding utf8` adds one; use `-Encoding utf8NoBOM` (or write with a
+  tool that doesn't add a BOM) instead.
+- To refresh the pinned Mathlib revision: update `rev` in `agent_system/docker/tfl_lean/lakefile.toml`, run
+  `lake update` inside a container built from the *previous* image (or any Lean 4.18-compatible toolchain) to
+  regenerate `lake-manifest.json`, commit the new manifest, then rebuild the image.
+
+---
+
 ## `tfl-eval` — accuracy and calibration over an eval set
 
 `tfl_eval/` runs the eval set described in [`docs/EVAL_SET.md`](docs/EVAL_SET.md) (74 tasks across all four

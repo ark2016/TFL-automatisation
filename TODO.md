@@ -247,7 +247,14 @@
 - [ ] ⚪ **S** Contract-тесты промптов: каждый ```json-блок парсится и содержит обязательные ключи; все ключи, которые формирует
   builder входа, упомянуты в промпте (по образцу `cfl_system/tests/test_pda_contract.py`).
 - [ ] ⚪ **S** `agent_system/tests/test_phase3.py`: шаблоны Lean никогда не компилируются в CI (Lean-задача в CI неблокирующая, а не
-  выполняющая реальную компиляцию — см. `.github/workflows/tests.yml`).
+  выполняющая реальную компиляцию — см. `.github/workflows/tests.yml`). Локально (Docker Desktop, любая ОС/архитектура)
+  `docker compose -f agent_system/docker/docker-compose.yml build lean4` теперь собирает `tfl-lean4` с Mathlib
+  (`agent_system/docker/tfl_lean/`, pinned на тег `v4.18.0`) уже забилженным через `lake exe cache get` — все
+  Lean-тесты (шаблоны без Mathlib + `TestMathlibImportCompiles`) реально компилируются и зелёные. Для CI нужен
+  свой кэш: полный клон Mathlib ~250 МБ + прекомпилированный `.olean`-кэш ~1–2 ГБ на скачивание при каждой сборке
+  образа без слоя-кэша — без кэширования образа/слоёв в CI-раннере это будет слишком долго/дорого для
+  неблокирующей джобы, поэтому джоба остаётся неблокирующей до появления кэширования (registry cache или
+  actions/cache на `.lake`) в `.github/workflows/tests.yml`.
 
 ## 6. Документация и промпты
 

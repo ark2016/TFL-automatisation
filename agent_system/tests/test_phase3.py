@@ -68,6 +68,30 @@ class TestTemplatesCompile(unittest.TestCase):
         self.assertEqual(result["status"], "valid", f"Errors: {result.get('errors')}")
 
 
+# ── Mathlib import (requires Docker image built with the tfl_lean project) ──
+#
+# The formalizer prompt (agent_system/prompts/formalizer.md) and the LL(k)
+# live-run Lean examples import Mathlib.Computability.DFA /
+# Mathlib.Computability.RegularExpressions. Skipped unless Docker (and the
+# tfl-lean4 image) is available; when it is, this exercises the actual
+# `lake env lean` path used by check_lean() against a real Mathlib import,
+# not just the self-contained, Mathlib-free templates above.
+
+@unittest.skipUnless(
+    is_docker_available(),
+    "Docker with tfl-lean4 image not available"
+)
+class TestMathlibImportCompiles(unittest.TestCase):
+
+    def test_dfa_import_compiles(self):
+        code = (
+            "import Mathlib.Computability.DFA\n\n"
+            "theorem tfl_mathlib_smoke (n : Nat) : n + 0 = n := by simp\n"
+        )
+        result = check_lean(code, timeout=600)
+        self.assertEqual(result["status"], "valid", f"Errors: {result.get('errors')}")
+
+
 # ── Docker infrastructure files ─────────────────────────────────────────────
 
 class TestDockerFiles(unittest.TestCase):

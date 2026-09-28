@@ -1,0 +1,10 @@
+name = "tfl_lean"
+defaultTargets = ["TflLean"]
+
+[[require]]
+name = "mathlib"
+git = "https://github.com/leanprover-community/mathlib4.git"
+rev = "v4.18.0"
+
+[[lean_lib]]
+name = "TflLean"

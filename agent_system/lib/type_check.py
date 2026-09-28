@@ -17,9 +17,15 @@ import os
 from pathlib import Path
 
 DOCKER_IMAGE = "tfl-lean4"
-DEFAULT_TIMEOUT = 120  # seconds
+DEFAULT_TIMEOUT = 300  # seconds — Mathlib imports are much slower to elaborate than the old, dependency-free templates
 DOCKER_DIR = Path(__file__).resolve().parent.parent / "docker"
 COMPOSE_FILE = DOCKER_DIR / "docker-compose.yml"
+# Working directory for `lake env lean` inside the container: the tfl_lean
+# lake project baked into the image at build time (see Dockerfile.lean4),
+# which has Mathlib.Computability.DFA / Mathlib.Computability.RegularExpressions
+# pre-built. Running `lean` from here (via `lake env`) puts Mathlib's .olean
+# cache on LEAN_PATH so imports resolve without recompiling Mathlib.
+LEAN_PROJECT_DIR = "/home/lean/tfl_lean"
 
 
 def _windows_docker_path(p: str) -> str:
@@ -108,14 +114,16 @@ def check_lean(code: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
 
         start = time.monotonic()
 
-        # Run lean in Docker container
+        # Run lean (via `lake env`, from the tfl_lean project dir, so Mathlib
+        # is on LEAN_PATH) in the Docker container.
         result = subprocess.run(
             [
                 "docker", "run", "--rm",
-                "--memory=2g", "--cpus=2",
+                "--memory=4g", "--cpus=2",
                 "-v", f"{mount_src}:/home/lean/check.lean:ro",
+                "-w", LEAN_PROJECT_DIR,
                 DOCKER_IMAGE,
-                "timeout", str(timeout), "lean", "/home/lean/check.lean",
+                "timeout", str(timeout), "lake", "env", "lean", "/home/lean/check.lean",
             ],
             capture_output=True,
             text=True,
