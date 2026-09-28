@@ -30,7 +30,10 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
   not in each `LiveRunner` separately. Structured outputs (`output_config.format`, per-agent JSON schema) are the
   primary response-parsing path; `agent_output_schema.py` in each project builds the schema, with automatic
   fallback to the legacy brace/fence extraction.
-- Live test runs use Haiku only: `TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`. Opus runs cost real money — only on request.
+- Live API runs (any model) happen **only on the user's explicit request, with a budget agreed beforehand** (order of $1 per
+  session); never as an automatic step of a workflow, round or review. All verification defaults to mock mode. When a live run
+  is requested, use Haiku only (`TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`), state the estimated cost first, and run the
+  smallest task set that answers the question. Opus runs cost real money — only on request.
 - `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables `agent_system`'s `formalizer` agent by default for every
   run, without passing `--formalize` each time; unset/other values keep it opt-in per `--formalize`.
 - Eval set: `docs/EVAL_SET.md` (73 tasks, expected verdicts) is run by `tfl-eval` (`tfl_eval/`), which reports
