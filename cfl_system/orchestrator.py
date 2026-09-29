@@ -68,6 +68,7 @@ from agent_system.lib.llm_client import (
     get_concurrency_semaphore,
 )
 from cfl_system.lib.agent_output_schema import schema_for as _output_schema_for
+from agent_system.lib.progress import ProgressWriter, announce_start, finish_pipeline, instrument_node
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,7 @@ class PipelineState(TypedDict):
     agent_runner: Any
     verbose: bool
     formalize: bool | None                               # None = use FORMALIZATION_ENABLED (Lean step)
+    progress: Any                                        # ProgressWriter | None (agent_system.lib.progress)
 
     # -- Pipeline data --
     hypothesis: dict
@@ -635,6 +637,8 @@ def _run_agent(state: PipelineState, agent_name: str, input_data: dict | None = 
     runner = _get_runner(state)
     if runner is None:
         return None
+    if state.get("mock_runner") is None:
+        announce_start(state, agent_name)
     try:
         return runner.run_agent(agent_name, input_data)
     except NotImplementedError:
@@ -2866,25 +2870,25 @@ def build_cfl_pipeline_graph() -> Any:
     graph = StateGraph(PipelineState)
 
     # -- Register nodes --
-    graph.add_node("validate_ir_node", validate_ir_node)
-    graph.add_node("assemble_early_failure", assemble_early_failure)
-    graph.add_node("analyze_hypothesis_node", analyze_hypothesis_node)
-    graph.add_node("run_classifier_node", run_classifier_node)
-    graph.add_node("language_preprocess_node", language_preprocess_node)
-    graph.add_node("setup_dispatch_node", setup_dispatch_node)
-    graph.add_node("run_specialist_node", run_specialist_node)
-    graph.add_node("collect_specialists_node", collect_specialists_node)
-    graph.add_node("build_oracle_node", build_oracle_node)
-    graph.add_node("verify_claims_node", verify_claims_node)
-    graph.add_node("oracle_test_node", oracle_test_node)
-    graph.add_node("run_proof_checker_node", run_proof_checker_node)
-    graph.add_node("run_reasoning_node", run_reasoning_node)
-    graph.add_node("verdict_gate_node", verdict_gate_node)
-    graph.add_node("run_retry_planner_node", run_retry_planner_node)
-    graph.add_node("invert_hypothesis_node", invert_hypothesis_node)
-    graph.add_node("formalize_node", formalize_node)
-    graph.add_node("lean_formalize_node", lean_formalize_node)
-    graph.add_node("assemble_result_node", assemble_result_node)
+    graph.add_node("validate_ir_node", instrument_node("validate_ir_node", validate_ir_node))
+    graph.add_node("assemble_early_failure", instrument_node("assemble_early_failure", assemble_early_failure))
+    graph.add_node("analyze_hypothesis_node", instrument_node("analyze_hypothesis_node", analyze_hypothesis_node))
+    graph.add_node("run_classifier_node", instrument_node("run_classifier_node", run_classifier_node))
+    graph.add_node("language_preprocess_node", instrument_node("language_preprocess_node", language_preprocess_node))
+    graph.add_node("setup_dispatch_node", instrument_node("setup_dispatch_node", setup_dispatch_node))
+    graph.add_node("run_specialist_node", instrument_node("run_specialist_node", run_specialist_node))
+    graph.add_node("collect_specialists_node", instrument_node("collect_specialists_node", collect_specialists_node))
+    graph.add_node("build_oracle_node", instrument_node("build_oracle_node", build_oracle_node))
+    graph.add_node("verify_claims_node", instrument_node("verify_claims_node", verify_claims_node))
+    graph.add_node("oracle_test_node", instrument_node("oracle_test_node", oracle_test_node))
+    graph.add_node("run_proof_checker_node", instrument_node("run_proof_checker_node", run_proof_checker_node))
+    graph.add_node("run_reasoning_node", instrument_node("run_reasoning_node", run_reasoning_node))
+    graph.add_node("verdict_gate_node", instrument_node("verdict_gate_node", verdict_gate_node))
+    graph.add_node("run_retry_planner_node", instrument_node("run_retry_planner_node", run_retry_planner_node))
+    graph.add_node("invert_hypothesis_node", instrument_node("invert_hypothesis_node", invert_hypothesis_node))
+    graph.add_node("formalize_node", instrument_node("formalize_node", formalize_node))
+    graph.add_node("lean_formalize_node", instrument_node("lean_formalize_node", lean_formalize_node))
+    graph.add_node("assemble_result_node", instrument_node("assemble_result_node", assemble_result_node))
 
     # -- Edges --
 
@@ -2966,6 +2970,7 @@ def run_pipeline(
     agent_runner: LiveRunner | None = None,
     verbose: bool = False,
     formalize: bool | None = None,
+    progress: ProgressWriter | None = None,
 ) -> dict:
     """Run the full CFL pipeline and return the result dict.
 
@@ -2991,6 +2996,7 @@ def run_pipeline(
         "agent_runner": agent_runner,
         "verbose": verbose,
         "formalize": formalize,
+        "progress": progress,
         "formalization": None,
         "hypothesis": {},
         "classifier_output": {},
@@ -3018,6 +3024,10 @@ def run_pipeline(
         "result": {},
     }
 
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    if progress is not None and tracker is not None:
+        progress.attach_tracker(tracker)
+
     final_state = graph.invoke(initial_state)
     result = final_state.get("result")
     if not result:
@@ -3038,8 +3048,8 @@ def run_pipeline(
     # Usage/cost block (TODO.md §3) -- additive, present even without a live
     # agent_runner (an all-zero UsageTracker) so callers can rely on
     # result["usage"] always existing.
-    tracker = getattr(agent_runner, "usage_tracker", None)
     result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+    finish_pipeline(progress, result)
     return result
 
 
@@ -3062,6 +3072,10 @@ def main() -> None:
                              "with the tfl-lean4 image; a live run spends "
                              "extra Opus calls, so only on request")
     parser.add_argument("--save", help="Save result to this directory")
+    parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=None,
+                        help="Write progress.jsonl + partial_result.json into the --save "
+                             "directory while running (default: on iff --save is given; "
+                             "--no-progress disables)")
     parser.add_argument("--draw-graph", help="Save pipeline graph PNG to this path")
     args = parser.parse_args()
 
@@ -3090,10 +3104,18 @@ def main() -> None:
     elif args.live:
         live = LiveRunner(verbose=args.verbose)
 
-    result = run_pipeline(
-        ir_data, mock_runner=mock, agent_runner=live, verbose=args.verbose,
-        formalize=True if args.formalize else None,
+    progress = ProgressWriter.for_cli(
+        args.save, args.progress, system="cfl_system", stem=f"{task_name}_result",
     )
+    try:
+        result = run_pipeline(
+            ir_data, mock_runner=mock, agent_runner=live, verbose=args.verbose,
+            formalize=True if args.formalize else None, progress=progress,
+        )
+    except Exception as exc:
+        if progress is not None and progress.status != "error":
+            progress.error(f"{type(exc).__name__}: {exc}", exc_type=type(exc).__name__)
+        raise
     if args.verbose and live is not None:
         print(live.usage_tracker.summary_line(), file=sys.stderr)
 
@@ -3118,6 +3140,9 @@ def main() -> None:
             print(f"Rendered: {html_path}", file=sys.stderr)
         except Exception as exc:
             print(f"Renderer failed: {exc}", file=sys.stderr)
+        if progress is not None:
+            progress.done(result, files=[f"{task_name}_result.{ext}" for ext in ("json", "md", "html")
+                                         if (save_dir / f"{task_name}_result.{ext}").exists()])
 
     # Exit code reflects pipeline outcome
     verdict = result.get("verdict")

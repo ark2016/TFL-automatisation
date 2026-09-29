@@ -336,14 +336,22 @@ All four pipelines use the same three-tier model stack:
 
 Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS (`static/app.js`, no inline `<script>`) + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/) (served from cdnjs, not jsdelivr, so a strict `script-src` can allow-list a single host) + [DOMPurify](https://github.com/cure53/DOMPurify) to sanitize the rendered Markdown before it goes into `innerHTML`. No framework, no build step.
 
-**Runs are bounded, not fire-and-forget:** at most `MAX_CONCURRENT_RUNS` (default 2, `TFL_LAB_MAX_CONCURRENT_RUNS` env var) pipeline subprocesses run at once — further runs queue; each run is killed if it exceeds `RUN_TIMEOUT_SECONDS` (`--run-timeout`, default 1800 s); `POST /api/runs/<run_id>/cancel` cancels a queued or running run on demand from the UI.
+**Runs are bounded, with no timeout:** at most `MAX_CONCURRENT_RUNS` (default 2, `TFL_LAB_MAX_CONCURRENT_RUNS` env var / `--max-concurrent-runs`) pipeline subprocesses run at once — further runs queue. There is **no run timeout** (`RUN_TIMEOUT_SECONDS` / `--run-timeout` were removed): a run ends on its own or by manual cancel (`POST /api/runs/<run_id>/cancel`, also while a run is formalizing).
+
+**Progress and partial results.** Every pipeline writes into its run directory as it goes: `progress.jsonl` (one JSON event per line: `node_start` / `node_done` / `llm_call` / `verdict` / `formalization` / `done` / `error`, each with a cumulative `usage` = calls, input/output tokens, estimated cost) and `partial_result.json` (snapshot of the result after every finished node); the final `<stem>_result.{json,md,html}` are unchanged. The writer is `agent_system/lib/progress.py`, shared by all four systems. The UI's **Progress** tab (default on run start) polls `GET /api/runs/<id>?after=N` and shows sections (hypothesis and classification, specialists, oracle checks, gate and verdict, formalization) as they fill, with model, tokens, time and cost per step. A manual cancel writes no event; the server marks such a run cancelled itself.
+
+**Runs persist on disk.** Each run directory keeps `run.json` (status, project, times, pid, verdict, confidence, cost, errors) and `run.log`; the server reloads them on start. A run left queued/running/formalizing without a live process becomes `interrupted` (or `completed` if its result was already written); older directories without `run.json` load read-only from their result files. The server refuses to start over active runs (`--force` overrides).
+
+**Formalization is a separate entry.** A finished result has a **Formalize** button (CLI: `python -m <system>.formalize <run_dir>`, see "R-Lean architecture"); the request must carry `confirm_spend: true`. Inside a run it is optional and off by default. **Settings** in the UI: formalization in-run on/off, first-attempt model (Opus 5.5), correction model (Sonnet 5.5), number of corrections (default 2), output limit 128000 tokens for both. Defaults are in `ui_server/settings.example.json`. In the UI, "formalize inside a run" chains the same separate entry (`<system>.formalize`, with the settings above as flags) after a finished **live** run's result is written: the run goes `running` → `formalizing` → `completed`; mock runs and LL never call it. The pipeline subprocess itself is always started with `TFL_FORMALIZATION=0` (the env variable still controls the in-graph step for plain CLI runs). A result whose block is already proved is not formalized again (the server answers 409; the button becomes "Re-run (proved)" and sends `force: true` after a confirmation); a forced re-run that does not end proved keeps the existing proof, verdict and confidence untouched.
+
+**Cost.** Before a *run* the UI shows the mean (and min–max, number of runs) of the pipeline cost of the recorded live runs of that project (`run.json` / `progress.jsonl`, formalization excluded) — measured, not tabulated; with no recorded run it says "no data". Before a *formalization* it shows min / expected / hard maximum from `<system>.formalize --estimate` (no API, no Docker; prices from `config.py`, output sizes 25k / 12k tokens per first / correction attempt are stated assumptions; the maximum is every call, including the one body-only call, at `max_tokens`) via `GET /api/runs/<id>/formalize/estimate`. A running total updates per LLM call during the run, and the final cost is stored in `run.json` and the result.
 
 Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a loopback `Host` header (DNS-rebinding guard), `POST /api/run` requires a same-origin `application/json` request (no cross-site "no-cors" posts starting paid runs), files are served only by lookup in an index of the served directory, and a `Content-Security-Policy` header (script/style/connect restricted to `'self'` + cdnjs, no inline scripts, iframe results rendered with `sandbox`) limits the blast radius of a compromised or malicious IR/report.
 
 ```bash
 .venv/Scripts/python -m ui_server.server --port 8765
 # → http://127.0.0.1:8765/
-.venv/Scripts/python -m ui_server.server --port 8765 --run-timeout 900
+.venv/Scripts/python -m ui_server.server --port 8765 --max-concurrent-runs 1
 ```
 
 ---
@@ -418,6 +426,21 @@ statement never changes) -> gate. Entry points: `agent_system/graph.py` (`formal
 Markdown `formalize_node`, which is a separate, Lean-free step). A `proved` result raises trust to `verified`
 (0.98) and can flip the verdict in both directions. The step is off by default: `--formalize` or
 `TFL_FORMALIZATION=1`; the result is in `result["formalization"]` (the CFL/DCFL renderers do not show it yet).
+
+**Separate entry over a finished run** (`agent_system/lib/formalize_run.py`, thin wrappers
+`python -m agent_system.formalize` / `cfl_system.formalize` / `dcfl_system.formalize <run_dir>`; the "Formalize" button
+of TFL Lab calls it). Input: a run directory with `input.json` and `<stem>_result.json`. The statement is rendered
+from the IR for the result's verdict (or `--direction`); attempt 1 runs on `--first-model` (default Opus 5.5), up to
+`--retries` (default 2) corrections on `--retry-model` (default Sonnet 5.5) get the Lean errors and the previous
+body; both with `--max-tokens 128000`. A reply cut off at the limit without a proof body earns exactly one Sonnet
+"output ONLY the proof body" attempt, then the loop stops. The `formalization` block is appended to
+`<stem>_result.{json,md,html}` and a `proved` block updates verdict/confidence through the system's own R-Lean gate;
+progress and running cost go to `progress.jsonl` / `partial_result.json` (`agent_system/lib/progress.py`).
+Idempotent: an already `proved` run is a no-op (`--force` re-runs from the saved pre-Lean values), a failed block is
+replaced by the next run. `--estimate` prints the cost estimate (min / expected / hard maximum) without any call;
+`--live` calls the API (spends money, only on request), `--mock DIR` replays scripted proof bodies. Defaults live in
+each `config.py` (`MODELS["formalizer_retry"]` / `["lean_formalizer_retry"]`, `FORMALIZE_RETRIES`,
+`FORMALIZE_MAX_TOKENS`). Whether the Lean step also runs *inside* a pipeline run stays opt-in (`--formalize`).
 
 - **Statement is code, proof body is the LLM.** The Lean file's theorem *statement* (alphabet type, language
   definition, the claim itself) is generated **deterministically from the IR** by

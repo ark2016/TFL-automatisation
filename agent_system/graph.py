@@ -38,6 +38,7 @@ from .lib.dfa_runner import validate_dfa, run_dfa
 from .lib.hypothesis_module import analyze_hypothesis
 from .lib.type_check import compose_lean_file, check_lean_file
 from .lib.llm_client import UsageTracker
+from .lib.progress import ProgressWriter, announce_start, finish_pipeline, instrument_node
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +85,7 @@ class PipelineState(TypedDict):
     agent_runner: Any
     verbose: bool
     formalize: bool | None                               # None = use FORMALIZATION_ENABLED
+    progress: Any                                        # ProgressWriter | None (agent_system.lib.progress)
 
     # -- Pipeline data --
     hypothesis: dict
@@ -164,6 +166,7 @@ def run_agent(state: PipelineState, agent_name: str,
             return out
 
     if agent_runner is not None:
+        announce_start(state, agent_name)
         log_msg(state, f"{agent_name}: calling LLM...")
         t0 = _time.monotonic()
         out = agent_runner.run_agent(agent_name, input_data)
@@ -2072,24 +2075,24 @@ def build_full_pipeline_graph() -> Any:
     graph = StateGraph(PipelineState)
 
     # -- Register nodes --
-    graph.add_node("validate_ir_node", validate_ir_node)
-    graph.add_node("assemble_early_failure", assemble_early_failure)
-    graph.add_node("analyze_hypothesis_node", analyze_hypothesis_node)
-    graph.add_node("run_classifier_node", run_classifier_node)
-    graph.add_node("grammar_preprocess_node", grammar_preprocess_node)
-    graph.add_node("setup_dispatch_node", setup_dispatch_node)
-    graph.add_node("run_specialist_node", run_specialist_node)
-    graph.add_node("collect_specialists_node", collect_specialists_node)
-    graph.add_node("build_oracle_node", build_oracle_node)
-    graph.add_node("verify_closure_node", verify_closure_node)
-    graph.add_node("verify_claims_node", verify_claims_node)
-    graph.add_node("oracle_test_node", oracle_test_node)
-    graph.add_node("run_proof_checker_node", run_proof_checker_node)
-    graph.add_node("run_reasoning_node", run_reasoning_node)
-    graph.add_node("run_retry_planner_node", run_retry_planner_node)
-    graph.add_node("invert_hypothesis_node", invert_hypothesis_node)
-    graph.add_node("formalize_node", formalize_node)
-    graph.add_node("assemble_result_node", assemble_result_node)
+    graph.add_node("validate_ir_node", instrument_node("validate_ir_node", validate_ir_node))
+    graph.add_node("assemble_early_failure", instrument_node("assemble_early_failure", assemble_early_failure))
+    graph.add_node("analyze_hypothesis_node", instrument_node("analyze_hypothesis_node", analyze_hypothesis_node))
+    graph.add_node("run_classifier_node", instrument_node("run_classifier_node", run_classifier_node))
+    graph.add_node("grammar_preprocess_node", instrument_node("grammar_preprocess_node", grammar_preprocess_node))
+    graph.add_node("setup_dispatch_node", instrument_node("setup_dispatch_node", setup_dispatch_node))
+    graph.add_node("run_specialist_node", instrument_node("run_specialist_node", run_specialist_node))
+    graph.add_node("collect_specialists_node", instrument_node("collect_specialists_node", collect_specialists_node))
+    graph.add_node("build_oracle_node", instrument_node("build_oracle_node", build_oracle_node))
+    graph.add_node("verify_closure_node", instrument_node("verify_closure_node", verify_closure_node))
+    graph.add_node("verify_claims_node", instrument_node("verify_claims_node", verify_claims_node))
+    graph.add_node("oracle_test_node", instrument_node("oracle_test_node", oracle_test_node))
+    graph.add_node("run_proof_checker_node", instrument_node("run_proof_checker_node", run_proof_checker_node))
+    graph.add_node("run_reasoning_node", instrument_node("run_reasoning_node", run_reasoning_node))
+    graph.add_node("run_retry_planner_node", instrument_node("run_retry_planner_node", run_retry_planner_node))
+    graph.add_node("invert_hypothesis_node", instrument_node("invert_hypothesis_node", invert_hypothesis_node))
+    graph.add_node("formalize_node", instrument_node("formalize_node", formalize_node))
+    graph.add_node("assemble_result_node", instrument_node("assemble_result_node", assemble_result_node))
 
     # -- Edges --
 
@@ -2173,6 +2176,7 @@ def run_pipeline(
     agent_runner: Any = None,
     verbose: bool | None = None,
     formalize: bool | None = None,
+    progress: ProgressWriter | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline and return the result dict.
 
@@ -2189,6 +2193,10 @@ def run_pipeline(
                    ``None`` (default) uses ``FORMALIZATION_ENABLED``
                    (itself defaulted from the ``TFL_FORMALIZATION`` env
                    var); ``True``/``False`` force it on/off for this run.
+        progress: Optional :class:`ProgressWriter`; when given, node/LLM
+                  events go to ``run_dir/progress.jsonl`` and
+                  ``partial_result.json`` is refreshed after every node
+                  (see ``agent_system/lib/progress.py``).
 
     Returns:
         Structured result per section 5.3 output contract.
@@ -2204,6 +2212,7 @@ def run_pipeline(
         "agent_runner": agent_runner,
         "verbose": verbose,
         "formalize": formalize,
+        "progress": progress,
         # Initialise accumulator fields
         "hypothesis": {},
         "classifier_output": {},
@@ -2234,11 +2243,15 @@ def run_pipeline(
         "result": {},
     }
 
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    if progress is not None and tracker is not None:
+        progress.attach_tracker(tracker)
+
     final_state = graph.invoke(initial_state)
     result = final_state.get("result", _make_result("failure", errors=["Graph produced no result"]))
     # Usage/cost block (TODO.md §3) -- additive: never replaces existing
     # result keys. Present even without a live agent_runner (an all-zero
     # UsageTracker) so callers can rely on result["usage"] always existing.
-    tracker = getattr(agent_runner, "usage_tracker", None)
     result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+    finish_pipeline(progress, result)
     return result

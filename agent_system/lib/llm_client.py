@@ -26,7 +26,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 
@@ -681,6 +681,23 @@ class UsageTracker:
         self._by_agent: dict[str, dict[str, UsageTotals]] = {}
         self._structured_output_calls = 0
         self._extraction_fallback_calls = 0
+        self._listeners: list[Callable[[dict], None]] = []
+
+    def add_listener(self, fn: Callable[[dict], None]) -> None:
+        """Register `fn(call)`, invoked after every recorded call (outside the
+        lock, exceptions swallowed) with ``{"model", "agent", "input_tokens",
+        "output_tokens", "cache_read_input_tokens",
+        "cache_creation_input_tokens", "estimated_cost_usd"}`` for THAT call.
+        Feeds ``agent_system.lib.progress`` (running cost while a run is in
+        flight)."""
+        with self._lock:
+            if fn not in self._listeners:
+                self._listeners.append(fn)
+
+    def remove_listener(self, fn: Callable[[dict], None]) -> None:
+        with self._lock:
+            if fn in self._listeners:
+                self._listeners.remove(fn)
 
     def record(
         self, model: str | None, usage: Any, *,
@@ -724,6 +741,23 @@ class UsageTracker:
                 self._structured_output_calls += 1
             elif used_structured_output is False:
                 self._extraction_fallback_calls += 1
+            listeners = list(self._listeners)
+
+        if listeners:
+            call = {
+                "model": model_key,
+                "agent": agent_key,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+                "estimated_cost_usd": estimate_cost_usd(model_key, usage),
+            }
+            for fn in listeners:
+                try:
+                    fn(call)
+                except Exception:  # noqa: BLE001 — progress reporting must never break a call
+                    pass
 
     def as_dict(self) -> dict:
         """JSON-serializable summary — the pipeline result's ``usage`` block.

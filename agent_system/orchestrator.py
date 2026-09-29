@@ -33,6 +33,7 @@ from .lib.oracle_test import oracle_test
 from .lib.dfa_runner import validate_dfa, run_dfa
 from .lib.hypothesis_module import analyze_hypothesis
 from .lib.type_check import check_lean
+from .lib.progress import ProgressWriter
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +251,7 @@ class Pipeline:
         mock_runner: MockRunner | None = None,
         agent_runner: Any | None = None,
         formalize: bool | None = None,
+        progress: ProgressWriter | None = None,
     ) -> dict[str, Any]:
         """Run the full end-to-end pipeline per §5.1.
 
@@ -268,6 +270,9 @@ class Pipeline:
                        from the ``TFL_FORMALIZATION`` env var); pass
                        ``True``/``False`` to force it on/off for this run
                        (the CLI's ``--formalize`` does this).
+            progress: Optional :class:`ProgressWriter` (progress.jsonl +
+                      partial_result.json in its run dir; see
+                      ``lib/progress.py``).
 
         Returns:
             Structured result per §5.3 output contract.
@@ -279,6 +284,7 @@ class Pipeline:
             mock_runner=mock_runner,
             agent_runner=agent_runner,
             formalize=formalize,
+            progress=progress,
         )
 
         # Sync instance attributes for backward compatibility
@@ -435,6 +441,10 @@ def main() -> None:
                              "(common CLI contract used by TFL Lab)")
     parser.add_argument("--verbose", action="store_true",
                         help="Accepted for CLI parity with the other pipelines")
+    parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=None,
+                        help="Write progress.jsonl + partial_result.json into the --save "
+                             "directory while running (default: on iff --save is given; "
+                             "--no-progress disables)")
     parser.add_argument("--formalize", action="store_true",
                         help="Force-enable Lean 4 formalization for this run "
                              "(default: TFL_FORMALIZATION env var, currently "
@@ -457,33 +467,43 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     pipeline = Pipeline()
     formalize = True if args.formalize else None
+    progress = ProgressWriter.for_cli(
+        args.save, args.progress, system="agent_system",
+        stem=f"{Path(args.ir_json).stem}_result",
+    )
+    try:
+        if args.mock is not None:
+            task_prefix = Path(args.ir_json).stem
+            mock_runner = MockRunner(args.mock, task_prefix=task_prefix)
+            result = pipeline.run_full_pipeline(
+                ir, mock_runner=mock_runner, formalize=formalize, progress=progress)
 
-    if args.mock is not None:
-        task_prefix = Path(args.ir_json).stem
-        mock_runner = MockRunner(args.mock, task_prefix=task_prefix)
-        result = pipeline.run_full_pipeline(ir, mock_runner=mock_runner, formalize=formalize)
-
-    elif args.live:
-        from .lib.llm_client import LLMRunner
-        try:
-            llm = LLMRunner(verbose=args.verbose)
-        except RuntimeError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            sys.exit(1)
-        result = pipeline.run_full_pipeline(ir, agent_runner=llm, formalize=formalize)
-        if args.verbose:
-            print(llm.usage_tracker.summary_line(), file=sys.stderr)
-
-    else:
-        dfa = None
-        if args.dfa_json:
+        elif args.live:
+            from .lib.llm_client import LLMRunner
             try:
-                with open(args.dfa_json, encoding="utf-8") as f:
-                    dfa = json.load(f)
-            except (OSError, json.JSONDecodeError) as exc:
-                print(f"Error reading DFA file: {exc}", file=sys.stderr)
+                llm = LLMRunner(verbose=args.verbose)
+            except RuntimeError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
                 sys.exit(1)
-        result = pipeline.run_from_ir(ir, dfa)
+            result = pipeline.run_full_pipeline(
+                ir, agent_runner=llm, formalize=formalize, progress=progress)
+            if args.verbose:
+                print(llm.usage_tracker.summary_line(), file=sys.stderr)
+
+        else:
+            dfa = None
+            if args.dfa_json:
+                try:
+                    with open(args.dfa_json, encoding="utf-8") as f:
+                        dfa = json.load(f)
+                except (OSError, json.JSONDecodeError) as exc:
+                    print(f"Error reading DFA file: {exc}", file=sys.stderr)
+                    sys.exit(1)
+            result = pipeline.run_from_ir(ir, dfa)
+    except Exception as exc:
+        if progress is not None and progress.status != "error":
+            progress.error(f"{type(exc).__name__}: {exc}", exc_type=type(exc).__name__)
+        raise
 
     # Top-level verdict (regular / non_regular), same place as in the
     # cfl / dcfl / ll results, so callers don't dig through evidence.
@@ -507,6 +527,9 @@ def main() -> None:
             except Exception as exc:
                 print(f"Renderer ({fmt}) failed: {exc}", file=sys.stderr)
         print(f"Result saved to {save_dir / (stem + '.json')}", file=sys.stderr)
+        if progress is not None:
+            progress.done(result, files=[f"{stem}.{ext}" for ext in ("json", "md", "html")
+                                         if (save_dir / f"{stem}.{ext}").exists()])
 
     # Render
     if args.render:

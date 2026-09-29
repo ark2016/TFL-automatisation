@@ -32,6 +32,10 @@ MODELS: dict[str, str] = {
     # R-Lean: writes only the Lean 4 proof body (the statement is generated
     # from the IR by code, cfl_system.lib.lean_ir) -- proof-producing, Opus.
     "lean_formalizer":    "claude-opus-5-5",
+    # Separate Lean formalization entry (`python -m cfl_system.formalize`): the
+    # corrections after the first (Opus) attempt run on Sonnet. Shares the
+    # lean_formalizer prompt, hence no PROMPT_FILES slot.
+    "lean_formalizer_retry": "claude-sonnet-5-5",
 }
 
 # Temperature per agent — only sent to legacy models (Haiku 4.5, pre-4.6).
@@ -45,6 +49,7 @@ TEMPERATURES: dict[str, float] = {
     "proof_checker":      0.0,
     "formalizer":         0.0,
     "lean_formalizer":    0.0,
+    "lean_formalizer_retry": 0.0,
     "cfg_builder":        0.2,
     "pda_builder":        0.2,
     "decomposition":      0.3,
@@ -79,6 +84,7 @@ EFFORT: dict[str, str] = {
     "proof_checker":     "high",
     "formalizer":        "high",
     "lean_formalizer":   "high",
+    "lean_formalizer_retry": "high",
 }
 DEFAULT_EFFORT = "high"
 
@@ -143,6 +149,12 @@ MAX_CALLS_PER_AGENT = 3
 # Every attempt is one Opus call, so this is also the per-task cost ceiling
 # of the Lean step (mirrors agent_system.config.MAX_FORMALIZE_ITERATIONS).
 MAX_FORMALIZE_ITERATIONS = 3
+
+# Separate formalization entry (lib: agent_system/lib/formalize_run.py,
+# `python -m cfl_system.formalize`; decision 2026-09-29): corrections after the first
+# attempt, and the output limit per call (128000 = API maximum, both models).
+FORMALIZE_RETRIES = 2
+FORMALIZE_MAX_TOKENS = 128000
 
 # Seconds allowed for one `lake env lean` check. CFL statements import
 # langlib's pumping/Ogden modules on top of Mathlib, so this is a bit above

@@ -40,7 +40,7 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
   (`agent_system/lib/type_check.py`, `docker run ... lake env lean`) runs locally in Docker as ordinary pipeline
   work, no live-call rule applies to it. Writing the Lean **proof body** is an LLM call and follows the live-run
   rule above like every other agent call: mock mode by default, live only on explicit request with an agreed
-  budget. See README.md "R-Lean architecture" and `docs/VERDICT_POLICY.md`'s R-Lean rule.
+  budget. Formalization is also a separate entry over a finished run (`python -m <system>.formalize <run_dir>`, "Formalize" button in TFL Lab; needs `confirm_spend`); in-run it stays opt-in. See README.md "R-Lean architecture" and `docs/VERDICT_POLICY.md`'s R-Lean rule.
 - Eval set: `docs/EVAL_SET.md` (73 tasks, expected verdicts) is run by `tfl-eval` (`tfl_eval/`), which reports
   accuracy/calibration metrics — see `README.md` and `TODO.md` §7. Mock mode by default; `--live` only on request.
   Live results so far: `docs/EVAL_RESULTS.md` (24 trap tasks on Haiku, 2026-09-27) — read it before claiming a
@@ -60,7 +60,7 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 .venv/Scripts/python -m cfl_system.orchestrator <ir.json> --save DIR [--live] [--verbose]
 .venv/Scripts/python -m agent_system <ir.json> --save DIR [--live]
 
-# TFL Lab
+# TFL Lab (no run timeout, manual cancel; runs persist in run.json; progress.jsonl / partial_result.json per run dir)
 .venv/Scripts/python -m ui_server.server --port 8765
 ```
 

@@ -24,6 +24,10 @@ MODELS = {
     "grammar_analyzer": "claude-opus-5-5",
     "reasoning_agent":  "claude-opus-5-5",
     "formalizer":       "claude-opus-5-5",
+    # Separate Lean formalization entry (`python -m agent_system.formalize`,
+    # lib/formalize_run.py): the corrections after the first attempt (which uses
+    # "formalizer" above) run on Sonnet with the Lean errors and the previous body.
+    "formalizer_retry": "claude-sonnet-5-5",
 
     # Verification & retry planning
     "proof_checker":    "claude-opus-5-5",
@@ -52,6 +56,7 @@ EFFORT = {
     "grammar_analyzer": "high",
     "reasoning_agent":  "high",
     "formalizer":       "high",
+    "formalizer_retry": "high",
     "proof_checker":    "high",
     "retry_planner":    "medium",
 }
@@ -92,6 +97,14 @@ FORMALIZER_RETRIES = 2       # retry if Lean type check fails (§5.2 Level 4)
 # lib.lean_ir.render_statement); only the proof body is retried, fed back
 # the previous attempt's check_lean_file errors[] each time.
 MAX_FORMALIZE_ITERATIONS = 3
+
+# Separate formalization entry (lib/formalize_run.py, `python -m agent_system.formalize`;
+# decision 2026-09-29): corrections after the first attempt, and the output limit
+# per call -- 128000 is the API maximum for Opus 5.5 / Sonnet 5.5, used for both.
+# A reply cut off at the limit without a proof body earns one Sonnet "output ONLY
+# the proof body" attempt, then the loop stops.
+FORMALIZE_RETRIES = 2
+FORMALIZE_MAX_TOKENS = 128000
 
 # Cost ceiling (TODO.md backlog round C2): the retry planner must never call
 # the same specialist more than this many times for one task -- precedent:

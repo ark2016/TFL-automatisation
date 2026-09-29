@@ -70,6 +70,7 @@ from agent_system.lib.llm_client import (
     get_concurrency_semaphore,
 )
 from dcfl_system.lib.agent_output_schema import schema_for as _output_schema_for
+from agent_system.lib.progress import ProgressWriter, announce_start, finish_pipeline, instrument_node
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,7 @@ class DCFLState(TypedDict):
     # renderer_node's `_apply_lean_gate`.
     formalize: bool | None
     formalization: dict | None
+    progress: Any                                          # ProgressWriter | None (agent_system.lib.progress)
     _specialist_name: str
     result: dict
 
@@ -455,6 +457,8 @@ def _run_agent(state: DCFLState, agent_name: str, input_data: dict | None = None
     runner = _get_runner(state)
     if runner is None:
         return None
+    if state.get("mock_runner") is None:
+        announce_start(state, agent_name)
     try:
         return runner.run_agent(agent_name, input_data)
     except NotImplementedError:
@@ -1736,19 +1740,19 @@ def build_dcfl_pipeline_graph() -> Any:
     graph = StateGraph(DCFLState)
 
     # -- Register nodes --
-    graph.add_node("input_parser_node", input_parser_node)
-    graph.add_node("early_failure_node", early_failure_node)
-    graph.add_node("hypothesis_module_node", hypothesis_module_node)
-    graph.add_node("run_classifier_node", run_classifier_node)
-    graph.add_node("preprocess_node", preprocess_node)
-    graph.add_node("setup_dispatch_node", setup_dispatch_node)
-    graph.add_node("run_specialist_node", run_specialist_node)
-    graph.add_node("collect_specialists_node", collect_specialists_node)
-    graph.add_node("oracle_verification_node", oracle_verification_node)
-    graph.add_node("reasoning_agent_node", reasoning_agent_node)
-    graph.add_node("retry_planner_node", retry_planner_node)
-    graph.add_node("lean_formalize_node", lean_formalize_node)
-    graph.add_node("renderer_node", renderer_node)
+    graph.add_node("input_parser_node", instrument_node("input_parser_node", input_parser_node))
+    graph.add_node("early_failure_node", instrument_node("early_failure_node", early_failure_node))
+    graph.add_node("hypothesis_module_node", instrument_node("hypothesis_module_node", hypothesis_module_node))
+    graph.add_node("run_classifier_node", instrument_node("run_classifier_node", run_classifier_node))
+    graph.add_node("preprocess_node", instrument_node("preprocess_node", preprocess_node))
+    graph.add_node("setup_dispatch_node", instrument_node("setup_dispatch_node", setup_dispatch_node))
+    graph.add_node("run_specialist_node", instrument_node("run_specialist_node", run_specialist_node))
+    graph.add_node("collect_specialists_node", instrument_node("collect_specialists_node", collect_specialists_node))
+    graph.add_node("oracle_verification_node", instrument_node("oracle_verification_node", oracle_verification_node))
+    graph.add_node("reasoning_agent_node", instrument_node("reasoning_agent_node", reasoning_agent_node))
+    graph.add_node("retry_planner_node", instrument_node("retry_planner_node", retry_planner_node))
+    graph.add_node("lean_formalize_node", instrument_node("lean_formalize_node", lean_formalize_node))
+    graph.add_node("renderer_node", instrument_node("renderer_node", renderer_node))
 
     # -- Edges --
 
@@ -1821,6 +1825,7 @@ def run_pipeline(
     agent_runner: Any | None = None,
     verbose: bool = False,
     formalize: bool | None = None,
+    progress: ProgressWriter | None = None,
 ) -> dict:
     """Run the full DCFL pipeline and return the result dict.
 
@@ -1861,9 +1866,14 @@ def run_pipeline(
         "call_cap_notes": [],
         "formalize": formalize,
         "formalization": None,
+        "progress": progress,
         "_specialist_name": "",
         "result": {},
     }
+
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    if progress is not None and tracker is not None:
+        progress.attach_tracker(tracker)
 
     final_state = graph.invoke(initial_state)
     result = final_state.get("result")
@@ -1880,8 +1890,8 @@ def run_pipeline(
     # Usage/cost block (TODO.md §3) -- additive, present even without a live
     # agent_runner (an all-zero UsageTracker) so callers can rely on
     # result["usage"] always existing.
-    tracker = getattr(agent_runner, "usage_tracker", None)
     result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+    finish_pipeline(progress, result)
     return result
 
 
@@ -1913,6 +1923,10 @@ def main() -> None:
     parser.add_argument("--save", metavar="DIR",
                         help="Save <stem>_result.{json,md,html} to DIR "
                              "(common CLI contract used by TFL Lab)")
+    parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=None,
+                        help="Write progress.jsonl + partial_result.json into the --save "
+                             "directory while running (default: on iff --save is given; "
+                             "--no-progress disables)")
     args = parser.parse_args()
 
     if args.mock and args.live:
@@ -1931,13 +1945,22 @@ def main() -> None:
     if args.live:
         agent = LiveRunner(verbose=args.verbose)
 
-    result = run_pipeline(
-        ir_data,
-        mock_runner=mock,
-        agent_runner=agent,
-        verbose=args.verbose,
-        formalize=True if args.formalize else None,
+    progress = ProgressWriter.for_cli(
+        args.save, args.progress, system="dcfl_system", stem=f"{task_name}_result",
     )
+    try:
+        result = run_pipeline(
+            ir_data,
+            mock_runner=mock,
+            agent_runner=agent,
+            verbose=args.verbose,
+            formalize=True if args.formalize else None,
+            progress=progress,
+        )
+    except Exception as exc:
+        if progress is not None and progress.status != "error":
+            progress.error(f"{type(exc).__name__}: {exc}", exc_type=type(exc).__name__)
+        raise
     if args.verbose and agent is not None:
         print(agent.usage_tracker.summary_line(), file=sys.stderr)
 
@@ -1980,6 +2003,10 @@ def main() -> None:
         print("Warning: dcfl_system.renderer not available for HTML output", file=sys.stderr)
     except Exception as exc:
         print(f"HTML render failed: {exc}", file=sys.stderr)
+
+    if progress is not None:
+        progress.done(result, files=[f"{out_stem}.{ext}" for ext in ("json", "md", "html")
+                                     if (output_dir / f"{out_stem}.{ext}").exists()])
 
     # Exit code reflects pipeline outcome
     verdict = result.get("verdict")
