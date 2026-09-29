@@ -28,7 +28,12 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
-from dcfl_system.config import MAX_CALLS_PER_AGENT
+from dcfl_system.config import (
+    FORMALIZATION_ENABLED,
+    LEAN_TIMEOUT,
+    MAX_CALLS_PER_AGENT,
+    MAX_FORMALIZE_ITERATIONS,
+)
 from dcfl_system.lib.dcfl_ir_schema import validate_dcfl_ir
 from dcfl_system.lib.hypothesis_module import analyze_dcfl_hypothesis
 from dcfl_system.lib.pattern_db import match_patterns
@@ -42,6 +47,12 @@ from dcfl_system.lib.oracle_verifier import (
     CONTRADICTION_CONFIDENCE_CAP,
 )
 from dcfl_system.lib.retry_logic import build_retry_plan
+from dcfl_system.lib.lean_ir import render_statement_verbose
+
+# R-Lean (docs/VERDICT_POLICY.md): Lean 4 compose + Docker type check are shared
+# with agent_system -- the barriers (scan_proof_body, kernel replay, axiom check,
+# sorry-by-position) live there and are not reimplemented here.
+from agent_system.lib.type_check import check_lean_file, compose_lean_file, is_docker_available
 
 # Shared Anthropic call machinery (TODO.md §3): kwargs building, streaming +
 # retry/backoff, typed errors, concurrency semaphore, usage tracking. See
@@ -59,6 +70,7 @@ from agent_system.lib.llm_client import (
     get_concurrency_semaphore,
 )
 from dcfl_system.lib.agent_output_schema import schema_for as _output_schema_for
+from agent_system.lib.progress import ProgressWriter, announce_start, finish_pipeline, instrument_node
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +128,13 @@ class DCFLState(TypedDict):
     # specialist's call cap is reached and a requested retry is skipped for
     # it -- surfaced in the final verdict_gate.downgrades (reasoning_agent_node).
     call_cap_notes: Annotated[list, operator.add]
+    # Lean 4 formal proof (docs/VERDICT_POLICY.md R-Lean): `formalize` is the
+    # per-call override of config.FORMALIZATION_ENABLED (None = use the
+    # default); `formalization` is lean_formalize_node's output, read by
+    # renderer_node's `_apply_lean_gate`.
+    formalize: bool | None
+    formalization: dict | None
+    progress: Any                                          # ProgressWriter | None (agent_system.lib.progress)
     _specialist_name: str
     result: dict
 
@@ -226,7 +245,7 @@ class LiveRunner:
     # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
     # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
     # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
-    # Opus 4.7+, Sonnet 5 and Opus 5.x reject `temperature` with a 400, so
+    # Opus 4.7+, Sonnet 5 / 5.5 and Opus 5.x reject `temperature` with a 400, so
     # thinking models never get sampling parameters.
     _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
     # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
@@ -307,7 +326,7 @@ class LiveRunner:
             logger.warning("Skipping agent '%s': %s", agent_name, exc)
             return None
 
-        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5")
+        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5-5")
         temperature = self.temperatures.get(agent_name, 0.0)
         effort = self.efforts.get(agent_name, self.default_effort)
         max_tokens = self.max_tokens_per_agent.get(agent_name, self.max_tokens)
@@ -438,6 +457,8 @@ def _run_agent(state: DCFLState, agent_name: str, input_data: dict | None = None
     runner = _get_runner(state)
     if runner is None:
         return None
+    if state.get("mock_runner") is None:
+        announce_start(state, agent_name)
     try:
         return runner.run_agent(agent_name, input_data)
     except NotImplementedError:
@@ -804,6 +825,82 @@ def _apply_verdict_gate(
 
 
 # ---------------------------------------------------------------------------
+# R-Lean gate (docs/VERDICT_POLICY.md R-Lean)
+#
+# A Lean proof with status `proved` (compiled without errors, no `sorryAx`,
+# axioms within {propext, Classical.choice, Quot.sound}, kernel replay -- all
+# enforced by agent_system.lib.type_check.check_lean_file) is a machine-checked
+# proof of `is_DCF L` / `¬ is_DCF L`: the strongest evidence there is. It sits
+# ABOVE R1/R2/R3/R4' (`_apply_verdict_gate`): it needs no artifact from the
+# specialists, resolves a contradiction between them, and flips a wrong
+# reasoning verdict. Every other status (has_sorry / error / timeout /
+# unavailable / not_formalizable) is not evidence either way (R1) and leaves the
+# result of `_apply_verdict_gate` exactly as it was.
+# ---------------------------------------------------------------------------
+
+def _apply_lean_gate(reasoning_output: dict, formalization: dict | None) -> dict:
+    """Apply R-Lean on top of an already-gated reasoning dict; returns a new
+    dict (the input is never mutated). No-op unless ``formalization["status"]
+    == "proved"`` for a ``dcfl`` / ``non_dcfl`` direction."""
+    if not isinstance(formalization, dict) or formalization.get("status") != "proved":
+        return reasoning_output
+    direction = _normalize_verdict(formalization.get("direction"))
+    if direction is None:
+        return reasoning_output
+
+    out = dict(reasoning_output)
+    gate = dict(out.get("verdict_gate") or {})
+    basis = list(gate.get("basis") or [])
+    downgrades = list(gate.get("downgrades") or [])
+    prior_verdict = _normalize_verdict(out.get("verdict"))
+    flipped = prior_verdict is not None and prior_verdict != direction
+    verified_cap = confidence_cap_for("verified")
+
+    basis.append({"agent": "lean_formalizer", "trust": "verified", "basis": "lean_proof"})
+    if flipped:
+        # A machine-checked proof of the OPPOSITE direction outranks the
+        # reasoning agent's own claim: the verdict flips at the full verified
+        # ceiling (as agent_system.graph.assemble_result_node does). Not a
+        # contradiction (`contradiction` stays False); the override is recorded
+        # in a downgrade note.
+        downgrades.append(
+            f"lean proof of '{direction}' overrides reasoning verdict '{prior_verdict}' "
+            f"-> verified {verified_cap} (VERDICT_POLICY.md R-Lean: a machine-checked "
+            "proof takes priority over every other track)"
+        )
+        out["primary_evidence"] = "lean_formalizer"
+        out["summary"] = (
+            f"Lean-verified {direction} (machine-checked proof); the specialists' proposal "
+            f"'{prior_verdict}' is overruled. " + str(out.get("summary") or "")
+        ).strip()
+    elif prior_verdict is None:
+        downgrades.append(
+            f"Lean proof verified for '{direction}' -> verdict '{direction}', verified "
+            f"{verified_cap} (VERDICT_POLICY.md R-Lean; the specialists' gate had left the "
+            "verdict inconclusive)"
+        )
+    elif gate.get("contradiction"):
+        downgrades.append(
+            f"Lean proof verified for '{direction}': the specialists' R3 contradiction is "
+            "resolved by a machine-checked proof (R-Lean)"
+        )
+
+    out["action"] = "done"
+    out["decision"] = "done"
+    out["verdict"] = direction
+    out["confidence"] = _clamp_confidence(verified_cap)
+    out["verdict_gate"] = {
+        **gate,
+        "basis": basis,
+        # a proof leaves no unresolved contradiction behind (flip or not).
+        "contradiction": False,
+        "downgrades": downgrades,
+        "confidence_cap": verified_cap,
+    }
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Node functions
 # ---------------------------------------------------------------------------
 
@@ -1147,6 +1244,211 @@ def _fallback_reasoning(state: DCFLState) -> dict:
     )
 
 
+_DCFL_LEAN_PLAN_MAX_CHARS = 12000
+
+
+def _lean_plan(state: DCFLState, direction: str) -> str:
+    """Natural-language plan for the Lean formalizer: the reasoning summary plus
+    the ``proof_sketch`` of the strongest specialist that argued *direction*
+    (the primary evidence when it fits)."""
+    reasoning = state.get("reasoning") or {}
+    agent_results = state.get("agent_results") or {}
+    goal = "`is_DCF L`" if direction == "dcfl" else "`¬ is_DCF L`"
+    parts = [f"Direction to prove: {direction} ({goal})."]
+    summary = reasoning.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        parts.append(f"Reasoning summary: {summary.strip()}")
+
+    primary = reasoning.get("primary_evidence")
+    candidates = ([primary] if isinstance(primary, str) else []) + list(DCFL_SPECIALIST_NAMES)
+    for name in candidates:
+        out = agent_results.get(name)
+        if not isinstance(out, dict) or out.get("status") != "success":
+            continue
+        if out.get("verdict") != direction:
+            continue
+        sketch = out.get("proof_sketch")
+        if sketch:
+            parts.append(
+                f"Evidence from agent '{name}' -- proof_sketch:\n"
+                + json.dumps(sketch, ensure_ascii=False, indent=2)
+            )
+            break
+    return "\n\n".join(parts)[:_DCFL_LEAN_PLAN_MAX_CHARS]
+
+
+def lean_formalize_node(state: DCFLState) -> dict:
+    """R-Lean (docs/VERDICT_POLICY.md): try to machine-check the verdict in Lean 4.
+
+    The theorem *statement* (`is_DCF L` / `¬ is_DCF L`) is generated
+    deterministically from the IR by ``lib.lean_ir.render_statement`` -- never by
+    the LLM. The ``lean_formalizer`` agent only writes the proof body
+    (``compose_lean_file`` splices it in); on a retry (up to
+    ``config.MAX_FORMALIZE_ITERATIONS``) it gets the previous attempt's
+    ``check_lean_file`` ``errors[]``, never a new statement. Type checking runs
+    locally in Docker; without Docker the status is ``unavailable``.
+
+    Disabled by default (``config.FORMALIZATION_ENABLED``, from the
+    ``TFL_FORMALIZATION`` env var); ``run_pipeline(..., formalize=...)`` / the
+    CLI's ``--formalize`` override it per call. Also a no-op without an agent /
+    mock runner (mock mode by default: root CLAUDE.md, live only on request).
+
+    Direction: the reasoning verdict, else the hypothesis prediction. Sets
+    ``state["formalization"]`` to ``{status, direction, statement, proof_body,
+    attempts, errors, axioms, elapsed}`` (``status`` one of ``proved`` /
+    ``has_sorry`` / ``error`` / ``timeout`` / ``unavailable`` /
+    ``not_formalizable``); ``renderer_node`` feeds it to ``_apply_lean_gate``.
+    An agent failure is recorded as ``status == "error"`` (R1: no evidence
+    either way), never as a pipeline error.
+    """
+    log_msg(state, "lean_formalize_node...")
+
+    override = state.get("formalize")
+    enabled = FORMALIZATION_ENABLED if override is None else override
+    if not enabled:
+        log_msg(state, "  formalization: disabled")
+        return {}
+    if _get_runner(state) is None:
+        log_msg(state, "  formalization: skipped (no runner)")
+        return {}
+
+    reasoning = state.get("reasoning") or {}
+    direction = _normalize_verdict(reasoning.get("verdict"))
+    if direction is None:
+        direction = _normalize_verdict((state.get("hypothesis") or {}).get("prediction"))
+    if direction is None:
+        log_msg(state, "  formalization: no dcfl/non_dcfl direction to prove")
+        return {"formalization": {
+            "status": "not_formalizable",
+            "direction": None,
+            "reason": "neither the reasoning verdict nor the hypothesis names a direction",
+        }}
+
+    statement, reason = render_statement_verbose(state.get("task_ir") or {}, direction)
+    if statement is None:
+        log_msg(state, f"  formalization: no Lean statement ({reason})")
+        return {"formalization": {
+            "status": "not_formalizable",
+            "direction": direction,
+            "reason": reason or "render_statement returned no statement for this ir/direction",
+        }}
+
+    statement_snapshot = {
+        "imports": statement.imports,
+        "alphabet_decl": statement.alphabet_decl,
+        "language_decl": statement.language_decl,
+        "theorem_decl": statement.theorem_decl,
+        "name": statement.name or "tfl_main",
+    }
+    # Live run without Docker / the tfl-lean4 image: every attempt would end in
+    # `unavailable` after an Opus call -- do not spend it (mock runs skip this
+    # check: they cost nothing, and check_lean_file reports `unavailable` itself).
+    if state.get("mock_runner") is None and state.get("agent_runner") is not None and not is_docker_available():
+        log_msg(state, "  formalization: Docker / tfl-lean4 image unavailable, lean_formalizer not called")
+        return {"formalization": {
+            "status": "unavailable",
+            "direction": direction,
+            "statement": statement_snapshot,
+            "proof_body": None,
+            "attempts": [],
+            "errors": [],
+            "axioms": [],
+            "elapsed": 0.0,
+            "reason": "Docker / tfl-lean4 image not available; lean_formalizer was not called",
+        }}
+
+    plan = _lean_plan(state, direction)
+
+    attempts: list[dict] = []
+    errors: list = []
+    proof_body: str | None = None
+    axioms: list = []
+    status = "error"
+    elapsed_total = 0.0
+
+    for attempt_num in range(1, MAX_FORMALIZE_ITERATIONS + 1):
+        formalizer_input: dict[str, Any] = {
+            "statement": statement_snapshot,
+            "plan": plan,
+            "available_lemmas": [],
+        }
+        if errors:
+            formalizer_input["errors"] = errors
+            formalizer_input["previous_proof_body"] = proof_body
+
+        log_msg(state, f"  lean_formalizer: attempt {attempt_num}/{MAX_FORMALIZE_ITERATIONS}")
+        output = _run_agent(state, "lean_formalizer", formalizer_input)
+        if output is None:
+            log_msg(state, "  lean_formalizer: no output")
+            status, errors = "error", ["lean_formalizer produced no output"]
+            attempts.append({"attempt": attempt_num, "status": "no_output", "errors": errors})
+            break
+        if output.get("status") == "agent_error":
+            errors = [str(m) for m in (output.get("errors") or ["lean_formalizer returned agent_error"])]
+            log_msg(state, f"  lean_formalizer agent_error: {errors}")
+            status = "error"
+            attempts.append({"attempt": attempt_num, "status": "agent_error", "errors": errors})
+            break
+
+        f_ev = output.get("evidence", output)
+        new_proof_body = f_ev.get("proof_body") if isinstance(f_ev, dict) else None
+        if isinstance(new_proof_body, str) and not new_proof_body.strip():
+            # An explicit empty proof_body is the agent's honest "no route with
+            # the available lemmas" (see prompts/dcfl_lean_formalizer.md,
+            # "Known limitation"): stop now, more attempts on the same dead end
+            # only burn budget. Not evidence either way (R1).
+            notes = f_ev.get("notes") if isinstance(f_ev, dict) else None
+            log_msg(state, "  lean_formalizer: gave up (empty proof_body)")
+            status = "error"
+            errors = [f"lean_formalizer gave up: {notes}" if notes else "lean_formalizer gave up (empty proof_body)"]
+            attempts.append({"attempt": attempt_num, "status": "gave_up", "errors": errors})
+            break
+        if not isinstance(new_proof_body, str):
+            log_msg(state, "  lean_formalizer: no proof_body in output")
+            status, errors = "error", ["lean_formalizer output had no proof_body"]
+            attempts.append({"attempt": attempt_num, "status": "no_proof_body", "errors": errors})
+            if attempt_num < MAX_FORMALIZE_ITERATIONS:
+                continue
+            break
+
+        proof_body = new_proof_body
+        lean_text = compose_lean_file(statement, proof_body)
+        tc = check_lean_file(
+            lean_text, timeout=LEAN_TIMEOUT, theorem_name=statement_snapshot["name"],
+        )
+        elapsed_total += tc.get("elapsed", 0.0) or 0.0
+        tc_status = tc.get("status", "error")
+        tc_errors = tc.get("errors", [])
+        log_msg(state, f"  check_lean_file: {tc_status}")
+        attempts.append({"attempt": attempt_num, "status": tc_status, "errors": tc_errors})
+
+        status = tc_status
+        axioms = tc.get("axioms", [])
+        errors = tc_errors
+
+        if tc_status == "proved":
+            errors = []
+            break
+        if tc_status in ("has_sorry", "timeout", "unavailable"):
+            # Not evidence either way (R1), and asking the formalizer to
+            # re-edit the same body will not fix a `sorry`, a timeout or a
+            # missing Docker image.
+            break
+        # tc_status == "error": retry with the compiler errors fed back (the
+        # statement is unchanged -- only formalizer_input["errors"] differs).
+
+    return {"formalization": {
+        "status": status,
+        "direction": direction,
+        "statement": statement_snapshot,
+        "proof_body": proof_body,
+        "attempts": attempts,
+        "errors": errors,
+        "axioms": axioms,
+        "elapsed": round(elapsed_total, 2),
+    }}
+
+
 def decide_after_reasoning(state: DCFLState) -> str:
     """Conditional edge after reasoning: done / retry / fail."""
     reasoning = state.get("reasoning") or {}
@@ -1280,6 +1582,11 @@ def renderer_node(state: DCFLState) -> dict:
             max_retries=MAX_RETRIES,
         )
         state = {**state, "reasoning": gated}
+    # R-Lean (docs/VERDICT_POLICY.md): a `proved` Lean proof outranks everything
+    # the gate above decided. No-op for any other status / no formalization.
+    formalization = state.get("formalization")
+    if formalization:
+        state = {**state, "reasoning": _apply_lean_gate(state.get("reasoning") or {}, formalization)}
     return assemble_result_node(state)
 
 
@@ -1325,30 +1632,36 @@ def assemble_result_node(state: DCFLState) -> dict:
     if not proof_text and not proof_sketch:
         proof_text = reasoning.get("summary")
 
+    result = {
+        "task": ir.get("task_type"),
+        "source_text": ir.get("source_text"),
+        "verdict": verdict,
+        "confidence": confidence,
+        "hypothesis": state.get("hypothesis"),
+        "classifier_hint": state.get("classifier_hint"),
+        "preprocess": state.get("preprocess"),
+        "reasoning_summary": reasoning.get("summary"),
+        "primary_evidence": primary_ev,
+        "proof_method": proof_method,
+        "proof_sketch": proof_sketch,
+        "proof_text": proof_text,
+        "oracle_verification": oracle_verification,
+        "agents_used": sorted(agent_results.keys()),
+        "specialist_outputs": specialist_outputs_out,
+        "agent_results": specialist_outputs_out,
+        "hints_for_human": hints,
+        "retries": state.get("retry_count", 0),
+        "errors": errors,
+        # VERDICT_POLICY.md §5 — additive field, never replaces existing ones.
+        "verdict_gate": reasoning.get("verdict_gate"),
+    }
+    # R-Lean: lean_formalize_node's output (statement, proof_body, attempts,
+    # status, ...) -- additive; None when the Lean step is off / did not run
+    # (same convention as cfl_system).
+    result["formalization"] = state.get("formalization") or None
+
     return {
-        "result": {
-            "task": ir.get("task_type"),
-            "source_text": ir.get("source_text"),
-            "verdict": verdict,
-            "confidence": confidence,
-            "hypothesis": state.get("hypothesis"),
-            "classifier_hint": state.get("classifier_hint"),
-            "preprocess": state.get("preprocess"),
-            "reasoning_summary": reasoning.get("summary"),
-            "primary_evidence": primary_ev,
-            "proof_method": proof_method,
-            "proof_sketch": proof_sketch,
-            "proof_text": proof_text,
-            "oracle_verification": oracle_verification,
-            "agents_used": sorted(agent_results.keys()),
-            "specialist_outputs": specialist_outputs_out,
-            "agent_results": specialist_outputs_out,
-            "hints_for_human": hints,
-            "retries": state.get("retry_count", 0),
-            "errors": errors,
-            # VERDICT_POLICY.md §5 — additive field, never replaces existing ones.
-            "verdict_gate": reasoning.get("verdict_gate"),
-        },
+        "result": result,
         "solution": {
             "verdict": verdict,
             "confidence": confidence,
@@ -1418,27 +1731,28 @@ def build_dcfl_pipeline_graph() -> Any:
         START -> input_parser -> [ok] -> hypothesis_module -> classifier
               -> preprocess -> setup_dispatch -> (fan-out 5 specialists)
               -> collect_specialists -> oracle_verify -> reasoning
-              -> [done] -> renderer -> END
+              -> [done] -> lean_formalize (R-Lean, opt-in) -> renderer -> END
               -> [retry] -> retry_planner -> [non-empty plan] -> setup_dispatch (loop)
-                                           -> [empty plan] -> renderer -> END
+                                           -> [empty plan] -> lean_formalize -> renderer -> END
               -> [fail] -> early_failure -> END
         input_parser -> [fail] -> early_failure -> END
     """
     graph = StateGraph(DCFLState)
 
     # -- Register nodes --
-    graph.add_node("input_parser_node", input_parser_node)
-    graph.add_node("early_failure_node", early_failure_node)
-    graph.add_node("hypothesis_module_node", hypothesis_module_node)
-    graph.add_node("run_classifier_node", run_classifier_node)
-    graph.add_node("preprocess_node", preprocess_node)
-    graph.add_node("setup_dispatch_node", setup_dispatch_node)
-    graph.add_node("run_specialist_node", run_specialist_node)
-    graph.add_node("collect_specialists_node", collect_specialists_node)
-    graph.add_node("oracle_verification_node", oracle_verification_node)
-    graph.add_node("reasoning_agent_node", reasoning_agent_node)
-    graph.add_node("retry_planner_node", retry_planner_node)
-    graph.add_node("renderer_node", renderer_node)
+    graph.add_node("input_parser_node", instrument_node("input_parser_node", input_parser_node))
+    graph.add_node("early_failure_node", instrument_node("early_failure_node", early_failure_node))
+    graph.add_node("hypothesis_module_node", instrument_node("hypothesis_module_node", hypothesis_module_node))
+    graph.add_node("run_classifier_node", instrument_node("run_classifier_node", run_classifier_node))
+    graph.add_node("preprocess_node", instrument_node("preprocess_node", preprocess_node))
+    graph.add_node("setup_dispatch_node", instrument_node("setup_dispatch_node", setup_dispatch_node))
+    graph.add_node("run_specialist_node", instrument_node("run_specialist_node", run_specialist_node))
+    graph.add_node("collect_specialists_node", instrument_node("collect_specialists_node", collect_specialists_node))
+    graph.add_node("oracle_verification_node", instrument_node("oracle_verification_node", oracle_verification_node))
+    graph.add_node("reasoning_agent_node", instrument_node("reasoning_agent_node", reasoning_agent_node))
+    graph.add_node("retry_planner_node", instrument_node("retry_planner_node", retry_planner_node))
+    graph.add_node("lean_formalize_node", instrument_node("lean_formalize_node", lean_formalize_node))
+    graph.add_node("renderer_node", instrument_node("renderer_node", renderer_node))
 
     # -- Edges --
 
@@ -1477,7 +1791,7 @@ def build_dcfl_pipeline_graph() -> Any:
         "reasoning_agent_node",
         decide_after_reasoning,
         {
-            "done": "renderer_node",
+            "done": "lean_formalize_node",
             "retry": "retry_planner_node",
             "fail": "early_failure_node",
         },
@@ -1488,8 +1802,12 @@ def build_dcfl_pipeline_graph() -> Any:
     graph.add_conditional_edges(
         "retry_planner_node",
         decide_after_retry_planner,
-        {"retry": "setup_dispatch_node", "terminal": "renderer_node"},
+        {"retry": "setup_dispatch_node", "terminal": "lean_formalize_node"},
     )
+
+    # R-Lean: every path that ends in a rendered verdict passes through the
+    # Lean step first (a no-op unless enabled -- see lean_formalize_node).
+    graph.add_edge("lean_formalize_node", "renderer_node")
 
     # Final
     graph.add_edge("renderer_node", END)
@@ -1506,11 +1824,17 @@ def run_pipeline(
     mock_runner: MockRunner | None = None,
     agent_runner: Any | None = None,
     verbose: bool = False,
+    formalize: bool | None = None,
+    progress: ProgressWriter | None = None,
 ) -> dict:
     """Run the full DCFL pipeline and return the result dict.
 
     Builds the LangGraph StateGraph, constructs the initial state,
     invokes the graph, and extracts the result.
+
+    ``formalize`` overrides ``config.FORMALIZATION_ENABLED`` (the Lean 4 step,
+    docs/VERDICT_POLICY.md R-Lean) for this call: ``None`` = use the default
+    (``TFL_FORMALIZATION`` env var), ``True``/``False`` = force on/off.
     """
     if verbose:
         logging.basicConfig(level=logging.INFO)
@@ -1540,9 +1864,16 @@ def run_pipeline(
         "evidence": {},
         "errors": [],
         "call_cap_notes": [],
+        "formalize": formalize,
+        "formalization": None,
+        "progress": progress,
         "_specialist_name": "",
         "result": {},
     }
+
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    if progress is not None and tracker is not None:
+        progress.attach_tracker(tracker)
 
     final_state = graph.invoke(initial_state)
     result = final_state.get("result")
@@ -1559,8 +1890,8 @@ def run_pipeline(
     # Usage/cost block (TODO.md §3) -- additive, present even without a live
     # agent_runner (an all-zero UsageTracker) so callers can rely on
     # result["usage"] always existing.
-    tracker = getattr(agent_runner, "usage_tracker", None)
     result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+    finish_pipeline(progress, result)
     return result
 
 
@@ -1577,6 +1908,11 @@ def main() -> None:
     parser.add_argument("--mock", help="Mock directory for agent outputs")
     parser.add_argument("--live", action="store_true", help="Use live LLM agents")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
+    parser.add_argument("--formalize", action="store_true",
+                        help="Force-enable the Lean 4 formalization step for this run "
+                             "(default: TFL_FORMALIZATION env var). The statement is generated "
+                             "from the IR; only the proof body comes from the lean_formalizer "
+                             "agent (mock mode unless --live).")
     parser.add_argument(
         "--render",
         choices=["json", "md", "html", "all"],
@@ -1587,6 +1923,10 @@ def main() -> None:
     parser.add_argument("--save", metavar="DIR",
                         help="Save <stem>_result.{json,md,html} to DIR "
                              "(common CLI contract used by TFL Lab)")
+    parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=None,
+                        help="Write progress.jsonl + partial_result.json into the --save "
+                             "directory while running (default: on iff --save is given; "
+                             "--no-progress disables)")
     args = parser.parse_args()
 
     if args.mock and args.live:
@@ -1605,12 +1945,22 @@ def main() -> None:
     if args.live:
         agent = LiveRunner(verbose=args.verbose)
 
-    result = run_pipeline(
-        ir_data,
-        mock_runner=mock,
-        agent_runner=agent,
-        verbose=args.verbose,
+    progress = ProgressWriter.for_cli(
+        args.save, args.progress, system="dcfl_system", stem=f"{task_name}_result",
     )
+    try:
+        result = run_pipeline(
+            ir_data,
+            mock_runner=mock,
+            agent_runner=agent,
+            verbose=args.verbose,
+            formalize=True if args.formalize else None,
+            progress=progress,
+        )
+    except Exception as exc:
+        if progress is not None and progress.status != "error":
+            progress.error(f"{type(exc).__name__}: {exc}", exc_type=type(exc).__name__)
+        raise
     if args.verbose and agent is not None:
         print(agent.usage_tracker.summary_line(), file=sys.stderr)
 
@@ -1653,6 +2003,10 @@ def main() -> None:
         print("Warning: dcfl_system.renderer not available for HTML output", file=sys.stderr)
     except Exception as exc:
         print(f"HTML render failed: {exc}", file=sys.stderr)
+
+    if progress is not None:
+        progress.done(result, files=[f"{out_stem}.{ext}" for ext in ("json", "md", "html")
+                                     if (output_dir / f"{out_stem}.{ext}").exists()])
 
     # Exit code reflects pipeline outcome
     verdict = result.get("verdict")

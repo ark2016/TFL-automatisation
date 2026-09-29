@@ -465,7 +465,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
 
 **Вход:** Текст задачи на русском или формальная нотация.
 **Выход:** JSON IR по schema из §3.
-**Модель:** Sonnet 5 (effort=medium, structured output=JSON).
+**Модель:** Sonnet 5.5 (effort=medium, structured output=JSON).
 **Валидация:** Pure fn `validate_ir(json)` — проверка по JSON Schema.
 **Retry:** Если невалидный JSON — повтор с ошибкой валидации в промпте (max 2 retry).
 
@@ -535,7 +535,7 @@ CF НЕ замкнут относительно ∩ и ~ (complement). Одна�
   }
 }
 ```
-**Модель:** Sonnet 5 (effort=medium).
+**Модель:** Sonnet 5.5 (effort=medium).
 
 ### 4.4. RE Builder Agent (LLM)
 
@@ -773,6 +773,15 @@ def differential_test(dfa1: dict, dfa2: dict, alphabet: list, max_len: int = 10)
 
 ### 4.12. Formalizer Agent (LLM — template-based)
 
+> **Реализация ушла дальше этого раздела (историческая спецификация, оставлена для контекста).** Текущая
+> архитектура — **R-Lean** (`docs/VERDICT_POLICY.md`, детали и версии — README.md "R-Lean architecture"):
+> формулировка теоремы (alphabet/язык/claim) генерируется **детерминированно из IR** кодом
+> (`agent_system/lib/lean_ir.py`), а не подстановкой в статический `.lean`-template ниже; LLM-формализатор
+> заполняет только тело доказательства между сгенерированной формулировкой и `#print axioms`. Основания
+> формулировок для REG — Mathlib, для CFL/DCFL — langlib (не входил в область этой спецификации при написании);
+> LL(k) не формализуется. Шаблоны ниже остаются годным примером структуры доказательства по DFA / pumping lemma /
+> Myhill–Nerode, но не отражают, откуда берётся сама формулировка теоремы в текущем коде.
+
 **Вход:** Consolidated proof от Reasoning Agent + proof template.
 **Выход:** Lean 4 proof term (заполненный template).
 
@@ -1006,7 +1015,7 @@ USER lean
 WORKDIR /home/lean
 ENV PATH="/home/lean/.elan/bin:$PATH"
 RUN curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
-RUN elan default leanprover/lean4:v4.18.0
+RUN elan default leanprover/lean4:v4.18.0  # historical; current pin is v4.33.0 + langlib, see README.md "R-Lean architecture"
 RUN lake --version && lean --version
 ```
 

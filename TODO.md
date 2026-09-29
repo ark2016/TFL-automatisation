@@ -6,13 +6,16 @@
 
 **Уже исправлено** (не повторять):
 
-- миграция на Opus 5.5 / Sonnet 5: effort, refusal, streaming, чтение блоков по типу;
+- миграция на Opus 5.5 / Sonnet 5 (затем Sonnet 5 -> Sonnet 5.5, `claude-sonnet-5-5`, 2026-09-28; `claude-sonnet-5` остаётся в таблице цен как legacy): effort, refusal, streaming, чтение блоков по типу;
 - TFL Lab: path traversal, CSRF/Host, запуск всех 4 пайплайнов (`--save`);
 - CFL: формат PDA, маскировка контрпримеров, `quick_verdict` при нерегулярном фильтре, «semilinear ⇒ CFL»;
 - `_CONSTRUCTIVE_AGENTS` → tuple; `ui_server/tests` в CI; `anthropic>=0.77.0`;
 - CodeQL: раздача файлов через индекс, `permissions: contents: read` в CI;
 - документация: README (CLI, различия пайплайнов, теория DCFL/LL, тесты), корневой и подсистемные `CLAUDE.md`,
   `CONTRIBUTING.md`, шаблоны issue/PR, `SECURITY.md`;
+- R-Lean подключён к CFL и DCFL (`lean_formalize_node`, гейт `proved` ⇒ 0.98), 5 новых эталонных доказательств
+  (`AnBnAnNotCF`, `EvenPalGrammar_CF`, `AnBnCm_DCF`, `AnBnCmPos_DCF`, `AiBjCkNeq_NotDCF`), мост `DCFL ⊆ CFL`
+  в образе, перевод грамматик/реверсов/фильтров в IR→Lean (2026-09-29, `docs/NIGHT_REPORT_2026-09-29.md`);
 - формулировка леммы Шаллита (`dcfl_system/prompts/shallit.md`) — заменена на теорему 4.7.4 (классы
   Майхилла–Нероуда) + ограничение про мёртвый класс, см. `docs/THEORY.md` §1.2;
 - ложное эталонное доказательство в CFL-промптах (пересечение с `a⁺b⁺a⁺c⁺`) — заменено на корректный
@@ -59,7 +62,7 @@
 - §4: `pumping_len.py` — точный поиск `p_min` (не эвристика «первое повторение состояния»), `ε`/`∅` как
   языковые литералы, конечные языки без исключений, CLI (`--witness`, `--json`) и собственные тесты (`tests/`);
   `ui_server/static/index.html` — `marked`-вывод санитизирован (DOMPurify), CDN на cdnjs с SRI, CSP через `<meta>`,
-  iframe `sandbox`; `ui_server/server.py` — `MAX_CONCURRENT_RUNS`, `RUN_TIMEOUT_SECONDS`, `POST .../cancel`;
+  iframe `sandbox`; `ui_server/server.py` — `MAX_CONCURRENT_RUNS`, `POST .../cancel` (run-timeout убран 2026-09-29: только ручная отмена);
   корень репозитория очищен (`tmp*/`, `.codex_tmp/`, лишние `.env`, `gen_pass.py`) и `tmp*/` в `.gitignore`;
 - §6: дублирующее поле `markdown` убрано из контракта `cfl_formalizer`; строки `**Model:** ...` убраны из промптов;
   `advisory_only` больше не пишется агентами (остаётся только в старых example-фикстурах);
@@ -234,6 +237,10 @@
 - [ ] ⚪ **S** `agent_system`: при refusal JSON-ретрай делает лишний второй вызов (`run_agent` не отличает refusal от невалидного JSON).
 - [ ] ⚪ **—** После миграции перемерить стоимость и время на 1–2 задачах (на Haiku через `TFL_MODEL_OVERRIDE`, затем выборочно на Opus)
   и подстроить `EFFORT` по агентам.
+- [ ] ⚪ **—** Сравнить стоимость/качество Sonnet 5.5 (`claude-sonnet-5-5`, роли `input_parser`/`classifier`/`retry_planner`/
+  `marker_analyzer`/`grammar_transformer`) на 2–3 задачах против Sonnet 5 — **только по запросу пользователя**, с заранее
+  согласованным бюджетом (миграция 5 -> 5.5 выполнена без live-прогона; `REFUSAL_FALLBACK` для Sonnet не включён —
+  `_FALLBACK_MODEL_PREFIXES` = Opus/Fable, поддержка server-side fallback для Sonnet 5.5 не проверялась).
 
 ## 4. TFL Lab и корень репозитория
 
@@ -247,7 +254,46 @@
 - [ ] ⚪ **S** Contract-тесты промптов: каждый ```json-блок парсится и содержит обязательные ключи; все ключи, которые формирует
   builder входа, упомянуты в промпте (по образцу `cfl_system/tests/test_pda_contract.py`).
 - [ ] ⚪ **S** `agent_system/tests/test_phase3.py`: шаблоны Lean никогда не компилируются в CI (Lean-задача в CI неблокирующая, а не
-  выполняющая реальную компиляцию — см. `.github/workflows/tests.yml`).
+  выполняющая реальную компиляцию — см. `.github/workflows/tests.yml`). Локально (Docker Desktop, любая ОС/архитектура)
+  `docker compose -f agent_system/docker/docker-compose.yml build lean4` собирает `tfl-lean4` — Lean/Mathlib `v4.33.0` +
+  langlib (`agent_system/docker/tfl_lean/`, см. README "R-Lean architecture") — уже забилженным через `lake exe cache get`
+  — все Lean-тесты реально компилируются и зелёные. Для CI нужен свой кэш: полный клон Mathlib ~250 МБ +
+  прекомпилированный `.olean`-кэш ~1–2 ГБ на скачивание при каждой сборке образа без слоя-кэша — без кэширования
+  образа/слоёв в CI-раннере это будет слишком долго/дорого для неблокирующей джобы, поэтому джоба остаётся
+  неблокирующей до появления кэширования (registry cache или actions/cache на `.lake`) в `.github/workflows/tests.yml`.
+- [ ] ⚪ **M** **Формальный доказатель (заполнение тела proof) — только по запросу.** `formalizer`-агент пишет тело
+  доказательства LLM-вызовом на Opus 5.5 (`config.py` `EFFORT`); как и все live-прогоны, это только по явному
+  запросу пользователя с согласованным бюджетом — mock-режим (канонические тела доказательств) остаётся дефолтом
+  везде, включая `tfl-eval` и CI. Открыто: ни одного live-прогона доказателя (Opus) на CFL/DCFL-примерах ещё не
+  было — оценить реальную стоимость на 1–2 задачах прежде чем предлагать его шире.
+- [ ] ⚪ **M** **Расширение IR→Lean переводчика.** Сделано (2026-09-29): грамматики в CFL-формулировках
+  (`g.language`, `g.language ⊓ {w | filter}`), экспоненциальная запись с decidable-компаньоном, реверсы/палиндромы,
+  предикатные фильтры. Открыто: вложенные экспоненты (`a^(2^n)`, cfl-10 → `None`; открыло бы `notCF_unaryPow2`),
+  `natural_language_filter`, regex с backreferences, вложенные булевы комбинации. Формулировка остаётся
+  детерминированной (`docs/VERDICT_POLICY.md` R-Lean), LLM для statement запрещён.
+- [ ] ⚪ **M** **Yu / Шаллит в Lean.** Методы без лемм в образе (замыкание с регулярным языком, Parikh, подстановка,
+  теорема Шаллита 4.7.4, лемма Ю) не формализуются — агент доказывает напрямую (накачка/Огден) или отказывается.
+  Нужны леммы в `TflLean/Lemmas.lean` + новые эталоны.
+- [ ] ⚪ **M** **Мост грамматика→ДМП для DCFL (exam_04 `kind=grammar`).** В образе нет `is_DCF_of_is_RG`/моста
+  грамматика→ДПДА; mock для exam_04 — честный отказ. Аналог для CFL positive: кроме `EvenPalGrammar_CF` нет
+  скомпилированного примера с `ContextFreeGrammar` (например aⁿbⁿ через `is_CF_iff_isContextFree`).
+- [ ] ⚪ **M** **LL(k) в Lean.** Не формализуется: нет Lean-формулировки для LL(k)-утверждений (гейт R-Lean только
+  REG/CFL/DCFL).
+- [ ] ⚪ **S** **Рендереры CFL/DCFL не показывают `result["formalization"]`** (только в result JSON; при смене вердикта
+  — как Lean-объект `proof`). Для DCFL нет схемы structured output у `lean_formalizer`
+  (`dcfl_system/lib/agent_output_schema.py`); в `cfl_system/orchestrator.py` `_LEAN_AVAILABLE_LEMMAS` не перечисляет
+  новые `TflLean.*` леммы (перенос, `not_isContextFree_of_slice`). `lean_formalizer` есть в `config.py` только
+  CFL/DCFL (root CLAUDE.md требует менять модели во всех четырёх проектах) — свести.
+- [ ] ⚪ **S** **Обновление пина langlib / Mathlib.** Сейчас Lean `v4.33.0`, Mathlib `v4.33.0` (`db584cd…`), langlib
+  `c5fb834…`. Обновление: `rev` в `lakefile.toml` → `lake update` в контейнере → закоммитить `lake-manifest.json` →
+  пересобрать образ (~20 мин, ~16 ГБ) → прогнать все эталоны (`test_lean_examples*.py`). Собраны только модули
+  langlib, которые импортирует `TflLean/Langlib.lean` (51 модуль + `Inclusion.ContextFree`).
+- [ ] ⚪ **S** **Live-проверка доказателя.** Ни одного live-прогона `lean_formalizer` (CFL/DCFL, до 3 вызовов Opus на
+  задачу) не было; только по явному запросу и с бюджетом (см. выше).
+- [ ] ⚪ **S** **CI без Docker для Lean.** Дополняет пункт выше про кэш: альтернативный (более дешёвый) путь —
+  держать в CI только `lean_ir.py`-юниты (генерация statement без реальной компиляции) и упаковку файла для
+  Docker, а полную компиляцию гонять как отдельную ручную/scheduled джобу с восстановленным `.lake`-кэшем, а не
+  на каждый PR.
 
 ## 6. Документация и промпты
 

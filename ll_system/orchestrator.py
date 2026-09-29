@@ -51,6 +51,7 @@ from agent_system.lib.llm_client import (
     get_concurrency_semaphore,
 )
 from ll_system.lib.agent_output_schema import schema_for as _output_schema_for
+from agent_system.lib.progress import ProgressWriter, announce_start, finish_pipeline, instrument_node
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,7 @@ class PipelineState(TypedDict):
     mock_runner: Any
     agent_runner: Any
     verbose: bool
+    progress: Any                # ProgressWriter | None (agent_system.lib.progress)
 
     # -- Pipeline data --
     input_format: int            # 1, 2, or 3
@@ -240,7 +242,7 @@ class LiveRunner:
     # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
     # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
     # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
-    # Opus 4.7+, Sonnet 5 and Opus 5.x reject `temperature` with a 400, so
+    # Opus 4.7+, Sonnet 5 / 5.5 and Opus 5.x reject `temperature` with a 400, so
     # thinking models never get sampling parameters.
     _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
     # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
@@ -377,7 +379,7 @@ class LiveRunner:
             logger.warning("Skipping agent '%s': %s", agent_name, exc)
             return None
 
-        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5")
+        model = self.model_override or self.models.get(agent_name, "claude-sonnet-5-5")
         temperature = self.temperatures.get(agent_name, 0.0)
         effort = self.efforts.get(agent_name, self.default_effort)
         max_tokens = self.max_tokens_per_agent.get(agent_name, self.max_tokens)
@@ -575,6 +577,8 @@ def _run_agent(
     runner = _get_runner(state)
     if runner is None:
         return None
+    if state.get("mock_runner") is None:
+        announce_start(state, agent_name)
     try:
         return runner.run_agent(agent_name, input_data)
     except NotImplementedError:
@@ -2049,20 +2053,20 @@ def build_ll_pipeline_graph() -> Any:
     graph = StateGraph(PipelineState)
 
     # Register nodes
-    graph.add_node("validate_ir_node", validate_ir_node)
-    graph.add_node("preprocess_node", preprocess_node)
-    graph.add_node("first_follow_oracle_node", first_follow_oracle_node)
-    graph.add_node("run_classifier_node", run_classifier_node)
-    graph.add_node("setup_dispatch_node", setup_dispatch_node)
-    graph.add_node("run_specialist_node", run_specialist_node)
-    graph.add_node("collect_specialists_node", collect_specialists_node)
-    graph.add_node("verify_claims_node", verify_claims_node)
-    graph.add_node("run_reasoning_node", run_reasoning_node)
-    graph.add_node("verdict_gate_node", verdict_gate_node)
-    graph.add_node("handle_retry_node", handle_retry_node)
-    graph.add_node("formalize_node", formalize_node)
-    graph.add_node("assemble_result_node", assemble_result_node)
-    graph.add_node("assemble_early_failure", assemble_early_failure)
+    graph.add_node("validate_ir_node", instrument_node("validate_ir_node", validate_ir_node))
+    graph.add_node("preprocess_node", instrument_node("preprocess_node", preprocess_node))
+    graph.add_node("first_follow_oracle_node", instrument_node("first_follow_oracle_node", first_follow_oracle_node))
+    graph.add_node("run_classifier_node", instrument_node("run_classifier_node", run_classifier_node))
+    graph.add_node("setup_dispatch_node", instrument_node("setup_dispatch_node", setup_dispatch_node))
+    graph.add_node("run_specialist_node", instrument_node("run_specialist_node", run_specialist_node))
+    graph.add_node("collect_specialists_node", instrument_node("collect_specialists_node", collect_specialists_node))
+    graph.add_node("verify_claims_node", instrument_node("verify_claims_node", verify_claims_node))
+    graph.add_node("run_reasoning_node", instrument_node("run_reasoning_node", run_reasoning_node))
+    graph.add_node("verdict_gate_node", instrument_node("verdict_gate_node", verdict_gate_node))
+    graph.add_node("handle_retry_node", instrument_node("handle_retry_node", handle_retry_node))
+    graph.add_node("formalize_node", instrument_node("formalize_node", formalize_node))
+    graph.add_node("assemble_result_node", instrument_node("assemble_result_node", assemble_result_node))
+    graph.add_node("assemble_early_failure", instrument_node("assemble_early_failure", assemble_early_failure))
 
     # START → validate
     graph.add_edge(START, "validate_ir_node")
@@ -2156,8 +2160,13 @@ def run_pipeline(
     verbose: bool = False,
     output_dir: str | None = None,
     task_name: str | None = None,
+    progress: ProgressWriter | None = None,
 ) -> dict:
-    """Run the LL pipeline on an IR dict. Returns the result dict."""
+    """Run the LL pipeline on an IR dict. Returns the result dict.
+
+    ``progress``: optional :class:`ProgressWriter` -- node/LLM events go to
+    ``run_dir/progress.jsonl`` and ``partial_result.json`` is refreshed after
+    every node (``agent_system/lib/progress.py``)."""
     global _ll_pipeline_graph
 
     if verbose:
@@ -2171,6 +2180,7 @@ def run_pipeline(
         "mock_runner": mock_runner,
         "agent_runner": agent_runner,
         "verbose": verbose,
+        "progress": progress,
         "input_format": 0,       # determined in validate_ir_node
         "preprocess_hints": {},
         "classifier_output": {},
@@ -2194,6 +2204,9 @@ def run_pipeline(
     # ~3 full rounds = ~30 node hops, plus fan-out overhead.  Set a generous
     # recursion limit so a legitimate retry cycle never hits the LangGraph cap.
     _recursion_limit = 100 + 20 * MAX_RETRIES
+    tracker = getattr(agent_runner, "usage_tracker", None)
+    if progress is not None and tracker is not None:
+        progress.attach_tracker(tracker)
     final_state = _ll_pipeline_graph.invoke(
         initial_state, config={"recursion_limit": _recursion_limit}
     )
@@ -2222,8 +2235,8 @@ def run_pipeline(
     # Usage/cost block (TODO.md §3) -- additive, present even without a live
     # agent_runner (an all-zero UsageTracker) so callers can rely on
     # result["usage"] always existing.
-    tracker = getattr(agent_runner, "usage_tracker", None)
     result["usage"] = tracker.as_dict() if tracker is not None else UsageTracker().as_dict()
+    finish_pipeline(progress, result)
 
     # Optionally render outputs
     if output_dir and result:
@@ -2283,6 +2296,10 @@ def main() -> None:
                         help="Save <stem>_result.{json,md,html} to DIR "
                              "(common CLI contract used by TFL Lab)")
     parser.add_argument("--task", metavar="NAME", help="Task name for mock file lookup")
+    parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=None,
+                        help="Write progress.jsonl + partial_result.json into the --save "
+                             "directory while running (default: on iff --save is given; "
+                             "--no-progress disables)")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
         "--draw-graph", metavar="PATH", help="Save pipeline graph to this path (.mmd/.png)"
@@ -2333,14 +2350,23 @@ def main() -> None:
     mock_runner = MockRunner(args.mock, task_name) if args.mock else None
     agent_runner = LiveRunner(verbose=args.verbose) if args.live else None
 
-    result = run_pipeline(
-        ir,
-        mock_runner=mock_runner,
-        agent_runner=agent_runner,
-        verbose=args.verbose,
-        output_dir=args.out,
-        task_name=task_name,
+    progress = ProgressWriter.for_cli(
+        args.save, args.progress, system="ll_system", stem=f"{task_name}_result",
     )
+    try:
+        result = run_pipeline(
+            ir,
+            mock_runner=mock_runner,
+            agent_runner=agent_runner,
+            verbose=args.verbose,
+            output_dir=args.out,
+            task_name=task_name,
+            progress=progress,
+        )
+    except Exception as exc:
+        if progress is not None and progress.status != "error":
+            progress.error(f"{type(exc).__name__}: {exc}", exc_type=type(exc).__name__)
+        raise
     if args.verbose and agent_runner is not None:
         print(agent_runner.usage_tracker.summary_line(), file=sys.stderr)
 
@@ -2361,6 +2387,9 @@ def main() -> None:
             (save_dir / f"{task_name}_result.html").write_text(render_html(result), encoding="utf-8")
         except Exception as exc:
             print(f"Renderer failed: {exc}", file=sys.stderr)
+        if progress is not None:
+            progress.done(result, files=[f"{task_name}_result.{ext}" for ext in ("json", "md", "html")
+                                         if (save_dir / f"{task_name}_result.{ext}").exists()])
 
     # Exit code reflects pipeline outcome
     verdict = result.get("verdict")

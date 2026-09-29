@@ -1,0 +1,7 @@
+{
+  "formalize_in_run": false,
+  "first_model": "claude-opus-5-5",
+  "retry_model": "claude-sonnet-5-5",
+  "retries": 2,
+  "max_tokens": 128000
+}

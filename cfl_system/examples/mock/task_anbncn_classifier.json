@@ -1,0 +1,5 @@
+{
+  "verdict": "non_cfl",
+  "confidence": 0.9,
+  "reasoning": "Three equal-length blocks a^n b^n c^n: the classical non-context-free language."
+}

@@ -36,7 +36,8 @@ def _mock_stream(runner, message):
 
 @pytest.mark.parametrize("model, adaptive", [
     ("claude-opus-5-5", True),
-    ("claude-sonnet-5", True),
+    ("claude-sonnet-5-5", True),
+    ("claude-sonnet-5", True),  # legacy, still available
     ("claude-haiku-4-5", False),
     ("claude-opus-4-5", False),
 ])
@@ -182,3 +183,39 @@ def test_model_override_env(monkeypatch, runner):
     monkeypatch.setenv("TFL_MODEL_OVERRIDE", "claude-haiku-4-5")
     assert runner._get_model("reasoning_agent") == "claude-haiku-4-5"
     assert runner._get_model("classifier") == "claude-haiku-4-5"
+
+
+def test_sonnet_5_5_request_params(runner):
+    """Sonnet 5.5 (claude-sonnet-5-5) is an adaptive-thinking model: adaptive
+    thinking + explicit effort (+ structured-output format), no temperature,
+    no budget_tokens, no server-side refusal fallback (Opus/Fable only)."""
+    schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+    kw = runner._shared.build_request_kwargs(
+        "claude-sonnet-5-5", 64000, "sys", "u", effort="medium", temperature=0.0, output_schema=schema,
+    )
+    assert kw["thinking"] == {"type": "adaptive"}
+    assert "budget_tokens" not in kw["thinking"]
+    assert kw["output_config"] == {
+        "effort": "medium", "format": {"type": "json_schema", "schema": schema},
+    }
+    assert "temperature" not in kw
+    assert "extra_body" not in kw and "extra_headers" not in kw
+    assert kw["model"] == "claude-sonnet-5-5"
+
+
+def test_sonnet_5_5_is_not_legacy_and_priced():
+    from agent_system.lib.llm_client import MODEL_PRICING
+    assert _is_adaptive_model("claude-sonnet-5-5")
+    assert _is_adaptive_model("claude-sonnet-5-5-20260928")
+    assert MODEL_PRICING["claude-sonnet-5-5"]["input"] == 2.00
+    assert MODEL_PRICING["claude-sonnet-5-5"]["output"] == 10.00
+    assert "claude-sonnet-5" in MODEL_PRICING  # legacy entry kept
+
+
+def test_default_stack_uses_sonnet_5_5_everywhere():
+    """All four projects moved from Sonnet 5 to Sonnet 5.5 together."""
+    import importlib
+    for pkg in ("agent_system", "cfl_system", "dcfl_system", "ll_system"):
+        models = importlib.import_module(f"{pkg}.config").MODELS
+        assert "claude-sonnet-5" not in models.values(), pkg
+        assert "claude-sonnet-5-5" in models.values(), pkg

@@ -8,12 +8,12 @@ Edit this file to change models or behavior.
 # ---------------------------------------------------------------------------
 # Model assignments per agent (§4 spec table)
 # ---------------------------------------------------------------------------
-# Available: "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5"
+# Available: "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"
 
 MODELS = {
     # Fast / structured tasks → Sonnet
-    "input_parser":     "claude-sonnet-5",
-    "classifier":       "claude-sonnet-5",
+    "input_parser":     "claude-sonnet-5-5",
+    "classifier":       "claude-sonnet-5-5",
 
     # Deep reasoning → Opus
     "re_builder":       "claude-opus-5-5",
@@ -24,10 +24,14 @@ MODELS = {
     "grammar_analyzer": "claude-opus-5-5",
     "reasoning_agent":  "claude-opus-5-5",
     "formalizer":       "claude-opus-5-5",
+    # Separate Lean formalization entry (`python -m agent_system.formalize`,
+    # lib/formalize_run.py): the corrections after the first attempt (which uses
+    # "formalizer" above) run on Sonnet with the Lean errors and the previous body.
+    "formalizer_retry": "claude-sonnet-5-5",
 
     # Verification & retry planning
     "proof_checker":    "claude-opus-5-5",
-    "retry_planner":    "claude-sonnet-5",
+    "retry_planner":    "claude-sonnet-5-5",
 
     # Quick validation / summarization → Haiku (logs & translation only)
     "validator":        "claude-haiku-4-5",
@@ -35,7 +39,7 @@ MODELS = {
 }
 
 # Reasoning depth per agent (`output_config.effort`). Opus 5.5 always runs
-# adaptive thinking (it can't be switched off) and Sonnet 5 runs it by default;
+# adaptive thinking (it can't be switched off) and Sonnet 5.5 runs it by default;
 # effort is the knob for how much they think (and thus for latency and cost).
 # Opus 5.5 defaults to "medium" when effort is omitted, so every agent gets an
 # explicit value: proof-producing agents run at "high", structured
@@ -52,6 +56,7 @@ EFFORT = {
     "grammar_analyzer": "high",
     "reasoning_agent":  "high",
     "formalizer":       "high",
+    "formalizer_retry": "high",
     "proof_checker":    "high",
     "retry_planner":    "medium",
 }
@@ -67,13 +72,13 @@ REFUSAL_FALLBACK = True
 # ---------------------------------------------------------------------------
 
 # Max tokens per LLM call. Thinking tokens count toward this limit on
-# Opus 5.5 / Sonnet 5, so it must cover reasoning + the answer. Calls are
+# Opus 5.5 / Sonnet 5.5, so it must cover reasoning + the answer. Calls are
 # streamed, so a large ceiling doesn't hit the SDK's non-streaming timeout;
 # you pay only for tokens actually generated.
 MAX_TOKENS = 64000
 
 # Temperature — only sent to legacy models (Haiku 4.5). Adaptive-thinking
-# models (Opus 4.7+, Sonnet 5, Opus 5.x) reject sampling parameters.
+# models (Opus 4.7+, Sonnet 5 / 5.5, Opus 5.x) reject sampling parameters.
 TEMPERATURE = 0.0
 
 # Lean 4 type check timeout (seconds)
@@ -85,6 +90,21 @@ ORACLE_MAX_EXHAUSTIVE = 7
 # Retry counts
 LLM_JSON_RETRIES = 1        # retry if LLM returns non-JSON
 FORMALIZER_RETRIES = 2       # retry if Lean type check fails (§5.2 Level 4)
+
+# R-Lean (docs/VERDICT_POLICY.md): max formalizer <-> check_lean_file round
+# trips inside formalize_node for one statement. The formulation never
+# changes across attempts (it is rendered once from the IR by
+# lib.lean_ir.render_statement); only the proof body is retried, fed back
+# the previous attempt's check_lean_file errors[] each time.
+MAX_FORMALIZE_ITERATIONS = 3
+
+# Separate formalization entry (lib/formalize_run.py, `python -m agent_system.formalize`;
+# decision 2026-09-29): corrections after the first attempt, and the output limit
+# per call -- 128000 is the API maximum for Opus 5.5 / Sonnet 5.5, used for both.
+# A reply cut off at the limit without a proof body earns one Sonnet "output ONLY
+# the proof body" attempt, then the loop stops.
+FORMALIZE_RETRIES = 2
+FORMALIZE_MAX_TOKENS = 128000
 
 # Cost ceiling (TODO.md backlog round C2): the retry planner must never call
 # the same specialist more than this many times for one task -- precedent:

@@ -30,7 +30,7 @@ def test_empty_tracker():
 
 def test_record_none_usage_is_a_noop():
     t = UsageTracker()
-    t.record("claude-sonnet-5", None, agent="foo", used_structured_output=True)
+    t.record("claude-sonnet-5-5", None, agent="foo", used_structured_output=True)
     d = t.as_dict()
     assert d["calls"] == 0
     assert "foo" not in d["per_agent"]
@@ -38,9 +38,9 @@ def test_record_none_usage_is_a_noop():
 
 def test_record_accumulates_by_model_and_agent():
     t = UsageTracker()
-    t.record("claude-sonnet-5", _usage(100, 50), agent="reasoning",
+    t.record("claude-sonnet-5-5", _usage(100, 50), agent="reasoning",
               used_structured_output=True)
-    t.record("claude-sonnet-5", _usage(200, 80), agent="reasoning",
+    t.record("claude-sonnet-5-5", _usage(200, 80), agent="reasoning",
               used_structured_output=True)
     t.record("claude-haiku-4-5", _usage(30, 10), agent="repair",
               used_structured_output=False)
@@ -51,7 +51,7 @@ def test_record_accumulates_by_model_and_agent():
     assert d["output_tokens"] == 140
     assert d["total_tokens"] == 470
 
-    assert d["by_model"]["claude-sonnet-5"]["calls"] == 2
+    assert d["by_model"]["claude-sonnet-5-5"]["calls"] == 2
     assert d["by_model"]["claude-haiku-4-5"]["calls"] == 1
 
     assert d["per_agent"]["reasoning"]["calls"] == 2
@@ -64,7 +64,7 @@ def test_record_accumulates_by_model_and_agent():
 
 def test_record_without_agent_falls_under_unknown():
     t = UsageTracker()
-    t.record("claude-sonnet-5", _usage(10, 5))
+    t.record("claude-sonnet-5-5", _usage(10, 5))
     d = t.as_dict()
     assert d["per_agent"]["unknown"]["calls"] == 1
 

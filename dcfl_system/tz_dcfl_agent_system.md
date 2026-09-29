@@ -258,7 +258,10 @@ dispatch_all_agents        ──── всегда все 5 агентов
              │
              ▼
     reasoning_agent_node ────── retry? ──→ retry_planner_node ──→ dispatch
-             │ done
+             │ done                              │ пустой план
+             ▼                                   ▼
+    lean_formalize_node  ◄── опционально (R-Lean, §7.3): по умолчанию no-op
+             │
              ▼
     renderer_node
              │
@@ -1084,6 +1087,59 @@ class RetryPlan:
   (скорее всего метод действительно не подходит)
 - При retry передавать конкретную подсказку, а не просто "попробуй ещё раз"
 
+### 7.3. Lean 4 формальное доказательство вердикта (lean_formalize_node, R-Lean)
+
+Необязательный шаг между вердиктом и рендерером: `reasoning_agent_node` (done) / `retry_planner_node` (пустой план)
+→ `lean_formalize_node` → `renderer_node`. Правило: `docs/VERDICT_POLICY.md` R-Lean; образец — `agent_system`
+(`formalize_node` + гейт в `assemble_result_node`). Утверждение — предикат **langlib** `is_DCF` (Mathlib не знает ДМП-автоматов):
+`is_DCF L` (направление `dcfl`) или `¬ is_DCF L` (`non_dcfl`).
+
+**Включение.** Флаг `--formalize` / `run_pipeline(..., formalize=True)` или `TFL_FORMALIZATION=1|true|yes|on`
+(`config.FORMALIZATION_ENABLED`); явный аргумент приоритетнее переменной. По умолчанию шаг выключен (no-op,
+`result["formalization"] = null`), без раннера (ни mock, ни live) тоже no-op. Само включение бюджет API не тратит: агент
+`lean_formalizer` (Opus 5.5, `prompts/dcfl_lean_formalizer.md`) вызывается только через раннер — в mock-режиме из
+`examples/mock/<task_id>_lean_formalizer.json`, в `--live` до `MAX_FORMALIZE_ITERATIONS` (3) раз, поэтому live — только по явному
+запросу (корневой `CLAUDE.md`, «Models and LLM calls»). Проверка типов — локально в Docker (образ `tfl-lean4`); в `--live` без
+Docker/образа шаг сразу даёт `unavailable`, агент не вызывается.
+
+**Формулировка генерируется кодом.** `lib/lean_ir.render_statement(ir, direction)` (обёртка над `agent_system.lib.lean_ir`)
+строит алфавит `Letter` (+ `instance : Fintype Letter`, нужный `is_DPDA`), язык и теорему `tfl_main` по IR: `set_builder`
+в форме «переменная = буква с доменом `x+`/`x*`, `word_pattern` — склейка имён, ограничения `length_cmp`/`integer_cmp`»
+(или экспоненциальная нотация в `word_pattern`) либо `grammar`. Направление — вердикт reasoning (после гейта), если его нет —
+`hypothesis.prediction`; нет ни того ни другого, либо IR не переводится, — `not_formalizable` (с `reason`), агент не вызывается.
+LLM пишет только тело доказательства; формулировка из его вывода не используется никогда. Вход агента: `statement`, `plan`
+(направление, `summary` reasoning и `proof_sketch` сильнейшего специалиста за это направление — для `stack_strategy` это явный ДМП),
+`available_lemmas`; при повторе ещё `errors` (из `check_lean_file`) и `previous_proof_body`, `statement` не меняется.
+
+**Цикл.** До `MAX_FORMALIZE_ITERATIONS` попыток: агент → `compose_lean_file` → `check_lean_file(theorem_name=…)` (оба из
+`agent_system.lib.type_check`; барьеры — `scan_proof_body`, `sorry` по позиции, аксиомы ⊆ {propext, Classical.choice, Quot.sound},
+kernel replay — не дублируются). `error` → повтор с ошибками; `proved`, `has_sorry`, `timeout`, `unavailable` останавливают цикл.
+Пустой `proof_body` — честный отказ агента («нет пути на доступных леммах», причина в `notes`): цикл останавливается сразу,
+статус `error`. Сбой агента (`agent_error`, нет вывода) — тоже `error` внутри `formalization`, а не ошибка пайплайна (R1).
+
+**Результат** — `result["formalization"]`: `status` ∈ {`proved`, `has_sorry`, `error`, `timeout`, `unavailable`, `not_formalizable`},
+`direction`, `statement`, `proof_body`, `attempts`, `errors`, `axioms`, `elapsed`.
+
+**Гейт R-Lean** (`_apply_lean_gate`, вызывается из `renderer_node` после существующего гейта R1–R4′, то есть и на терминальном
+пути с принудительным `done`): **самый приоритетный** источник основания — выше R1/R2/R3/R4′ и не требует артефакта специалиста.
+- `proved` ⇒ вердикт = доказанное направление, confidence 0.98 (`verified`, не ограничивается самооценкой reasoning и потолками
+  0.85/0.55/0.50), `verdict_gate.basis += {agent: lean_formalizer, trust: verified, basis: lean_proof}`, `confidence_cap = 0.98`.
+- `proved` в направлении, **противоположном** вердикту специалистов ⇒ вердикт меняется, `contradiction: true` остаётся как пометка
+  расхождения, причина — в `verdict_gate.downgrades`, `primary_evidence = lean_formalizer`.
+- `proved` при открытом вердикте (`inconclusive`, в том числе после неразрешённого R3) ⇒ вердикт = доказанное, 0.98.
+- `has_sorry`, `error`, `timeout`, `unavailable`, `not_formalizable` — не свидетельство ни за, ни против (R1): вердикт, confidence и
+  `verdict_gate` остаются ровно такими, какими их оставил существующий гейт.
+
+**Границы (образ `tfl-lean4` на 2026-09-28).** В образе собраны только модули langlib, которые импортирует `TflLean`; тело
+доказательства импортировать ничего не может. Доступны: `is_DCF`/`is_DPDA`, структура `DPDA`, `PDA.step/Reaches₁/Reaches`,
+`DCF_closedUnderComplement`, `DCF_inter_regular`. `DCFL ⊆ CFL` (модуль `Inclusion.ContextFree`, обёртки `TflLean.isContextFree_of_isDCF` / `not_isDCF_of_not_isContextFree`). **Нет** `is_DCF_of_is_RG`, моста грамматика→ДМП. Поэтому:
+`dcfl` для языков, распознаваемых явным ДМП, доказуемо (образец в промпте — {aⁿbⁿ | n ≥ 1}; mock `dcfl_anbncm` — реальное
+скомпилированное доказательство {aⁿbⁿcᵐ | n, m ≥ 1}, тест прогоняет его через Docker: `proved`, 0.98); `non_dcfl` доказуем через
+лемму-мост `TflLean.not_isDCF_of_not_isContextFree` (DCFL ⊆ CFL; эталон `Examples/AiBjCkNeq_NotDCF.lean`, статус `proved`); языки-грамматики
+(`g.language`) тоже. Для них промпт требует честный отказ, mock-файлы `dcfl_exam_0{1,2,3,4}_lean_formalizer.json` — отказы.
+Тесты: `tests/test_lean_formalize.py` (mock-режим, `check_lean_file` подменён; Docker-условные: `sorry` для `task_anbncm` ⇒
+`has_sorry` в обоих направлениях, пример из промпта ⇒ `proved`, сквозной прогон `dcfl_anbncm` с mock-доказательством ⇒ `dcfl` 0.98).
+
 ---
 
 ## 8. Выходной формат
@@ -1148,7 +1204,8 @@ dcfl_system/
 │   ├── dcfl_pumping.md             # §5.4
 │   ├── shallit.md                  # §5.5
 │   ├── inh_ambiguity.md            # §5.6
-│   └── reasoning_agent.md
+│   ├── reasoning_agent.md
+│   └── dcfl_lean_formalizer.md     # тело Lean-доказательства (§7.3, R-Lean)
 │
 ├── orchestrator.py                 # LangGraph orchestrator
 ├── renderer.py                     # Генерация .json/.md/.html
@@ -1173,7 +1230,8 @@ dcfl_system/
 │   ├── test_word_sampler.py
 │   ├── test_oracle_verifier.py
 │   ├── test_retry_logic.py
-│   └── test_orchestrator.py
+│   ├── test_orchestrator.py
+│   └── test_lean_formalize.py      # Lean-шаг и гейт R-Lean (§7.3)
 ```
 
 ---

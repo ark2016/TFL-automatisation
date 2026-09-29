@@ -14,7 +14,7 @@ import pytest
 
 from ui_server import server as srv
 
-TERMINAL_STATUSES = {"completed", "error", "timeout", "cancelled"}
+TERMINAL_STATUSES = {"completed", "error", "cancelled", "interrupted"}
 
 
 def _sleep_command(seconds: float):
@@ -213,16 +213,28 @@ def test_concurrency_limit_queues_extra_runs(monkeypatch):
         _cleanup_runs(id1, id2)
 
 
-def test_run_timeout_kills_process_and_marks_status(monkeypatch):
-    monkeypatch.setattr(srv, "RUN_TIMEOUT_SECONDS", 0.3)
-    monkeypatch.setattr(srv, "build_command", _sleep_command(30))
+def test_run_timeout_is_gone(monkeypatch):
+    """Runs have no timeout at all: no constant, no CLI flag; a slow run is
+    only ever ended by its own exit or a manual cancel."""
+    assert not hasattr(srv, "RUN_TIMEOUT_SECONDS")
+    assert not hasattr(srv, "DEFAULT_RUN_TIMEOUT_SECONDS")
+    monkeypatch.setattr(sys, "argv", ["ui_server", "--run-timeout", "5", "--port", "0"])
+    with pytest.raises(SystemExit) as exc:
+        srv.main()
+    assert exc.value.code == 2  # argparse: unrecognized argument
 
+
+def test_slow_run_is_not_killed(monkeypatch):
+    monkeypatch.setattr(srv, "build_command", _sleep_command(1.2))
     r = srv.api_run({"project": "cfl_system", "ir": {}})
     run_id = r["run_id"]
     try:
+        time.sleep(0.8)
+        assert srv.api_log(run_id)["status"] == "running"
+        # ended by its own exit (the sleep stub writes no result → "error"),
+        # never by a watchdog kill
         data = _drain_run(run_id, timeout=5.0)
-        assert data["status"] == "timeout"
-        assert "timeout" in (data["error"] or "").lower()
+        assert data["status"] == "error" and "cancelled" not in (data["error"] or "")
     finally:
         _cleanup_runs(run_id)
 

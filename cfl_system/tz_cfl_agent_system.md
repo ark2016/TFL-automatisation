@@ -246,6 +246,9 @@ run_reasoning_node                                           │
 formalize    invert_hyp    retry_planner_node ────────────────┘
     │           │              │ fail
     ▼           ▼              ▼
+lean_formalize_node (§5.5, opt-in: --formalize)
+    │
+    ▼
 assemble_result_node      assemble_early_failure
     │                          │
     ▼                          ▼
@@ -274,7 +277,7 @@ assemble_result_node      assemble_early_failure
 
 **Вход:** Текст задачи (русский или формальная нотация).
 **Выход:** JSON IR по расширенной schema из §2.
-**Модель:** Sonnet 5 (effort=medium, structured output=JSON).
+**Модель:** Sonnet 5.5 (effort=medium, structured output=JSON).
 **Промпт:** `prompts/cfl_input_parser.md`
 
 Критические паттерны:
@@ -328,7 +331,7 @@ assemble_result_node      assemble_early_failure
   "reasoning": "Repeated subword w1 at positions 1 and 3 with intervening w2 creates a copying dependency that CFGs cannot track"
 }
 ```
-**Модель:** Sonnet 5 (effort=medium).
+**Модель:** Sonnet 5.5 (effort=medium).
 **Роль:** Чисто рекомендательная. Dispatch не зависит от verdict; `advisory_only` убран из контракта —
 никто его не читал (`TODO.md` §6), а advisory-статус и так закреплён отдельным полем `classifier_hint`
 в результате пайплайна.
@@ -721,6 +724,59 @@ n ≥ m ≥ 2 и всякого R ⊆ L ∩ Σⁿ найдётся Z = {z₁,…
 
 ---
 
+### 5.5. Lean 4 формальное доказательство вердикта (lean_formalize_node, R-Lean)
+
+Отдельный необязательный шаг **после** вердикта (`verdict_gate_node` → `formalize_node` → `lean_formalize_node`
+→ `assemble_result_node`). `formalize_node` (агент `formalizer`) по-прежнему пишет только Markdown-доказательство
+для отчёта, без Lean; Lean-шаг его не заменяет и не меняет. Правило: `docs/VERDICT_POLICY.md` R-Lean.
+
+**Включение** — как в `agent_system`: флаг `--formalize` (`run_pipeline(..., formalize=True)`) или
+`TFL_FORMALIZATION=1|true|yes|on` (`config.FORMALIZATION_ENABLED`); явный аргумент `formalize` приоритетнее
+переменной. По умолчанию шаг выключен: нет ключа `formalization` в состоянии, `result["formalization"] = null`.
+Само включение бюджет API не тратит; в `--live` шаг стоит до `MAX_FORMALIZE_ITERATIONS` вызовов Opus, поэтому только
+по явному запросу (корневой `CLAUDE.md`, «Models and LLM calls»). Проверка типов — локально в Docker (образ `tfl-lean4`).
+
+**Формулировка генерируется кодом.** `cfl_system.lib.lean_ir.render_statement(ir, direction)` строит алфавит,
+язык и теорему; `direction` — `cfl` (`L.IsContextFree`) или `non_cfl` (`¬ L.IsContextFree`, с импортами langlib
+для накачки/Огдена) по **вердикту после гейта**. Агент `lean_formalizer` (`prompts/cfl_lean_formalizer.md`,
+контракт `{agent, proof_body, lemmas_used, notes}`, structured output) пишет только тело доказательства;
+формулировка из его вывода не используется никогда. Вход агента: `statement`, `plan` (метод, обоснование и
+evidence основного специалиста), `available_lemmas`; при повторе ещё `errors` (из `check_lean_file`) и
+`previous_proof_body`, `statement` не меняется.
+
+**Цикл.** До `MAX_FORMALIZE_ITERATIONS` (3) попыток: агент → `compose_lean_file` → `check_lean_file(theorem_name=…)`
+(оба из `agent_system.lib.type_check`, логика барьеров — `sorry`/аксиомы/kernel replay — не дублируется).
+`error` → повтор с ошибками; `proved`, `has_sorry`, `timeout`, `unavailable` останавливают цикл.
+
+**Результат** — `result["formalization"]`: `status` ∈ {`proved`, `has_sorry`, `error`, `timeout`, `unavailable`,
+`not_formalizable`, `skipped`}, `direction`, `statement`, `proof_body`, `lean_code`, `attempts`, `errors`, `axioms`,
+`elapsed`. `not_formalizable` (с `reason`) — у IR нет Lean-формулировки (`set_builder`/`predicate`/… без
+экспоненциальной нотации, IR без `language_spec`, в том числе входы LL-пайплайна); агент при этом не вызывается.
+`skipped` — шаг включён, но нет раннера или нет определённого вердикта; `unavailable` — в `--live` без Docker/образа
+(агент не вызывается, чтобы не тратить Opus впустую).
+
+**Гейт** (`apply_lean_gate`, вызывается из `assemble_result_node`; `apply_verdict_gate` до Lean-шага не видит
+формализации): только `proved` меняет итог.
+- `proved` в направлении вердикта ⇒ trust `verified`, confidence 0.98 (не ограничивается самооценкой reasoning),
+  `verdict_gate.basis += {agent: lean_formalizer, trust: verified, basis: lean_proof}`, `basis_trust = verified`,
+  `proof_verified = true`.
+- `proved` в противоположном направлении (или вердикт был открыт) ⇒ вердикт меняется на доказанное, 0.98,
+  противоречие помечается разрешённым, причина пишется в `verdict_gate.downgrades` (R3/R4), а `proof` заменяется
+  Lean-доказательством (неформальное доказательство специалиста было за другую сторону). Шаг формулирует утверждение
+  по вердикту, поэтому на практике эта ветка — страховка, а не рабочий путь.
+- `has_sorry`, `error`, `timeout`, `unavailable`, `not_formalizable`, `skipped` — не свидетельство ни за, ни против (R1):
+  вердикт, confidence и `verdict_gate` не меняются.
+
+**Границы.** Скомпилированный образец есть только для `non_cfl` ({aⁿbⁿcⁿ}, `TflLean/Examples/AnBnCnNotCF.lean`,
+few-shot в промпте). Для направления `cfl` (нужно построить `ContextFreeGrammar` и доказать `g.language = L`)
+скомпилированного примера пока нет — агент, скорее всего, будет тратить повторы; путь через langlib
+(`is_CF_iff_isContextFree`) не опробован. Способы решения, для которых в образе нет лемм (замкнутость/пересечение с
+регулярным, Парих, подстановка), формализатор не переносит в Lean: он доказывает `¬ L.IsContextFree` накачкой/Огденом
+напрямую. Тесты: `tests/test_lean_formalize.py` (mock-режим, `check_lean_file` подменён; два Docker-условных теста —
+`sorry` для {aⁿbⁿcⁿ} ⇒ `has_sorry` и сквозной прогон `examples/task_anbncn.json` с моками ⇒ `proved`, 0.98).
+
+---
+
 ## 6. Reasoning и Retry
 
 ### 6.1. run_reasoning_node (LLM)
@@ -857,7 +913,8 @@ cfl_system/
 │   ├── cfl_reasoning.md
 │   ├── cfl_retry_planner.md
 │   ├── cfl_proof_checker.md
-│   └── cfl_formalizer.md
+│   ├── cfl_formalizer.md               # Markdown-доказательство для отчёта (без Lean)
+│   └── cfl_lean_formalizer.md          # тело Lean-доказательства (§5.5, R-Lean)
 ├── orchestrator.py                     # Main pipeline (§3 graph)
 ├── examples/
 │   ├── task_w1w2w1w3.json              # {w₁w₂w₁w₃ | ...}
@@ -882,6 +939,7 @@ cfl_system/
 │   ├── test_preprocess.py
 │   ├── test_renderer.py
 │   ├── test_stratification.py
+│   ├── test_lean_formalize.py          # Lean-шаг и гейт R-Lean (§5.5)
 │   └── test_e2e.py
 └── docker/                             # Lean 4 (Phase 3)
     └── ...
@@ -951,13 +1009,11 @@ mock outputs для примеров, e2e тесты.
 
 ### Phase 3 — Lean 4 Formalization
 
-Переиспользовать Docker из REG-системы (`agent_system/docker/`).
-Добавить proof templates для:
-- Pumping Lemma CFL
-- Closure properties (CFL ∩ REG = CFL)
-- Parikh's theorem application
-
-**Отложить до завершения Phase 2.**
+**Статус:** подключено как R-Lean (§5.5) по образцу `agent_system` — формулировка генерируется из IR
+(`lib/lean_ir.py`), агент `lean_formalizer` пишет только тело доказательства, Docker и образ `tfl-lean4` общие с
+REG-системой (`agent_system/docker/`), гейт: `proved` ⇒ `verified` 0.98. Proof-templates под конкретные леммы
+не нужны: доказательство ищет агент по образцам в промпте. Открыто: скомпилированный пример для направления `cfl`,
+леммы для замкнутости/Париха.
 
 ### Phase 4 — Live LLM Integration
 

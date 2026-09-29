@@ -58,7 +58,7 @@ def test_usage_tracker_consistent_with_calls_made():
     assert usage["structured_output_calls"] == 1
     assert usage["extraction_fallback_calls"] == 0
     assert usage["per_agent"]["cfg_builder"]["calls"] == 1
-    assert usage["by_model"]["claude-sonnet-5"]["calls"] == 1
+    assert usage["by_model"]["claude-sonnet-5-5"]["calls"] == 1
 
 
 def test_usage_tracker_counts_haiku_repair_as_fallback():

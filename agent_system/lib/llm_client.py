@@ -26,7 +26,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 
@@ -48,7 +48,7 @@ except ImportError:
 # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
 # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
 # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
-# Opus 4.7+, Sonnet 5 and Opus 5.x reject `temperature` with a 400.
+# Opus 4.7+, Sonnet 5 / 5.5 and Opus 5.x reject `temperature` with a 400.
 _LEGACY_MODEL_RE = re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
 # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
 _FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
@@ -569,9 +569,13 @@ def _sleep_with_backoff(attempt: int, base: float = 1.0, cap: float = 20.0) -> N
 # Anthropic prompt-caching multipliers — except Claude Opus 5.5's
 # `cache_read`, which is the confirmed $0.20/MTok rate (not 0.1x its
 # $4.00 input rate; Opus 5.5 prices cache reads the same as it prices
-# Sonnet 5's own input tokens, not as a fraction of its own).
+# Sonnet 5.5's own input tokens, not as a fraction of its own).
 MODEL_PRICING: dict[str, dict[str, float | None]] = {
     "claude-opus-5-5":  {"input": 4.00, "output": 20.00, "cache_read": 0.20, "cache_write": 5.00},
+    # Sonnet 5.5 (2026-09-28 platform.claude.com model table): the dateless id is
+    # the pinned snapshot; 5m cache write $2.50, 1h cache write $4 (not modelled).
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    # Legacy (still available, same rates as 5.5).
     "claude-sonnet-5":  {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00,  "cache_read": 0.10, "cache_write": 1.25},
 }
@@ -677,6 +681,23 @@ class UsageTracker:
         self._by_agent: dict[str, dict[str, UsageTotals]] = {}
         self._structured_output_calls = 0
         self._extraction_fallback_calls = 0
+        self._listeners: list[Callable[[dict], None]] = []
+
+    def add_listener(self, fn: Callable[[dict], None]) -> None:
+        """Register `fn(call)`, invoked after every recorded call (outside the
+        lock, exceptions swallowed) with ``{"model", "agent", "input_tokens",
+        "output_tokens", "cache_read_input_tokens",
+        "cache_creation_input_tokens", "estimated_cost_usd"}`` for THAT call.
+        Feeds ``agent_system.lib.progress`` (running cost while a run is in
+        flight)."""
+        with self._lock:
+            if fn not in self._listeners:
+                self._listeners.append(fn)
+
+    def remove_listener(self, fn: Callable[[dict], None]) -> None:
+        with self._lock:
+            if fn in self._listeners:
+                self._listeners.remove(fn)
 
     def record(
         self, model: str | None, usage: Any, *,
@@ -720,6 +741,23 @@ class UsageTracker:
                 self._structured_output_calls += 1
             elif used_structured_output is False:
                 self._extraction_fallback_calls += 1
+            listeners = list(self._listeners)
+
+        if listeners:
+            call = {
+                "model": model_key,
+                "agent": agent_key,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+                "estimated_cost_usd": estimate_cost_usd(model_key, usage),
+            }
+            for fn in listeners:
+                try:
+                    fn(call)
+                except Exception:  # noqa: BLE001 — progress reporting must never break a call
+                    pass
 
     def as_dict(self) -> dict:
         """JSON-serializable summary — the pipeline result's ``usage`` block.
@@ -919,7 +957,7 @@ class AnthropicClient:
         outputs (``output_config.format``) instead of the "extract JSON from
         prose" heuristic — verified against the Anthropic Python SDK /
         ``claude-api`` skill: GA, no beta header, works on every model this
-        codebase uses (Opus 5.5, Sonnet 5, Haiku 4.5).
+        codebase uses (Opus 5.5, Sonnet 5.5, Haiku 4.5).
         """
         kwargs: dict[str, Any] = {
             "model": model,
@@ -1162,7 +1200,7 @@ class LLMRunner:
             if env:
                 return env
         return self.model_map.get(
-            prompt_name, self.model_map.get(agent_name, "claude-sonnet-5")
+            prompt_name, self.model_map.get(agent_name, "claude-sonnet-5-5")
         )
 
     def _get_effort(self, agent_name: str) -> str:

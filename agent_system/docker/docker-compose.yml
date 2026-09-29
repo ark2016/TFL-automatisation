@@ -4,19 +4,20 @@ services:
       context: .
       dockerfile: Dockerfile.lean4
     image: tfl-lean4
-    mem_limit: 2g
+    mem_limit: 4g
     cpus: 2
     volumes:
       - lean-work:/home/lean/work
-    working_dir: /home/lean/work
-    entrypoint: ["lean"]
+    working_dir: /home/lean/tfl_lean
+    entrypoint: ["lake", "env", "lean"]
 
   check:
     image: tfl-lean4
-    mem_limit: 2g
+    mem_limit: 4g
     cpus: 2
     profiles: ["check"]
-    entrypoint: ["timeout", "120", "lean"]
+    working_dir: /home/lean/tfl_lean
+    entrypoint: ["timeout", "120", "lake", "env", "lean"]
 
 volumes:
   lean-work:

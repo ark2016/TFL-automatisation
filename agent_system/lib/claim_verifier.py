@@ -625,3 +625,39 @@ def compute_destructive_trust(
 
     best = max(usable, key=lambda a: _TRUST_RANK.get(a["trust"], 0))
     return {"trust": best["trust"], "agents": agents, "best_agent": best["agent"]}
+
+
+# ---------------------------------------------------------------------------
+# R-Lean — trust from a Lean 4 formal-proof result (docs/VERDICT_POLICY.md
+# R-Lean, TODO §1 ⚪)
+# ---------------------------------------------------------------------------
+
+def compute_lean_proof_trust(formalization: dict | None) -> dict[str, Any]:
+    """Trust for ``state["formalization"]`` (``graph.formalize_node``'s
+    output, itself built from ``type_check.check_lean_file``).
+
+    Only a deterministic ``status == "proved"`` result -- no compile
+    errors, no `sorry`, axioms subset of ``type_check.ALLOWED_AXIOMS``
+    (already enforced by `check_lean_file`) -- earns ``verified``; this
+    is a machine-checked proof, so it is never capped below the
+    ``verified`` ceiling the way a sampled/self-reported claim would be.
+    Every other status (``has_sorry``, ``error``, ``timeout``,
+    ``unavailable``, ``not_formalizable``, or missing/``None``) is not
+    evidence either way (R1) and comes back as ``not_verified`` --
+    ``graph.assemble_result_node`` decides on its own whether to leave
+    the standing verdict alone in that case.
+
+    Returns ``{"trust": "verified" | "not_verified", "direction": str |
+    None, "status": str | None}``. ``direction`` is the verdict the
+    statement was rendered for (``lean_ir.render_statement``'s
+    *direction* argument, echoed back by `formalize_node`) -- the gate
+    compares it against ``reasoning_verdict`` to tell a confirming proof
+    from one that flips the verdict.
+    """
+    if not isinstance(formalization, dict):
+        return {"trust": "not_verified", "direction": None, "status": None}
+
+    status = formalization.get("status")
+    direction = formalization.get("direction")
+    trust = "verified" if status == "proved" else "not_verified"
+    return {"trust": trust, "direction": direction, "status": status}

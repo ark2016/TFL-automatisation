@@ -62,7 +62,7 @@ TFL_MODEL_OVERRIDE=claude-haiku-4-5 .venv/Scripts/python -m cfl_system.orchestra
     cfl_system/examples/task11_ai_bj_between.json \
     --live --verbose --save cfl_system/examples/live_outputs/
 
-# Live with the production models (Opus 5.5 / Sonnet 5 — real money)
+# Live with the production models (Opus 5.5 / Sonnet 5.5 — real money)
 .venv/Scripts/python -m cfl_system.orchestrator \
     cfl_system/examples/task11_ai_bj_between.json \
     --live --verbose --save cfl_system/examples/live_outputs/
@@ -176,7 +176,7 @@ Opus response → _extract_json (3 strategies: whole / fenced / braces)
 ```
 
 - **Streaming API** everywhere — non-streaming requests are rejected by the Anthropic SDK when `max_tokens × projected latency > 10 min`, and with adaptive thinking `max_tokens` has to cover reasoning + answer (64K).
-- **Request parameters per model.** Opus 5.5 / Sonnet 5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; only legacy models (Haiku 4.5) get `temperature`. See `LiveRunner._build_request_kwargs()`.
+- **Request parameters per model.** Opus 5.5 / Sonnet 5.5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; only legacy models (Haiku 4.5) get `temperature`. See `LiveRunner._build_request_kwargs()`.
 - **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-4-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
 - **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`).
 
@@ -222,7 +222,7 @@ flowchart LR
 - **Closure under boolean ops + concatenation + star.** Reduce unknown language to a known one via $L \cup R$, $L \cap R$, $\overline{L}$, $h^{-1}(L)$.
 - **Grammar analysis.** Right-linear grammars generate exactly regular languages.
 
-Formalizer can emit **Lean 4** proof stubs in addition to Markdown (optional, gated by availability of a Lean build).
+Formalizer can emit **Lean 4** proofs in addition to Markdown (optional, gated by `--formalize` and the `tfl-lean4` Docker image); see "R-Lean architecture" below. The same optional step exists in CFL and DCFL.
 
 ### CFL — `cfl_system/`
 
@@ -316,7 +316,7 @@ All four pipelines use the same three-tier model stack:
 | Role | Model (alias) | Rate (input / output) | Used by |
 |---|---|---|---|
 | Heavy reasoning | `claude-opus-5-5` (effort `high`) | $4 / $20 per MTok | All specialists, reasoning, proof_checker, formalizer |
-| Fast structured | `claude-sonnet-5` (effort `medium`) | $2 / $10 per MTok | `classifier`, `retry_planner`, `input_parser` |
+| Fast structured | `claude-sonnet-5-5` (effort `medium`) | $2 / $10 per MTok | `classifier`, `retry_planner`, `input_parser` |
 | JSON repair | `claude-haiku-4-5` | $1 / $5 per MTok | `_repair_json_with_haiku` hook in `LiveRunner` |
 
 **Run cost.** On the previous stack (Opus 4.7 without thinking) a medium CFL problem (`task_w1bw2w3_ticket50.json`) cost **≈ $2–3**, a simple one **≈ $1**. Opus 5.5 is cheaper per token but thinks on every call, so these numbers need re-measuring; tune `EFFORT` per agent in each `config.py`. For development, `TFL_MODEL_OVERRIDE=claude-haiku-4-5` runs a full CFL pipeline (≈20 calls incl. a retry round) for well under $1.
@@ -336,14 +336,22 @@ All four pipelines use the same three-tier model stack:
 
 Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS (`static/app.js`, no inline `<script>`) + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/) (served from cdnjs, not jsdelivr, so a strict `script-src` can allow-list a single host) + [DOMPurify](https://github.com/cure53/DOMPurify) to sanitize the rendered Markdown before it goes into `innerHTML`. No framework, no build step.
 
-**Runs are bounded, not fire-and-forget:** at most `MAX_CONCURRENT_RUNS` (default 2, `TFL_LAB_MAX_CONCURRENT_RUNS` env var) pipeline subprocesses run at once — further runs queue; each run is killed if it exceeds `RUN_TIMEOUT_SECONDS` (`--run-timeout`, default 1800 s); `POST /api/runs/<run_id>/cancel` cancels a queued or running run on demand from the UI.
+**Runs are bounded, with no timeout:** at most `MAX_CONCURRENT_RUNS` (default 2, `TFL_LAB_MAX_CONCURRENT_RUNS` env var / `--max-concurrent-runs`) pipeline subprocesses run at once — further runs queue. There is **no run timeout** (`RUN_TIMEOUT_SECONDS` / `--run-timeout` were removed): a run ends on its own or by manual cancel (`POST /api/runs/<run_id>/cancel`, also while a run is formalizing).
+
+**Progress and partial results.** Every pipeline writes into its run directory as it goes: `progress.jsonl` (one JSON event per line: `node_start` / `node_done` / `llm_call` / `verdict` / `formalization` / `done` / `error`, each with a cumulative `usage` = calls, input/output tokens, estimated cost) and `partial_result.json` (snapshot of the result after every finished node); the final `<stem>_result.{json,md,html}` are unchanged. The writer is `agent_system/lib/progress.py`, shared by all four systems. The UI's **Progress** tab (default on run start) polls `GET /api/runs/<id>?after=N` and shows sections (hypothesis and classification, specialists, oracle checks, gate and verdict, formalization) as they fill, with model, tokens, time and cost per step. A manual cancel writes no event; the server marks such a run cancelled itself.
+
+**Runs persist on disk.** Each run directory keeps `run.json` (status, project, times, pid, verdict, confidence, cost, errors) and `run.log`; the server reloads them on start. A run left queued/running/formalizing without a live process becomes `interrupted` (or `completed` if its result was already written); older directories without `run.json` load read-only from their result files. The server refuses to start over active runs (`--force` overrides).
+
+**Formalization is a separate entry.** A finished result has a **Formalize** button (CLI: `python -m <system>.formalize <run_dir>`, see "R-Lean architecture"); the request must carry `confirm_spend: true`. Inside a run it is optional and off by default. **Settings** in the UI: formalization in-run on/off, first-attempt model (Opus 5.5), correction model (Sonnet 5.5), number of corrections (default 2), output limit 128000 tokens for both. Defaults are in `ui_server/settings.example.json`. In the UI, "formalize inside a run" chains the same separate entry (`<system>.formalize`, with the settings above as flags) after a finished **live** run's result is written: the run goes `running` → `formalizing` → `completed`; mock runs and LL never call it. The pipeline subprocess itself is always started with `TFL_FORMALIZATION=0` (the env variable still controls the in-graph step for plain CLI runs). A result whose block is already proved is not formalized again (the server answers 409; the button becomes "Re-run (proved)" and sends `force: true` after a confirmation); a forced re-run that does not end proved keeps the existing proof, verdict and confidence untouched.
+
+**Cost.** Before a *run* the UI shows the mean (and min–max, number of runs) of the pipeline cost of the recorded live runs of that project (`run.json` / `progress.jsonl`, formalization excluded) — measured, not tabulated; with no recorded run it says "no data". Before a *formalization* it shows min / expected / hard maximum from `<system>.formalize --estimate` (no API, no Docker; prices from `config.py`, output sizes 25k / 12k tokens per first / correction attempt are stated assumptions; the maximum is every call, including the one body-only call, at `max_tokens`) via `GET /api/runs/<id>/formalize/estimate`. A running total updates per LLM call during the run, and the final cost is stored in `run.json` and the result.
 
 Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a loopback `Host` header (DNS-rebinding guard), `POST /api/run` requires a same-origin `application/json` request (no cross-site "no-cors" posts starting paid runs), files are served only by lookup in an index of the served directory, and a `Content-Security-Policy` header (script/style/connect restricted to `'self'` + cdnjs, no inline scripts, iframe results rendered with `sandbox`) limits the blast radius of a compromised or malicious IR/report.
 
 ```bash
 .venv/Scripts/python -m ui_server.server --port 8765
 # → http://127.0.0.1:8765/
-.venv/Scripts/python -m ui_server.server --port 8765 --run-timeout 900
+.venv/Scripts/python -m ui_server.server --port 8765 --max-concurrent-runs 1
 ```
 
 ---
@@ -404,6 +412,142 @@ The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-le
 
 ---
 
+## Lean 4 + Mathlib in Docker: how to build and check a file
+
+### R-Lean architecture
+
+The policy behind this is `docs/VERDICT_POLICY.md`'s **R-Lean** rule — change it there first, this is a summary.
+
+**Wired in all three main pipelines: REG, CFL, DCFL** (LL(k) is not formalized). Each has the same loop:
+statement from the IR (`lib/lean_ir.py`, code, never the LLM) -> `lean_formalizer`/`formalizer` agent writes the proof
+body -> `compose_lean_file` + `check_lean_file` (Docker, up to `MAX_FORMALIZE_ITERATIONS` = 3 rounds, errors fed back,
+statement never changes) -> gate. Entry points: `agent_system/graph.py` (`formalize_node` + `assemble_result_node`),
+`cfl_system/orchestrator.py` and `dcfl_system/orchestrator.py` (`lean_formalize_node`; in CFL it runs after the
+Markdown `formalize_node`, which is a separate, Lean-free step). A `proved` result raises trust to `verified`
+(0.98) and can flip the verdict in both directions. The step is off by default: `--formalize` or
+`TFL_FORMALIZATION=1`; the result is in `result["formalization"]` (the CFL/DCFL renderers do not show it yet).
+
+**Separate entry over a finished run** (`agent_system/lib/formalize_run.py`, thin wrappers
+`python -m agent_system.formalize` / `cfl_system.formalize` / `dcfl_system.formalize <run_dir>`; the "Formalize" button
+of TFL Lab calls it). Input: a run directory with `input.json` and `<stem>_result.json`. The statement is rendered
+from the IR for the result's verdict (or `--direction`); attempt 1 runs on `--first-model` (default Opus 5.5), up to
+`--retries` (default 2) corrections on `--retry-model` (default Sonnet 5.5) get the Lean errors and the previous
+body; both with `--max-tokens 128000`. A reply cut off at the limit without a proof body earns exactly one Sonnet
+"output ONLY the proof body" attempt, then the loop stops. The `formalization` block is appended to
+`<stem>_result.{json,md,html}` and a `proved` block updates verdict/confidence through the system's own R-Lean gate;
+progress and running cost go to `progress.jsonl` / `partial_result.json` (`agent_system/lib/progress.py`).
+Idempotent: an already `proved` run is a no-op (`--force` re-runs from the saved pre-Lean values), a failed block is
+replaced by the next run. `--estimate` prints the cost estimate (min / expected / hard maximum) without any call;
+`--live` calls the API (spends money, only on request), `--mock DIR` replays scripted proof bodies. Defaults live in
+each `config.py` (`MODELS["formalizer_retry"]` / `["lean_formalizer_retry"]`, `FORMALIZE_RETRIES`,
+`FORMALIZE_MAX_TOKENS`). Whether the Lean step also runs *inside* a pipeline run stays opt-in (`--formalize`).
+
+- **Statement is code, proof body is the LLM.** The Lean file's theorem *statement* (alphabet type, language
+  definition, the claim itself) is generated **deterministically from the IR** by
+  `agent_system/lib/lean_ir.py` (and the `cfl_system`/`dcfl_system` wrappers around it) — never by the LLM. The
+  `formalizer` agent only fills in the proof *body* between the statement and its final token. This exists because
+  an LLM asked to write the whole file can "prove" `theorem … : True := by sorry` and have it technically compile;
+  a code-generated statement makes that impossible.
+- **Harness.** `agent_system/lib/type_check.py` composes the file (`compose_lean_file`), runs it inside the
+  `tfl-lean4` Docker image (`check_lean_file`, `lake env lean --json`), and classifies the result:
+  - `proved` — compiles, no errors, no `sorryAx`, and `#print axioms` is a subset of
+    `{propext, Classical.choice, Quot.sound}` (`native_decide`/`ofReduceBool` are rejected) — **only this status
+    raises trust to `verified`** (confidence 0.98) for the proved side of the claim.
+  - `has_sorry`, `error`, `timeout`, `unavailable` — evidence for neither side (R1); the pipeline's verdict falls
+    back to whatever the non-Lean agents established.
+- **What gets formalized.** REG statements are built on **Mathlib** (`Language.IsRegular`, `DFA.pumping_lemma`,
+  Myhill-Nerode). CFL and DCFL statements are built on **[langlib](https://github.com/nielstron/langlib)**
+  (`is_CF`/`is_DCF`, the pumping lemma, DCFL complement/intersection-with-REG closure, `DCFL ⊆ CFL`). The IR->Lean
+  translator covers: exponent notation (with a decidable companion `Bool` def), reversals/palindromes, grammars
+  (`g.language`, also `g.language ⊓ {w | filter}`), and predicate filters; a `natural_language_filter` or an
+  unsupported predicate gives `None` (`not_formalizable`, no evidence either way). **LL(k) is not formalized.**
+  Methods without Lean lemmas in the image (closure with a regular language, Parikh, substitution) are proved
+  directly or not at all.
+- **Reference proofs** (`agent_system/docker/tfl_lean/TflLean/Examples/`, each is exactly
+  `compose_lean_file(render_statement(IR, direction), body)` and compiles to `proved`, replay OK; checked by
+  `agent_system/tests/test_lean_examples.py`, `cfl_system/tests/test_lean_examples_cfl.py`,
+  `dcfl_system/tests/test_lean_examples_dcfl.py`, Docker-conditional):
+  `EvenA_Regular`, `AnBnNotRegular` (REG); `AnBnCnNotCF`, `AnBnAnNotCF` (via the closure lemma
+  `TflLean.not_isContextFree_of_slice`), `EvenPalGrammar_CF` (CFL); `AnBnCm_DCF`, `AnBnCmPos_DCF`,
+  `AiBjCkNeq_NotDCF` (DCFL; the non-DCFL direction goes through `TflLean.not_isDCF_of_not_isContextFree`).
+  Shared lemmas: `TflLean/Lemmas.lean`.
+  Known gaps: no compiled worked example for the *positive* CFL direction beyond `EvenPalGrammar_CF`; the
+  exam_04 grammar case (DCFL by a grammar) has no grammar->DPDA bridge in the image, so the mock is an honest
+  refusal; nested exponents (`a^(2^n)`) are not translated.
+- **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0` (resolves to commit
+  `db584cd6d46c92f209a44c0f1c829460d327499d`), langlib pinned at commit
+  `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — verified against langlib's *own* `lake-manifest.json` at that
+  commit, which resolves Mathlib to the exact same `v4.33.0`/`db584cd6...`, so there's nothing for `lake` to
+  arbitrate. Image build is checkpoint-layered (`elan default` → `cache get` → build `TflLean.Basic` → build
+  `TflLean.Langlib` → `lake build`); measured this round (BuildKit, pinned `lake-manifest.json`, elan/toolchain
+  layers warm from a prior build): `lake exe cache get` ~7 min, `lake build TflLean.Basic` ~10s,
+  `lake build TflLean.Langlib` ~67s, final `lake build` ~6s, image export ~8 min — **~20 minutes** total for the
+  Lean-project layers; a fully cold build (toolchain + `apt-get` too) adds a few more minutes. Final image
+  **~16 GB**. A file that does `import TflLean` and `#check`s `Language.IsRegular`, `DFA.pumping_lemma`,
+  `CF_pumping`, `Language.IsContextFree.ogdens_lemma` type-checks in a few seconds via `lake env lean` (not
+  minutes) — Mathlib and the langlib modules `TflLean.Langlib` imports are pre-built .olean, not recompiled per
+  check.
+- **Where each step runs.** Type checking (`docker run ... lake env lean`) is **local, in Docker**, and is part of
+  the normal `--formalize` pipeline run — no API cost. Writing the proof body is an LLM call and, like every other
+  live call in this repo, happens **only on explicit request with an agreed budget**; mock mode (canned proof
+  bodies) is the default everywhere else, including in `tfl-eval` and CI.
+
+### The `tfl-lean4` Docker image
+
+`agent_system/lib/type_check.py` (via `agent_system/docker/run_check.sh`, or directly with `docker run`)
+type-checks Lean 4 code inside the `tfl-lean4` Docker image rather than requiring a local Lean install. The image
+bundles a small pinned lake project, `agent_system/docker/tfl_lean/` (`lakefile.toml`, `lean-toolchain` =
+`leanprover/lean4:v4.33.0`, Mathlib pinned to tag `v4.33.0`, and
+[langlib](https://github.com/nielstron/langlib) pinned by commit `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — its
+own lakefile requires the same Mathlib tag, so there's no transitive-revision conflict to resolve). `TflLean/Basic.lean`
+imports `Mathlib.Computability.{DFA, RegularExpressions, MyhillNerode, ContextFreeGrammar}` (what the formalizer
+prompt and the LL(k) live-run Lean examples under `ll_system/examples/live_outputs/*.lean` depend on);
+`TflLean/Langlib.lean` imports langlib's `Classes.Regular`/`Classes.ContextFree`/`Classes.DeterministicContextFree`
+definitions, `Classes.ContextFree.Basics.{Pumping,Ogden}` (`CF_pumping`, `Language.IsContextFree.ogdens_lemma`),
+`Classes.DeterministicContextFree.Closure.{Complement,IntersectionRegular}`, and the `AnBnCn` / `AnBn` worked
+examples — what the CFL/DCFL formalizer prompts depend on. Built with `lake exe cache get` (Mathlib's `.olean` cache)
++ `lake build` per module, in checkpoint layers, so Mathlib's cache is baked into the image and langlib's few
+required modules are pre-compiled, instead of either being recompiled on every check.
+
+```bash
+# Build the image (native on both amd64 and arm64 — e.g. Apple Silicon / Windows-on-ARM under
+# Docker Desktop's WSL2 backend build Lean natively, no emulation). Downloads the Lean 4.33 toolchain,
+# Mathlib's precompiled .olean cache, and langlib's source, per the pinned tfl_lean/lake-manifest.json.
+# Measured this round on a normal connection: ~20 min for the Lean-project layers (cache get + builds +
+# image export), ~16 GB final image; a throttled connection is proportionally longer (see the note below).
+docker compose -f agent_system/docker/docker-compose.yml build lean4
+# or: agent_system/docker/build.sh (bash) / build.ps1 (PowerShell)
+
+# Check a single file (Mathlib + langlib on LEAN_PATH via `lake env`, run from the tfl_lean project dir):
+agent_system/docker/run_check.sh path/to/file.lean          # bash
+# PowerShell / Windows Git Bash: pass MSYS_NO_PATHCONV=1 (or run from PowerShell directly) —
+# otherwise Git Bash rewrites /home/lean/... container paths in the docker run arguments.
+```
+
+Notes:
+- `agent_system/lib/type_check.py`'s `check_lean()` runs `docker run ... -w /home/lean/tfl_lean tfl-lean4 lake env lean /home/lean/check.lean`
+  and is a no-op (`status: "skipped"`) when Docker or the image isn't available — mock-mode tests stay green without it.
+- Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
+  leading UTF-8 BOM. PowerShell's `Set-Content -Encoding utf8` adds one; use `-Encoding utf8NoBOM` (or write with a
+  tool that doesn't add a BOM) instead.
+- `agent_system/docker/tfl_lean/lake-manifest.json` **is committed**: `Dockerfile.lean4` `COPY`s it in and runs
+  `lake exe cache get` directly (no `lake update`), so every build fetches the exact pinned commits without a
+  network-based version-resolution step. It was regenerated this round on a normal-bandwidth connection (`lake
+  update` inside a container, then `docker cp tfl_lean/lake-manifest.json` out) — a prior pin on a throttled
+  connection (~50-70 KB/s to `releases.lean-lang.org` and `github.com`) had left it uncommitted because producing
+  it required downloading the Lean toolchain first.
+- To refresh the pinned Mathlib or langlib revision: update `rev` in `agent_system/docker/tfl_lean/lakefile.toml`,
+  run `lake update` inside a container built from the *previous* image (or any Lean-4.33-compatible toolchain) to
+  regenerate `lake-manifest.json`, `docker cp` it out and commit it, then rebuild the image.
+- langlib's own source files declare `module` and import each other with `public import` — Lean 4's newer module
+  system, not just plain `import`. This works transparently from our side: `TflLean/Langlib.lean` is an ordinary
+  (non-`module`) file and its plain `import Langlib.Classes....` statements resolve langlib's public API — Ogden's
+  lemma and the pumping lemma included — with no special handling needed, and `lake env lean` on a downstream file
+  that only does `import TflLean` sees the same declarations. No incompatibility found; this was the one part of
+  the pin worth calling out since it's a newer Lean feature than the rest of this project's Lean usage.
+
+---
+
 ## `tfl-eval` — accuracy and calibration over an eval set
 
 `tfl_eval/` runs the eval set described in [`docs/EVAL_SET.md`](docs/EVAL_SET.md) (74 tasks across all four
@@ -434,7 +578,8 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 
 - **Python 3.12+** — `anthropic>=0.77`, `langgraph`, `python-dotenv` (declared in `pyproject.toml`), `pytest` for tests
 - **Graphviz `dot` binary** — rendering PDA state diagrams as inline SVG in HTML reports. Falls back to [Mermaid](https://mermaid.js.org/) via CDN if `dot` is absent. See [`cfl_system/CLAUDE.md`](cfl_system/CLAUDE.md) for install notes.
-- **Lean 4** (optional) — REG pipeline can emit Lean stubs via `agent_system/templates/*.lean`.
+- **Lean 4 + Docker** (optional) — `--formalize` type-checks generated proofs against the `tfl-lean4` image
+  (Lean/Mathlib v4.33.0 + langlib); see "R-Lean architecture" above.
 - **Anthropic API key** in `.env` for `--live` runs. Offline / mock mode needs no key.
 
 ---
@@ -442,7 +587,7 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 ## Design non-goals
 
 - **Not a solver for arbitrary undecidable questions.** All four pipelines assume the input is a well-posed problem from the exam problem set — the class being tested is decidable or admits a standard proof technique.
-- **Not a formal proof assistant.** Proofs are natural-language Markdown; the `proof_checker` agent is an independent LLM audit, not a machine-checked verification. Lean stubs (REG only) are the closest this project gets to machine-checked proofs, and even those are opt-in.
+- **Not a formal proof assistant.** Proofs are natural-language Markdown; the `proof_checker` agent is an independent LLM audit, not a machine-checked verification. Lean proofs (REG, CFL, DCFL; `proved` only) are the closest this project gets to machine-checked proofs, and even those are opt-in.
 - **No multi-user state.** TFL Lab binds to `127.0.0.1` and has no auth. It is a single-user research tool.
 
 ---
@@ -455,4 +600,4 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 
 Built for the Theory of Formal Languages course at **МГТУ им. Н.Э. Баумана, ИУ-9**.
 
-Powered by [Claude](https://www.anthropic.com/claude) (Opus 5.5 / Sonnet 5 / Haiku 4.5) via the Anthropic API, orchestrated through [LangGraph](https://langchain-ai.github.io/langgraph/).
+Powered by [Claude](https://www.anthropic.com/claude) (Opus 5.5 / Sonnet 5.5 / Haiku 4.5) via the Anthropic API, orchestrated through [LangGraph](https://langchain-ai.github.io/langgraph/).
