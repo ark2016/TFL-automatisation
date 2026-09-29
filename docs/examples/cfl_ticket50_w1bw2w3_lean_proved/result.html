@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang='ru'><head><meta charset='utf-8'>
+<title>CFL — Результат анализа</title>
+<style>
+body{font-family:'Segoe UI',system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a;background:#fff}
+.s-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid #e0e0e0}
+.s-task{font-size:15px;line-height:1.6}
+.s-label-sm{font-size:12px;color:#888;margin-bottom:6px}
+.s-badge{font-size:12px;font-weight:600;padding:4px 14px;border-radius:6px;white-space:nowrap;flex-shrink:0}
+.s-reg,.verdict-cfl{background:#e8f5e9;color:#2e7d32}
+.s-nonreg,.verdict-non-cfl{background:#fce4ec;color:#c62828}
+.s-unknown,.verdict-unknown{background:#fff3e0;color:#e65100}
+.s-sec{font-size:16px;font-weight:600;margin:24px 0 10px;padding-top:16px;border-top:1px solid #eee}
+.s-sec:first-of-type{border-top:none;padding-top:0}
+.s-p{font-size:14px;line-height:1.75;margin:6px 0}
+.s-meta{font-size:12px;color:#666;margin:4px 0 10px}
+.s-step{display:flex;gap:10px;margin:10px 0}
+.s-n{min-width:22px;height:22px;border-radius:50%;background:#f5f5f5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#666;flex-shrink:0;margin-top:2px}
+.s-t{font-size:14px;line-height:1.7}
+.s-box{background:#f8f9fa;border-radius:6px;padding:12px 16px;margin:10px 0;font-size:13px;line-height:1.7}
+.s-mono{font-family:Consolas,'Courier New',monospace;font-size:13px}
+.s-tab{display:flex;gap:2px;margin:16px 0 12px;flex-wrap:wrap}
+.s-tab-btn{font-size:12px;padding:6px 14px;border-radius:6px 6px 0 0;background:#f5f5f5;color:#666;cursor:pointer;border:none;border-bottom:2px solid transparent;font-family:inherit}
+.s-tab-btn:hover{background:#eee}
+.s-tab-btn.active{background:#fff;color:#1a1a1a;border-bottom-color:#1976d2}
+.s-panel{display:none}.s-panel.active{display:block}
+.s-footer{display:flex;gap:16px;align-items:center;margin-top:20px;padding-top:14px;border-top:1px solid #eee;font-size:12px;color:#888;flex-wrap:wrap}
+.s-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.s-pass{background:#4caf50}.s-fail{background:#e53935}
+.s-pill{font-size:11px;padding:2px 8px;border-radius:6px;background:#e3f2fd;color:#1565c0}
+.s-banner-ok{background:#e8f5e9;border-left:4px solid #2e7d32;padding:10px 14px;border-radius:4px;margin:12px 0;font-size:13px}
+.s-banner-warn{background:#fff3e0;border-left:4px solid #f57c00;padding:10px 14px;border-radius:4px;margin:12px 0;font-size:13px}
+.s-main-proof{background:#f1f8e9;border-left:4px solid #4caf50;padding:14px 18px;border-radius:4px;margin:14px 0}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px}
+th,td{border:1px solid #e0e0e0;padding:6px 10px;text-align:left}
+th{background:#f5f5f5;font-weight:600}
+.s-pda-table td,.s-pda-table th{padding:4px 8px;font-size:12px}
+.s-md-table{margin:10px 0;font-size:13px}
+.s-md-table th{background:#f5f5f5;font-weight:600;text-align:left}
+.s-md-table td,.s-md-table th{padding:6px 10px;border:1px solid #e0e0e0}
+.s-justification{margin-top:6px;color:#666;font-size:13px}
+.s-step p{margin:6px 0}
+.s-diagram{background:#fafafa;border:1px solid #e8e8e8;border-radius:6px;padding:14px;margin:10px 0;overflow-x:auto;text-align:center}
+.s-diagram svg{max-width:100%;height:auto}
+.mermaid{background:#fafafa;border-radius:6px;padding:12px;margin:10px 0;overflow-x:auto;text-align:center}
+</style></head><body>
+<div class="s-head">
+  <div>
+    <div class="s-label-sm">Задача (анализ КС-свойства)</div>
+    <div class="s-task">Проверить язык на контекстную свободу: L = {w₁ b w₂ w₃ | |w₁| = |w₂| ∧ |w₁| = |w₃| ∧ w₂ ∈ (ab)*}, w₁, w₃ ∈ {a,b}*. (Билет №50, ИУ-9)</div>
+  </div>
+  <span class="s-badge s-nonreg verdict-non-cfl">НЕ КС</span>
+</div>
+<div class="s-banner-ok"><strong>✓ Доказательство прошло независимую проверку верификатором</strong></div>
+<div class="s-sec">Вердикт-гейт</div>
+<div class="s-p"><strong>Доверие к вердикту:</strong> проверено полностью</div>
+<div class="s-sec">Основное доказательство</div>
+<div class="s-main-proof">
+<div class="s-p"><strong>Доказательство: L не является КС-языком</strong></div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t"><strong>Предположение</strong><p>Допустим, $L$ — КС-язык. Тогда по лемме Огдена существует константа $p &gt; 0$ со следующим свойством. Для любого слова $z \in L$, в котором отмечено не менее $p$ позиций, найдётся разбиение $z = u \cdot v \cdot w \cdot x \cdot y$, где $v \cdot x$ содержит хотя бы одну отмеченную позицию, $v \cdot w \cdot x$ содержит не более $p$ отмеченных позиций и $u \cdot v^i \cdot w \cdot x^i \cdot y \in L$ для всех $i \geq 0$.</p>
+<div class="s-justification"><em><p>Лемма Огдена для КС-языков; рассуждение ведётся от противного.</p></em></div>
+</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t"><strong>Вспомогательное наблюдение о структуре слов из L</strong><p>Пусть $t \in L$ и $n = |w_1|$. Тогда $|t| = 3n + 1$, поэтому $n = (|t| - 1)/3$ однозначно определяется длиной слова, а значит, однозначно определено и разбиение $t = w_1 \cdot b \cdot w_2 \cdot w_3$. Так как $w_2 \in (ab)^*$ и $|w_2| = n$, число $n = 2k$ чётно. Отсюда $|t| \equiv 1 \pmod 6$.</p><p>В 0-индексации получаем критерий: $t \in L \iff |t| = 3n+1$, $n = 2k$, $t[n] = b$ и $t[n+1..2n] = (ab)^k$. В частности, при $n \geq 2$ последний символ блока $w_2$ равен $b$, то есть $t[2n] = b$.</p>
+<div class="s-justification"><em><p>Из $|w_1| = |w_2| = |w_3| = n$ и $|b| = 1$ следует $|t| = 3n+1$. Слово из $(ab)^*$ имеет чётную длину и при непустоте оканчивается на $b$.</p></em></div>
+</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t"><strong>Выбор слова</strong><p>Выберем $z = a^{2p} \cdot b \cdot (ab)^p \cdot a^{2p}$, где $|z| = 6p + 1 \geq p$.</p><p>Позиции в 0-индексации:<br>- $0..2p-1$ — блок $a^{2p}$ (это $w_1$);<br>- $2p$ — средний символ $b$;<br>- $2p+1..4p$ — блок $(ab)^p$ (это $w_2$);<br>- $4p+1..6p$ — блок $a^{2p}$ (это $w_3$).</p><p>Примеры: при $p = 3$ получаем aaaaaababababaaaaaa, при $p = 4$ — aaaaaaaabababababaaaaaaaa.</p><p>**Обоснование принадлежности:** положим $w_1 = a^{2p}$, $w_2 = (ab)^p$, $w_3 = a^{2p}$. Тогда $|w_1| = |w_2| = |w_3| = 2p$ и $w_2 \in (ab)^*$, следовательно $z \in L$.</p>
+<div class="s-justification"><em><p>Слово явно представлено в требуемом виде $w_1 \cdot b \cdot w_2 \cdot w_3$, и все условия языка выполнены.</p></em></div>
+</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t"><strong>Разметка позиций</strong><p>Отметим все $6p+1$ позиций слова $z$ (позиции $0, 1, \ldots, 6p$). При такой разметке условие «$v \cdot w \cdot x$ содержит не более $p$ отмеченных позиций» означает $|v \cdot w \cdot x| \leq p$. Условие «$v \cdot x$ содержит отмеченную позицию» означает $|v \cdot x| \geq 1$.</p>
+<div class="s-justification"><em><p>Разметка всех позиций — частный случай леммы Огдена, совпадающий с классической леммой Бар-Хиллеля. Ограничение $|v \cdot w \cdot x| \leq p$ нужно для анализа случаев.</p></em></div>
+</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t"><strong>Разбиение</strong><p>Рассмотрим произвольное разбиение $z = u \cdot v \cdot w \cdot x \cdot y$, где $|v \cdot w \cdot x| \leq p$ и $d = |v \cdot x| \geq 1$. Во всех случаях возьмём $i = 0$ и рассмотрим $z_0 = u \cdot w \cdot y$ длины $|z_0| = 6p + 1 - d$.</p>
+<div class="s-justification"><em><p>Лемма Огдена при полной разметке гарантирует существование такого разбиения. Чтобы получить противоречие, достаточно показать, что для любого такого разбиения $z_0 \notin L$.</p></em></div>
+</div></div>
+<div class="s-step"><div class="s-n">6</div><div class="s-t"><strong>Разбор случаев</strong><table class="s-md-table"><thead><tr><th>Случай</th><th>Расположение $v \cdot w \cdot x$</th><th>Накачанное слово ($i = 0$)</th><th>Почему $\notin L$</th></tr></thead><tbody><tr><td>1: $6 \nmid d$</td><td>любое, $|v \cdot w \cdot x| \leq p$</td><td>$z_0 = u \cdot w \cdot y$, $|z_0| = 6p+1-d$</td><td>По шагу 2 все слова $L$ имеют длину $\equiv 1 \pmod 6$. Так как $d \not\equiv 0 \pmod 6$, имеем $6p+1-d \not\equiv 1 \pmod 6$. При $p \leq 5$ возможен только этот случай, так как $1 \leq d \leq p &lt; 6$.</td></tr><tr><td>2: $d = 6e$, $e \geq 1$; все удалённые позиции (из $v$ и $x$) строго правее $2p-2e$</td><td>$v \cdot w \cdot x$ начинается правее позиции $2p-2e$</td><td>$z_0$ длины $6(p-e)+1$, $n&#39; = 2(p-e)$</td><td>Для $z_0 \in L$ нужно $z_0[n&#39;] = z_0[2p-2e] = b$. Позиции левее удалённых не сдвигаются, поэтому $z_0[2p-2e] = z[2p-2e]$. Так как $0 \leq 2p-2e &lt; 2p$, это позиция блока $a^{2p}$, и там стоит $a \neq b$.</td></tr><tr><td>3: $d = 6e$, $e \geq 1$; $v$ или $x$ содержит позицию $\leq 2p-2e$</td><td>так как $|v \cdot w \cdot x| \leq p$, весь $v \cdot w \cdot x$ лежит в позициях $\leq 3p-2e-1$</td><td>$z_0$ длины $6(p-e)+1$, $n&#39; = 2(p-e)$; блок $w_2&#39;$ занимает позиции $2p-2e+1..4p-4e$</td><td>Так как $6e \leq p$, имеем $k&#39; = p-e \geq 1$, и для $z_0 \in L$ нужно $z_0[2n&#39;] = z_0[4p-4e] = b$. Все удалённые позиции меньше $3p-2e &lt; 4p+2e$, поэтому $z_0[4p-4e] = z[4p-4e+6e] = z[4p+2e]$. Из $1 \leq 2e \leq p/3$ следует $4p+1 \leq 4p+2e \leq 6p$, то есть это позиция блока $w_3 = a^{2p}$, и там стоит $a \neq b$.</td></tr></tbody></table><p><br>**Полнота разбора:** если $6 \nmid d$, работает случай 1. Если $6 \mid d$, то либо все удалённые позиции правее $2p-2e$ (случай 2), либо хотя бы одна из них $\leq 2p-2e$ (случай 3). Эти варианты исчерпывают все возможности.</p>
+<div class="s-justification"><em><p>В каждом случае используется критерий принадлежности из шага 2: длина $\equiv 1 \pmod 6$, символ $b$ на позиции $n&#39;$ и символ $b$ на позиции $2n&#39;$. Позиции левее удалённых символов не меняются, а позиции правее всех удалённых сдвигаются ровно на $d = 6e$.</p></em></div>
+</div></div>
+<div class="s-step"><div class="s-n">7</div><div class="s-t"><strong>Заключение</strong><p>Во всех случаях разбиения $z = u \cdot v \cdot w \cdot x \cdot y$, удовлетворяющего условиям леммы Огдена, слово $u \cdot v^0 \cdot w \cdot x^0 \cdot y \notin L$. Это противоречит лемме Огдена. Следовательно, $L$ **не является КС-языком**. $\blacksquare$</p><p>*Замечание.* Рассуждающий агент также указал альтернативный путь: пересечение с регулярным языком $R = a^+ \cdot bb \cdot (ab)^+ \cdot b \cdot a^+$ и применение леммы о накачке к $L \cap R$.</p>
+<div class="s-justification"><em><p>Предположение о контекстной свободе $L$ привело к противоречию с необходимым условием леммы Огдена.</p></em></div>
+</div></div>
+<div class="s-p"><strong>Заключение:</strong> Язык $L = \{ w_1 \cdot b \cdot w_2 \cdot w_3 \mid |w_1| = |w_2| = |w_3|,\ w_2 \in (ab)^* \}$ не является контекстно-свободным. В доказательстве использована лемма Огдена с разметкой всех позиций (что равносильно лемме Бар-Хиллеля) на слове $a^{2p} \cdot b \cdot (ab)^p \cdot a^{2p}$ при $i = 0$. Доказательство изложено по аргументации специалиста; независимая автоматическая проверка не проводилась.</div>
+</div>
+<div class="s-sec">Методы специалистов</div>
+<div class="s-tab">
+  <button class="s-tab-btn active" onclick="showTab(0)">Лемма Бар-Хиллеля</button>
+  <button class="s-tab-btn" onclick="showTab(1)">Лемма Огдена</button>
+  <button class="s-tab-btn" onclick="showTab(2)">Теорема Париха</button>
+  <button class="s-tab-btn" onclick="showTab(3)">КС-грамматика</button>
+  <button class="s-tab-btn" onclick="showTab(4)">МП-автомат</button>
+  <button class="s-tab-btn" onclick="showTab(5)">Декомпозиция</button>
+  <button class="s-tab-btn" onclick="showTab(6)">Замыкание</button>
+  <button class="s-tab-btn" onclick="showTab(7)">Interchange-лемма</button>
+  <button class="s-tab-btn" onclick="showTab(8)">Гомоморфизм</button>
+</div>
+<div class="s-panel active" id="panel-0">
+<div class="s-meta">вердикт: <code>non_cfl</code> · статус: <code>success</code> · доверие: <code>опровергнуто</code> · уверенность: 0.92</div>
+<div class="s-p">Выбранное слово: <span class="s-mono">z = a^{2p} b (ab)^p a^{2p}</span></div>
+<div class="s-p"><strong>Принадлежность z ∈ L:</strong> Положим n = 2p: w₁ = a^{2p} ∈ {a,b}*, затем маркер b, w₂ = (ab)^p ∈ (ab)*, w₃ = a^{2p} ∈ {a,b}*. Имеем |w₁| = |w₂| = |w₃| = 2p, значит z ∈ L. Важное наблюдение: у любого слова из L длина равна 3n+1, где n = |w₂| чётно (так как w₂ ∈ (ab)*), т.е. длина ≡ 1 (mod 6). Кроме того, n однозначно определяется длиной слова, поэтому разбиение единственно: символ на позиции n+1 обязан быть b, а позиции n+2..2n+1 образуют (ab)^{n/2}; в частности, при n ≥ 2 символ на позиции 2n+1 (последний символ w₂) равен b.</div>
+<div class="s-p"><strong>Длина:</strong> |z| = 2p + 1 + 2p + 2p = 6p + 1 &gt;= p</div>
+<div class="s-p"><strong>Разбор случаев:</strong></div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t"><strong>|vx| не делится на 6 (при любом расположении vwx) <em>(произвольное (блок a^{2p}, средний блок M = b(ab)^p, последний блок a^{2p} или их границы))</em></strong><br>Накачанное слово: <span class="s-mono">uwy, длина 6p+1-|vx|</span> (i = 0)<br>Длина любого слова из L сравнима с 1 по модулю 6. Длина uwy равна 6p+1-|vx| ≢ 1 (mod 6), так как 6 ∤ |vx|. Следовательно, uwy ∉ L. (При p = 3, 4 всегда 1 &lt;= |vx| &lt;= 4, так что этот случай исчерпывает все разбиения.)</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t"><strong>|vx| = 6m, m &gt;= 1; vwx целиком в первом блоке a^{2p} <em>(первый a-блок (позиции 1..2p))</em></strong><br>Накачанное слово: <span class="s-mono">a^{2p-6m} b (ab)^p a^{2p}, длина 6(p-m)+1</span> (i = 0)<br>Для uwy длины 3n&#x27;+1 должно быть n&#x27; = 2p-2m, и последний символ w₂ стоит на позиции 2n&#x27;+1 = 4p-4m+1 и обязан быть b. Последний блок a^{2p} не затронут и занимает позиции 4p-6m+2..6p-6m+1; так как 4p-6m+2 &lt;= 4p-4m+1 (ибо 2m &gt;= 1), на позиции 4p-4m+1 стоит a. Противоречие, uwy ∉ L.</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t"><strong>|vx| = 6m, m &gt;= 1; vwx пересекает границу первого a-блока и среднего блока M = b(ab)^p <em>(граница a^{2p} | b(ab)^p)</em></strong><br>Накачанное слово: <span class="s-mono">uwy = a^{2p-α} M&#x27; a^{2p}, где из хвоста первого блока и начала M удалено всего 6m символов; длина 6(p-m)+1</span> (i = 0)<br>Так как |vwx| &lt;= p &lt; |M| = 2p+1, vwx не достигает последнего блока a^{2p}, он сохраняется и занимает последние 2p позиций: 4p-6m+2..6p-6m+1. При n&#x27; = 2p-2m позиция 2n&#x27;+1 = 4p-4m+1 попадает в этот блок (4p-6m+2 &lt;= 4p-4m+1), там стоит a, а должен стоять последний символ w₂ = (ab)^{p-m}, т.е. b. Значит uwy ∉ L.</div></div>
+<div class="s-step"><div class="s-n">4</div><div class="s-t"><strong>|vx| = 6m, m &gt;= 1; vwx целиком внутри среднего блока M = b(ab)^p <em>(средний блок (позиции 2p+1..4p+1))</em></strong><br>Накачанное слово: <span class="s-mono">a^{2p} M&#x27; a^{2p}, где |M&#x27;| = 2p+1-6m; длина 6(p-m)+1</span> (i = 0)<br>Последний блок a^{2p} не затронут и занимает позиции 4p-6m+2..6p-6m+1. При n&#x27; = 2p-2m позиция 4p-4m+1 (конец w₂) лежит в нём, так что там a вместо требуемого b. uwy ∉ L. (Аналогично, первый блок a^{2p} тоже цел, и позиция маркера n&#x27;+1 = 2p-2m+1 &lt;= 2p содержит a вместо b.)</div></div>
+<div class="s-step"><div class="s-n">5</div><div class="s-t"><strong>|vx| = 6m, m &gt;= 1; vwx пересекает границу среднего блока M и последнего a-блока <em>(граница b(ab)^p | a^{2p})</em></strong><br>Накачанное слово: <span class="s-mono">uwy = a^{2p} M&#x27; a^{2p-β}, удалено 6m символов из конца M и начала последнего блока; длина 6(p-m)+1</span> (i = 0)<br>Так как |vwx| &lt;= p &lt; |M| = 2p+1, vwx не касается первого блока a^{2p}, он сохраняется на позициях 1..2p. При n&#x27; = 2p-2m маркер b должен стоять на позиции n&#x27;+1 = 2p-2m+1 &lt;= 2p-1, но там стоит a. Следовательно, uwy ∉ L.</div></div>
+<div class="s-step"><div class="s-n">6</div><div class="s-t"><strong>|vx| = 6m, m &gt;= 1; vwx целиком в последнем блоке a^{2p} <em>(последний a-блок (позиции 4p+2..6p+1))</em></strong><br>Накачанное слово: <span class="s-mono">a^{2p} b (ab)^p a^{2p-6m}, длина 6(p-m)+1</span> (i = 0)<br>Первый блок a^{2p} не затронут. При n&#x27; = 2p-2m позиция маркера n&#x27;+1 = 2p-2m+1 &lt;= 2p содержит a, а должна содержать b. uwy ∉ L.</div></div>
+<div class="s-box"><strong>Заключение.</strong> Любое слово из L имеет длину 3n+1 с чётным n, причём разбиение w₁ b w₂ w₃ однозначно определяется длиной: на позиции n+1 стоит b, а w₂ = (ab)^{n/2} заканчивается символом b на позиции 2n+1. Для произвольного p &gt;= 1 возьмём z = a^{2p} b (ab)^p a^{2p} ∈ L, |z| = 6p+1 &gt;= p. Пусть z = uvwxy, |vwx| &lt;= p, |vx| &gt;= 1. Если 6 ∤ |vx|, то при i = 0 длина uwy не сравнима с 1 по модулю 6, и uwy ∉ L. Если |vx| = 6m, то при i = 0 новое n&#x27; = 2p-2m; поскольку |vwx| &lt;= p &lt; 2p+1, vwx не может задеть оба крайних блока a^{2p}: если цел последний блок, то позиция 2n&#x27;+1 (конец w₂) попадает в него и содержит a вместо b; если цел первый блок, то позиция маркера n&#x27;+1 &lt;= 2p содержит a вместо b. Во всех случаях uv⁰wx⁰y ∉ L. По лемме о накачке для КС-языков (лемма Бар-Хиллеля) язык L = {w₁ b w₂ w₃ | |w₁| = |w₂| = |w₃|, w₂ ∈ (ab)*} не является контекстно-свободным.</div>
+</div>
+<div class="s-panel" id="panel-1">
+<div class="s-meta">вердикт: <code>non_cfl</code> · статус: <code>success</code> · доверие: <code>проверено выборочно</code> · уверенность: 0.90</div>
+<div class="s-p">Выбранное слово: <span class="s-mono">z = a^{2p} b (ab)^p a^{2p}</span></div>
+<div class="s-p"><strong>Принадлежность z ∈ L:</strong> Положим w₁ = a^{2p}, средний символ b, w₂ = (ab)^p, w₃ = a^{2p}. Тогда |w₁| = |w₂| = |w₃| = 2p и w₂ ∈ (ab)*, значит z ∈ L. Длина |z| = 6p+1. Важное наблюдение: для любого слова t ∈ L имеем |t| = 3n+1, где n = |w₁|, поэтому n однозначно определяется длиной слова. Следовательно, разбиение однозначно: t ∈ L ⇔ |t| = 3n+1, n = 2k чётно, t[n] = b и t[n+1..2n] = (ab)^k (0-индексация). В частности, |t| ≡ 1 (mod 6) и последний символ блока w₂, т.е. t[2n], обязан быть b.</div>
+<div class="s-p"><strong>Разбор случаев:</strong></div>
+<div class="s-step"><div class="s-n">1</div><div class="s-t"><strong>d = |vx| не делится на 6 <em>(любое положение vwx, |vwx| ≤ p)</em></strong><br>Накачанное слово: <span class="s-mono">uwy, длина 6p+1−d</span> (i = 0)<br>Все слова L имеют длину 3n+1 при чётном n, т.е. ≡ 1 (mod 6). Так как d ≢ 0 (mod 6), то 6p+1−d ≢ 1 (mod 6), и uwy ∉ L. (При p ≤ 5 это единственный возможный случай, т.к. 1 ≤ d ≤ p &lt; 6.)</div></div>
+<div class="s-step"><div class="s-n">2</div><div class="s-t"><strong>d = 6e (e ≥ 1) и все удалённые позиции (из v и x) лежат строго правее позиции 2p−2e <em>(vwx начинается правее позиции 2p−2e (может задевать конец w₁, среднее b, w₂, w₃))</em></strong><br>Накачанное слово: <span class="s-mono">z₀ = uwy длины 6(p−e)+1, n&#x27; = 2(p−e)</span> (i = 0)<br>Для z₀ ∈ L необходимо z₀[n&#x27;] = z₀[2p−2e] = b. Но все позиции левее удалённых не сдвигаются, поэтому z₀[2p−2e] = z[2p−2e] = a (так как 0 ≤ 2p−2e &lt; 2p, это блок a^{2p}). Значит z₀ ∉ L.</div></div>
+<div class="s-step"><div class="s-n">3</div><div class="s-t"><strong>d = 6e (e ≥ 1) и v или x содержит позицию ≤ 2p−2e <em>(vwx задевает позицию ≤ 2p−2e; т.к. |vwx| ≤ p, весь vwx лежит в позициях ≤ 3p−2e−1)</em></strong><br>Накачанное слово: <span class="s-mono">z₀ = uwy длины 6(p−e)+1, n&#x27; = 2(p−e), блок w₂&#x27; занимает позиции 2p−2e+1 .. 4p−4e</span> (i = 0)<br>Для z₀ ∈ L необходимо, чтобы последний символ w₂&#x27; был b: z₀[2n&#x27;] = z₀[4p−4e] = b (k&#x27; = p−e ≥ 1, т.к. 6e ≤ p). Все 6e удалённых позиций меньше 3p−2e &lt; 4p+2e, поэтому z₀[4p−4e] = z[4p−4e+6e] = z[4p+2e]. Так как 4p+1 ≤ 4p+2e ≤ 6p (2e ≤ p/3), это позиция блока w₃ = a^{2p}, т.е. символ a ≠ b. Значит z₀ ∉ L.</div></div>
+<div class="s-box"><strong>Заключение.</strong> Предположим, что L контекстно-свободен, и пусть p — константа из леммы Огдена. Возьмём z = a^{2p} b (ab)^p a^{2p} ∈ L и отметим все его позиции. Для любого разбиения z = uvwxy, где vx содержит отмеченную позицию и vwx содержит не более p отмеченных (т.е. |vwx| ≤ p), слово uv⁰wx⁰y ∉ L: либо его длина не сравнима с 1 по модулю 6, либо (при |vx| = 6e) на позиции среднего b оказывается a из w₁, либо на позиции последнего символа w₂ оказывается a из w₃. Противоречие с леммой Огдена. Следовательно, L = {w₁ b w₂ w₃ | |w₁| = |w₂| = |w₃|, w₂ ∈ (ab)*} не является контекстно-свободным языком. (Замечание: при отметке всех позиций рассуждение совпадает с классической леммой о накачке для КС-языков.)</div>
+</div>
+<div class="s-panel" id="panel-2">
+<div class="s-meta">статус: <code>success</code> · доверие: <code>не проверено</code> · уверенность: 0.00</div>
+<div class="s-p"><strong>Образ Париха Ψ(L):</strong> <span class="s-mono">Ψ(L) = {(k + s, 5k + 1 − s) : k ≥ 0, 0 ≤ s ≤ 4k} = {(A, B) : A + B = 6k + 1, k ≤ A ≤ 5k, k ≥ 0}</span></div>
+<div class="s-p"><strong>Полулинейность:</strong> да — значит необходимое условие КС выполнено</div>
+<div class="s-p"><strong>Представление:</strong> <span class="s-mono">L((0,1); (1,5), (2,4), (3,3), (4,2), (5,1)) = {(0,1) + n1(1,5) + n2(2,4) + n3(3,3) + n4(4,2) + n5(5,1) : ni ∈ N}</span></div>
+<div class="s-box"><strong>Обоснование.</strong><br><span style="white-space:pre-wrap">Алфавит Σ = {a, b}, векторы Париха имеют вид (|w|_a, |w|_b). Из ограничений w₂ ∈ (ab)* следует |w₂| = 2k, w₂ = (ab)^k. Тогда |w₁| = |w₃| = 2k, а m = b. Пусть w₁ содержит x букв &#x27;a&#x27; и 2k − x букв &#x27;b&#x27; (0 ≤ x ≤ 2k). Пусть w₃ содержит y букв &#x27;a&#x27; и 2k − y букв &#x27;b&#x27; (0 ≤ y ≤ 2k). Слово w₂ = (ab)^k даёт k букв &#x27;a&#x27; и k букв &#x27;b&#x27;. Разделитель m даёт одну букву &#x27;b&#x27;. Итого |w|_a = x + k + y и |w|_b = (2k − x) + 1 + k + (2k − y) = 5k + 1 − (x + y). Обозначим s = x + y. Поскольку w₁ и w₃ произвольны, s пробегает все значения от 0 до 4k. Значит, Ψ(L) = {(k + s, 5k + 1 − s) : k ≥ 0, 0 ≤ s ≤ 4k}. Проверим полулинейность. Каждое увеличение k на 1 добавляет к вектору (1 + t, 5 − t), где t ∈ {0, 1, 2, 3, 4} — вклад в s. Суммы k таких приращений дают ровно все s ∈ [0, 4k]. Поэтому Ψ(L) совпадает с линейным множеством с базой (0, 1) и периодами (1,5), (2,4), (3,3), (4,2), (5,1). Обратно, любая комбинация этих периодов с n₁ + … + n₅ = k даёт вектор (k + s, 5k + 1 − s) с 0 ≤ s ≤ 4k. Следовательно, Ψ(L) — линейное, а значит, полулинейное множество. Это согласуется с тем, что условие на Ψ(L) выразимо в арифметике Пресбургера. ограничений.инининейный — длины кратны 6k+1 с линейными неравенствами.).ммммутативный образ линеен, описывается арифметикой Пресбургера).,</span></div>
+</div>
+<div class="s-panel" id="panel-3">
+<div class="s-meta">статус: <code>failure</code> · уверенность: 0.00</div>
+<div class="s-p" style="color:#888">Грамматика не построена.</div>
+</div>
+<div class="s-panel" id="panel-4">
+<div class="s-meta">статус: <code>failure</code> · уверенность: 0.00</div>
+<div class="s-p" style="color:#888">МП-автомат не построен.</div>
+</div>
+<div class="s-panel" id="panel-5">
+<div class="s-meta">статус: <code>failure</code> · доверие: <code>не проверено</code> · уверенность: 0.10</div>
+<div class="s-p"><strong>Operation:</strong> concat</div>
+<div class="s-box"><span style="white-space:pre-wrap">Язык: L = {u b (ab)^k v : |u| = |v| = 2k, u, v ∈ {a,b}*}. Длина слова 6k+1 однозначно задаёт n = 2k, поэтому разбиение единственно. Проверены следующие попытки разложения.
+(1) Конкатенация L1·L2, где L1 = {u b (ab)^k : |u| = 2k} — КС-язык (S → xyS ab | b). Для хвоста v длины 2k нужна вторая независимая компонента, но её длина связана с тем же k. Любая L2 без этой связи (например, {a,b}*) даёт строгое надмножество L.
+(2) Вложенная порождающая схема: S → x S yz для пар (u, v), затем T → x T ab, T → b. Обозначим через m число шагов S, через m&#x27; — число шагов T. Тогда |u| = m + m&#x27;, |w2| = 2m&#x27;, |v| = 2m. Условие |u| = |w2| требует m = m&#x27;, а это вторая независимая проверка равенства. Грамматика её обеспечить не может.
+(3) Объединение и замыкание Клини не применимы: L не распадается на независимые части, и слова L не являются конкатенациями слов L.
+Более того, L не является КС-языком, что показывает лемма о накачке. Возьмём z = a^{2p} b (ab)^p b^{2p} ∈ L, z = uvxyz&#x27;, |vxy| ≤ p, |vy| = d ≥ 1. Если d не делится на 3, то длина uxz&#x27; не сравнима с 1 по модулю 3, и слово не в L. Пусть d делится на 3.
+Случай A: vxy не задевает блок b^{2p}. После выкачки новое n&#x27; = 2p − d/3. Тогда w3&#x27; целиком лежит в суффиксе b^{2p}. Слово w2&#x27; оканчивается на b^{d/3}, а перед блоком b стоит нетронутая буква b из (ab)^p. Значит, w2&#x27; содержит bb и не принадлежит (ab)*.
+Случай B: vxy задевает b^{2p}. Тогда префикс a^{2p} не тронут, а n&#x27; &lt; 2p. Позиция n&#x27;+1 содержит a вместо обязательной b.
+В обоих случаях uxz&#x27; ∉ L, поэтому L не КС.</span></div>
+<div class="s-box"><strong>Заключение.</strong> Разложить L через КС-замкнутые операции (объединение, конкатенацию, замыкание Клини, гомоморфизм, пересечение с регулярным языком) над КС-компонентами не удаётся. Язык требует одновременного равенства длин трёх блоков: |w1| = |w2| = |w3|, причём средний блок стоит в фиксированной позиции. Лемма о накачке (слово a^{2p} b (ab)^p b^{2p}) показывает, что L не является контекстно-свободным языком. Это согласуется с подсказкой классификатора (non_cfl).</div>
+</div>
+<div class="s-panel" id="panel-6">
+<div class="s-meta">вердикт: <code>non_cfl</code> · статус: <code>success</code> · доверие: <code>проверено выборочно</code> · уверенность: 0.88</div>
+<div class="s-box"><strong>Заключение.</strong> Возьмём регулярный язык R = a⁺bb(ab)⁺ba⁺ (задан регулярным выражением). Так как в L разбиение слова однозначно определяется длиной (|z| = 6k+1, w₂ занимает позиции 2k+2..4k+1), получаем L ∩ R = {a^{2k−1−2t} bb (ab)^{k+t+s} b a^{2k−1−2s} | k ≥ 1, t,s ≥ 0, t,s ≤ k−1}; в частности, у любого слова из L ∩ R длины N крайние a-блоки удовлетворяют 3i ≤ N−4 и 3l ≤ N−4. Для z = a^{2p−1}bb(ab)^p b a^{2p−1} ∈ L ∩ R при любом разбиении z = uvwxy с |vwx| ≤ p, |vx| ≥ 1 окно vwx не может задеть оба крайних a-блока, и при накачке с i = 0 длина уменьшается, а один из крайних блоков остаётся длины ≥ 2p−1, что нарушает соответствующее неравенство (или uwy выпадает из R). По лемме о накачке для КС-языков L ∩ R не является контекстно-свободным. Поскольку класс КС-языков замкнут относительно пересечения с регулярными языками, из контекстной свободы L следовала бы контекстная свобода L ∩ R — противоречие. Следовательно, L не является контекстно-свободным языком.</div>
+</div>
+<div class="s-panel" id="panel-7">
+<div class="s-meta">статус: <code>inconclusive</code> · доверие: <code>не проверено</code> · уверенность: 0.10</div>
+<div class="s-p"><strong>Contradiction:</strong> Не найдено</div>
+<div class="s-box"><strong>Заключение.</strong> Лемма об обмене неприменима по существу. Язык L = {u b (ab)^k v : |u| = |v| = 2k} задан над {a,b} (экзаменационный тип) и накладывает на u и v только ограничения по длине, поэтому условие (d) не создаёт жёсткости. Рекомендуется лемма о накачке, возможно после пересечения с регулярным языком a* b (ab)* b*. Например, слово a^{2p} b (ab)^p b^{2p}: накачка нарушает согласование длины префикса и суффикса со средним блоком (ab)^k. Также можно применить лемму Огдена с выделением позиций префикса a^{2p}.</div>
+</div>
+<div class="s-panel" id="panel-8">
+<div class="s-meta">вердикт: <code>non_cfl</code> · статус: <code>success</code> · доверие: <code>не проверено</code> · уверенность: 0.90</div>
+<div class="s-p"><strong>Morphism:</strong></div><pre class="s-mono" style="background:#f8f9fa;padding:8px;border-radius:4px;white-space:pre-wrap">{
+  &quot;domain_alphabet&quot;: [
+    &quot;x&quot;,
+    &quot;m&quot;,
+    &quot;y&quot;,
+    &quot;z&quot;
+  ],
+  &quot;codomain_alphabet&quot;: [
+    &quot;a&quot;,
+    &quot;b&quot;
+  ],
+  &quot;mapping&quot;: {
+    &quot;x&quot;: &quot;aaaaaa&quot;,
+    &quot;m&quot;: &quot;b&quot;,
+    &quot;y&quot;: &quot;ababab&quot;,
+    &quot;z&quot;: &quot;aaaaaa&quot;
+  }
+}</pre>
+<div class="s-box"><span style="white-space:pre-wrap">Все слова L имеют вид w₁ b (ab)^k w₃, где |w₁| = |w₃| = 2k. Определим гомоморфизм g: {x,m,y,z}* → {a,b}* так: g(x)=a⁶, g(m)=b, g(y)=(ab)³, g(z)=a⁶. Рассмотрим K = g⁻¹(L) ∩ x*my*z*. Слово x^p m y^s z^q отображается в a^{6p} b (ab)^{3s} a^{6q}.
+
+Вычислим, когда это слово лежит в L. Все b расположены в части b(ab)^{3s}. Поэтому «разделительный» b (стоящий после w₁) находится на позиции 6p+1+2t, где 0 ≤ t ≤ 3s. Тогда |w₁| = 6p+2t = 2k, откуда k = 3p+t.
+
+За разделителем идёт (ab)^{3s−t} a^{6q}. Блок w₂ = (ab)^k должен целиком уместиться в (ab)^{3s−t}. Если бы он заходил в a^{6q}, после a стояло бы a или конец слова, а не b. Отсюда k ≤ 3s−t.
+
+Далее w₃ = (ab)^{3s−t−k} a^{6q}, и |w₃| = 2k. Это даёт 6s − 4t − 6p + 6q = 6p + 2t, т.е. t = s + q − 2p. Условие t ≥ 0 равносильно q ≥ 2p − s. Условие k ≤ 3s − t равносильно 3p + 2t ≤ 3s, т.е. 2q ≤ p + s.
+
+Значит, K = {x^p m y^s z^q | 2p − s ≤ q, 2q ≤ p + s}. Проверка: при p=s=q=N слово a^{6N} b (ab)^{3N} a^{6N} ∈ L, так как w₁=a^{6N}, w₂=(ab)^{3N}, w₃=a^{6N}.</span></div>
+<div class="s-box"><strong>Заключение.</strong> КС-языки замкнуты относительно обратных гомоморфизмов и пересечения с регулярными языками. Если бы L был КС, то K = g⁻¹(L) ∩ x*my*z* тоже был бы КС. Однако по лемме о накачке (слово x^N m y^N z^N) K не является КС-языком. Противоречие. Следовательно, L не является контекстно-свободным языком.</div>
+</div>
+<div class="s-sec">Подсказки и наблюдения</div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Ключевой факт: длина слова из L равна 3n+1 с чётным n. Поэтому разбиение w₁ b w₂ w₃ однозначно определяется длиной, а все слова L имеют длину ≡ 1 (mod 6).</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Для экзамена удобнее всего прямая лемма о накачке на слове a^{2p} b (ab)^p a^{2p} с i = 0. Если 6 ∤ |vx|, ломается длина по модулю 6. Иначе нетронутый крайний блок из a попадает либо на позицию маркера b, либо на последнюю букву w₂.</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">У pumping_cfl неверный экземпляр при p=4: a⁸b(ab)⁵a⁸ (длина 27) ∉ L. Правильный экземпляр — aaaaaaaabababababaaaaaaaa (a⁸b(ab)⁴a⁸, длина 25). Само параметрическое рассуждение корректно.</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Альтернативные доказательства: пересечение с R = a⁺bb(ab)⁺ba⁺ (closure_reduction) и обратный гомоморфизм g(x) = a⁶, g(m) = b, g(y) = (ab)³, g(z) = a⁶ с условиями 2p−s ≤ q, 2q ≤ p+s (morphism).</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Встроенная накачка у decomposition (слово a^{2p} b (ab)^p b^{2p}) содержит пробел в случае A. Эскиз pda_builder ошибочно утверждает, что удаление одиночной b выводит слово из a*b(ab)*a*. На эти рассуждения опираться нельзя.</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Образ Париха полулинеен (линейное множество с базой (0,1) и периодами (1,5), …, (5,1)). Это не помогает доказать не-КС: нужны структурные методы.</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Лемма об обмене неприменима: на w₁ и w₃ наложены только ограничения по длине, поэтому условие взаимозаменяемости выполняется тривиально.</div></div>
+<div class="s-step"><div class="s-n">💡</div><div class="s-t">Структурно язык аналогичен {xyz : |x| = |y| = |z|} с фиксированным средним блоком: три связанных длины недоступны одному стеку.</div></div>
+<div class="s-footer">
+  <span>confidence: 0.98</span>
+  <span class="s-pill">9 агентов отработали</span>
+  <span style="display:flex;align-items:center;gap:5px"><span class="s-dot s-pass"></span>verified</span>
+</div>
+<script>
+function showTab(n){
+  document.querySelectorAll('.s-tab-btn').forEach((b,i)=>b.classList.toggle('active',i===n));
+  document.querySelectorAll('.s-panel').forEach((p,i)=>p.classList.toggle('active',i===n));
+  if(window.mermaid){try{window.mermaid.run({querySelector:'.s-panel.active .mermaid'});}catch(e){}}
+  if(window.renderMathInElement){try{window.renderMathInElement(document.querySelector('.s-panel.active'),{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false});}catch(e){}}
+}
+</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false});"></script>
+<div class="s-meta">Usage: 13 calls, 241429 tokens, estimated cost ≈ $2.3906</div>
+<section class="tfl-lean-formalization" style="max-width:960px;margin:24px auto;padding:16px 20px;border:1px solid #8884;border-radius:8px;font-family:system-ui,sans-serif">
+<h2 style="margin-top:0">Lean 4 formalization (R-Lean)</h2>
+<p>status: <b>proved</b> &middot; direction: <code>non_cfl</code> &middot; attempts: 1 &middot; cost: $1.5929</p>
+<h3>Statement (generated from the IR)</h3><pre style="overflow:auto"><code>import TflLean
+import Mathlib.Computability.ContextFreeGrammar
+import Langlib.Classes.ContextFree.Pumping.Pumping
+import Langlib.Classes.ContextFree.Basics.Ogden
+inductive Letter
+  | a | b
+  deriving DecidableEq, Repr
+def L : Language Letter := {x : List Letter | ∃ p_w1 p_m p_w2 p_w3 : List Letter, x = p_w1 ++ p_m ++ p_w2 ++ p_w3 ∧ (∀ ch ∈ p_m, ch = Letter.b) ∧ (p_m.length = 1) ∧ (p_w1.length = p_w2.length) ∧ (p_w1.length = p_w3.length) ∧ ((p_w2.length) % 2 = 0) ∧ (¬ ([Letter.a, Letter.a] &lt;:+: p_w2)) ∧ (¬ ([Letter.b, Letter.b] &lt;:+: p_w2)) ∧ ((p_w2.length = 0) ∨ ([Letter.a] &lt;+: p_w2))}
+theorem tfl_main : ¬ L.IsContextFree</code></pre>
+<h3>Proof body</h3><pre style="overflow:auto"><code>intro h
+  obtain ⟨p, hp⟩ := h.pumping
+  -- (ab)^q never contains [c,c]; neither does b(ab)^q.
+  have alt : ∀ q : ℕ, ∀ s t : List Letter, ∀ c : Letter,
+      s ++ [c, c] ++ t ≠ (List.replicate q [Letter.a, Letter.b]).flatten ∧
+      s ++ [c, c] ++ t ≠ Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten := by
+    intro q
+    induction q with
+    | zero =&gt;
+      intro s t c
+      constructor
+      · intro hst
+        have h&#x27; := congrArg List.length hst
+        simp only [List.length_append, List.length_cons, List.length_nil, List.replicate_zero, List.flatten_nil] at h&#x27;
+        omega
+      · intro hst
+        have h&#x27; := congrArg List.length hst
+        simp only [List.length_append, List.length_cons, List.length_nil, List.replicate_zero, List.flatten_nil] at h&#x27;
+        omega
+    | succ q ih =&gt;
+      intro s t c
+      have e : (List.replicate (q + 1) [Letter.a, Letter.b]).flatten = Letter.a :: Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten := by
+        rw [List.replicate_succ, List.flatten_cons, List.cons_append, List.cons_append, List.nil_append]
+      rw [e]
+      constructor
+      · intro hst
+        cases s with
+        | nil =&gt;
+          simp only [List.nil_append, List.cons_append] at hst
+          obtain ⟨h1, h2⟩ := List.cons.inj hst
+          obtain ⟨h3, -⟩ := List.cons.inj h2
+          subst h1
+          cases h3
+        | cons x s&#x27; =&gt;
+          simp only [List.cons_append] at hst
+          exact (ih s&#x27; t c).2 (List.cons.inj hst).2
+      · intro hst
+        cases s with
+        | nil =&gt;
+          simp only [List.nil_append, List.cons_append] at hst
+          obtain ⟨h1, h2⟩ := List.cons.inj hst
+          obtain ⟨h3, -⟩ := List.cons.inj h2
+          subst h1
+          cases h3
+        | cons x s&#x27; =&gt;
+          cases s&#x27; with
+          | nil =&gt;
+            simp only [List.nil_append, List.cons_append] at hst
+            obtain ⟨-, h2⟩ := List.cons.inj hst
+            obtain ⟨h3, h4⟩ := List.cons.inj h2
+            obtain ⟨h5, -⟩ := List.cons.inj h4
+            subst h3
+            cases h5
+          | cons y s&#x27;&#x27; =&gt;
+            simp only [List.cons_append] at hst
+            exact (ih s&#x27;&#x27; t c).2 (List.cons.inj (List.cons.inj hst).2).2
+  have hrep : ∀ i j : ℕ, List.replicate (i + j) Letter.a = List.replicate i Letter.a ++ List.replicate j Letter.a := by
+    intro i j
+    induction i with
+    | zero =&gt; simp
+    | succ i ih =&gt; rw [Nat.add_right_comm, List.replicate_succ, List.replicate_succ, ih, List.cons_append]
+  have hlenM : ∀ q : ℕ, (List.replicate q [Letter.a, Letter.b]).flatten.length = 2 * q := by
+    intro q
+    induction q with
+    | zero =&gt; simp
+    | succ q ih =&gt;
+      rw [List.replicate_succ, List.flatten_cons, List.length_append, ih]
+      simp only [List.length_cons, List.length_nil]
+      omega
+  have hstart : ∀ q : ℕ, (List.replicate q [Letter.a, Letter.b]).flatten.length = 0 ∨ [Letter.a] &lt;+: (List.replicate q [Letter.a, Letter.b]).flatten := by
+    intro q
+    cases q with
+    | zero =&gt; left; simp
+    | succ q =&gt;
+      right
+      exact ⟨Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten, by simp [List.replicate_succ]⟩
+  obtain ⟨M, hM⟩ : ∃ M : List Letter, M = (List.replicate p [Letter.a, Letter.b]).flatten := ⟨_, rfl⟩
+  have hMlen : M.length = 2 * p := by rw [hM]; exact hlenM p
+  have hMaa : ¬ [Letter.a, Letter.a] &lt;:+: M := by
+    rintro ⟨s, t, hst⟩
+    rw [hM] at hst
+    exact (alt p s t Letter.a).1 hst
+  have hMbb : ¬ [Letter.b, Letter.b] &lt;:+: M := by
+    rintro ⟨s, t, hst⟩
+    rw [hM] at hst
+    exact (alt p s t Letter.b).1 hst
+  have hMst : M.length = 0 ∨ [Letter.a] &lt;+: M := by rw [hM]; exact hstart p
+  -- Witness W = a^{2p} b (ab)^p a^{2p}.
+  obtain ⟨W, hW⟩ : ∃ W : List Letter, W = List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p) Letter.a := ⟨_, rfl⟩
+  have hWl : W.length = 6 * p + 1 := by
+    rw [hW]
+    simp only [List.length_append, List.length_replicate, List.length_cons, List.length_nil, hMlen]
+    omega
+  have hWL : W ∈ L := by
+    rw [hW]
+    exact ⟨List.replicate (2 * p) Letter.a, [Letter.b], M, List.replicate (2 * p) Letter.a, rfl, by simp, rfl, by rw [List.length_replicate, hMlen], rfl, by rw [hMlen]; omega, hMaa, hMbb, hMst⟩
+  have hWlen : W.length ≥ p := by omega
+  obtain ⟨u, v, x, y, z, hsplit, hvy, hvxy, hpump⟩ := hp W hWL hWlen
+  obtain ⟨w1, m, w2, w3, hw, hm, hml, h12, h13, hev, hnaa, -, -⟩ := hpump 0
+  simp only [nTimes, List.replicate_zero, List.flatten_nil, List.append_nil] at hw
+  have L1 := congrArg List.length hsplit
+  simp only [List.length_append, hWl] at L1 hvy hvxy
+  have L2 := congrArg List.length hw
+  simp only [List.length_append] at L2
+  rcases Nat.lt_or_ge u.length (w1.length + 1) with hlt | hge
+  · -- u is short: the last |w1|+2 letters of u x z are a&#x27;s, so w2 ends with aa.
+    obtain ⟨w2a, w2b, hw2, hw2b⟩ : ∃ w2a w2b : List Letter, w2 = w2a ++ w2b ∧ w2b.length = 2 :=
+      ⟨List.take (w1.length - 2) w2, List.drop (w1.length - 2) w2, by rw [List.take_append_drop], by rw [List.length_drop]; omega⟩
+    obtain ⟨z1, z2, hz, hz2⟩ : ∃ z1 z2 : List Letter, z = z1 ++ z2 ∧ z2.length = w1.length + 2 :=
+      ⟨List.take (z.length - (w1.length + 2)) z, List.drop (z.length - (w1.length + 2)) z, by rw [List.take_append_drop], by rw [List.length_drop]; omega⟩
+    have hN2 : w1.length + 2 ≤ 2 * p := by omega
+    have hA : List.replicate (2 * p) Letter.a = List.replicate (2 * p - (w1.length + 2)) Letter.a ++ List.replicate (w1.length + 2) Letter.a := by
+      rw [← hrep, Nat.sub_add_cancel hN2]
+    rw [hz, hw2] at hw
+    have E1 : (u ++ x ++ z1) ++ z2 = (w1 ++ m ++ w2a) ++ (w2b ++ w3) := by
+      simp only [List.append_assoc] at hw ⊢
+      exact hw
+    have r1 := (List.append_inj&#x27; E1 (by simp only [List.length_append]; omega)).2
+    have E2 : (u ++ v ++ x ++ y ++ z1) ++ z2 = (List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p - (w1.length + 2)) Letter.a) ++ List.replicate (w1.length + 2) Letter.a := by
+      have hWW : u ++ v ++ x ++ y ++ z = List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p) Letter.a := by
+        rw [← hsplit, hW]
+      rw [hz] at hWW
+      simp only [List.append_assoc] at hWW ⊢
+      rw [hWW, ← hA]
+    have r2 := (List.append_inj&#x27; E2 (by rw [hz2, List.length_replicate])).2
+    have h22 : List.replicate (w1.length + 2) Letter.a = List.replicate 2 Letter.a ++ List.replicate w1.length Letter.a := by
+      rw [show w1.length + 2 = 2 + w1.length by omega, hrep 2 w1.length]
+    have r3 : w2b ++ w3 = List.replicate 2 Letter.a ++ List.replicate w1.length Letter.a := r1.symm.trans (r2.trans h22)
+    have r4 := (List.append_inj r3 (by rw [hw2b, List.length_replicate])).1
+    have r5 : w2b = [Letter.a, Letter.a] := r4.trans rfl
+    exact hnaa ⟨w2a, [], by rw [List.append_nil, hw2, r5]⟩
+  · -- u is long: the first |w1|+1 letters of u x z are a&#x27;s, so the middle letter is a.
+    have t1 : List.take (w1.length + 1) W = List.take (w1.length + 1) u := by
+      rw [hsplit]
+      simp only [List.append_assoc]
+      first
+        | exact List.take_append_of_le_length hge
+        | simp [List.take_append, Nat.sub_eq_zero_of_le hge]
+    have t2 : List.take (w1.length + 1) (u ++ x ++ z) = List.take (w1.length + 1) u := by
+      simp only [List.append_assoc]
+      first
+        | exact List.take_append_of_le_length hge
+        | simp [List.take_append, Nat.sub_eq_zero_of_le hge]
+    have t3 : List.take (w1.length + 1) (w1 ++ m ++ w2 ++ w3) = w1 ++ m := by
+      rw [show w1 ++ m ++ w2 ++ w3 = (w1 ++ m) ++ (w2 ++ w3) by simp only [List.append_assoc], show w1.length + 1 = (w1 ++ m).length by simp [hml], List.take_left]
+    have hle2 : w1.length + 1 ≤ (List.replicate (2 * p) Letter.a).length := by
+      rw [List.length_replicate]; omega
+    have hle3 : w1.length + 1 ≤ 2 * p := by omega
+    have t4 : List.take (w1.length + 1) W = List.replicate (w1.length + 1) Letter.a := by
+      rw [hW]
+      simp only [List.append_assoc]
+      first
+        | rw [List.take_append_of_le_length hle2, List.take_replicate, Nat.min_eq_left hle3]
+        | simp [List.take_append, Nat.sub_eq_zero_of_le hle2, List.take_replicate, Nat.min_eq_left hle3]
+    have key : w1 ++ m = List.replicate (w1.length + 1) Letter.a :=
+      t3.symm.trans ((congrArg (List.take (w1.length + 1)) hw.symm).trans (t2.trans (t1.symm.trans t4)))
+    obtain ⟨c, hc⟩ : ∃ c, c ∈ m := by
+      cases m with
+      | nil =&gt; simp at hml
+      | cons c r =&gt; exact ⟨c, by simp⟩
+    have hcb := hm c hc
+    have hmem : c ∈ List.replicate (w1.length + 1) Letter.a := by
+      rw [← key]; simp [hc]
+    have hca := List.eq_of_mem_replicate hmem
+    rw [hca] at hcb
+    cases hcb</code></pre>
+<table style="border-collapse:collapse"><thead><tr><th>#</th><th>model</th><th>result</th><th>tokens in/out</th></tr></thead><tbody><tr><td>1</td><td>claude-opus-5-5</td><td>proved</td><td>15912/76464</td></tr></tbody></table>
+</section>
+</body></html>

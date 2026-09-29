@@ -1,0 +1,110 @@
+{
+  "task_type": "classify_and_prove_cfl",
+  "source_text": "Проверить язык на контекстную свободу: L = {w₁ b w₂ w₃ | |w₁| = |w₂| ∧ |w₁| = |w₃| ∧ w₂ ∈ (ab)*}, w₁, w₃ ∈ {a,b}*. (Билет №50, ИУ-9)",
+  "language_spec": {
+    "kind": "exists_decomposition",
+    "parts": [
+      "w1",
+      "m",
+      "w2",
+      "w3"
+    ],
+    "concat_pattern": [
+      "w1",
+      "m",
+      "w2",
+      "w3"
+    ],
+    "alphabets": {
+      "w1": [
+        "a",
+        "b"
+      ],
+      "m": [
+        "b"
+      ],
+      "w2": [
+        "a",
+        "b"
+      ],
+      "w3": [
+        "a",
+        "b"
+      ]
+    },
+    "constraints": [
+      {
+        "op": "eq",
+        "left": {
+          "kind": "length",
+          "of_var": "m"
+        },
+        "right": {
+          "kind": "constant",
+          "value": 1
+        }
+      },
+      {
+        "op": "eq",
+        "left": {
+          "kind": "length",
+          "of_var": "w1"
+        },
+        "right": {
+          "kind": "length",
+          "of_var": "w2"
+        }
+      },
+      {
+        "op": "eq",
+        "left": {
+          "kind": "length",
+          "of_var": "w1"
+        },
+        "right": {
+          "kind": "length",
+          "of_var": "w3"
+        }
+      },
+      {
+        "expr": {
+          "kind": "length",
+          "of_var": "w2"
+        },
+        "modulus": 2,
+        "remainder": 0
+      },
+      {
+        "op": "is_not_substring",
+        "substring_expr": "aa",
+        "in_var": "w2"
+      },
+      {
+        "op": "is_not_substring",
+        "substring_expr": "bb",
+        "in_var": "w2"
+      },
+      {
+        "op": "or",
+        "operands": [
+          {
+            "op": "eq",
+            "left": {
+              "kind": "length",
+              "of_var": "w2"
+            },
+            "right": {
+              "kind": "constant",
+              "value": 0
+            }
+          },
+          {
+            "op": "starts_with",
+            "prefix_expr": "a",
+            "of_var": "w2"
+          }
+        ]
+      }
+    ]
+  }
+}
