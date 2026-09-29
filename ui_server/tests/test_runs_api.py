@@ -303,12 +303,20 @@ def test_restore_marks_dead_active_runs_interrupted():
 
 
 def test_restore_reports_live_runs_and_leaves_them_alone():
-    _write_record("a" * 12, status="running", pid=os.getpid())   # a live process
-    _write_record("b" * 12, status="queued", server_pid=os.getppid())  # owned by a live other server
-    live = srv.restore_runs()
-    assert sorted(live) == ["a" * 12, "b" * 12]
-    assert srv.api_log("a" * 12)["status"] == "running"
-    assert read_record("a" * 12)["status"] == "running"  # untouched on disk
+    # The "other live server" is our own long-lived child (os.getppid() may be 0/1 or
+    # invisible in containers and under xdist).
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        _write_record("a" * 12, status="running", pid=os.getpid())   # a live process
+        _write_record("b" * 12, status="queued", server_pid=other.pid,
+                      server_identity=srv.process_identity(other.pid))  # owned by a live other server
+        live = srv.restore_runs()
+        assert sorted(live) == ["a" * 12, "b" * 12]
+        assert srv.api_log("a" * 12)["status"] == "running"
+        assert read_record("a" * 12)["status"] == "running"  # untouched on disk
+    finally:
+        other.kill()
+        other.wait()
 
 
 def test_restore_loads_legacy_dirs_without_run_json():

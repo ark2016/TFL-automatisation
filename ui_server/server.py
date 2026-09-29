@@ -576,7 +576,12 @@ def process_identity(pid: int | None) -> dict | None:
         if stat.is_file():
             tail = stat.read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[1].split()
             ticks = int(tail[19])  # field 22: starttime (clock ticks since boot)
-            created = ticks / float(os.sysconf("SC_CLK_TCK"))
+            btime = 0.0
+            for line in Path("/proc/stat").read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("btime "):
+                    btime = float(line.split()[1])
+                    break
+            created = btime + ticks / float(os.sysconf("SC_CLK_TCK"))
             comm = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8", errors="replace").strip()
             return {"created": created, "image": comm.lower()}
         out = subprocess.run(["ps", "-o", "lstart=,comm=", "-p", str(pid)],
