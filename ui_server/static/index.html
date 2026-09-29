@@ -14,6 +14,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,400;9..144,500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/lab.css">
   <style>
     :root {
       --bg:           #0d0e12;
@@ -853,6 +854,7 @@
       <span>run: <kbd>⌘</kbd> <kbd>↵</kbd></span>
       <span>save: <kbd>⌘</kbd> <kbd>S</kbd></span>
     </div>
+    <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">⚙</button>
   </header>
 
   <main class="workspace">
@@ -862,11 +864,17 @@
         <!-- injected -->
       </div>
       <div class="side-section-title">
-        <span>examples</span>
+        <span class="side-switch">
+          <button class="side-tab active" id="side-tab-examples" data-side="examples">examples</button>
+          <button class="side-tab" id="side-tab-runs" data-side="runs">runs</button>
+        </span>
         <span class="side-count" id="example-count">—</span>
       </div>
       <div class="example-list" id="example-list">
         <div class="example-empty">select a project</div>
+      </div>
+      <div class="run-list" id="run-list" style="display:none">
+        <div class="example-empty">no runs yet</div>
       </div>
       <div class="sidebar-footer">
         <button class="new-btn" id="new-btn">＋ new task from scratch</button>
@@ -908,6 +916,7 @@
               <button class="btn btn-danger" id="btn-live" disabled>
                 live run
               </button>
+              <span class="estimate" id="est-live" title="estimated live-run cost">est. —</span>
             </div>
             <label class="check" style="margin-left:auto">
               <input type="checkbox" id="verbose" checked>
@@ -925,8 +934,25 @@
 
     <!-- RIGHT: result viewer -->
     <section class="pane result-pane">
+      <div class="run-head" id="run-head">
+        <span class="pill" id="rh-status">—</span>
+        <span class="rh-id" id="rh-id">—</span>
+        <span id="rh-project">—</span>
+        <span class="rh-sep">·</span>
+        <span>verdict <span class="rh-verdict" id="rh-verdict">—</span></span>
+        <span class="rh-sep">·</span>
+        <span title="running cost total">cost <span class="rh-cost" id="rh-cost">$0.0000</span></span>
+        <span id="rh-usage">—</span>
+        <span id="rh-elapsed"></span>
+        <span class="rh-actions">
+          <span class="estimate" id="est-formalize"></span>
+          <button class="btn btn-sm btn-danger" id="btn-formalize" disabled
+            title="Lean formalization of the finished result; needs 'I confirm API spend'">Formalize</button>
+        </span>
+      </div>
       <div class="tabs">
-        <button class="tab active" data-tab="html">HTML</button>
+        <button class="tab active" data-tab="progress">Progress</button>
+        <button class="tab" data-tab="html">HTML</button>
         <button class="tab" data-tab="json">JSON</button>
         <button class="tab" data-tab="md">Markdown</button>
         <button class="tab" data-tab="log">Log <span class="badge" id="log-badge">0</span></button>
@@ -936,7 +962,12 @@
         </div>
       </div>
       <div class="tab-panels">
-        <div class="panel active" data-panel="html">
+        <div class="panel active" data-panel="progress">
+          <div class="progress-root" id="progress-root">
+            <div class="progress-empty">no run yet — start one, or open a run from the runs list</div>
+          </div>
+        </div>
+        <div class="panel" data-panel="html">
           <div class="empty" id="html-empty">no result yet — run a task to render here</div>
           <!-- Report HTML embeds tab-switch JS (and optional KaTeX/mermaid
                <script> tags for cfl), so scripts stay allowed; the frame
@@ -963,6 +994,53 @@
       </div>
     </section>
   </main>
+
+  <div class="modal-back" id="settings-back">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <span id="settings-title">settings</span>
+        <button class="icon-btn" id="settings-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <label class="check">
+            <input type="checkbox" id="set-formalize">
+            <span>formalize inside a run (Lean step)</span>
+          </label>
+          <span class="hint">off by default; formalization can always be requested later with the Formalize button</span>
+        </div>
+        <div class="field">
+          <label for="set-first-model">first-attempt model</label>
+          <input type="text" id="set-first-model" list="model-options" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="set-retry-model">correction model</label>
+          <input type="text" id="set-retry-model" list="model-options" autocomplete="off" spellcheck="false">
+        </div>
+        <datalist id="model-options">
+          <option value="claude-opus-5-5"></option>
+          <option value="claude-sonnet-5-5"></option>
+          <option value="claude-haiku-4-5"></option>
+        </datalist>
+        <div class="field-row">
+          <div class="field">
+            <label for="set-retries">corrections</label>
+            <input type="number" id="set-retries" min="0" max="10" step="1">
+          </div>
+          <div class="field">
+            <label for="set-max-tokens">max output tokens</label>
+            <input type="number" id="set-max-tokens" min="1024" max="128000" step="1000">
+          </div>
+        </div>
+        <span class="hint">A truncated answer without a body gets one Sonnet "body only" attempt, then stops.</span>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary" id="settings-save">save</button>
+        <button class="btn" id="settings-cancel">close</button>
+        <span class="set-status" id="settings-status"></span>
+      </div>
+    </div>
+  </div>
 
 <script src="/static/app.js"></script>
 </body>
