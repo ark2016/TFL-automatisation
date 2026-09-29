@@ -71,6 +71,7 @@ const rhElapsed  = $('rh-elapsed');
 const btnFormalize = $('btn-formalize');
 const estLive    = $('est-live');
 const estFormalize = $('est-formalize');
+const mockFormalizeWarn = $('formalize-mock-warning');
 const progressRoot = $('progress-root');
 const btnSettings = $('btn-settings');
 const settingsBack = $('settings-back');
@@ -382,7 +383,7 @@ function startPolling(pickTab) {
   tick();
 }
 
-const RUN_KEYS = ['status', 'project', 'verdict', 'confidence', 'live', 'error', 'elapsed',
+const RUN_KEYS = ['status', 'project', 'verdict', 'confidence', 'live', 'source_mode', 'error', 'elapsed',
   'formalize_error', 'started', 'finished', 'result_html_url', 'result_json_url', 'result_md_url'];
 
 async function pollOnce(gen, pickTab) {
@@ -535,6 +536,9 @@ function updateFormalizeButton() {
     : (proved ? 'already machine-checked: a re-run costs money and the proof is kept unless the new attempt proves it too'
       : 'Lean formalization of the finished result; needs the API-spend confirmation');
   estFormalize.style.display = can || formalizing ? '' : 'none';
+  // A mock-mode result: formalization always makes paid (live) calls.
+  const mockSource = !!r && (r.source_mode === 'mock' || (r.source_mode === undefined && r.live === false));
+  mockFormalizeWarn.style.display = mockSource && supported && (can || formalizing) ? '' : 'none';
 }
 
 async function requestFormalize() {

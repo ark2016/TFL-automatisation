@@ -1608,22 +1608,8 @@ def formalize_node(state: PipelineState) -> dict:
     return {"formalization": formalization}
 
 
-def _set_reasoning_verdict(evidence: dict, verdict: str | None) -> None:
-    """Overwrite the verdict inside `evidence['reasoning']` (both the flat
-    shape and the nested `reasoning['evidence']` shape reasoning prompts
-    also use) so downstream readers of the top-level result (`orchestrator.
-    _result_verdict`, `tfl_eval.runners.extract('reg')`) see the verdict
-    gate's own decision, not whatever the reasoning agent originally
-    proposed before R1-R3/R3' were applied. Mutates a copy, never the
-    dict `state["reasoning_output"]` still holds."""
-    reasoning_copy = dict(evidence.get("reasoning") or {})
-    inner = reasoning_copy.get("evidence")
-    if isinstance(inner, dict):
-        inner = dict(inner)
-        inner["verdict"] = verdict
-        reasoning_copy["evidence"] = inner
-    reasoning_copy["verdict"] = verdict
-    evidence["reasoning"] = reasoning_copy
+# Single implementation shared with agent_system.formalize.apply_gate.
+from .lib.reg_lean_gate import set_reasoning_verdict as _set_reasoning_verdict  # noqa: E402
 
 
 def _cross_check_r3prime_reg(
@@ -1723,8 +1709,8 @@ def assemble_result_node(state: PipelineState) -> dict:
     from .lib.claim_verifier import (
         CONFIDENCE_CAPS,
         compute_destructive_trust,
-        compute_lean_proof_trust,
     )
+    from .lib.reg_lean_gate import lean_gate_decision
 
     evidence = dict(state.get("evidence", {}))
     errors = list(state.get("errors", []))
@@ -1788,9 +1774,7 @@ def assemble_result_node(state: PipelineState) -> dict:
         #    not_formalizable/missing) is not evidence either way (R1) and
         #    never changes the gate -- `compute_lean_proof_trust` reports
         #    those as `not_verified`.
-        lean_trust = compute_lean_proof_trust(state.get("formalization"))
-        lean_proved = lean_trust["trust"] == "verified"
-        lean_direction = lean_trust["direction"]
+        lean_decision = lean_gate_decision(state.get("formalization"), reasoning_verdict)
 
         # -- Constructive trust: from the DFA/regex oracle test --
         constructive_trust = None
@@ -1807,36 +1791,20 @@ def assemble_result_node(state: PipelineState) -> dict:
         destructive_trust = destructive["trust"]
         destructive_ok = destructive_trust not in (None, "refuted", "not_verified")
 
-        if lean_proved and lean_direction and reasoning_verdict and lean_direction != reasoning_verdict:
-            # R-Lean + R3: a machine-checked proof of the OPPOSITE direction
-            # outranks the reasoning agent's own (unverified) claim -- the
-            # verdict flips to the proven direction at the full verified
-            # ceiling, rather than being left as a capped contradiction.
-            # Not a contradiction: the proof is the deciding basis, so
-            # `contradiction` stays False; the override is recorded in
-            # `downgrades` (same convention in cfl_system / dcfl_system).
-            status = "success"
-            confidence = CONFIDENCE_CAPS["verified"]
-            basis.append({"agent": "formalizer", "trust": "verified", "basis": "lean_proof"})
-            downgrades.append(
-                f"lean proof of '{lean_direction}' overrides reasoning verdict "
-                f"'{reasoning_verdict}' -> verified 0.98 (VERDICT_POLICY.md R-Lean: a "
-                "machine-checked proof takes priority over every other track)"
-            )
-            _set_reasoning_verdict(evidence, lean_direction)
-
-        elif lean_proved:
-            # Direction matches `reasoning_verdict` (or the statement carried
-            # no explicit direction) -- uncontested, full verified ceiling.
-            # R-Lean: `proved` earns the full 0.98 ceiling outright, same as
-            # the opposite-direction branch above -- it is never further
-            # bounded by the (unverified) reasoning_confidence, so a
-            # low-confidence reasoning agent next to a machine-checked proof
-            # still reports 0.98, not a value dragged down toward its own
-            # self-estimate.
-            status = "success"
-            confidence = CONFIDENCE_CAPS["verified"]
-            basis.append({"agent": "formalizer", "trust": "verified", "basis": "lean_proof"})
+        if lean_decision is not None:
+            # R-Lean: a machine-checked proof outranks every other track and
+            # earns the full verified 0.98 ceiling outright (never bounded by
+            # the unverified reasoning_confidence). A proof of the OPPOSITE
+            # direction to a set reasoning verdict flips the verdict instead
+            # of standing as an R3 contradiction (`contradiction` stays False;
+            # the override is recorded in `downgrades`). Shared with
+            # `agent_system.formalize.apply_gate` (lib/reg_lean_gate.py).
+            status = lean_decision["status"]
+            confidence = lean_decision["confidence"]
+            basis.append(lean_decision["basis"])
+            if lean_decision["override"]:
+                downgrades.append(lean_decision["downgrade"])
+                _set_reasoning_verdict(evidence, lean_decision["direction"])
 
         elif constructive_trust == "bounded_pass" and destructive_ok:
             # R3: a passing constructive artifact AND a standing destructive

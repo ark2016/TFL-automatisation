@@ -304,13 +304,16 @@ def test_proved_updates_result_json_md_html(tmp_path, spec, check):
 
 def test_proved_opposite_direction_flips_the_verdict(tmp_path, spec, check):
     run_dir = make_run_dir(tmp_path)
+    res = load_result(run_dir)
+    res["evidence"]["reasoning"] = {"evidence": {"verdict": "non_regular", "confidence": 0.9}}
+    (run_dir / "input_result.json").write_text(json.dumps(res), encoding="utf-8")
     check(tc("proved"))
     run(run_dir, spec, [body_turn("exact h")], direction="regular")
     after = load_result(run_dir)
     assert after["verdict"] == "regular" and after["confidence"] == 0.98
     assert after["evidence"]["reasoning"]["verdict"] == "regular"
     notes = after["verdict_gate"]["downgrades"]
-    assert any("lean proof of 'regular' overrides the standing verdict 'non_regular'" in n for n in notes)
+    assert any("lean proof of 'regular' overrides reasoning verdict 'non_regular'" in n for n in notes)
     assert after["evidence"]["formalization"]["direction_source"] == "cli"
 
 
@@ -351,6 +354,69 @@ def test_gate_matches_assemble_result_node(spec, with_contradiction):
     assert plain["verdict_gate"]["basis"][-1] == expected["verdict_gate"]["basis"][-1]
     assert (plain["verdict_gate"]["downgrades"][-1:] == expected["verdict_gate"]["downgrades"][-1:])
     assert plain["evidence"]["reasoning"]["verdict"] == expected["evidence"]["reasoning"]["verdict"]
+
+
+def test_proof_without_reasoning_verdict_leaves_verdict_as_the_graph_does(tmp_path, spec, check):
+    """No reasoning verdict: assemble_result_node does not flip anything, so
+    neither does the separate entry (one shared gate, lib/reg_lean_gate.py)."""
+    run_dir = make_run_dir(tmp_path)
+    check(tc("proved"))
+    run(run_dir, spec, [body_turn("exact h")], direction="regular")
+    after = load_result(run_dir)
+    assert (after["status"], after["confidence"]) == ("success", 0.98)
+    assert after["verdict"] == "non_regular"
+    assert after["verdict_gate"]["downgrades"] == [] or not any(
+        "overrides" in n for n in after["verdict_gate"]["downgrades"])
+
+
+def test_graph_and_formalize_share_one_gate():
+    """Both entries go through lib.reg_lean_gate (no second copy of the rules)."""
+    import inspect
+    from agent_system import formalize, graph
+    from agent_system.lib import reg_lean_gate
+    assert graph._set_reasoning_verdict is reg_lean_gate.set_reasoning_verdict
+    assert "lean_gate_decision" in inspect.getsource(graph.assemble_result_node)
+    assert "lean_gate_decision" in inspect.getsource(formalize.apply_gate)
+    assert "compute_lean_proof_trust" not in inspect.getsource(formalize.apply_gate)
+
+
+@pytest.mark.parametrize("prior,direction,expect_verdict,expect_note", [
+    ("regular", "non_regular", "non_regular", True),      # opposite: flips
+    ("non_regular", "non_regular", "non_regular", False),  # confirming
+    ("regular", "regular", "regular", False),
+    (None, "non_regular", None, False),                   # no reasoning verdict: untouched
+])
+def test_gate_equivalence_with_assemble_result_node_verdicts(spec, prior, direction,
+                                                             expect_verdict, expect_note):
+    from agent_system.graph import assemble_result_node
+    from agent_system.tests.test_verdict_policy import _state
+
+    ro = {"evidence": {"verdict": prior, "confidence": 0.7}} if prior else None
+    block = {"status": "proved", "direction": direction, "axioms": []}
+
+    def build(f):
+        return assemble_result_node(_state(
+            test_result={"status": "pass", "tested": 200}, formalization=f,
+            evidence={"reasoning": json.loads(json.dumps(ro))} if ro else {},
+            reasoning_output=ro))["result"]
+
+    expected = build(block)
+    plain = json.loads(json.dumps(build(None)))
+    if ro:
+        plain["evidence"]["reasoning"] = json.loads(json.dumps(ro))
+    assert spec.apply_gate(plain, dict(block)) is True
+    for key in ("status", "confidence"):
+        assert plain[key] == expected[key]
+    g, e = plain["verdict_gate"], expected["verdict_gate"]
+    assert (g["contradiction"], g["confidence_cap"]) == (e["contradiction"], e["confidence_cap"])
+    assert g["basis"][-1] == e["basis"][-1]
+    assert [d for d in g["downgrades"] if "overrides" in d] ==         [d for d in e["downgrades"] if "overrides" in d]
+    assert bool([d for d in g["downgrades"] if "overrides" in d]) is expect_note
+    rv = lambda r: ((r["evidence"].get("reasoning") or {}).get("evidence") or
+                    (r["evidence"].get("reasoning") or {})).get("verdict")
+    assert rv(plain) == rv(expected)
+    from agent_system.orchestrator import _result_verdict
+    assert _result_verdict(plain) == _result_verdict(expected)
 
 
 def test_gate_confirming_proof_adds_no_override_note(spec):
@@ -647,3 +713,67 @@ def test_import_direction_agent_system_never_imports_cfl_or_dcfl():
     text = Path(fr.__file__).read_text(encoding="utf-8")
     for pkg in ("cfl_system", "dcfl_system", "ll_system"):
         assert f"import {pkg}" not in text and f"from {pkg}" not in text
+
+
+# ---------------------------------------------------------------------------
+# proved block from a pipeline run (no "baseline") + atomic renders
+# ---------------------------------------------------------------------------
+
+def _pipeline_proved_run_dir(tmp_path, spec, check):
+    """A run dir as an in-run formalization leaves it: proved block, no baseline."""
+    run_dir = make_run_dir(tmp_path)
+    check(tc("proved"))
+    run(run_dir, spec, [body_turn("exact h")])
+    res = load_result(run_dir)
+    del res["evidence"]["formalization"]["baseline"]
+    (run_dir / "input_result.json").write_text(json.dumps(res), encoding="utf-8")
+    return run_dir
+
+
+def test_proved_without_baseline_is_skipped_with_a_clear_reason_unless_forced(tmp_path, spec, check):
+    run_dir = _pipeline_proved_run_dir(tmp_path, spec, check)
+    summary, client = run(run_dir, spec, [])
+    assert summary["skipped"] is True and client.stream_calls == []
+    assert "--force" in summary["reason"] and "already proved" in summary["reason"]
+
+    check(tc("proved"))
+    summary, client = run(run_dir, spec, [body_turn("exact g")], force=True)
+    assert summary["skipped"] is False and summary["proved"] is True
+    assert len(client.stream_calls) == 1                       # the re-run really happened
+    after = load_result(run_dir)
+    assert after["evidence"]["formalization"]["proof_body"] == "exact g"
+    assert len([b for b in after["verdict_gate"]["basis"] if b.get("basis") == "lean_proof"]) == 1
+
+
+def test_forced_rerun_without_baseline_that_fails_keeps_the_proof(tmp_path, spec, check):
+    run_dir = _pipeline_proved_run_dir(tmp_path, spec, check)
+    before = (run_dir / "input_result.json").read_bytes()
+    check(tc("error", [{"severity": "error", "data": "boom"}]))
+    turns = [body_turn("a"), body_turn("b", model=SONNET), body_turn("c", model=SONNET)]
+    summary, _ = run(run_dir, spec, turns, force=True)
+    assert summary["kept_proved"] is True
+    assert (run_dir / "input_result.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("fmt", ["md", "html"])
+def test_render_failure_midway_leaves_the_previous_file_intact(tmp_path, spec, check, monkeypatch, fmt):
+    """The renderer writes a half file and dies: the existing md/html is not
+    touched (rendering goes to a scratch file, replaced in one step)."""
+    run_dir = make_run_dir(tmp_path)
+    target = run_dir / f"input_result.{fmt}"
+    old = target.read_bytes()
+    real = spec.render_file
+
+    def broken(result, path, f):
+        if f == fmt:
+            Path(path).write_text("HALF-WRITTEN", encoding="utf-8")
+            raise RuntimeError("cancelled mid-write")
+        real(result, path, f)
+
+    monkeypatch.setattr(spec, "render_file", broken)
+    check(tc("proved"))
+    run(run_dir, spec, [body_turn("exact h")])
+    assert target.read_bytes() == old
+    assert not list(run_dir.glob("*.tmp"))
+    other = "html" if fmt == "md" else "md"
+    assert "Lean" in (run_dir / f"input_result.{other}").read_text(encoding="utf-8")

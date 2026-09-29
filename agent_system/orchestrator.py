@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -147,6 +148,7 @@ class Pipeline:
         ir: dict,
         dfa: dict | None = None,
         lean_code: str | None = None,
+        progress: ProgressWriter | None = None,
     ) -> dict[str, Any]:
         """Run the pipeline from a pre-parsed IR dict.
 
@@ -154,10 +156,30 @@ class Pipeline:
             ir:  Validated IR dictionary (see lib.ir_schema).
             dfa: Optional DFA dict to test against the oracle.
             lean_code: Optional Lean 4 code to formalize and type-check.
+            progress: Optional :class:`ProgressWriter`; gets a node event for
+                the whole step and the final verdict event.
 
         Returns:
             Structured result per §5.3 contract.
         """
+        from .lib.progress import finish_pipeline
+
+        if progress is not None:
+            progress.node_start("run_from_ir")
+        t0 = time.monotonic()
+        result = self._run_from_ir(ir, dfa, lean_code)
+        if progress is not None:
+            progress.node_done("run_from_ir", {"result": result},
+                               elapsed=time.monotonic() - t0)
+            finish_pipeline(progress, result)
+        return result
+
+    def _run_from_ir(
+        self,
+        ir: dict,
+        dfa: dict | None = None,
+        lean_code: str | None = None,
+    ) -> dict[str, Any]:
         errors: list[str] = []
 
         # --- Step 1: Validate IR ---
@@ -499,7 +521,7 @@ def main() -> None:
                 except (OSError, json.JSONDecodeError) as exc:
                     print(f"Error reading DFA file: {exc}", file=sys.stderr)
                     sys.exit(1)
-            result = pipeline.run_from_ir(ir, dfa)
+            result = pipeline.run_from_ir(ir, dfa, progress=progress)
     except Exception as exc:
         if progress is not None and progress.status != "error":
             progress.error(f"{type(exc).__name__}: {exc}", exc_type=type(exc).__name__)

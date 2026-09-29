@@ -133,3 +133,10 @@ def test_progress_started_call_shows_running_without_counting():
               _ev("llm_call", "reasoning", {"phase": "start", "agent": "reasoning"}, 0, 0.0)]
     row = _build_model(events)["phases"]["verdict"][0]
     assert row["state"] == "running" and row["calls"] == 0 and row["cost"] == 0
+
+
+def test_mock_source_warning_next_to_formalize_button():
+    assert 'id="formalize-mock-warning"' in INDEX
+    assert INDEX.index('id="formalize-mock-warning"') < INDEX.index('id="btn-formalize"')
+    assert "mock mode" in INDEX and "paid API calls" in INDEX
+    assert "mockFormalizeWarn" in APP and "source_mode" in APP

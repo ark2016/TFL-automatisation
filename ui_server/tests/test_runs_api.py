@@ -767,3 +767,92 @@ def test_projects_listing_flags_formalize_support(port):
     _, d = http_req(port, "GET", "/api/projects")
     flags = {p["id"]: p["formalize"] for p in d["projects"]}
     assert flags == {"agent_system": True, "cfl_system": True, "dcfl_system": True, "ll_system": False}
+
+
+# ---------------------------------------------------------------------------
+# pid identity (recycled pids are neither trusted nor killed)
+# ---------------------------------------------------------------------------
+
+def test_process_identity_of_self_and_dead():
+    ident = srv.process_identity(os.getpid())
+    assert ident and ident["image"] and abs(ident["created"] - time.time()) < 10 ** 9
+    assert srv.process_identity(_dead_pid()) is None
+    assert srv._pid_matches(os.getpid(), ident)
+    assert srv._pid_matches(os.getpid(), None)          # legacy record: liveness only
+    assert not srv._pid_matches(os.getpid(), {"created": ident["created"] - 3600, "image": ident["image"]})
+    assert not srv._pid_matches(os.getpid(), {"created": ident["created"], "image": "definitely-not-this.exe"})
+
+
+def test_restore_recycled_pid_is_interrupted_not_live():
+    ident = srv.process_identity(os.getpid())
+    stale = {"created": ident["created"] - 5000, "image": ident["image"]}
+    _write_record("a" * 12, status="running", pid=os.getpid(), pid_identity=stale)
+    _write_record("b" * 12, status="queued", server_pid=os.getppid(),
+                  server_identity={"created": 1.0, "image": "x"})
+    assert srv.restore_runs() == []
+    assert srv.api_log("a" * 12)["status"] == "interrupted"
+    assert srv.api_log("b" * 12)["status"] == "interrupted"
+    assert read_record("a" * 12)["pid"] is None
+
+
+def test_restore_matching_identity_is_live():
+    _write_record("a" * 12, status="running", pid=os.getpid(),
+                  pid_identity=srv.process_identity(os.getpid()))
+    assert srv.restore_runs() == ["a" * 12]
+
+
+def test_kill_pid_refuses_on_identity_mismatch():
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        ident = srv.process_identity(proc.pid)
+        bad = {"created": ident["created"] - 5000, "image": ident["image"]}
+        assert srv._kill_pid(proc.pid, bad) is False
+        time.sleep(0.3)
+        assert proc.poll() is None                      # still alive
+        assert srv._kill_pid(proc.pid, ident) is True
+        proc.wait(timeout=15)
+    finally:
+        proc.kill()
+
+
+def test_cancel_orphan_with_recycled_pid_does_not_kill(monkeypatch):
+    monkeypatch.setattr(srv, "_ORPHAN_POLL_SECONDS", 0.05)
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        ident = srv.process_identity(proc.pid)
+        _write_record("a" * 12, status="running", pid=proc.pid, pid_identity=ident)
+        assert srv.restore_runs() == ["a" * 12]
+        # the pid gets "recycled": stored identity no longer matches
+        with srv._runs_lock:
+            srv._runs["a" * 12]["pid_identity"] = {"created": ident["created"] - 5000,
+                                                   "image": ident["image"]}
+        srv.adopt_orphans(["a" * 12])
+        srv.api_cancel("a" * 12)
+        wait_status("a" * 12, {"cancelled", "completed", "interrupted"})
+        assert proc.poll() is None                      # never killed
+    finally:
+        proc.kill()
+
+
+def test_formalize_of_a_mock_run_reports_source_mode_and_warning(port, monkeypatch):
+    stub_formalize(monkeypatch)
+    run_id = _completed_run(monkeypatch)            # api_run default: live=False -> mock
+    assert read_record(run_id)["source_mode"] == "mock"
+    assert srv.api_log(run_id)["source_mode"] == "mock"
+    status, d = http_req(port, "POST", f"/api/runs/{run_id}/formalize", {"confirm_spend": True})
+    assert status == 200 and d["source_mode"] == "mock"
+    assert "mock mode" in d["warning"] and "paid" in d["warning"]
+    wait_status(run_id, {"completed"})
+    # confirmation stays mandatory
+    assert http_req(port, "POST", f"/api/runs/{run_id}/formalize", {})[0] == 400
+
+
+def test_formalize_of_a_live_run_has_no_mock_warning(port, monkeypatch):
+    stub_formalize(monkeypatch)
+    run_id = _completed_run(monkeypatch)
+    with srv._runs_lock:
+        srv._runs[run_id]["live"] = True
+    status, d = http_req(port, "POST", f"/api/runs/{run_id}/formalize", {"confirm_spend": True})
+    assert status == 200 and d["source_mode"] == "live" and "warning" not in d
+    wait_status(run_id, {"completed"})
+    assert read_record(run_id)["source_mode"] == "live"

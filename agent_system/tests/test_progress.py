@@ -280,3 +280,20 @@ def test_reg_cli_no_progress_flag(tmp_path, monkeypatch):
     assert not (tmp_path / PROGRESS_FILENAME).exists()
     assert not (tmp_path / PARTIAL_FILENAME).exists()
     assert (tmp_path / f"{TASK}_result.json").exists()
+
+
+def test_reg_cli_plain_path_writes_progress(tmp_path, monkeypatch):
+    """No --mock/--live (pipeline.run_from_ir, the UI's REG Mock Run): the
+    progress log has node + verdict events, not only the final one."""
+    from agent_system.orchestrator import main
+    monkeypatch.setattr(sys, "argv", ["agent_system", str(EXAMPLES / f"{TASK}.json"),
+                                      "--save", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        main()
+    events = read_events(tmp_path)
+    kinds = [e["event"] for e in events]
+    assert "node_start" in kinds and "node_done" in kinds
+    assert any(e["event"] == "verdict" and e["payload"]["final"] for e in events)
+    assert kinds[-1] == "done"
+    snap = read_partial(tmp_path)
+    assert snap["status"] == "done" and "run_from_ir" in snap["nodes_done"]

@@ -62,7 +62,7 @@ timeout: manual cancellation is the only way to stop a run early.
 statuses: completed / error / cancelled / interrupted.
 
 Persistence: every run keeps its state in <run_dir>/run.json (status,
-project, started, finished, pid, server_pid, verdict, urls, error, cost) and
+project, started, finished, pid (+ pid_identity: creation time and image name, checked before a pid is trusted or killed), server_pid, verdict, urls, error, cost) and
 its log in <run_dir>/run.log; on start `restore_runs()` reloads them. A run
 that was queued/running/formalizing but has no live process any more becomes
 "interrupted" (or "completed" if its result was already written). If a
@@ -542,8 +542,82 @@ def _pid_alive(pid: int | None) -> bool:
     return True
 
 
-def _kill_pid(pid: int) -> None:
-    """Kill a process (tree) we do not hold a Popen handle for."""
+def process_identity(pid: int | None) -> dict | None:
+    """{"created": <process creation time, epoch seconds>, "image": <lower-case
+    executable name>} for a live pid, else None. Saved next to a pid in run.json
+    so a recycled pid (another process that got the same number) is not taken
+    for the run's process."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.windll.kernel32
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return None
+            try:
+                ft = [wintypes.FILETIME() for _ in range(4)]
+                if not kernel32.GetProcessTimes(handle, *[ctypes.byref(f) for f in ft]):
+                    return None
+                raw = (ft[0].dwHighDateTime << 32) | ft[0].dwLowDateTime
+                created = raw / 1e7 - 11644473600.0
+                buf = ctypes.create_unicode_buffer(1024)
+                size = wintypes.DWORD(len(buf))
+                image = ""
+                if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                    image = os.path.basename(buf.value).lower()
+                return {"created": created, "image": image}
+            finally:
+                kernel32.CloseHandle(handle)
+        stat = Path(f"/proc/{pid}/stat")
+        if stat.is_file():
+            tail = stat.read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[1].split()
+            ticks = int(tail[19])  # field 22: starttime (clock ticks since boot)
+            created = ticks / float(os.sysconf("SC_CLK_TCK"))
+            comm = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8", errors="replace").strip()
+            return {"created": created, "image": comm.lower()}
+        out = subprocess.run(["ps", "-o", "lstart=,comm=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+        if out:
+            created = time.mktime(time.strptime(" ".join(out.split()[:5]), "%a %b %d %H:%M:%S %Y"))
+            return {"created": created, "image": os.path.basename(out.split(None, 5)[-1]).lower()}
+    except Exception:
+        pass
+    return None
+
+
+_IDENTITY_TOLERANCE_S = 2.0
+
+
+def _pid_matches(pid: int | None, identity: dict | None) -> bool:
+    """Is `pid` alive AND still the process that was recorded? Without a saved
+    identity (records from before it was stored) only liveness can be checked.
+    A live pid whose identity cannot be read is trusted (nothing to compare)."""
+    if not _pid_alive(pid):
+        return False
+    if not isinstance(identity, dict) or not identity:
+        return True
+    cur = process_identity(pid)
+    if cur is None:
+        return True
+    try:
+        if abs(float(cur["created"]) - float(identity["created"])) > _IDENTITY_TOLERANCE_S:
+            return False
+    except (KeyError, TypeError, ValueError):
+        return True
+    img_a, img_b = str(cur.get("image") or ""), str(identity.get("image") or "")
+    return not (img_a and img_b and img_a != img_b)
+
+
+def _kill_pid(pid: int, identity: dict | None = None) -> bool:
+    """Kill a process (tree) we do not hold a Popen handle for. When an
+    `identity` was recorded it must still match: a recycled pid is never
+    killed. Returns whether a kill was attempted."""
+    if identity is not None and not _pid_matches(pid, identity):
+        return False
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -552,7 +626,8 @@ def _kill_pid(pid: int) -> None:
             import signal
             os.kill(pid, signal.SIGTERM)
     except Exception:
-        pass
+        return False
+    return True
 
 
 def _wait_for_process(run_id: str, proc: subprocess.Popen):
@@ -586,13 +661,23 @@ def _wait_for_process(run_id: str, proc: subprocess.Popen):
 # ---------------------------------------------------------------------------
 
 _RECORD_KEYS = ("run_id", "status", "project", "started", "finished", "pid", "server_pid",
-                "live", "verdict", "confidence", "error", "formalize_error", "cost",
+                "pid_identity", "server_identity", "live", "verdict", "confidence", "error", "formalize_error", "cost",
                 "formalize_in_run")
+
+
+def _source_mode(run: dict) -> str:
+    """"live" when the run's result came from real API calls, else "mock"."""
+    return "live" if run.get("live") else "mock"
+
+
+MOCK_FORMALIZE_WARNING = ("the result was obtained in mock mode; formalization will make "
+                          "paid API calls")
 
 
 def _run_record(run: dict) -> dict:
     """The persisted (JSON-safe) form of a registry entry."""
     rec = {k: run.get(k) for k in _RECORD_KEYS}
+    rec["source_mode"] = _source_mode(run)
     rec["urls"] = {
         "html": run.get("result_html_url"),
         "json": run.get("result_json_url"),
@@ -656,7 +741,9 @@ def _new_run_entry(run_id: str, project: str, run_dir: Path, live: bool) -> dict
         "run_dir": str(run_dir),
         "live": live,
         "pid": None,
+        "pid_identity": None,
         "server_pid": os.getpid(),
+        "server_identity": process_identity(os.getpid()),
         "result_html_url": None,
         "result_json_url": None,
         "result_md_url": None,
@@ -687,6 +774,7 @@ def _settle_dead_locked(run: dict, reason: str) -> None:
         run["error"] = reason
     run["finished"] = run.get("finished") or time.time()
     run["pid"] = None
+    run["pid_identity"] = None
     run["orphan"] = False
     if run.get("started"):
         run["elapsed"] = run["finished"] - run["started"]
@@ -696,10 +784,11 @@ def _settle_dead_locked(run: dict, reason: str) -> None:
 def _is_live_record(rec: dict) -> bool:
     """Does a recorded-active run still have a live process behind it (its own
     subprocess, or the other server that owns/queues it)?"""
-    if _pid_alive(rec.get("pid")):
+    if _pid_matches(rec.get("pid"), rec.get("pid_identity")):
         return True
     owner = rec.get("server_pid")
-    return bool(owner and owner != os.getpid() and _pid_alive(owner))
+    return bool(owner and owner != os.getpid()
+                and _pid_matches(owner, rec.get("server_identity")))
 
 
 def restore_runs() -> list[str]:
@@ -737,7 +826,8 @@ def restore_runs() -> list[str]:
             rec = {"status": "completed" if has_result else "interrupted",
                    "started": mtime, "finished": mtime}
         run = _new_run_entry(run_id, rec.get("project"), run_dir, bool(rec.get("live")))
-        for key in ("status", "started", "finished", "pid", "server_pid", "live", "verdict",
+        for key in ("status", "started", "finished", "pid", "pid_identity", "server_pid",
+                    "server_identity", "live", "verdict",
                     "confidence", "error", "formalize_error", "cost", "formalize_in_run"):
             if key in rec:
                 run[key] = rec[key]
@@ -786,8 +876,9 @@ def _watch_orphan(run_id: str) -> None:
             alive = _is_live_record(run)
             cancel = bool(run.get("cancel_requested"))
             pid = run.get("pid")
+            pid_identity = run.get("pid_identity")
         if cancel and pid:
-            _kill_pid(pid)
+            _kill_pid(pid, pid_identity)
         if not alive:
             with _runs_lock:
                 run = _runs.get(run_id)
@@ -852,6 +943,7 @@ def _summary_locked(run: dict) -> dict:
         "status": run["status"],
         "project": run.get("project"),
         "live": bool(run.get("live")),
+        "source_mode": _source_mode(run),
         "started": run.get("started"),
         "finished": run.get("finished"),
         "elapsed": _elapsed(run),
@@ -970,6 +1062,7 @@ def api_cancel(run_id: str) -> dict:
         run["cancel_requested"] = True
         proc = run.get("proc")
         orphan_pid = run.get("pid") if run.get("orphan") else None
+        orphan_identity = run.get("pid_identity")
     # Wake any thread blocked waiting for a concurrency slot (a queued run
     # notices cancel_requested there and never launches a subprocess).
     with _concurrency_lock:
@@ -980,7 +1073,7 @@ def api_cancel(run_id: str) -> dict:
     if proc is not None:
         _terminate_process(proc)
     elif orphan_pid:
-        _kill_pid(orphan_pid)  # adopted foreign run: settled by its watcher
+        _kill_pid(orphan_pid, orphan_identity)  # adopted foreign run: settled by its watcher
     return {"run_id": run_id, "status": "cancelling"}
 
 
@@ -1072,6 +1165,7 @@ def _spawn_and_wait(run_id: str, cmd: list[str], env_overrides: dict[str, str]):
         if run is not None:
             run["proc"] = proc
             run["pid"] = proc.pid
+            run["pid_identity"] = process_identity(proc.pid)
             _persist_locked(run)
     if cancel_now:
         _terminate_process(proc)
@@ -1101,6 +1195,7 @@ def _spawn_and_wait(run_id: str, cmd: list[str], env_overrides: dict[str, str]):
         if run is not None:
             run["proc"] = None
             run["pid"] = None
+            run["pid_identity"] = None
     return rc, outcome, stderr_tail
 
 
@@ -1211,6 +1306,7 @@ def _mark_formalizing_locked(run: dict, keep_elapsed: bool = False) -> None:
     if not keep_elapsed:
         run["elapsed"] = None
     run["server_pid"] = os.getpid()
+    run["server_identity"] = process_identity(os.getpid())
     _persist_locked(run)
 
 
@@ -1254,11 +1350,16 @@ def api_formalize(run_id: str, payload: dict | None = None) -> dict:
                 "the result is already formalized and machine-checked (proved); "
                 "send {\"force\": true} to run it again (the proof is kept unless the new "
                 "attempt proves it as well)")
+        source_mode = _source_mode(run)
         _mark_formalizing_locked(run)
 
     threading.Thread(target=_formalize_worker, args=(run_id, project, run_dir, settings, force),
                      daemon=True).start()
-    return {"run_id": run_id, "status": "formalizing", "log_url": f"/api/log/{run_id}"}
+    out = {"run_id": run_id, "status": "formalizing", "log_url": f"/api/log/{run_id}",
+           "source_mode": source_mode}
+    if source_mode == "mock":
+        out["warning"] = MOCK_FORMALIZE_WARNING
+    return out
 
 
 def _formalize_worker(run_id: str, project: str, run_dir: Path, settings: dict,

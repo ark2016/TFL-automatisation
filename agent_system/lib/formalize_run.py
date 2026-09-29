@@ -675,12 +675,16 @@ def run_formalization(
     old_block = _get_path(result, spec.block_path)
     old_block = old_block if isinstance(old_block, dict) else None
 
-    if old_block and old_block.get("status") == "proved":
-        if not force or not old_block.get("baseline"):
-            return {"status": "proved", "direction": old_block.get("direction"), "proved": True,
-                    "skipped": True, "attempts": len(old_block.get("attempts") or []),
-                    "usage": old_block.get("usage"), "files": [],
-                    "reason": "already proved; nothing to do (use --force to re-run)"}
+    if old_block and old_block.get("status") == "proved" and not force:
+        # Without --force a proved block is left alone. With --force the re-run
+        # always happens -- also for a block written inside a pipeline run,
+        # which has no "baseline": then the current (already gated) values
+        # become the baseline, and a re-run that does not prove it again keeps
+        # the standing proof (see _keep_proved).
+        return {"status": "proved", "direction": old_block.get("direction"), "proved": True,
+                "skipped": True, "attempts": len(old_block.get("attempts") or []),
+                "usage": old_block.get("usage"), "files": [],
+                "reason": "already proved; nothing to do (pass --force to run it again)"}
 
     def log(msg: str) -> None:
         if verbose:
@@ -933,9 +937,12 @@ def _finish(prep: Prepared, spec: SystemSpec, block: dict, old_block: dict | Non
     files.append(prep.result_path.name)
     for fmt in ("md", "html"):
         path = prep.run_dir / f"{prep.stem}_result.{fmt}"
+        # Render into a scratch file, then replace the real one in a single
+        # step: a cancel in the middle never leaves a broken md/html behind.
+        scratch = path.with_name(path.name + ".render.tmp")
         try:
-            spec.render_file(result, str(path), fmt)
-            text = path.read_text(encoding="utf-8")
+            spec.render_file(result, str(scratch), fmt)
+            text = scratch.read_text(encoding="utf-8")
             if fmt == "md":
                 text = text.rstrip("\n") + "\n" + formalization_markdown(block)
             else:
@@ -944,6 +951,11 @@ def _finish(prep: Prepared, spec: SystemSpec, block: dict, old_block: dict | Non
             files.append(path.name)
         except Exception as exc:  # noqa: BLE001 -- a renderer bug must not lose the JSON
             print(f"Renderer ({fmt}) failed: {exc}", file=sys.stderr)
+        finally:
+            try:
+                scratch.unlink()
+            except OSError:
+                pass
 
     if pw is not None:
         pw.merge({"formalization": block})          # the snapshot no longer says "running"

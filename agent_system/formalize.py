@@ -51,57 +51,57 @@ def build_plan(result: dict, direction: str) -> Any:
 
 
 def apply_gate(result: dict, block: dict) -> bool:
-    """R-Lean over an assembled REG result: mirrors the ``lean_proved``
-    branches of ``graph.assemble_result_node`` (a machine-checked proof takes
-    priority over every other track: success, verified 0.98, the verdict flips
-    to the proven direction, no contradiction left standing).  One deliberate
-    difference: the verdict is set to the proven direction whenever it differs
-    from the standing one, also when the standing one was cleared by an
-    unresolved R3 contradiction."""
-    from .graph import _set_reasoning_verdict
-    from .lib.claim_verifier import CONFIDENCE_CAPS, compute_lean_proof_trust
+    """R-Lean over an assembled REG result. The decision itself
+    (``lib/reg_lean_gate.lean_gate_decision``) is the very one
+    ``graph.assemble_result_node`` uses, so a proof gives the same status,
+    confidence, gate and verdict here as inside a run: success, verified 0.98,
+    no contradiction standing; the reasoning verdict flips to the proven
+    direction only when it is set and disagrees (recorded in ``downgrades``).
+    A result whose reasoning agent escalated is left alone, as in the graph.
 
-    trust = compute_lean_proof_trust(block)
-    direction = trust["direction"]
-    if trust["trust"] != "verified" or direction not in DIRECTIONS:
-        return False
+    The result is already assembled, so two things the graph never sees are
+    restored: a reasoning verdict cleared by an unresolved R3 contradiction
+    (which the graph would not have applied next to a proof) gets the proven
+    direction back, and that stale contradiction downgrade is dropped."""
+    from .lib.reg_lean_gate import lean_gate_decision, set_reasoning_verdict
 
     evidence = result.setdefault("evidence", {})
+    reasoning, r_ev = _reasoning(result)
+    action = r_ev.get("action", reasoning.get("action", ""))
+    if action == "escalate":
+        return False
+    prior = r_ev.get("verdict", reasoning.get("verdict"))
+    decision = lean_gate_decision(block, prior)
+    if decision is None or decision["direction"] not in DIRECTIONS:
+        return False
+    direction = decision["direction"]
+
     gate = dict(evidence.get("verdict_gate") or result.get("verdict_gate") or {})
     basis = list(gate.get("basis") or [])
     downgrades = list(gate.get("downgrades") or [])
-    _, r_ev = _reasoning(result)
-    prior = r_ev.get("verdict", (evidence.get("reasoning") or {}).get("verdict"))
-    # No reasoning agent ran (or its verdict was cleared): the standing verdict
-    # is whatever the result reports (hypothesis fallback).
-    standing = prior or (result.get("verdict") if result.get("verdict") in DIRECTIONS else None)
-    verified = CONFIDENCE_CAPS["verified"]
+    cleared = bool(gate.get("contradiction")) and not prior
+    if cleared:
+        downgrades = [d for d in downgrades if not str(d).startswith("contradiction:")]
 
-    basis.append({"agent": "formalizer", "trust": "verified", "basis": "lean_proof"})
-    if standing != direction:
-        if prior:
-            was = f"reasoning verdict '{prior}'"
-        elif standing:
-            was = f"the standing verdict '{standing}'"
-        else:
-            was = "the (inconclusive) standing verdict"
-        downgrades.append(
-            f"lean proof of '{direction}' overrides {was} "
-            f"-> verified {verified} (VERDICT_POLICY.md R-Lean: a "
-            "machine-checked proof takes priority over every other track)"
-        )
-        _set_reasoning_verdict(evidence, direction)
+    # A forced re-run over a block gated inside a pipeline run meets its own
+    # earlier entries: never list them twice.
+    basis = [b for b in basis if b != decision["basis"]] + [decision["basis"]]
+    if decision["override"] and decision["downgrade"] not in downgrades:
+        downgrades.append(decision["downgrade"])
+        set_reasoning_verdict(evidence, direction)
+    elif cleared:
+        set_reasoning_verdict(evidence, direction)
     gate.update({
         "basis": basis,
         "contradiction": False,
         "downgrades": downgrades,
-        "confidence_cap": verified,
+        "confidence_cap": decision["confidence"],
     })
     evidence["verdict_gate"] = gate
     evidence.pop("needs_human_review", None)
     result["verdict_gate"] = copy.deepcopy(gate)
-    result["status"] = "success"
-    result["confidence"] = verified
+    result["status"] = decision["status"]
+    result["confidence"] = decision["confidence"]
     return True
 
 
