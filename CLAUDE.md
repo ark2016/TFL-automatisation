@@ -34,26 +34,26 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
   session); never as an automatic step of a workflow, round or review. All verification defaults to mock mode. When a live run
   is requested, use Haiku only (`TFL_MODEL_OVERRIDE=claude-haiku-4-5 ... --live`), state the estimated cost first, and run the
   smallest task set that answers the question. Opus runs cost real money — only on request.
-- `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables the Lean formalization step (`agent_system` `formalizer`, `cfl_system`/`dcfl_system` `lean_formalize_node`; `ll_system` has none) by default for every
+- `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables the Lean formalization step (`agent_system` builds a fixed theorem statement from the IR and asks its formalizer for only the proof body; `cfl_system`/`dcfl_system` run `lean_formalize_node`; `ll_system` has no Lean path) by default for every
   run, without passing `--formalize` each time; unset/other values keep it opt-in per `--formalize`. This only
   turns on the pipeline step; it does not by itself spend API budget. Within that step, Lean **type-checking**
   (`agent_system/lib/type_check.py`, `docker run ... lake env lean`) runs locally in Docker as ordinary pipeline
   work, no live-call rule applies to it. Writing the Lean **proof body** is an LLM call and follows the live-run
   rule above like every other agent call: mock mode by default, live only on explicit request with an agreed
   budget. Formalization is also a separate entry over a finished run (`python -m <system>.formalize <run_dir>`, "Formalize" button in TFL Lab; needs `confirm_spend`); in-run it stays opt-in. See README.md "R-Lean architecture" and `docs/VERDICT_POLICY.md`'s R-Lean rule.
-- Eval set: `docs/EVAL_SET.md` (73 tasks, expected verdicts) is run by `tfl-eval` (`tfl_eval/`), which reports
+- Eval set: `docs/EVAL_SET.md` (74 tasks, expected verdicts) is run by `tfl-eval` (`tfl_eval/`), which reports
   accuracy/calibration metrics — see `README.md` and `TODO.md` §7. Mock mode by default; `--live` only on request.
-  Live results so far: `docs/EVAL_RESULTS.md` (24 trap tasks on Haiku, 2026-09-27) — read it before claiming a
-  pipeline is or isn't calibrated; a full 73-task run and a post-C2 re-run are still open.
+  The current manifest contains 25 trap tasks. `docs/EVAL_RESULTS.md` records a historical Haiku run over 24 traps
+  (2026-09-27); read it before claiming a
+  pipeline is or isn't calibrated; a full 74-task run and a post-C2 re-run are still open.
 - Model prices live in each project's `config.py` alongside `EFFORT`/`MAX_TOKENS` (see "Models and LLM calls"
   above) — change the pricing table there, in all four projects together, not in docs.
 
 ## Commands
 ```bash
-# Tests: the root conftest.py + pyproject.toml testpaths make a bare `pytest` safe now
-# (it strips ANTHROPIC_API_KEY and stubs anthropic.Anthropic), but prefer explicit paths for speed:
-.venv/Scripts/python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests ui_server/tests tests -q
-# or simply:
+# Tests: pyproject.toml testpaths includes tfl_eval/tests and excludes the legacy
+# pumping_lemma/tests that call the real Anthropic API. The root conftest also
+# strips ANTHROPIC_API_KEY and stubs anthropic.Anthropic.
 .venv/Scripts/python -m pytest -q
 
 # Any pipeline, shared CLI contract (writes <stem>_result.{json,md,html})

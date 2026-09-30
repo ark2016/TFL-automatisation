@@ -62,7 +62,7 @@ def build_parse_table(
 
     for rule in grammar["rules"]:
         lhs: str = rule["lhs"]
-        rhs: list[str] = rule["rhs"]
+        rhs: list[str] = [] if _is_epsilon_rhs(rule["rhs"]) else rule["rhs"]
 
         ds = director_set(grammar, lhs, rhs, k, first_k, follow_k, nullable)
 
@@ -155,7 +155,9 @@ def _full_ll_k_test(
     rules_by_lhs: dict[str, list[list[str]]] = {}
     for rule in grammar["rules"]:
         rhs = [] if _is_epsilon_rhs(rule["rhs"]) else list(rule["rhs"])
-        rules_by_lhs.setdefault(rule["lhs"], []).append(rhs)
+        alternatives = rules_by_lhs.setdefault(rule["lhs"], [])
+        if rhs not in alternatives:
+            alternatives.append(rhs)
 
     # (nonterminal, rhs1, rhs2, lookahead) -> set of σ(A) contexts (each a
     # frozenset of strings) that produce this lookahead conflict
@@ -241,6 +243,10 @@ def check_ll_k(
       require exponentially many tables in the worst case and needs a
       *time_budget_s* / *max_tables* budget.
 
+    The time budget covers local-follow enumeration and the full-table test
+    only. Exact NULLABLE/FIRST/FOLLOW computation and the strong test run
+    before that deadline starts; this is not a wall-clock cap on this call.
+
     Returns a result dict with keys:
     - ``"is_ll_k"`` (bool | None) — ``None`` when the budget was exhausted
       before a conclusive answer (see ``"test_complete"``).
@@ -318,9 +324,10 @@ def find_min_ll_k(
     Absent a certificate (e.g. an essentially-ambiguous grammar with no left
     recursion), exhausting k ≤ *max_k* without success is reported as
     "not LL(k) for k ≤ max_k_checked" — not a claim about every k. And when
-    any of the checked k's hit its own budget (``test_complete`` False, i.e.
-    ``is_ll_k`` came back ``None``) before a witness was found, the search
-    result is flagged ``"undetermined"`` — the true answer might lie in the
+    a checked k hits its own budget (``test_complete`` False, i.e.
+    ``is_ll_k`` came back ``None``), the search stops with
+    ``"undetermined"`` — a larger witnessed k could not establish minimality;
+    the true answer might lie in the
     unchecked (or budget-cut) part of the search space, so callers must not
     treat "not found" as a conclusive negative in that case (docs/THEORY.md
     §3.1: "лимит ⇒ unknown").
@@ -336,9 +343,8 @@ def find_min_ll_k(
     - ``"max_k_decided"`` (int) — the highest k for which ``check_ll_k``
       returned a *conclusive* answer (``test_complete`` True); can be less
       than ``max_k_checked`` when the budget ran out partway through
-    - ``"undetermined"`` (bool) — True when the search stopped without
-      finding an LL(k) witness *and* at least one checked k was itself
-      inconclusive (budget-limited) rather than conclusively not-LL(k)
+    - ``"undetermined"`` (bool) — True when the search stopped at an
+      inconclusive k or exhausted its time budget before finding a witness
     - ``"result_for_k"`` (dict) — ``check_ll_k`` result for the winning k, or
       for the last k checked when not found (``{}`` when short-circuited)
     - ``"certificate"`` (dict | None) — ``{"type": "left_recursion", ...}``
@@ -385,6 +391,7 @@ def find_min_ll_k(
     # has already answered the question the caller asked).
     for k in range(1, max_k + 1):
         if deadline is not None and time.monotonic() > deadline:
+            undetermined = found_k is None
             break
         max_k_checked = k
 
@@ -392,10 +399,10 @@ def find_min_ll_k(
             remaining = (deadline - time.monotonic()) if deadline is not None else None
             result = check_ll_k(grammar, k, time_budget_s=remaining)
             last_result = result
-            if result.get("test_complete", True):
-                max_k_decided = k
-            else:
+            if result.get("is_ll_k") is None or not result.get("test_complete", True):
                 undetermined = True
+                break
+            max_k_decided = k
             if strong_k is None and result.get("is_strong_ll_k"):
                 strong_k = k
             if result.get("is_ll_k") is True:

@@ -18,6 +18,7 @@ from agent_system.lib import formalize_run as fr
 from . import config
 
 DIRECTIONS = ("dcfl", "non_dcfl")
+_PROOF_FIELDS = ("proof_method", "proof_sketch", "proof_text")
 
 
 def pick_direction(result: dict, ir: dict) -> tuple[str | None, str]:
@@ -59,6 +60,20 @@ def apply_gate(result: dict, block: dict) -> bool:
     out = _apply_lean_gate(_reasoning_view(result), block)
     if block.get("status") != "proved" or out.get("verdict") is None:
         return False
+    if result.get("verdict") != out["verdict"]:
+        # Older saved blocks predate these proof-field snapshots. Their
+        # proof fields are still the specialist baseline at this point.
+        baseline = block.get("baseline")
+        if isinstance(baseline, dict):
+            for field, value in fr.snapshot_baseline(result, _PROOF_FIELDS).items():
+                baseline.setdefault(field, value)
+        result["proof_method"] = "lean_formalizer"
+        result["proof_sketch"] = None
+        proof = f"Lean-verified {out['verdict']} (machine-checked proof)."
+        if block.get("proof_body"):
+            proof += "\n\n" + block["proof_body"]
+        result["proof_text"] = proof
+        out["primary_evidence"] = "lean_formalizer"
     result["verdict"] = out["verdict"]
     result["confidence"] = out["confidence"]
     result["verdict_gate"] = out["verdict_gate"]
@@ -94,7 +109,7 @@ def build_spec() -> fr.SystemSpec:
         apply_gate=apply_gate,
         render_file=_render_file,
         baseline_paths=("verdict", "confidence", "verdict_gate", "primary_evidence",
-                        "reasoning_summary"),
+                        "reasoning_summary", *_PROOF_FIELDS),
         block_path=("formalization",),
         available_lemmas=(),
         default_retries=config.FORMALIZE_RETRIES,

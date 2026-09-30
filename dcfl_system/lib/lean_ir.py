@@ -67,6 +67,7 @@ from agent_system.lib.lean_ir import (
     word_template_body,
 )
 from cfl_system.lib.exponent_pattern import parse_exponent_pattern
+from dcfl_system.lib.constraints import Comparison, parse_constraints
 
 __all__ = ["render_statement", "render_statement_verbose"]
 
@@ -205,27 +206,18 @@ def _letter_domain_setbuilder(lang_spec: dict, sym_map: dict[str, str]) -> tuple
             domain_conds.append(f"{cid} ≥ 1")
 
     extra_conds: list[str] = []
-    for c in constraints:
-        if not isinstance(c, dict):
+    try:
+        parsed = parse_constraints(constraints, set(count_ident))
+    except (ValueError, TypeError):
+        return None
+    for c in parsed:
+        if not isinstance(c, Comparison) or c.mode != "length":
             return None
-        args = c.get("args")
-        if not isinstance(args, dict):
+        if isinstance(c.right, int) and c.right < 0:
+            # Counts are Nat; do not coerce a negative integer into Nat.
             return None
-        kind = c.get("kind")
-        left, op, right = args.get("left"), args.get("op"), args.get("right")
-        lean_op = _REL_LEAN.get(op) if isinstance(op, str) else None
-        if lean_op is None or left not in count_ident:
-            return None
-        if kind == "length_cmp":
-            if right not in count_ident:
-                return None
-            extra_conds.append(f"{count_ident[left]} {lean_op} {count_ident[right]}")
-        elif kind == "integer_cmp":
-            if not isinstance(right, int) or isinstance(right, bool):
-                return None
-            extra_conds.append(f"{count_ident[left]} {lean_op} {right}")
-        else:
-            return None
+        right = count_ident[c.right] if isinstance(c.right, str) else str(c.right)
+        extra_conds.append(f"{count_ident[c.left]} {_REL_LEAN[c.op]} {right}")
 
     word_expr = " ++ ".join(parts)
     all_conds = domain_conds + extra_conds

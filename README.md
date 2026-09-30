@@ -9,6 +9,11 @@ Multi-agent pipelines for **Theory of Formal Languages** problems — classify a
 
 > The system targets the formal languages course at **ИУ-9, МГТУ им. Баумана**. Inputs are Russian problem statements; outputs are structured Markdown / HTML / JSON reports with LaTeX-typeset proofs, grammar constructions, PDA diagrams, and case analyses.
 
+Offline HTML guides (Russian): [ticket 50 and Lean explained](docs/examples/cfl_ticket50_w1bw2w3_lean_proved/walkthrough.html),
+[interactive architecture audit](docs/architecture_explorer.html), and
+[September 30 fixes, source checks and validation](docs/audit_fixes_2026-09-30.html).
+The architecture guide preserves the pre-fix snapshot; the last report records the corrected behavior and remaining limits.
+
 ---
 
 ## At a glance
@@ -20,7 +25,7 @@ Multi-agent pipelines for **Theory of Formal Languages** problems — classify a
 | **DCFL** — `dcfl_system/` | Deterministic CFL | 8 | DCFL pumping, Shallit's lemma, inherent ambiguity |
 | **LL** — `ll_system/` | LL(k) grammars | 10 | FIRST / FOLLOW, LL(k) conflict detection, left-recursion and factoring transforms |
 
-Each pipeline runs its specialist agents **in parallel**, checks their artifacts against deterministic oracles, and fuses the evidence through a reasoning agent into a verdict and a structured report. REG and CFL additionally audit the chosen proof with an independent proof-checker agent. See [Architecture](#architecture) below.
+Each pipeline runs its specialist agents **in parallel**, checks their artifacts against deterministic oracles, and fuses the evidence through a reasoning agent into a verdict and a structured report. REG and CFL also run an independent LLM proof-checker; its self-assessment alone does not establish `proof_verified`. See [Architecture](#architecture) below.
 
 ---
 
@@ -76,7 +81,7 @@ Artifacts land as `{ir_stem}_result.{json,md,html}` in the `--save` directory; t
 
 ## Architecture
 
-Every pipeline is a **LangGraph `StateGraph`** built on the same pattern: specialists run concurrently via `Send()` fan-out, deterministic oracles check their artifacts, and a reasoning agent consolidates the evidence; disagreements trigger a selective retry. The diagram shows the full topology of **REG and CFL**; DCFL and LL use a subset (see [Pipeline differences](#pipeline-differences)).
+Every pipeline is a **LangGraph `StateGraph`** built on a shared pattern: specialists run concurrently via `Send()` fan-out, deterministic checks inspect their artifacts, and a reasoning agent consolidates the evidence; disagreements can trigger a retry. This is a conceptual overview, not the exact node order of each graph. See the REG path below and [Pipeline differences](#pipeline-differences).
 
 ```mermaid
 flowchart TD
@@ -100,7 +105,7 @@ flowchart TD
     OT --> PC[proof_checker<br/><i>LLM: independent audit</i>]
     PC --> R{reasoning<br/><i>consolidate + verdict</i>}
 
-    R -->|done| F[formalizer<br/><i>structured MD proof</i>]
+    R -->|done| F[proof output / optional formalization]
     R -->|retry| RP[retry_planner<br/><i>pick agents + hints</i>]
     R -->|invert| INV[invert_hypothesis]
 
@@ -115,16 +120,25 @@ flowchart TD
     style F fill:#4a3a1e,stroke:#d4a86a,color:#e6e8ec
 ```
 
-`formalizer` is disabled by default (it's an extra Opus call to turn the reasoning agent's proof sketch into a
-polished, structured Markdown proof). Enable it per run with `--formalize`, or for every run with
-`TFL_FORMALIZATION=1` (also `true`/`yes`/`on`).
+The nodes represented as one proof-output stage above differ by pipeline. REG uses an opt-in Lean formalizer: code
+renders the theorem statement from the input IR, and the LLM supplies only its proof body. CFL's normal formalizer
+returns a structured `proof_document`; its optional Lean formalization is a separate step. DCFL has optional Lean
+formalization without a normal informal formalizer. LL produces structured or plain-language proofs and has no Lean
+path. Lean formalization is enabled per run with `--formalize`, or by default with `TFL_FORMALIZATION=1` (also
+`true`/`yes`/`on`).
+
+REG's actual graph order is: `validate_ir` → `analyze_hypothesis` → `run_classifier` →
+`grammar_preprocess` → `setup_dispatch` → specialist fan-out and collection → `build_oracle` →
+`verify_closure` → `verify_claims` → `oracle_test` → `run_proof_checker` → `run_reasoning` →
+optional Lean `formalize` → `assemble_result`. In particular, the classifier runs before grammar preprocessing,
+and closure verification follows oracle construction.
 
 ### Key properties
 
-- **Fan-out parallelism.** All specialists are dispatched in one `Send()` burst and run concurrently in LangGraph's Pregel thread pool. End-to-end wall time ≈ max(specialist time), not sum.
+- **Fan-out parallelism.** Specialists are dispatched in one `Send()` burst and can run concurrently in LangGraph's Pregel thread pool. A process-wide semaphore limits concurrent API calls to 4 by default (`TFL_MAX_CONCURRENCY` changes the limit), so larger fan-outs run through multiple waves; elapsed time depends on the queue and each wave's call times, not just the slowest single specialist.
 - **Selective retry.** `retry_planner` can re-dispatch a subset of agents with specific hints (e.g. "try pumping word $a^p b^p c^p$ instead of $a^{2p}$") without re-running the whole pipeline.
 - **Hypothesis inversion.** If every specialist under the current guess (`cfl` / `non_cfl`) fails, `invert_hypothesis` flips the hypothesis and restarts the dispatch. Bounded by `MAX_INVERSIONS`.
-- **Error tracking.** `proof_verified: true` is set only if `proof_checker` actually ran and returned `status = verified` (REG / CFL). Agent errors, API failures, and JSON-parse problems are tracked in `state["errors"]` and surfaced in the final result.
+- **Error tracking.** `proof_verified` comes from the verdict gate's `verified` trust basis, which can include deterministic verification such as a checked Lean proof; an LLM proof-checker self-assessment alone cannot set it. Agent errors, API failures, and JSON-parse problems are tracked in `state["errors"]` and surfaced in the final result.
 - **Known limitations.** Claim verifiers that used to mark an agent claim `verified` for being merely well-formed now
   return `well_formed` (see trust taxonomy below); semantic (word-level) verification of the claim's content is only
   partial so far — implemented where an oracle already exists (CFL pumping/ogden/closure_reduction, DCFL pumping/Shallit,
@@ -138,7 +152,7 @@ polished, structured Markdown proof). Enable it per run with `--formalize`, or f
   | trust | meaning | confidence cap |
   |---|---|---|
   | `verified` | deterministic, complete check (LL(k) table, Lean proof w/o `sorry`, regex/DFA regularity) | 0.98 |
-  | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, pumping checked for p ∈ {3,4,5}) | 0.85 |
+  | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, sampled grammar equivalence) | 0.85 |
   | `well_formed` | structure only — fields present, JSON/words parsed | 0.55 |
   | `not_verified` | check impossible or fields missing (verdict must be `inconclusive`/`uncertain`) | 0.40 |
   | unresolved `contradiction` (constructive vs. destructive evidence) | — | 0.50 |
@@ -146,6 +160,9 @@ polished, structured Markdown proof). Enable it per run with `--formalize`, or f
   The result's `verdict_gate` block (`basis`, `contradiction`, `downgrades`, `confidence_cap`) records which trust
   levels backed the verdict and any downgrade the gate applied; renderers label evidence in words (`verified` /
   `bounded_pass` / `well_formed` / `refuted`) rather than a blanket green "verified" banner.
+
+  Checking a pumping argument at selected fixed values of `p` is diagnostic only; it does not raise trust for a
+  universal non-CFL or non-DCFL claim.
 
 ### Pipeline differences
 
@@ -157,7 +174,7 @@ polished, structured Markdown proof). Enable it per run with `--formalize`, or f
 | `proof_checker` agent | ✓ | ✓ | — | — |
 | Retry | LLM planner | LLM planner | rule-based | reasoning-driven |
 | Hypothesis inversion | ✓ | ✓ | — | — |
-| Formalizer | Markdown (+ Lean stubs) | Markdown | renderer only | Markdown |
+| Proof output / formalization | Lean proof body from IR-fixed statement (opt-in) | Structured `proof_document`; optional Lean step | Optional Lean step only | Structured/plain-language proof; no Lean |
 
 ### Live-runner reliability layer
 
@@ -222,7 +239,7 @@ flowchart LR
 - **Closure under boolean ops + concatenation + star.** Reduce unknown language to a known one via $L \cup R$, $L \cap R$, $\overline{L}$, $h^{-1}(L)$.
 - **Grammar analysis.** Right-linear grammars generate exactly regular languages.
 
-Formalizer can emit **Lean 4** proofs in addition to Markdown (optional, gated by `--formalize` and the `tfl-lean4` Docker image); see "R-Lean architecture" below. The same optional step exists in CFL and DCFL.
+REG's opt-in formalizer writes only a Lean proof body for a theorem statement generated from the IR; it does not create a Markdown proof. The optional Lean step also exists in CFL and DCFL, with pipeline-specific behavior described above and in "R-Lean architecture" below.
 
 ### CFL — `cfl_system/`
 
@@ -266,7 +283,7 @@ flowchart LR
 **Theorems / methods** (formulations follow [`docs/THEORY.md`](docs/THEORY.md) §1 — the single source of truth for these lemma statements; change it there first, then in prompts):
 
 - **DCFL pumping lemma (Yu).** Works with *two* words `xy`, `xz ∈ L` sharing a long prefix `x` (|x| > p, first(y) = first(z)). At least one of two conditions must hold: **(1)** a *pair* of factors `x₂, x₄` — the pair may sit **anywhere** in `x`, only the window `|x₂x₃x₄| ≤ p` is bounded — pumps synchronously in both `xy` and `xz`; **(2)** a single factor in the *last* `p` symbols of `x` pumps synchronously with matching factors of `y` and `z`. Refuting **both** for every decomposition shows `L` is not DCFL. (A single-factor reading of condition (1) is unsound — it would wrongly reject DCFLs like {aⁿbⁿcᵐ}.)
-- **Shallit's theorem (Myhill–Nerode classes, [Sh] Thm 4.7.4).** If `L` is a DCFL, at least one Nerode-equivalence class of `L` is infinite. Contrapositive: if **all** classes are finite — every pair of distinct words separable by some suffix — then `L` is not DCFL. The argument only bites if the "dead" class `D = {x | no z: xz ∈ L}` is finite (usually `D = ∅`); an infinite dead class makes the theorem vacuously true and the method inapplicable (`not_applicable`), so it must be checked first.
+- **Shallit's theorem (Myhill–Nerode classes, [Sh] Thm 4.7.4).** If `L` is a DCFL, at least one Nerode-equivalence class of `L` is infinite. Thus, showing that all classes are finite proves `L` is not DCFL. This includes the "dead" class `D = {x | no z: xz ∈ L}`: over a nonempty alphabet, `D` is closed under right extension, so it is either empty or infinite, and the theorem gives no conclusion when it is infinite. A bounded membership-oracle search can find evidence that a word has no short continuation, but that does not prove `D` is empty; the current search leaves that claim unresolved.
 - **Continuation lemma.** For a DCFL `L`, `haspref(L) = {xy | x, xy ∈ L, y ≠ ε}` and `L_$ = {x$y | x, xy ∈ L}` are also DCFL. Since DCFL ⊆ CFL and DCFLs are closed under ∩ REG, showing `L_$ ∩ R` is not CFL for some regular `R` proves `L` is not DCFL — a route around languages where direct pumping/Shallit arguments are awkward.
 
 **Constructive DCFL certificate (R2′, [`docs/VERDICT_POLICY.md`](docs/VERDICT_POLICY.md)).** A positive (`dcfl`)
@@ -401,14 +418,14 @@ Each pipeline follows the same module split — `config.py` (models, effort), `p
 Pure-function modules have pytest coverage; LLM-driven layers are covered by mock-mode integration tests and by request-building tests against a mocked Anthropic client. No test calls the API.
 
 ```bash
-.venv/Scripts/python -m pytest agent_system/tests cfl_system/tests \
-                               dcfl_system/tests ll_system/tests ui_server/tests -q
+.venv/Scripts/python -m pytest -q
 # → 1383 passed, 3 skipped
 ```
 
-The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-lean4` image.
+The configured `testpaths` include `tfl_eval/tests` and exclude the legacy `pumping_lemma/tests`, which call the
+real Anthropic API. The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-lean4` image.
 
-> Run pytest with these explicit paths. A bare `pytest` from the repo root also collects the legacy `pumping_lemma/tests`, which **call the real API** with the key from `.env`.
+The root `conftest.py` also strips `ANTHROPIC_API_KEY` and blocks live Anthropic client calls during test runs.
 
 ---
 
@@ -418,12 +435,13 @@ The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-le
 
 The policy behind this is `docs/VERDICT_POLICY.md`'s **R-Lean** rule — change it there first, this is a summary.
 
-**Wired in all three main pipelines: REG, CFL, DCFL** (LL(k) is not formalized). Each has the same loop:
-statement from the IR (`lib/lean_ir.py`, code, never the LLM) -> `lean_formalizer`/`formalizer` agent writes the proof
-body -> `compose_lean_file` + `check_lean_file` (Docker, up to `MAX_FORMALIZE_ITERATIONS` = 3 rounds, errors fed back,
-statement never changes) -> gate. Entry points: `agent_system/graph.py` (`formalize_node` + `assemble_result_node`),
-`cfl_system/orchestrator.py` and `dcfl_system/orchestrator.py` (`lean_formalize_node`; in CFL it runs after the
-Markdown `formalize_node`, which is a separate, Lean-free step). A `proved` result raises trust to `verified`
+**Wired in REG, CFL, and DCFL** (LL(k) has no Lean path), with pipeline-specific formalizers. REG's `formalize_node`
+uses code to render the theorem statement from the IR and asks its formalizer for only the proof body. CFL and DCFL
+use their `lean_formalize_node` and `lean_formalizer`; CFL runs this optional step after its normal informal
+`formalize_node`, which returns a structured `proof_document`. In each Lean loop, `compose_lean_file` and
+`check_lean_file` run in Docker (up to `MAX_FORMALIZE_ITERATIONS` = 3 rounds, with errors fed back and the statement
+held fixed) before the verdict gate. Entry points: `agent_system/graph.py` (`formalize_node` +
+`assemble_result_node`), `cfl_system/orchestrator.py`, and `dcfl_system/orchestrator.py`. A `proved` result raises trust to `verified`
 (0.98) and can flip the verdict in both directions. The step is off by default: `--formalize` or
 `TFL_FORMALIZATION=1`; the result is in `result["formalization"]` (the CFL/DCFL renderers do not show it yet).
 
@@ -445,7 +463,8 @@ each `config.py` (`MODELS["formalizer_retry"]` / `["lean_formalizer_retry"]`, `F
 - **Statement is code, proof body is the LLM.** The Lean file's theorem *statement* (alphabet type, language
   definition, the claim itself) is generated **deterministically from the IR** by
   `agent_system/lib/lean_ir.py` (and the `cfl_system`/`dcfl_system` wrappers around it) — never by the LLM. The
-  `formalizer` agent only fills in the proof *body* between the statement and its final token. This exists because
+In REG, the `formalizer` agent only fills in the proof *body* between the statement and its final token. CFL/DCFL
+use their `lean_formalizer` agents for this role. This exists because
   an LLM asked to write the whole file can "prove" `theorem … : True := by sorry` and have it technically compile;
   a code-generated statement makes that impossible.
 - **Harness.** `agent_system/lib/type_check.py` composes the file (`compose_lean_file`), runs it inside the
@@ -587,7 +606,7 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 ## Design non-goals
 
 - **Not a solver for arbitrary undecidable questions.** All four pipelines assume the input is a well-posed problem from the exam problem set — the class being tested is decidable or admits a standard proof technique.
-- **Not a formal proof assistant.** Proofs are natural-language Markdown; the `proof_checker` agent is an independent LLM audit, not a machine-checked verification. Lean proofs (REG, CFL, DCFL; `proved` only) are the closest this project gets to machine-checked proofs, and even those are opt-in.
+- **Not a general formal proof assistant.** Most proof output is natural-language or structured content, and the `proof_checker` is an LLM audit rather than machine verification. Only a Lean result with status `proved` is machine-checked; Lean is opt-in in REG, CFL, and DCFL, while LL has no Lean path.
 - **No multi-user state.** TFL Lab binds to `127.0.0.1` and has no auth. It is a single-user research tool.
 
 ---

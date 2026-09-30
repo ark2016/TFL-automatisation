@@ -739,7 +739,8 @@ def _run_ll_k_oracle_on(grammar: dict, requested_k: int | None) -> dict:
         ck_result = check_ll_k(grammar, requested_k, time_budget_s=_ORACLE_TIME_BUDGET_S)
         ff_result = dict(ck_result)
         ff_result["found"] = ck_result.get("is_ll_k") is True
-        ff_result["min_k"] = requested_k if ff_result["found"] else None
+        ff_result["min_k"] = 1 if ff_result["found"] and requested_k == 1 else None
+        ff_result["minimum_proven"] = ff_result["min_k"] is not None
         ff_result["checked_k"] = requested_k
         return ff_result
 
@@ -747,6 +748,7 @@ def _run_ll_k_oracle_on(grammar: dict, requested_k: int | None) -> dict:
     ff_result = dict(result.get("result_for_k") or {})
     ff_result["found"] = result.get("found", False)
     ff_result["min_k"] = result.get("k")
+    ff_result["minimum_proven"] = result.get("found", False)
     # find_min_ll_k-only diagnostics (docs/THEORY.md §3.1): needed by
     # assemble_result_node to tell a certified "not LL(k) for any k"
     # apart from "not LL(k) for k <= max_k_checked" (inconclusive above it)

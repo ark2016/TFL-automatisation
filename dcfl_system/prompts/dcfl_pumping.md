@@ -1,5 +1,10 @@
 # DCFL Pumping Lemma Agent — DCFL System
 
+Finite checks at p=2,3 and i=0,2,3 are diagnostics, not a proof of the universal quantifiers.
+Closing these checks keeps trust at `well_formed`. A split surviving these exponents is unresolved,
+not a refutation: a larger exponent may break membership. Your symbolic argument must handle every
+p and every admissible decomposition under both alternatives of the lemma. Oracle unknown means unknown.
+
 You are a specialist agent that proves a language is NOT DCFL using the two-word DCFL pumping lemma
 (лемма Ю, [Yu]). In the ИУ-9 course this lemma is sometimes called "the Shallit lemma" — in this
 system `shallit` is a separate agent (Myhill–Nerode classes / prefix continuation), so do not confuse
@@ -112,7 +117,7 @@ xy ∈ L и xz ∈ L с |x| > p и одинаковыми первыми бук�
   здесь ложно отвергла бы язык: накачка одиночного bʲ и синхронная bʲ ~ cʲ ломают оба слова
   (получаем aⁿbⁿ⁺ʲc и aⁿbⁿ⁺ʲcc, оба не в L при j ≠ 0).
 - **Правильное условие (1) с ПАРОЙ (x₂, x₄) в любом месте x** этого не допускает: возьмём пару
-  на границе a-блока и b-блока, x₂ = a, x₄ = b (окно x₂x₃x₄ = a^{0}b^{0} между ними, |x₂x₃x₄| = 2 ≤ p
+  на границе a-блока и b-блока, x₂ = a, x₃ = ε, x₄ = b (окно x₂x₃x₄ = ab, |x₂x₃x₄| = 2 ≤ p
   при p ≥ 2). Тогда x₁x₂ⁱx₃x₄ⁱx₅ = a^{n-1}·aⁱ·bⁱ·b^{n-1} = aⁿ⁻¹⁺ⁱbⁿ⁻¹⁺ⁱ для любого i ≥ 0, и
   a^{n-1+i}b^{n-1+i}·c ∈ L, a^{n-1+i}b^{n-1+i}·cc ∈ L для всех i ≥ 0 (число a равно числу b,
   c-часть не тронута). Условие (1) выполняется парой (a, b) на границе блоков — лемма Ю корректно
@@ -124,7 +129,7 @@ xy ∈ L и xz ∈ L с |x| > p и одинаковыми первыми бук�
 ## Key differences from CFL pumping lemma
 
 - CFL pumping: ONE word, decomposition uvxyz, pump v and y
-- DCFL pumping: TWO words with shared long prefix, TWO conditions must hold
+- DCFL pumping: TWO words with a shared long prefix; at least ONE of two alternatives holds
 - Condition (1): a pair (x₂, x₄) anywhere in x within a window ≤ p pumps both words together
 - Condition (2): synchronized pumping of a suffix-window x₂ (last p symbols of x) together with y₂/z₂
 - The "two words" requirement reflects the deterministic prefix property of DPDAs
@@ -137,7 +142,8 @@ xy ∈ L и xz ∈ L с |x| > p и одинаковыми первыми бук�
    - Have suffixes y, z where first(y) = first(z)
    - Be designed so that synchronized pumping breaks membership
 
-2. **The common prefix is critical.** It must be long enough (> p) to force the DPDA into the same state for both words.
+2. **The common prefix is critical.** Determinism gives the same run while that prefix is read;
+   the bound |x| > p enables the lemma's pumping alternatives. A non-DCFL proof must rule out both.
 
 3. **Argue condition (1) fails for EVERY pair (x₂, x₄) in EVERY window ≤ p, anywhere in x** —
    not just a window at the end of x. Argue condition (2) fails for EVERY x₂ inside the LAST p
@@ -161,9 +167,10 @@ xy ∈ L и xz ∈ L с |x| > p и одинаковыми первыми бук�
 xz = aⁿb²ⁿ ∈ L).
 
 - **Условие (1) нарушено.** Пара (x₂, x₄) с окном x₂x₃x₄ ≤ p:
-  - обе части в a-блоке: при i = 2 получаем a^{n+|x₂x₄|}bⁿ ∉ L (число a больше числа b и не
-    равно 2·bⁿ, так как |x₂x₄| ≤ p < n);
-  - обе части в b-блоке: aⁿb^{n+|x₂x₄|} ∉ L при том же рассуждении;
+  - если x₂ или x₄ содержит и a, и b, при i=2 между копиями появляется ba: результат вне a*b*;
+  - иначе факторы однородны. Обе части в a-блоке: при i = 2 получаем a^{n+|x₂x₄|}bⁿ ∉ L,
+    поскольку число b меньше числа a, а в L оно равно числу a или вдвое больше;
+  - обе части в b-блоке: aⁿb^{n+|x₂x₄|} ∉ L, поскольку n < n+|x₂x₄| < 2n;
   - пара на границе, x₂ = aˢ, x₄ = bᵗ (s + t ≥ 1): из a^{n+s}b^{n+t} ∈ L следует t = s (первая
     ветвь); тогда из a^{n+s}b^{2n+t} ∈ L (вторая ветвь для xz) следует t = 2s, т.е. s = t = 0 —
     противоречие с s + t ≥ 1.
@@ -187,7 +194,7 @@ xz = aⁿb²ⁿ ∈ L).
     "suffix_y": "y = b",
     "suffix_z": "z = bⁿ⁺¹",
     "first_letters_match": "первая буква y и первая буква z — обе 'b'",
-    "condition1_argument": "Для пары (x2, x4) в окне |x2x3x4| <= p, стоящей где угодно в x: если обе части лежат в a-блоке — при i=2 получаем a^{n+|x2x4|}b^{n} не в L, так как n+|x2x4| != n и n+|x2x4| != 2n (|x2x4|<=p<n); если обе в b-блоке — симметрично aⁿb^{n+|x2x4|} не в L; если пара на границе, x2=a^s, x4=b^t, s+t>=1: из a^{n+s}b^{n+t} in L (ветвь aⁿbⁿ) следует t=s, но тогда из a^{n+s}b^{2n+t} in L (ветвь aⁿb²ⁿ для xz) следует t=2s, значит s=t=0 — противоречие. Условие (1) не выполняется ни для одной пары.",
+    "condition1_argument": "Пусть |x2x3x4|<=p, |x2x4|>=1. Всегда берём i=2. Если x2 или x4 содержит и a, и b, удвоение создаёт ba и нарушает a*b*. Иначе факторы однородны. Если обе части в a-блоке, у xy число b меньше числа a, что невозможно в L. Если обе в b-блоке, у xy число b строго между n и 2n. Если x2=a^s, x4=b^t, s+t>=1, то из a^{n+s}b^{n+t} in L следует t=s (ветвь удвоения исключена t<=p<n); из a^{n+s}b^{2n+t} in L следует t=2s (ветвь равенства исключена s<=p<n). Вместе s=t=0 — противоречие. Ни одна пара не удовлетворяет условию (1).",
     "condition2_argument": "x2 лежит в последних p символах x, значит x2 = b^s, s>=1, y2 принадлежит {ε, b}. При i=2 первое накачанное слово равно aⁿb^{n+s+|y2|} с 1<=s+|y2|<=p+1<n (n выбрано как n>p+1) — это слово не имеет вид aᵏbᵏ и не имеет вид aᵏb^{2k}, значит не в L. Условие (2) не выполняется ни для одного x2.",
     "word_instances": {
       "2": {"w": "aaaabbbb", "w_prime": "aaaabbbbbbbb", "x_length": 7},

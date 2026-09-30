@@ -48,6 +48,10 @@ that D is finite (in the typical case D = ∅: every prefix extends to a word of
 show D is finite, the method does not apply — return `"uncertain"` (`not_applicable`), never claim
 `not_ll` on the strength of an infinite dead class.
 
+A bounded suffix search can witness that a prefix extends into L. Failing
+to find a suffix within that bound leaves continuability unknown; it does
+not prove that the prefix is dead or that D is infinite.
+
 ---
 
 ## Classic Example: {wwᴿ | w ∈ {a,b}*}

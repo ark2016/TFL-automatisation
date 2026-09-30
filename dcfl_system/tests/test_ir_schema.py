@@ -230,12 +230,21 @@ class TestSetBuilderSpec:
         assert any("args" in e for e in errors)
 
     @pytest.mark.parametrize(
-        "kind",
-        ["length_cmp", "regex_member", "equal", "reverse", "integer_cmp", "disjunction"],
+        "constraint",
+        [
+            {"kind": "length_cmp", "args": {"left": "a", "op": "==", "right": "a"}},
+            {"kind": "regex_member", "args": {"var": "a", "pattern": "a*"}},
+            {"kind": "equal", "args": {"left": "a", "right": "a"}},
+            {"kind": "reverse", "args": {"left": "a", "right": "a"}},
+            {"kind": "integer_cmp", "args": {"left": "a", "op": ">", "right": 0}},
+            {"kind": "disjunction", "args": {"branches": [
+                {"kind": "integer_cmp", "args": {"left": "a", "op": ">", "right": 0}},
+            ]}},
+        ],
     )
-    def test_all_valid_constraint_kinds(self, kind: str) -> None:
+    def test_all_valid_constraint_kinds(self, constraint: dict) -> None:
         ir = _minimal_set_builder_ir()
-        ir["language_spec"]["constraints"] = [{"kind": kind, "args": {"x": 1}}]
+        ir["language_spec"]["constraints"] = [constraint]
         assert validate_dcfl_ir(ir) == []
 
 

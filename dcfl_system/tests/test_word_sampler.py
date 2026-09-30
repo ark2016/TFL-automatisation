@@ -65,10 +65,9 @@ class TestCheckConstraints:
         constraint = {"kind": "length_cmp", "args": {"left": "u3", "op": ">=", "right": "u4"}}
         assert check_constraints({"u3": "abc", "u4": "a"}, [constraint]) is True
 
-    def test_length_cmp_missing_var_uses_empty_string(self):
+    def test_length_cmp_missing_var_is_not_an_empty_word(self):
         constraint = {"kind": "length_cmp", "args": {"left": "u1", "op": "<=", "right": "u2"}}
-        # u1 missing => len("") = 0 <= len("a") = 1
-        assert check_constraints({"u2": "a"}, [constraint]) is True
+        assert check_constraints({"u2": "a"}, [constraint]) is False
 
     # -- integer_cmp --
 

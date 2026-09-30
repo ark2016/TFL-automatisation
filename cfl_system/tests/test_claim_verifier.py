@@ -347,15 +347,8 @@ class TestVerifyAgentClaims:
         assert result["agent"] == "ogden"
         assert result["verification_status"] == "well_formed"
 
-    def test_pumping_word_instances_bounded_pass(self):
-        """docs/VERDICT_POLICY.md §4: word_instances at p=3 checked exhaustively
-        against the oracle upgrades well_formed -> bounded_pass.
-
-        Uses a genuinely non-CFL language (a^n b^n c^n via a counting
-        predicate oracle, not a grammar — a^n b^n itself is CFL, so no split
-        of any of its words can ever be fully disqualified, which is the
-        correct behavior, not a bug: see test_pumping_word_instances_refutes_bad_witness).
-        """
+    def test_pumping_word_instances_remain_diagnostic(self):
+        """Closing the sampled pumping instances remains well_formed, not a universal proof."""
         ir_anbncn = {
             "language_spec": {
                 "kind": "predicate",
@@ -390,7 +383,8 @@ class TestVerifyAgentClaims:
         }
         result = verify_agent_claims(agent_output, ir_anbncn)
         assert result["verification_status"] == "well_formed"
-        assert result["trust"] == "bounded_pass"
+        assert result["trust"] == "well_formed"
+        assert result["details"]["bounded_check"]["status"] == "closed_for_sampled_p"
 
     def test_ogden_semantic_check_skipped_without_marked_positions(self):
         """docs/VERDICT_POLICY.md fix: ogden's word_instances alone (no
@@ -448,11 +442,8 @@ class TestVerifyAgentClaims:
         for (u, v, w, x, _y) in splits:
             assert len(v) + len(w) + len(x) <= 2
 
-    def test_ogden_semantic_check_bounded_pass_with_marked_positions(self):
-        """docs/VERDICT_POLICY.md §4: a genuine Ogden proof against a truly
-        non-CFL language (a^n b^n c^n) with concrete marked_positions
-        upgrades well_formed -> bounded_pass, same as the plain pumping
-        check does for its own word_instances (test_pumping_word_instances_bounded_pass)."""
+    def test_ogden_semantic_check_remains_diagnostic_with_marked_positions(self):
+        """Ogden marks enable finite diagnostics without promoting the universal claim."""
         ir_anbncn = {
             "language_spec": {
                 "kind": "predicate",
@@ -493,7 +484,8 @@ class TestVerifyAgentClaims:
         result = verify_agent_claims(agent_output, ir_anbncn)
         assert result["agent"] == "ogden"
         assert result["verification_status"] == "well_formed"
-        assert result["trust"] == "bounded_pass"
+        assert result["trust"] == "well_formed"
+        assert result["details"]["bounded_check"]["status"] == "closed_for_sampled_p"
 
     # -----------------------------------------------------------------
     # cfl-12 (docs/EVAL_SET.md) -- {a^i b^j c^k d^l | i=0 or j=k=l}, the
@@ -563,11 +555,8 @@ class TestVerifyAgentClaims:
             },
         }
 
-    def test_cfl12_ogden_b_block_marking_bounded_pass(self):
-        """cfl_ogden.md Example 1's own marking (mark the b-block, exactly p
-        positions) closes the automatic check -> bounded_pass, once the
-        contract's word_instances/marked_positions fields are actually
-        populated."""
+    def test_cfl12_ogden_b_block_marking_remains_diagnostic(self):
+        """The example closes the finite marked-split check, which is still only diagnostic."""
         agent_output = self._cfl12_ogden_output({
             "description": "b-block (positions 1..p, 0-indexed)",
             "3": [1, 2, 3],
@@ -576,7 +565,8 @@ class TestVerifyAgentClaims:
         result = verify_agent_claims(agent_output, self._IR_CFL12)
         assert result["agent"] == "ogden"
         assert result["verification_status"] == "well_formed"
-        assert result["trust"] == "bounded_pass"
+        assert result["trust"] == "well_formed"
+        assert result["details"]["bounded_check"]["status"] == "closed_for_sampled_p"
         assert result["issues"] == []
 
     def test_cfl12_ogden_undermarked_stays_well_formed(self):
@@ -600,9 +590,8 @@ class TestVerifyAgentClaims:
         assert result["trust"] == "well_formed"
         assert any("need >=" in issue for issue in result["issues"])
 
-    def test_pumping_word_instances_refutes_bad_witness(self):
-        """A word for which some split can never be disqualified (i in {0,2})
-        is not a valid pumping witness — must be refuted, not well_formed."""
+    def test_pumping_surviving_finite_exponents_is_unresolved(self):
+        """Survival at finitely many exponents does not certify survival at every exponent."""
         # L = a*b* (union, both counts unconstrained): a^n b^n pumped at i=0/2
         # both stay in a*b*, so NO split of "aaabbb" at p=3 is disqualified.
         ir_astar_bstar = {
@@ -631,24 +620,12 @@ class TestVerifyAgentClaims:
             },
         }
         result = verify_agent_claims(agent_output, ir_astar_bstar)
-        assert result["verification_status"] == "refuted"
-        assert result["trust"] == "refuted"
+        assert result["verification_status"] == "well_formed"
+        assert result["trust"] == "well_formed"
+        assert result["details"]["bounded_check"]["unresolved_splits"] > 0
 
     def test_pumping_word_instances_not_refuted_when_i3_leaves_l(self):
-        """docs/VERDICT_POLICY.md §4 (reviewer finding): a split is only
-        refuted if the pumped word stays in L for ALL of i=0, i=2 AND i=3.
-        A correct proof is free to rely on i=3 rather than i=2 to
-        disqualify a split, so finding i=0/i=2 both in L must not by
-        itself refute the whole proof -- it must first check i=3 and,
-        if that pumped word is NOT in L, treat the split as closed
-        (witness, not refutation).
-
-        Built with a synthetic oracle (not a real language) so every split
-        this enumerates is deliberately "in L at i=0/i=2, out at i=3" --
-        the old code would hit the very first such split and return
-        `refuted` immediately; the fixed code must instead close every
-        split via i=3 and return `bounded_pass`.
-        """
+        """A rejecting i=3 is a concrete witness even when i=0 and i=2 survive."""
         word = "abcdef"
         p = 3
         forbidden = {
@@ -672,7 +649,8 @@ class TestVerifyAgentClaims:
         }
         result = verify_pumping_claim(agent_output["evidence"], {}, oracle=oracle)
         assert result["verification_status"] != "refuted"
-        assert result["trust"] == "bounded_pass"
+        assert result["trust"] == "well_formed"
+        assert result["details"]["bounded_check"]["status"] == "closed_for_sampled_p"
 
     def test_ogden_word_instances_not_refuted_when_i3_leaves_l(self):
         """Same fix as test_pumping_word_instances_not_refuted_when_i3_leaves_l,
@@ -702,4 +680,5 @@ class TestVerifyAgentClaims:
         }
         result = verify_pumping_claim(agent_output["evidence"], {}, agent="ogden", oracle=oracle)
         assert result["verification_status"] != "refuted"
-        assert result["trust"] == "bounded_pass"
+        assert result["trust"] == "well_formed"
+        assert result["details"]["bounded_check"]["status"] == "closed_for_sampled_p"

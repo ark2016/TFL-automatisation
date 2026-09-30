@@ -542,7 +542,9 @@ def render_markdown(result: dict) -> str:
 
     k = result.get("k")
     if verdict == "ll" and k is not None:
-        sections.append(f"**Минимальное k:** {k}\n")
+        ff = result.get("first_follow_result") or {}
+        label = "Минимальное k" if ff.get("minimum_proven") else "Проверенное k"
+        sections.append(f"**{label}:** {k}\n")
 
     # Proof section
     proof = result.get("proof")
@@ -987,7 +989,9 @@ def render_html(result: dict) -> str:
     sol_parts: list[str] = []
     sol_parts.append(f'<div class="ll-p"><strong>Вердикт:</strong> {_esc(_verdict_label_ll(verdict))}</div>')
     if verdict == "ll" and k is not None:
-        sol_parts.append(f'<div class="ll-p"><strong>Минимальное k:</strong> {_esc(str(k))}</div>')
+        ff = result.get("first_follow_result") or {}
+        label = "Минимальное k" if ff.get("minimum_proven") else "Проверенное k"
+        sol_parts.append(f'<div class="ll-p"><strong>{label}:</strong> {_esc(str(k))}</div>')
 
     # Verdict gate (docs/VERDICT_POLICY.md §3/§5)
     verdict_gate = result.get("verdict_gate")

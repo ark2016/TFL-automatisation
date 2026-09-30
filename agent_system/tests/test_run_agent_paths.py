@@ -62,6 +62,7 @@ def _no_real_sleep(monkeypatch):
     """Every retry/backoff path in this file is exercised with a mocked
     clock -- the assertions are about attempt counts, not wall time."""
     monkeypatch.setattr(llm_client.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(llm_client, "_load_env", lambda: None)
 
 
 def test_thinking_block_read_past(runner):
@@ -221,6 +222,52 @@ def test_schema_shaped_classifier_output_verdict_is_read(runner):
     assert out["status"] == "success"
     assert out.get("evidence", out).get("verdict") == "regular"
     assert out.get("evidence", out).get("dispatch") == ["re_builder"]
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+def test_formalizer_json_body_reaches_graph_compiler(runner, monkeypatch, fenced):
+    from agent_system import graph
+    from agent_system.lib import lean_ir
+
+    body = "trivial"
+    response = json.dumps({"proof_body": body, "lemmas_used": [], "notes": "offline"})
+    if fenced:
+        response = f"```json\n{response}\n```"
+    runner._client = FakeAnthropic([text_turn(response)])
+    statement = {
+        "imports": [], "alphabet_decl": "", "language_decl": "",
+        "theorem_decl": "theorem tfl_main : True", "name": "tfl_main",
+    }
+    monkeypatch.setattr(lean_ir, "render_statement", lambda _ir, _direction: statement)
+    compiled = []
+
+    def check(text, **_kwargs):
+        compiled.append(text)
+        return {"status": "proved", "errors": [], "axioms": [], "elapsed": 0.0}
+
+    monkeypatch.setattr(graph, "check_lean_file", check)
+    state = {
+        "formalize": True, "ir": {}, "agent_runner": runner,
+        "reasoning_output": {"evidence": {
+            "action": "proceed_to_formalizer", "verdict": "regular",
+            "consolidated_proof": "offline plan",
+        }},
+    }
+
+    result = graph.formalize_node(state)["formalization"]
+
+    assert result["status"] == "proved" and result["proof_body"] == body
+    assert len(compiled) == len(runner._client.stream_calls) == 1
+    assert "  trivial" in compiled[0] and '"proof_body"' not in compiled[0]
+
+
+def test_formalizer_invalid_json_is_an_agent_error(runner):
+    runner._client = FakeAnthropic([text_turn("not json"), text_turn("still not json")])
+
+    out = runner.run_agent("formalizer", {"statement": {}})
+
+    assert out["status"] == "agent_error" and out["evidence"] == {}
+    assert len(runner._client.stream_calls) == 2
 
 
 def test_concurrency_semaphore_bounds_parallel_calls(monkeypatch):

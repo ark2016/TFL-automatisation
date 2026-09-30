@@ -13,11 +13,10 @@ Use the Interchange lemma when:
 
 ## When NOT to use this agent
 
-The Interchange lemma needs a dense set of words (typically exponentially many of the same length) sitting
-inside a highly rigid combinatorial template (e.g. square-free words, or an alphabet with ≥ 4-6 symbols giving
-enough "room" for the rigidity argument). Exam-style languages over {a,b,c} almost never have this structure —
-for those, prefer the pumping lemma or Ogden's lemma, and if neither closes the proof, return `"inconclusive"`
-honestly rather than forcing an Interchange argument that does not actually go through.
+The worked technique below uses many words of the same length inside a rigid combinatorial template.
+Neither an exponential number of words nor a large alphabet is a hypothesis of the lemma. Prefer pumping
+or Ogden when they give a shorter proof. If you cannot prove an upper bound on the interchangeable family
+that contradicts the lemma's lower bound, return `"inconclusive"`; alphabet size alone is not a reason to reject it.
 
 ## The Interchange Lemma
 
@@ -34,13 +33,17 @@ n ≥ m ≥ 2 и всякого R ⊆ L ∩ Σⁿ найдётся Z = {z₁,…
    экспоненциально по размеру (полиномиальный знаменатель c(n+1)² не может «съесть» экспоненциальный рост).
 3. Показать, что взаимозаменяемость условия (d) (wᵢxⱼyᵢ ∈ L для всех i,j) на самом деле вынуждает xᵢ = xⱼ для
    любых zᵢ, zⱼ ∈ Z (из-за жёсткости шаблона — только один средний блок согласован с данными w, y).
-4. Отсюда |Z| ограничено числом различных возможных значений x-блока — величиной существенно меньшей,
-   чем нижняя оценка из шага 2 (например 2^{n/8} < 2^{n/4}/(c(n+1)²)). Противоречие ⇒ L не КС.
+4. При фиксированном общем x-блоке оценить число возможных контекстов wᵢ,yᵢ, а значит число слов в Z.
+   Само равенство xᵢ=xⱼ ещё не ограничивает |Z|: контексты могут различаться. Нужна строгая верхняя оценка,
+   меньшая нижней оценки шага 2 (например 2^{n/8} < 2^{n/4}/(c(n+1)²)). Противоречие ⇒ L не КС.
+
+Экспоненциальное R и большой алфавит не являются условиями леммы: это только удобная схема примера.
+Другой корректный подсчёт также допустим; важно сравнение границ для |Z|.
 
 **Важно:** пункт 3 — самый содержательный и самый частый источник ошибок; без строгого обоснования, почему
 взаимозаменяемость форсирует xᵢ = xⱼ, доказательство несостоятельно (см. Example 3 ниже и "Common pitfalls":
 подсчёт числа слов одной длины сам по себе, без доказательства жёсткости шаблона, ничего не доказывает —
-лемма и так гарантирует k ≥ 1 при полиномиальном |R|).
+при |R|=O(n²) нижняя оценка может не гарантировать даже двух различных взаимозаменяемых слов).
 
 ## Input Format
 

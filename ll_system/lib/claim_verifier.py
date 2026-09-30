@@ -472,7 +472,7 @@ def _verify_branch_words_by_oracle(bw: dict, ir: dict) -> tuple[str | None, dict
 # the claimed distinguishing_suffix against concrete class representatives
 # (the proof's own `representative_pairs`, if given, else random samples from
 # the task language via the word oracle) and check it separates them; and
-# sample short words to check the dead class isn't obviously infinite. Only
+# sample short words to find continuation witnesses. Only
 # runs for `set_builder` IRs with a word oracle available; otherwise trust
 # stays at well_formed, same fallback as everywhere else in this module.
 # ---------------------------------------------------------------------------
@@ -493,11 +493,9 @@ def _continuable_ll(
     `max_extra` is visited unless cut short by `node_budget` or an
     inconclusive oracle answer).
 
-    Returns True (a continuation into L was found), False (the exhaustive
-    search visited every extension up to the bound and found none -- a
-    decisive negative WITHIN this bound, per docs/VERDICT_POLICY.md §4), or
-    None (the search could not be completed -- genuinely inconclusive, never
-    treated as evidence of an infinite dead class)."""
+    Returns True when a continuation is found, otherwise None. Exhausting
+    a finite suffix bound cannot prove that every continuation is impossible.
+    A longer continuation may exist (docs/VERDICT_POLICY.md §4)."""
     if not alphabet:
         return None
     budget = [node_budget]
@@ -519,7 +517,7 @@ def _continuable_ll(
         return any(dfs(w + ch, depth + 1) for ch in alphabet)
 
     try:
-        return dfs(word, 0)
+        return True if dfs(word, 0) else None
     except _SearchBudgetExceededLL:
         return None
 
@@ -536,17 +534,12 @@ def _all_words_ll(alphabet: list[str], max_len: int) -> list[str]:
 
 
 def _check_dead_class_finite_ll(ir: dict) -> tuple[bool | None, list[str]]:
-    """Dead-class part of the prefix_classes step 2 (mirrors
-    dcfl_system.lib.oracle_verifier._check_dead_class_finite): enumerate ALL
-    words over the task's alphabet up to length 4 -- not just words the task
-    language itself generates, which are already in L and so always
-    "continue" via the empty extension -- and check each is continuable into
-    L within an EXHAUSTIVE bounded search (up to 6 more symbols).
+    """Find continuations for sampled prefixes, without certifying deadness.
 
-    A failure here (a word with provably no continuation within the bound)
-    means the dead class is not finite as claimed, so the caller must cap
-    trust at well_formed rather than bounded_pass -- Theorem 4.7.4 is vacuous
-    once the dead class is infinite (docs/VERDICT_POLICY.md §4)."""
+    True is bounded supporting evidence: every sampled prefix had a witness.
+    Missing a witness within the finite search returns None, never False:
+    it neither proves a prefix dead nor the dead class infinite.
+    """
     spec = ir.get("language_spec")
     if not isinstance(spec, dict) or spec.get("kind") != "set_builder":
         return None, []
@@ -563,17 +556,18 @@ def _check_dead_class_finite_ll(ir: dict) -> tuple[bool | None, list[str]]:
     checked = 0
     for w in short_words[:200]:
         cont = _continuable_ll(oracle, w, alphabet)
-        if cont is None:
-            continue
-        checked += 1
-        if not cont:
+        if cont is not True:
             issues.append(
-                f"dead_class_finite check: {w!r} has NO continuation into L "
-                "within an exhaustive bounded search (up to 6 more symbols)"
+                f"dead_class_finite check: no continuation witness for {w!r} "
+                "within the bounded search; continuability remains unknown"
             )
+        else:
+            checked += 1
+    if issues:
+        return None, issues
     if checked == 0:
         return None, []
-    return (len(issues) == 0), issues
+    return True, []
 
 
 def _semantic_check_prefix_classes(proof_sketch: dict, ir: dict) -> tuple[str | None, dict]:
@@ -672,16 +666,11 @@ def _semantic_check_prefix_classes(proof_sketch: dict, ir: dict) -> tuple[str | 
 
     if status == "bounded_pass":
         dead_ok, dead_issues = _check_dead_class_finite_ll(ir)
-        if dead_ok is False:
+        details["dead_class_finite_check"] = "bounded_pass" if dead_ok is True else "unknown"
+        if dead_ok is not True:
             details["dead_class_finite_issues"] = dead_issues
-            # An EXHAUSTIVE bounded search found a word that provably cannot
-            # be continued into L within it: the proof's "dead class is
-            # finite" premise is false, so Theorem 4.7.4 is vacuous
-            # (docs/VERDICT_POLICY.md §4) and the caller must not report a
-            # deterministic oracle pass on it. Cap at well_formed rather than
-            # refuted -- this only falsifies the dead-class premise, not
-            # necessarily the distinguishing_suffix/representative_pairs
-            # argument checked above.
+            # The required dead-class premise remains unchecked. This is
+            # incomplete evidence, not a refutation of that premise.
             status = "well_formed"
 
     return status, details

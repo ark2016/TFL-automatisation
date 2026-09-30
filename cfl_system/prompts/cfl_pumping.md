@@ -12,6 +12,12 @@ To prove L is NOT context-free, show:
 
 Quantifier order: FOR ALL p -> EXISTS z -> FOR ALL u,v,w,x,y -> EXISTS i.
 
+The automatic instances p=3,4 and exponents i=0,2,3 are diagnostics only. Closing those checks
+does not prove the universal argument or promote its trust above `well_formed`. A split surviving
+those exponents may fail at a later i. Supply a symbolic argument for every p and every valid split.
+If the entire input language is defined by a valid CFG, it is CFL by definition: return `inconclusive`
+instead of attempting a non-CFL proof. This does not apply to a language with an additional filter.
+
 **Key differences from regular pumping lemma:**
 - The decomposition is z = uvwxy (5 parts, not 3)
 - TWO parts are pumped simultaneously: v and x

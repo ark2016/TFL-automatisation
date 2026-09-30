@@ -6,8 +6,9 @@ and returns a structured verification result with pass/fail counts and issues.
 
 Trust taxonomy (docs/VERDICT_POLICY.md §1). This module never returns "verified"
 (full deterministic proof) — its structural-only pass is "well_formed", and a
-successful Step-2 semantic check (docs/VERDICT_POLICY.md §4) upgrades it to
-"bounded_pass". Order: refuted < not_verified < well_formed < bounded_pass.
+successful bounded comparison may earn "bounded_pass". Finite pumping-p
+checks are diagnostics and leave universal claims at "well_formed".
+Order: refuted < not_verified < well_formed < bounded_pass.
 """
 
 from __future__ import annotations
@@ -16,6 +17,33 @@ import re
 from typing import Any
 
 from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir, grammar_oracle
+
+
+def input_grammar_is_cfg(ir: dict) -> bool:
+    """Certify CFL only when the entire input language is a valid explicit CFG."""
+    spec = ir.get("language_spec")
+    if not isinstance(spec, dict) or spec.get("kind") != "grammar":
+        return False
+    terms, nonterms = spec.get("terminals"), spec.get("nonterminals")
+    if not isinstance(terms, list) or not isinstance(nonterms, list) or not nonterms:
+        return False
+    if any(not isinstance(s, str) or len(s) != 1 for s in terms):
+        return False
+    if any(not isinstance(s, str) or not s for s in nonterms):
+        return False
+    terminals, nonterminals = set(terms), set(nonterms)
+    if terminals & nonterminals or spec.get("start") not in nonterms:
+        return False
+    rules = spec.get("rules")
+    if not isinstance(rules, list):
+        return False
+    symbols = terminals | nonterminals
+    return all(
+        isinstance(rule, dict) and isinstance(rule.get("lhs"), str)
+        and rule["lhs"] in nonterminals and isinstance(rule.get("rhs"), list)
+        and all(isinstance(symbol, str) and symbol in symbols for symbol in rule["rhs"])
+        for rule in rules
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -113,90 +141,106 @@ def _witness_collector() -> tuple[list[dict], Any]:
     return witnesses, _add
 
 
-def _check_pumping_word_instances(
-    evidence: dict, ir: dict, issues: list[str], oracle=None,
+def _oracle_answer(oracle, word: str) -> bool | None:
+    """Preserve the membership oracle's unknown result and failures."""
+    try:
+        answer = oracle(word)
+    except Exception:
+        return None
+    return answer if isinstance(answer, bool) else None
+
+
+def _check_pumping_instances(
+    evidence: dict, ir: dict, issues: list[str], *, ogden: bool = False,
+    oracle=None, diagnostics: dict | None = None,
 ) -> tuple[str | None, list[dict]]:
-    """Step-2 semantic check for the plain (Bar-Hillel) pumping lemma
-    (docs/VERDICT_POLICY.md §4). NOT valid for Ogden's lemma — see
-    `_check_ogden_word_instances` — because it bounds |vwx| by p directly,
-    whereas Ogden's p bounds the number of MARKED positions in vwx.
+    """Check finite instances, never the universal pumping argument.
 
-    Expects evidence["word_instances"] = {"3": "<instantiated word>", "4": "..."}
-    (concrete words, p already substituted). For each p in {3, 4} present:
-      1. z must be in L (oracle).
-      2. Every split z=uvwxy with |vwx|<=p, |vx|>=1 must have some i in
-         {0, 2, 3} with the pumped word NOT in L.
-    All closed -> "bounded_pass". Any violation -> "refuted". No oracle or no
-    usable entries -> None (leave trust at well_formed).
-
-    A split is refuted only if the pumped word is in L for ALL of i=0, i=2
-    AND i=3 (reviewer finding, docs/VERDICT_POLICY.md §4): a correct proof is
-    free to rely on i=3 rather than i=2 to disqualify a split, so finding
-    i=0/i=2 both in L is not by itself proof the split fails — checking only
-    those two i values would refute an otherwise-valid proof.
-
-    `oracle`, when given, overrides the oracle built from `ir` (used by
-    closure_reduction's nested check, which must test membership in L ∩ R,
-    not L alone).
-
-    Returns (trust_or_None, witnesses): `witnesses` are the concrete words
-    this check actually instantiated and their expected oracle membership
-    (docs/VERDICT_POLICY.md R3' — reused by the verdict gate's cross-check
-    instead of re-deriving them from `word_instances`/splits again).
+    A rejected witness is a concrete refutation. Closing all sampled splits
+    only checks small p, so it cannot promote a non-CFL claim. Conversely,
+    surviving i=0,2,3 does not imply surviving every i. Unknown oracle answers
+    must never become negative witnesses (VERDICT_POLICY.md section 4).
     """
     raw = evidence.get("word_instances")
     witnesses, add_witness = _witness_collector()
+    diag = diagnostics if diagnostics is not None else {}
+    diag.update({"p_values": [], "i_values": [0, 2, 3], "splits_checked": 0,
+                 "splits_closed": 0, "unresolved_splits": 0,
+                 "unknown_answers": 0, "status": "not_checked"})
     if not isinstance(raw, dict) or not raw:
+        return None, witnesses
+    marks_by_p = evidence.get("marked_positions")
+    if ogden and not isinstance(marks_by_p, dict):
         return None, witnesses
     if oracle is None:
         oracle = _get_oracle(ir)
     if oracle is None:
         return None, witnesses
 
-    checked_any = False
     for key, word in raw.items():
-        if not isinstance(word, str) or not word:
-            continue
         p = _extract_p(key)
-        if p not in (3, 4):
+        if not isinstance(word, str) or p not in (3, 4):
             continue
-        try:
-            in_l = bool(oracle(word))
-        except Exception:
+        if len(word) < p:
+            issues.append(f"word_instances[p={p}]: length {len(word)} < p; skipped")
             continue
-        if not in_l:
-            issues.append(
-                f"word_instances[p={p}] = '{word}' is NOT in L (oracle) — "
-                f"pumping witness invalid"
-            )
+        marked = set()
+        if ogden:
+            marks = marks_by_p.get(key)
+            if not isinstance(marks, list):
+                continue
+            if any(type(m) is not int or not 0 <= m < len(word) for m in marks):
+                issues.append(f"word_instances[p={p}]: invalid marked positions; skipped")
+                continue
+            marked = set(marks)
+            if len(marked) < p:
+                issues.append(f"word_instances[p={p}]: only {len(marked)} position(s) "
+                              f"marked, need >= {p} per Ogden's lemma; skipped")
+                continue
+        in_l = _oracle_answer(oracle, word)
+        if in_l is None:
+            diag["unknown_answers"] += 1
+            continue
+        if in_l is False:
+            issues.append(f"word_instances[p={p}] = '{word}' is NOT in L (oracle); "
+                          "pumping witness invalid")
+            diag["status"] = "invalid_witness"
             return "refuted", witnesses
-        checked_any = True
+        diag["p_values"].append(p)
         add_witness(word, True, f"word_instances[p={p}]")
-        for (u, v, w, x, y) in _enumerate_vwx_splits(word, p):
-            try:
-                in0 = bool(oracle(_pump(u, v, w, x, y, 0)))
-                in2 = bool(oracle(_pump(u, v, w, x, y, 2)))
-            except Exception:
-                continue
-            if in0 and in2:
-                try:
-                    in3 = bool(oracle(_pump(u, v, w, x, y, 3)))
-                except Exception:
-                    in3 = False  # can't confirm i=3 stays in L -> don't refute on it
-                if in3:
-                    issues.append(
-                        f"word_instances[p={p}] = '{word}': split v='{v}' x='{x}' is not "
-                        f"disqualified by any i in {{0,2,3}} — uv^iwx^iy is in L for "
-                        f"i=0,2,3"
-                    )
-                    return "refuted", witnesses
-                add_witness(_pump(u, v, w, x, y, 3), False, f"pumping p={p} split v={v!r} x={x!r} i=3")
-                continue
-            if not in0:
-                add_witness(_pump(u, v, w, x, y, 0), False, f"pumping p={p} split v={v!r} x={x!r} i=0")
-            if not in2:
-                add_witness(_pump(u, v, w, x, y, 2), False, f"pumping p={p} split v={v!r} x={x!r} i=2")
-    return ("bounded_pass" if checked_any else None), witnesses
+        splits = (_enumerate_ogden_splits(word, marked, p) if ogden
+                  else _enumerate_vwx_splits(word, p))
+        for u, v, w, x, y in splits:
+            diag["splits_checked"] += 1
+            closed = False
+            for i in (0, 2, 3):
+                pumped = _pump(u, v, w, x, y, i)
+                answer = _oracle_answer(oracle, pumped)
+                if answer is None:
+                    diag["unknown_answers"] += 1
+                elif answer is False:
+                    add_witness(pumped, False, f"pumping p={p} split v={v!r} x={x!r} i={i}")
+                    closed = True
+                    break
+            if closed:
+                diag["splits_closed"] += 1
+            else:
+                diag["unresolved_splits"] += 1
+    if diag["p_values"]:
+        diag["status"] = ("closed_for_sampled_p" if not diag["unresolved_splits"]
+                          and not diag["unknown_answers"] else "inconclusive")
+        return "well_formed", witnesses
+    if diag["unknown_answers"]:
+        diag["status"] = "inconclusive"
+    return None, witnesses
+
+
+def _check_pumping_word_instances(
+    evidence: dict, ir: dict, issues: list[str], oracle=None,
+    diagnostics: dict | None = None,
+) -> tuple[str | None, list[dict]]:
+    return _check_pumping_instances(evidence, ir, issues, oracle=oracle,
+                                   diagnostics=diagnostics)
 
 
 def _enumerate_ogden_splits(word: str, marked: set[int], p: int):
@@ -231,95 +275,11 @@ def _enumerate_ogden_splits(word: str, marked: set[int], p: int):
 
 def _check_ogden_word_instances(
     evidence: dict, ir: dict, issues: list[str], oracle=None,
+    diagnostics: dict | None = None,
 ) -> tuple[str | None, list[dict]]:
-    """Step-2 semantic check for Ogden's lemma (docs/VERDICT_POLICY.md §4 fix).
-
-    Expects evidence["word_instances"] (as for plain pumping) AND
-    evidence["marked_positions"] = {"3": [i0, i1, ...], "4": [...]} — the
-    0-indexed positions in the instantiated word that the proof marks. Per
-    Ogden's lemma, a decomposition with the required guarantees exists only
-    when AT LEAST p symbols are marked; fewer than that and the split search
-    below (`_enumerate_ogden_splits`) is too narrow — it can miss the split
-    the real proof needs and wrongly certify an incorrect non-CFL proof as
-    `bounded_pass` (reviewer finding, docs/VERDICT_POLICY.md §4). So a given
-    p is skipped entirely (not checked, not refuted) whenever fewer than p
-    positions are marked for it. Without `marked_positions` for a given p,
-    that p's semantic check is likewise skipped entirely (never falls back
-    to the plain length-bounded enumeration, which is unsound for Ogden's
-    lemma) — trust stays at `well_formed` for that instance.
-
-    Returns (trust_or_None, witnesses) — see `_check_pumping_word_instances`
-    for the witness format (docs/VERDICT_POLICY.md R3'), including the same
-    "refuted only if i=0, i=2 AND i=3 are all in L" rule.
-    """
-    raw = evidence.get("word_instances")
-    witnesses, add_witness = _witness_collector()
-    if not isinstance(raw, dict) or not raw:
-        return None, witnesses
-    marked_raw = evidence.get("marked_positions")
-    if not isinstance(marked_raw, dict) or not marked_raw:
-        return None, witnesses
-    if oracle is None:
-        oracle = _get_oracle(ir)
-    if oracle is None:
-        return None, witnesses
-
-    checked_any = False
-    for key, word in raw.items():
-        if not isinstance(word, str) or not word:
-            continue
-        p = _extract_p(key)
-        if p not in (3, 4):
-            continue
-        marks = marked_raw.get(key)
-        if not isinstance(marks, list) or not marks:
-            continue
-        marked_positions = {m for m in marks if isinstance(m, int) and 0 <= m < len(word)}
-        if not marked_positions:
-            continue
-        if len(marked_positions) < p:
-            issues.append(
-                f"word_instances[p={p}] = '{word}': only {len(marked_positions)} position(s) "
-                f"marked, need >= {p} per Ogden's lemma — semantic check skipped for this p"
-            )
-            continue
-        try:
-            in_l = bool(oracle(word))
-        except Exception:
-            continue
-        if not in_l:
-            issues.append(
-                f"word_instances[p={p}] = '{word}' is NOT in L (oracle) — "
-                f"Ogden witness invalid"
-            )
-            return "refuted", witnesses
-        checked_any = True
-        add_witness(word, True, f"word_instances[p={p}]")
-        for (u, v, w, x, y) in _enumerate_ogden_splits(word, marked_positions, p):
-            try:
-                in0 = bool(oracle(_pump(u, v, w, x, y, 0)))
-                in2 = bool(oracle(_pump(u, v, w, x, y, 2)))
-            except Exception:
-                continue
-            if in0 and in2:
-                try:
-                    in3 = bool(oracle(_pump(u, v, w, x, y, 3)))
-                except Exception:
-                    in3 = False  # can't confirm i=3 stays in L -> don't refute on it
-                if in3:
-                    issues.append(
-                        f"word_instances[p={p}] = '{word}': marked split v='{v}' x='{x}' is "
-                        f"not disqualified by any i in {{0,2,3}} — uv^iwx^iy is in L for "
-                        f"i=0,2,3"
-                    )
-                    return "refuted", witnesses
-                add_witness(_pump(u, v, w, x, y, 3), False, f"ogden p={p} split v={v!r} x={x!r} i=3")
-                continue
-            if not in0:
-                add_witness(_pump(u, v, w, x, y, 0), False, f"ogden p={p} split v={v!r} x={x!r} i=0")
-            if not in2:
-                add_witness(_pump(u, v, w, x, y, 2), False, f"ogden p={p} split v={v!r} x={x!r} i=2")
-    return ("bounded_pass" if checked_any else None), witnesses
+    """Ogden instances require at least p marked positions; bound marks, not length."""
+    return _check_pumping_instances(evidence, ir, issues, ogden=True,
+                                   oracle=oracle, diagnostics=diagnostics)
 
 
 def _check_closure_examples(
@@ -363,15 +323,15 @@ def _check_closure_examples(
     if oracle is None:
         return None, witnesses
 
+    checked_examples = checked_non_examples = 0
     for w in examples:
         if not isinstance(w, str):
             continue
         if not pattern.fullmatch(w):
             issues.append(f"intersection_examples: '{w}' does not match R = /{regex}/")
             return "refuted", witnesses
-        try:
-            in_l = bool(oracle(w))
-        except Exception:
+        in_l = _oracle_answer(oracle, w)
+        if in_l is None:
             continue
         if not in_l:
             issues.append(
@@ -380,6 +340,7 @@ def _check_closure_examples(
             )
             return "refuted", witnesses
         add_witness(w, True, "intersection_examples")
+        checked_examples += 1
 
     for w in non_examples:
         if not isinstance(w, str):
@@ -387,9 +348,8 @@ def _check_closure_examples(
         if not pattern.fullmatch(w):
             issues.append(f"intersection_non_examples: '{w}' does not match R = /{regex}/")
             return "refuted", witnesses
-        try:
-            in_l = bool(oracle(w))
-        except Exception:
+        in_l = _oracle_answer(oracle, w)
+        if in_l is None:
             continue
         if in_l:
             issues.append(
@@ -399,8 +359,11 @@ def _check_closure_examples(
             )
             return "refuted", witnesses
         add_witness(w, False, "intersection_non_examples")
+        checked_non_examples += 1
 
-    return "bounded_pass", witnesses
+    if checked_examples >= 3 and checked_non_examples >= 2:
+        return "bounded_pass", witnesses
+    return None, witnesses
 
 
 # ---------------------------------------------------------------------------
@@ -418,9 +381,10 @@ def verify_pumping_claim(
     3. |vwx| <= p and |vx| >= 1 constraints are respected in each case (fields present).
     4. all_cases_covered flag is set.
 
-    Semantic step 2 (bounded_pass): if evidence["word_instances"] gives concrete
-    words for p in {3,4}, brute-force every uvwxy split and check the pumping
-    lemma actually holds (docs/VERDICT_POLICY.md §4). For `agent="ogden"`,
+    Semantic diagnostics: if evidence["word_instances"] gives concrete words
+    for p in {3,4}, enumerate uvwxy splits and try i in {0,2,3}. This finite
+    search cannot verify the universal pumping claim or refute it from
+    finite survival (docs/VERDICT_POLICY.md §4). For `agent="ogden"`,
     this dispatches to the marked-position-aware Ogden check instead of the
     plain (length-bounded) pumping check — the two are NOT interchangeable
     (docs/VERDICT_POLICY.md fix: Ogden's p bounds marked positions in vwx,
@@ -440,10 +404,13 @@ def verify_pumping_claim(
         checks_total += 1
         try:
             word_oracle = oracle if oracle is not None else cfl_oracle_from_ir(ir)
-            if word_oracle(word_chosen):
+            answer = _oracle_answer(word_oracle, word_chosen)
+            if answer is True:
                 checks_passed += 1
-            else:
+            elif answer is False:
                 issues.append(f"Chosen word '{word_chosen}' is NOT in L")
+            else:
+                issues.append("Could not verify word membership (oracle unknown)")
         except Exception:
             issues.append("Could not verify word membership (oracle error)")
 
@@ -475,16 +442,15 @@ def verify_pumping_claim(
 
     trust = status
     witnesses: list[dict] = []
+    bounded_check: dict = {}
     if status != "refuted":
         if agent == "ogden":
-            semantic, witnesses = _check_ogden_word_instances(evidence, ir, issues, oracle=oracle)
+            semantic, witnesses = _check_ogden_word_instances(evidence, ir, issues, oracle=oracle, diagnostics=bounded_check)
         else:
-            semantic, witnesses = _check_pumping_word_instances(evidence, ir, issues, oracle=oracle)
+            semantic, witnesses = _check_pumping_word_instances(evidence, ir, issues, oracle=oracle, diagnostics=bounded_check)
         if semantic == "refuted":
             status = "refuted"
             trust = "refuted"
-        elif semantic == "bounded_pass" and status == "well_formed":
-            trust = "bounded_pass"
 
     return _make_result(
         agent=agent,
@@ -495,7 +461,7 @@ def verify_pumping_claim(
         # docs/VERDICT_POLICY.md R3': the concrete witness words this check
         # instantiated, reused by the verdict gate's cross-check instead of
         # re-deriving them.
-        details={"word_verified": checks_passed > 0 and not issues, "destructive_witnesses": witnesses},
+        details={"word_verified": checks_passed > 0 and not issues, "destructive_witnesses": witnesses, "bounded_check": bounded_check},
         trust=trust,
     )
 
@@ -549,7 +515,7 @@ def verify_closure_claim(evidence: dict, ir: dict) -> dict:
     # still be in L (just outside R), which the ORIGINAL L-only oracle
     # would wrongly read as "still in the language" and refute a correct
     # proof. Build a combined oracle (word ∈ L ∩ R) whenever R parses and
-    # an L-oracle is available; fall back to the plain L oracle only when
+    # an L-oracle is available; use an unknown-answer oracle when
     # R can't be used (never silently checking against the wrong language).
     intersection_proof = evidence.get("intersection_not_cfl_proof")
     nested_witnesses: list[dict] = []
@@ -562,15 +528,15 @@ def verify_closure_claim(evidence: dict, ir: dict) -> dict:
             try:
                 pattern_for_nested = re.compile(regex_for_nested)
 
-                def nested_oracle(w: str, _pat=pattern_for_nested, _l=base_oracle) -> bool:
-                    return bool(_pat.fullmatch(w)) and bool(_l(w))
+                def nested_oracle(w: str, _pat=pattern_for_nested, _l=base_oracle) -> bool | None:
+                    return _oracle_answer(_l, w) if _pat.fullmatch(w) else False
             except re.error:
                 pattern_for_nested = None
                 nested_oracle = None
         pumping_result = verify_pumping_claim(
             intersection_proof, ir,
             agent=("ogden" if intersection_proof.get("method") == "ogden" else "pumping_cfl"),
-            oracle=nested_oracle,
+            oracle=nested_oracle if nested_oracle is not None else lambda _word: None,
         )
         checks_total += pumping_result["checks_total"]
         checks_passed += pumping_result["checks_passed"]

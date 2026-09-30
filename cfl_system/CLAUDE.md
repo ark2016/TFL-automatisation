@@ -72,8 +72,9 @@ TFL_MODEL_OVERRIDE=claude-haiku-4-5 .venv/Scripts/python -m cfl_system.orchestra
 
 
 ## Lean 4 formalization (R-Lean, opt-in)
-- `formalize_node` (agent `formalizer`) outputs Markdown only, no Lean — untouched.
-- `lean_formalize_node` (agent `lean_formalizer`, `prompts/cfl_lean_formalizer.md`) is a separate step after the
-  verdict: `--formalize` / `TFL_FORMALIZATION=1`. Statement from `lib/lean_ir.py`, agent writes only the proof body,
+- `formalize_node` (agent `formalizer`) is the normal informal-proof step and returns a structured `proof_document`;
+  legacy mock/consumer outputs may still supply Markdown as a fallback.
+- `lean_formalize_node` (agent `lean_formalizer`, `prompts/cfl_lean_formalizer.md`) is an optional separate step after the
+  verdict and informal proof: `--formalize` / `TFL_FORMALIZATION=1`. Statement from `lib/lean_ir.py`, agent writes only the proof body,
   `agent_system.lib.type_check` checks it in Docker; `proved` => verified 0.98 (`apply_lean_gate`). Spec: `tz_cfl_agent_system.md` §5.5.
 - Live runs of this step cost Opus calls: only on explicit request (root `CLAUDE.md`)
