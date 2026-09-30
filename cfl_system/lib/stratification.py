@@ -8,12 +8,12 @@ characterisation via stratified semilinear exponent sets.
 
 from __future__ import annotations
 
-from typing import Any
+from functools import lru_cache
 
 from cfl_system.lib.parikh import (
     _generate_words_from_grammar,
     check_semilinearity,
-    parikh_image_from_grammar,
+    _is_valid_cfg,
 )
 
 
@@ -30,10 +30,20 @@ def _detect_bounding_words_repeated_subword(spec: dict) -> dict:
     """
     alphabets = spec.get("alphabets", {})
     concat_pattern = spec.get("concat_pattern", [])
+    parts = [
+        p[4:-1] if p.startswith("rev(") and p.endswith(")") else p
+        for p in concat_pattern
+    ]
+    if any(p not in alphabets for p in parts):
+        return {
+            "is_bounded": None,
+            "bounding_words": None,
+            "explanation": "Concat pattern has a part without a declared alphabet.",
+        }
 
     single_char_parts = all(len(v) == 1 for v in alphabets.values())
     if single_char_parts:
-        bounding = [alphabets[p][0] for p in concat_pattern]
+        bounding = [alphabets[p][0] for p in parts]
         return {
             "is_bounded": True,
             "bounding_words": bounding,
@@ -64,58 +74,72 @@ def _detect_bounding_words_repeated_subword(spec: dict) -> dict:
 
 
 def _detect_bounding_words_grammar(spec: dict) -> dict:
-    """Heuristic check for whether a grammar generates a bounded language.
+    """Certify L(G) is inside the sorted terminal-star template exactly.
 
-    Simple case: if the grammar only uses single terminal characters and
-    all rules produce terminals in a fixed left-to-right order, the
-    language may be bounded.  This is a rough heuristic.
+    For each nonterminal, compute its transition relation in the template
+    DFA by a least fixed point. A missing inclusion certificate says nothing
+    about existence of some other bounding expression.
     """
-    terminals = spec.get("terminals", [])
-
-    # Very simple case: single terminal → L ⊆ a*
-    if len(terminals) == 1:
+    if not _is_valid_cfg(spec):
         return {
-            "is_bounded": True,
-            "bounding_words": [terminals[0]],
-            "explanation": (
-                f"Single terminal '{terminals[0]}': L ⊆ {terminals[0]}*."
-            ),
+            "is_bounded": None,
+            "bounding_words": None,
+            "explanation": "Invalid or unsupported CFG; boundedness is unknown.",
+        }
+    terminals = sorted(set(spec["terminals"]))
+    # State 0 is initial; states 1..k remember the last terminal rank.
+    # Every state except sink accepts, including the initial epsilon state.
+    sink = len(terminals) + 1
+    states = range(sink + 1)
+    identity = {(q, q) for q in states}
+    relations: dict[str, set[tuple[int, int]]] = {
+        nt: set() for nt in spec["nonterminals"]
+    }
+    for rank, terminal in enumerate(terminals, 1):
+        relations[terminal] = {
+            (q, rank if q <= rank else sink) for q in states
         }
 
-    # For two terminals with rules of the form S → aSb | ε
-    # this produces {aⁿbⁿ} ⊆ a*b* — bounded.
-    # We check whether every rule's terminals appear in non-decreasing
-    # alphabetical order.
-    rules = spec.get("rules", [])
-    sorted_terminals = sorted(terminals)
-    terminal_set = set(terminals)
+    changed = True
+    while changed:
+        changed = False
+        for rule in spec["rules"]:
+            composed = identity
+            for symbol in rule["rhs"]:
+                next_states: dict[int, set[int]] = {}
+                for source, dest in relations[symbol]:
+                    next_states.setdefault(source, set()).add(dest)
+                composed = {
+                    (source, dest)
+                    for source, middle in composed
+                    for dest in next_states.get(middle, ())
+                }
+                if not composed:
+                    break
+            relation = relations[rule["lhs"]]
+            additions = composed - relation
+            if additions:
+                relation.update(additions)
+                changed = True
 
-    all_ordered = True
-    for rule in rules:
-        rhs_terminals = [s for s in rule.get("rhs", []) if s in terminal_set]
-        indices = []
-        for t in rhs_terminals:
-            indices.append(sorted_terminals.index(t))
-        if indices != sorted(indices):
-            all_ordered = False
-            break
-
-    if all_ordered and len(terminals) >= 2:
+    if (0, sink) in relations[spec["start"]]:
         return {
-            "is_bounded": True,
-            "bounding_words": sorted_terminals,
+            "is_bounded": None,
+            "bounding_words": None,
+            "sorted_template_inclusion": False,
             "explanation": (
-                f"All rules emit terminals in non-decreasing order "
-                f"({', '.join(sorted_terminals)}): L ⊆ "
-                f"{'·'.join(t + '*' for t in sorted_terminals)}."
+                "A generated word violates the sorted terminal-star template. "
+                "This does not determine whether some other bounding expression exists."
             ),
         }
-
     return {
-        "is_bounded": None,
-        "bounding_words": None,
+        "is_bounded": True,
+        "bounding_words": terminals,
+        "sorted_template_inclusion": True,
+        "evidence_scope": "cfg_dfa_fixed_point",
         "explanation": (
-            "Grammar structure does not obviously yield a bounded language."
+            "Exact CFG transition fixed point proves L is contained in "
+            + (" ".join(t + "*" for t in terminals) or "{epsilon}") + "."
         ),
     }
 
@@ -148,31 +172,30 @@ def is_bounded_language(ir: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _decompose_word(word: str, bounding_words: list[str]) -> tuple[int, ...] | None:
-    """Decompose *word* as w₁^k₁ · w₂^k₂ · … · wₙ^kₙ.
+    """Find one tuple for word = w1^k1 ... wm^km by memoized backtracking.
 
-    Uses a greedy left-to-right approach: consume as many copies of the
-    current bounding word as possible, then move to the next one.
-
-    Returns the exponent tuple (k₁, …, kₙ) or ``None`` if
-    decomposition fails.
+    Ambiguous bounds can have several valid tuples; this function returns
+    one, not the full exponent preimage required by Ginsburg-Spanier.
+    Empty bounding words are represented with exponent zero.
     """
-    exponents: list[int] = []
-    pos = 0
-    for bw in bounding_words:
-        count = 0
-        bw_len = len(bw)
-        if bw_len == 0:
-            # ε* = {ε}, contributes exponent 0
-            exponents.append(0)
-            continue
-        while pos + bw_len <= len(word) and word[pos: pos + bw_len] == bw:
-            count += 1
-            pos += bw_len
-        exponents.append(count)
+    @lru_cache(maxsize=None)
+    def solve(slot: int, pos: int) -> tuple[int, ...] | None:
+        if slot == len(bounding_words):
+            return () if pos == len(word) else None
+        bw = bounding_words[slot]
+        if not bw:
+            tail = solve(slot + 1, pos)
+            return (0,) + tail if tail is not None else None
+        ends = [pos]
+        while word.startswith(bw, ends[-1]):
+            ends.append(ends[-1] + len(bw))
+        for count in range(len(ends) - 1, -1, -1):
+            tail = solve(slot + 1, ends[count])
+            if tail is not None:
+                return (count,) + tail
+        return None
 
-    if pos == len(word):
-        return tuple(exponents)
-    return None
+    return solve(0, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -184,95 +207,69 @@ def check_stratification(
     bounding_words: list[str],
     max_length: int = 20,
 ) -> dict:
-    """Check if a bounded CFL satisfies the stratification criterion.
+    """Return finite exponent diagnostics, never a stratification/CFL verdict.
 
-    Generates words from *grammar*, decomposes each into the given
-    bounding structure, and checks whether the exponent vectors form a
-    semilinear set (as required by the Ginsburg–Spanier theorem for
-    bounded CFLs).
-
-    Returns a dict with ``is_stratified``, ``is_cfl``,
-    ``exponent_vectors``, ``explanation``.
+    Each sampled word contributes one valid decomposition. Ambiguous
+    bounding words may admit additional tuples, so this is not the complete
+    exponent preimage in the Ginsburg-Spanier theorem. Neither an empty
+    sample nor its observed growth pattern proves anything about that set.
     """
+    result = {
+        "is_stratified": None,
+        "is_cfl": None,
+        "looks_semilinear": None,
+        "exponent_vectors": [],
+        "evidence_scope": "finite_sample",
+        "exponent_scope": "one_decomposition_per_sampled_word",
+        "max_length": max_length,
+    }
     if not bounding_words:
-        return {
-            "is_stratified": None,
-            "is_cfl": None,
-            "exponent_vectors": [],
-            "explanation": "No bounding words provided.",
-        }
+        return {**result, "explanation": "No bounding words provided."}
+    if not _is_valid_cfg(grammar):
+        return {**result, "explanation": "Invalid or unsupported CFG; no exponent analysis."}
 
     words = _generate_words_from_grammar(grammar, max_length)
-
     if not words:
         return {
-            "is_stratified": True,
-            "is_cfl": True,
-            "exponent_vectors": [],
+            **result,
+            "sample_is_semilinear": True,
             "explanation": (
-                "Grammar generates no words up to the length bound — "
-                "empty language is trivially CFL."
+                "No words were sampled within the derivation/length bounds. "
+                "This does not establish an empty language or stratification."
             ),
         }
 
     exponent_vectors: set[tuple[int, ...]] = set()
     decomposition_failures: list[str] = []
-
-    for w in sorted(words):
-        ev = _decompose_word(w, bounding_words)
-        if ev is not None:
-            exponent_vectors.add(ev)
+    for word in sorted(words):
+        exponents = _decompose_word(word, bounding_words)
+        if exponents is None:
+            decomposition_failures.append(word)
         else:
-            decomposition_failures.append(w)
+            exponent_vectors.add(exponents)
 
+    semi = check_semilinearity(exponent_vectors, len(bounding_words))
+    result.update({
+        "exponent_vectors": sorted(exponent_vectors),
+        "looks_semilinear": semi["looks_semilinear"],
+        "sample_is_semilinear": semi["sample_is_semilinear"],
+    })
     if decomposition_failures:
         return {
-            "is_stratified": None,
-            "is_cfl": None,
-            "exponent_vectors": sorted(exponent_vectors),
+            **result,
             "explanation": (
-                f"{len(decomposition_failures)} word(s) could not be "
-                f"decomposed into the bounding structure "
-                f"({'·'.join(w + '*' for w in bounding_words)}). "
-                f"Examples: {decomposition_failures[:3]}"
+                f"{len(decomposition_failures)} sampled word(s) cannot be "
+                f"decomposed into the proposed bounds; examples: {decomposition_failures[:3]}. "
+                "The bounding expression therefore does not contain the grammar language. "
+                "No CFL or stratification conclusion follows."
             ),
         }
-
-    n_dims = len(bounding_words)
-    semi = check_semilinearity(exponent_vectors, n_dims)
-
-    # Ginsburg–Spanier: a bounded language is CFL iff its exponent set is a
-    # finite union of STRATIFIED linear sets. Semilinearity is necessary but
-    # not sufficient ({a^n b^n c^n} is bounded and semilinear, not CFL), and
-    # here it is judged from a finite sample of words. So this check can
-    # only give hints — never is_cfl=True/False on its own.
-    semilinear = semi["is_semilinear"]
-    is_stratified = None
-    is_cfl = None
-    if semilinear is True:
-        explanation = (
-            f"Sampled exponent vectors look semilinear ({len(exponent_vectors)} "
-            f"vectors over {n_dims} dimensions). {semi['explanation']} "
-            f"Necessary but not sufficient for CFL (Ginsburg–Spanier needs a "
-            f"stratified semilinear set) — hint only."
-        )
-    elif semilinear is False:
-        explanation = (
-            f"Sampled exponent vectors do not look semilinear. "
-            f"{semi['explanation']} A finite sample cannot prove "
-            f"non-semilinearity — hint only."
-        )
-    else:
-        is_cfl = None
-        explanation = (
-            f"Semilinearity of exponent vectors is inconclusive. "
-            f"{semi['explanation']}"
-        )
-
     return {
-        "is_stratified": is_stratified,
-        "is_cfl": is_cfl,
-        "looks_semilinear": semilinear,
-        "exponent_vectors": sorted(exponent_vectors),
-        "explanation": explanation,
+        **result,
+        "explanation": (
+            f"Sampled {len(exponent_vectors)} exponent vectors. {semi['explanation']} "
+            "Only one decomposition per sampled word is included. "
+            "Ginsburg-Spanier requires a stratified semilinear representation "
+            "of the full exponent preimage; these diagnostics do not decide it."
+        ),
     }

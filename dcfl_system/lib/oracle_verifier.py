@@ -1108,6 +1108,13 @@ def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         return isinstance(value, str) and len(value) > 0
 
     if technique == "nerode_classes":
+        if task_ir.get("alphabet") == []:
+            return _make_result(
+                "refuted", checks_run + ["nerode_nonempty_alphabet"],
+                sum(1 for value in passed if value),
+                ["Shallit's infinite-class theorem requires a nonempty alphabet; "
+                 "over the empty alphabet every language is finite and regular"],
+            )
         # dead_class_status is a closed enum, not a free-text field (VERDICT_POLICY.md
         # §4 dcfl/shallit): absent/invalid ⇒ this check fails ⇒ not_verified below;
         # "infinite" is a valid VALUE but makes the technique self-admittedly

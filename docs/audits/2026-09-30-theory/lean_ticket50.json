@@ -1,0 +1,123 @@
+{
+  "timestamp_utc": "2026-09-30T20:19:12.946352+00:00",
+  "proof": "docs/examples/cfl_ticket50_w1bw2w3_lean_proved/proof.lean",
+  "sha256": "39b73694dcf4637192c08cd8d18c82cf85c06bbe0bec4bd97e61002bc0e09fa8",
+  "docker_image_id": "sha256:f828d004800570cd1c4dd2e49cb1eca042e9b98ba4f707f88188ffded74dabc8",
+  "paid_api_calls": 0,
+  "check": {
+    "status": "proved",
+    "errors": [],
+    "warnings": [
+      {
+        "caption": "",
+        "data": "this tactic is never executed\n\nNote: This linter can be disabled with `set_option linter.unreachableTactic false`",
+        "endPos": {
+          "column": 60,
+          "line": 152
+        },
+        "fileName": "/home/lean/check.lean",
+        "isSilent": false,
+        "keepFullRange": false,
+        "kind": "linter.unreachableTactic",
+        "pos": {
+          "column": 10,
+          "line": 152
+        },
+        "severity": "warning"
+      },
+      {
+        "caption": "",
+        "data": "this tactic is never executed\n\nNote: This linter can be disabled with `set_option linter.unreachableTactic false`",
+        "endPos": {
+          "column": 60,
+          "line": 157
+        },
+        "fileName": "/home/lean/check.lean",
+        "isSilent": false,
+        "keepFullRange": false,
+        "kind": "linter.unreachableTactic",
+        "pos": {
+          "column": 10,
+          "line": 157
+        },
+        "severity": "warning"
+      },
+      {
+        "caption": "",
+        "data": "this tactic is never executed\n\nNote: This linter can be disabled with `set_option linter.unreachableTactic false`",
+        "endPos": {
+          "column": 104,
+          "line": 168
+        },
+        "fileName": "/home/lean/check.lean",
+        "isSilent": false,
+        "keepFullRange": false,
+        "kind": "linter.unreachableTactic",
+        "pos": {
+          "column": 10,
+          "line": 168
+        },
+        "severity": "warning"
+      },
+      {
+        "caption": "",
+        "data": "Unused tactic linter: `simp [List.take_append, Nat.sub_eq_zero_of_le hge]` does nothing\n\nNote: This linter can be disabled with `set_option linter.unusedTactic false`",
+        "endPos": {
+          "column": 60,
+          "line": 152
+        },
+        "fileName": "/home/lean/check.lean",
+        "isSilent": false,
+        "keepFullRange": false,
+        "kind": "linter.unusedTactic",
+        "pos": {
+          "column": 10,
+          "line": 152
+        },
+        "severity": "warning"
+      },
+      {
+        "caption": "",
+        "data": "Unused tactic linter: `simp [List.take_append, Nat.sub_eq_zero_of_le hge]` does nothing\n\nNote: This linter can be disabled with `set_option linter.unusedTactic false`",
+        "endPos": {
+          "column": 60,
+          "line": 157
+        },
+        "fileName": "/home/lean/check.lean",
+        "isSilent": false,
+        "keepFullRange": false,
+        "kind": "linter.unusedTactic",
+        "pos": {
+          "column": 10,
+          "line": 157
+        },
+        "severity": "warning"
+      },
+      {
+        "caption": "",
+        "data": "Unused tactic linter: `simp [List.take_append, Nat.sub_eq_zero_of_le hle2, List.take_replicate,\n  Nat.min_eq_left hle3]` does nothing\n\nNote: This linter can be disabled with `set_option linter.unusedTactic false`",
+        "endPos": {
+          "column": 104,
+          "line": 168
+        },
+        "fileName": "/home/lean/check.lean",
+        "isSilent": false,
+        "keepFullRange": false,
+        "kind": "linter.unusedTactic",
+        "pos": {
+          "column": 10,
+          "line": 168
+        },
+        "severity": "warning"
+      }
+    ],
+    "axioms": [
+      "propext",
+      "Classical.choice",
+      "Quot.sound"
+    ],
+    "elapsed": 56.77,
+    "message": null
+  },
+  "scope": "Existing ticket50 theorem only; not formal verification of all pipeline code or all theory claims."
+}

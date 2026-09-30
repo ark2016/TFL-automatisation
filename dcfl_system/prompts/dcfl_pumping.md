@@ -1,5 +1,7 @@
 # DCFL Pumping Lemma Agent — DCFL System
 
+Source statements, hypotheses and verification limits: [theory reference](../../docs/THEORY_REFERENCE.md#dcfl).
+
 Finite checks at p=2,3 and i=0,2,3 are diagnostics, not a proof of the universal quantifiers.
 Closing these checks keeps trust at `well_formed`. A split surviving these exponents is unresolved,
 not a refutation: a larger exponent may break membership. Your symbolic argument must handle every
@@ -274,78 +276,13 @@ xy = aⁿbⁿ⁻¹·bcⁿa = aⁿbⁿcⁿa — ветвь c^n; xz = aⁿbⁿ⁻�
 }
 ```
 
-## Solved Example (§1.6): L = { wvaav^Rw^R | w ∈ (aa*b)*a, v ∈ b(ab|aa)* }
+## Boundary example (§1.6): regex-constrained weak-marker palindromes
 
-(THEORY.md §1.6 — the candidate separator `aa` is NOT a true separator: it occurs both inside `w`
-(blocks `a⁺b`) and inside `v` (pairs `aa`), so `stack_strategy` must return `not_applicable` for
-this language; `dcfl_pumping` is the correct method to prove non-DCFL.)
-
-Пусть p — константа леммы, n > p + 2 (THEORY.md §1.6). Возьмём
-W₁ = (ab)ⁿ aa (ba)ⁿ ∈ L (x₁ = (ab)ⁿ ∈ X, где X = (a⁺b)* ab (ab|aa)*) и
-W₂ = (ab)ⁿ aab (ab)ⁿ aa (ba)ⁿ baa (ba)ⁿ ∈ L (x₂ = (ab)ⁿ aab (ab)ⁿ ∈ X). Так как
-(ab)ⁿ aab (ab)ⁿ = (ab)ⁿ aa (ba)ⁿ b, слово W₁ является префиксом W₂. Положим
-x = W₁ без последней буквы = (ab)ⁿ aa (ba)ⁿ⁻¹ b, y = a,
-z = a b aa (ba)ⁿ baa (ba)ⁿ; |x| = 4n + 1 > p, ⁽¹⁾y = ⁽¹⁾z = a (обе начинаются с 'a').
-
-- **Условие (2) нарушено.** x₂ лежит в последних p символах x, то есть внутри хвоста
-  (ba)ⁿ⁻¹b; y₂ ∈ {ε, a} (первая буква y — 'a'). Накачка меняет только правую половину W₁, не
-  трогая (ab)ⁿ aa: при i ≠ 1 длина хвоста больше не равна 2n, а единственное вхождение «aa» в
-  (ab)ⁿ aa … стоит на фиксированной позиции 2n+1 — палиндром с центром именно на позиции 2n+1
-  требует, чтобы хвост имел длину ровно 2n; при i = 0 хвост короче 2n, и центр палиндрома должен
-  сместиться внутрь (ab)ⁿ, где символов «aa» нет вовсе (это чередующаяся строка). Значит
-  W₁⁽ⁱ⁾ ∉ L при i ≠ 1 — условие (2) не выполняется.
-- **Условие (1) нарушено.** Для пары (x₂, x₄) с окном ≤ p, стоящей где угодно в x: если хотя бы
-  одна из частей окна затрагивает границу блоков (ab)ⁿ / aa / (ba)ⁿ⁻¹ несимметрично, накачка при
-  i=0 или i=2 либо разрушает палиндромность W₁⁽ⁱ⁾, либо превращает левую половину в слово вида
-  x″ ∉ X (например x″ = (ab)ⁿ⁻¹abb или (ab)ⁿa — не согласуется с грамматикой X = (a⁺b)*ab(ab|aa)*)
-  ⇒ W₁⁽ⁱ⁾ ∉ L. Единственные пары, которые формально сохраняют палиндромность W₁, — зеркальные
-  относительно центра пары вида (x₂, x₄) = ((ab)ˢ, (ba)ˢ), дающие W₁⁽ⁱ⁾ = (ab)ᵐ aa (ba)ᵐ,
-  m = n + (i−1)s. Но тогда соответствующая накачка W₂⁽ⁱ⁾ = (ab)ᵐ aab (ab)ᵐ aa (ba)ⁿ baa (ba)ⁿ при
-  m ≠ n перестаёт быть палиндромом: первые 2m+3 символа (ab)ᵐaab не совпадают с обращением
-  (ab)ⁿaab… (разная длина чередующегося блока слева и справа) ⇒ W₂⁽ⁱ⁾ ∉ L.
-
-Оба условия нарушены для произвольного p ⇒ L ∉ DCFL. ∎
-
-**Мораль для этого агента:** для «палиндромов со слабым маркером» (общая подстрока вроде `aa`,
-которая также встречается внутри переменных) общий префикс x надо брать **длиннее половины
-первого слова** — тогда зеркальное отражение хвоста x относительно центра лежит целиком внутри
-самого x, и синхронная накачка по условию (2) (которая работает только с суффиксом x внутри
-последних p символов) физически не может задеть обе половины сразу — она обязана сломать либо
-центральную симметрию, либо структуру X.
-
-```json
-{
-  "agent_name": "dcfl_pumping",
-  "status": "success",
-  "verdict": "non_dcfl",
-  "proof_sketch": {
-    "kind": "dcfl_pumping",
-    "pumping_length": "p — произвольная константа, n выбирается как n > p + 2 (THEORY.md §1.6); word_instances ниже отдельно инстанцируют это при конкретном n = p + 2 для оракул-проверки",
-    "word_w": "w = xy = W1 = (ab)^n aa (ba)^n ∈ L",
-    "word_w_prime": "w' = xz = W2 = (ab)^n aab (ab)^n aa (ba)^n baa (ba)^n ∈ L",
-    "common_prefix_x": "x = W1 без последней буквы = (ab)^n aa (ba)^{n-1} b, |x| = 4n + 1 > p",
-    "suffix_y": "y = a",
-    "suffix_z": "z = a b aa (ba)^n baa (ba)^n",
-    "first_letters_match": "первая буква y и первая буква z — обе 'a'",
-    "condition1_argument": "Пара (x2,x4) с окном <=p где угодно в x: если она несимметрична относительно границ блоков (ab)^n / aa / (ba)^{n-1}, накачка ломает либо палиндромность W1, либо принадлежность левой половины X = (a+b)*ab(ab|aa)*. Единственные симметричные пары дают W1^(i) = (ab)^m aa (ba)^m, m=n+(i-1)s, но тогда W2^(i) с той же накачкой применённой к первому вхождению (ab)^n (а второе вхождение (ab)^n перед финальным aa(ba)^n baa(ba)^n остаётся нетронутым) теряет палиндромность, так как левая половина длины 2m+3 не совпадает по структуре с фиксированной правой частью — значит W2^(i) не в L. Условие (1) не выполняется ни для одной пары.",
-    "condition2_argument": "x2 лежит в последних p символах x, т.е. внутри хвоста (ba)^{n-1}b, y2 в {ε,a}. При i!=1 длина хвоста перестаёт быть равна 2n, а единственное 'aa' в x стоит на фиксированной позиции 2n+1 сразу после (ab)^n — палиндром с центром именно там требует хвост длины ровно 2n; при i=0 хвост короче 2n и центр смещается внутрь чередующегося блока (ab)^n, где подстроки 'aa' нет. Значит W1^(i) не в L при i!=1 — условие (2) не выполняется.",
-    "word_instances": {
-      "2": {"w": "ababababaababababa", "w_prime": "ababababaabababababaabababababaababababa", "x_length": 17},
-      "3": {"w": "abababababaabababababa", "w_prime": "abababababaababababababaababababababaabababababa", "x_length": 21}
-    }
-  },
-  "evidence": [
-    "Берём n > p + 2, x = (ab)^n aa (ba)^{n-1} b, y = a, z = a b aa (ba)^n baa (ba)^n",
-    "xy = W1 = (ab)^n aa (ba)^n ∈ L, xz = W2 = (ab)^n aab (ab)^n aa (ba)^n baa (ba)^n ∈ L (W1 — префикс W2), первые буквы y и z совпадают ('a')",
-    "Условие (2): единственное 'aa' в x стоит на фиксированной позиции сразу после (ab)^n — накачка меняющая длину хвоста (i!=1) не может сохранить палиндром",
-    "Условие (1): несимметричные пары ломают палиндромность или принадлежность X; симметричные пары в W1 портят палиндромность W2 при m != n",
-    "Оба условия нарушены для произвольного p ⇒ по лемме Ю L не является DCFL",
-    "Разделитель 'aa' в этом языке — ложный: он встречается и внутри w (блоки a+b), и внутри v (пары aa), поэтому stack_strategy для этого языка неприменим (THEORY.md §1.6)"
-  ],
-  "confidence": 0.9,
-  "errors": []
-}
-```
+For task_wvaavRwR the old proposed Yu proof did not justify that all admissible
+factor pairs had been exhausted. Do not reuse that argument or treat fixed small
+word_instances as a universal proof. A complete non-DCFL proof now appears in
+THEORY.md §1.6 and shallit.md via marked continuation; return not_applicable here
+unless an independent complete Yu proof is supplied.
 
 ## Reminder
 

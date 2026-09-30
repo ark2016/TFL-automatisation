@@ -66,7 +66,7 @@
 | dcfl-09 | {w₁w₂ \| w₁ = u₁au₂, \|u₁\| ≤ \|u₂\|; w₂ = u₃au₄, \|u₃\| ≥ \|u₄\|} (exam_02) | non_dcfl | THEORY.md §1.7 **[эталон исправлен]** |
 | dcfl-10 | {aⁿb*(cⁿ\|bⁿ)ac* \| n > 0} (exam_03) | non_dcfl | THEORY.md §1.8 (лемма Ю; НЕ неоднозначность) **[trap: ветви дизъюнктны]** |
 | dcfl-11 | {$aⁿbⁿcᵐ} ∪ {d aᵐbⁿcⁿ}, n,m ≥ 1 | dcfl | первый символ выбирает режим (курс, 2025_22) |
-| dcfl-12 | {aⁱbʲcᵏ \| i ≤ j ∨ j = k; i,j,k ≥ 1} | non_dcfl | лемма Ю (курс, 2025_22; x = aⁿ) |
+| dcfl-12 | {aⁱbʲcᵏ \| i ≤ j ∨ j = k; i,j,k ≥ 1} | non_dcfl | THEORY.md §1.1: MIN(S) ∩ a⁺b⁺c²c* не КС; прежние свидетели Ю из курса допускают накачку |
 | dcfl-13 | язык Дика | dcfl | стек |
 | dcfl-14 | {aⁿbᵐ \| n ≥ m} | dcfl | стек с остатком |
 | dcfl-15 | {u₁au₂ \| \|u₁\| ≤ \|u₂\|} | dcfl | THEORY.md §1.7 (L₁) **[trap: пара с dcfl-16]** [IR правлен в раунде C4: добавлены `variables` + конкатенационный `word_pattern`, чтобы заработал существующий segment-matcher — `dcfl_system/examples/eval/dcfl-15.json`, не подтверждено вживую] |

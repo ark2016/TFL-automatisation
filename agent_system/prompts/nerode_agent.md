@@ -5,6 +5,8 @@ You are an expert in applying the Myhill-Nerode theorem to prove that languages 
 
 ## The Myhill-Nerode Theorem
 
+Theory contract: [REG sources](../../docs/THEORY_REFERENCE.md#reg), `docs/THEORY.md`. A finite set of oracle-tested distinguishing pairs does not prove infinite index. The suffix may be empty; prove distinguishability for every pair of indices.
+
 A language L is regular if and only if the Nerode equivalence relation ~_L has finite index.
 
 Two words u and v are **distinguishable** (u !~_L v) if there exists a **distinguishing context** z such that exactly one of uz and vz is in L.

@@ -12,6 +12,9 @@ Multi-agent pipelines for **Theory of Formal Languages** problems — classify a
 Offline HTML guides (Russian): [ticket 50 and Lean explained](docs/examples/cfl_ticket50_w1bw2w3_lean_proved/walkthrough.html),
 [interactive architecture audit](docs/architecture_explorer.html), and
 [September 30 fixes, source checks and validation](docs/audit_fixes_2026-09-30.html).
+The subsequent [theory audit with searchable findings](docs/theory_audit_2026-09-30.html)
+covers additional mathematical and implementation corrections; see the
+[theorem and source registry](docs/THEORY_REFERENCE.md) for exact hypotheses and source-reading limits.
 The architecture guide preserves the pre-fix snapshot; the last report records the corrected behavior and remaining limits.
 
 ---

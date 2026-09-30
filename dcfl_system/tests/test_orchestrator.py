@@ -30,10 +30,8 @@ MOCK_DIR = EXAMPLES_DIR / "mock"
 # are actually non-DCFL; the round-1 reference verdicts ("dcfl 0.92" / "dcfl
 # 0.88" / the incomplete "non_dcfl 0.5") were wrong or incomplete:
 #
-# - task_wvaavRwR (§1.6): stack_strategy now fails ('aa' is not a true phase
-#   separator — it also occurs inside w and inside v), dcfl_pumping succeeds
-#   with a full Yu two-word pumping proof (confidence 0.9) -> reasoning
-#   picks dcfl_pumping as primary_evidence, verdict=non_dcfl.
+# - task_wvaavRwR (§1.6): shallit succeeds via the exact marked-continuation
+#   reduction. The prior Yu case analysis had an unresolved universal gap.
 # - task_u1au2_u3au4 (§1.7): stack_strategy fails (no fixed separating
 #   occurrence of 'a'), shallit succeeds via Theorem 4.7.4 on the derived
 #   language L2 = {u3au4 | |u3|>=|u4|} (all Nerode classes finite,
@@ -59,19 +57,9 @@ MOCK_DIR = EXAMPLES_DIR / "mock"
 # dcfl_pumping-style free-text math prose are not clean instantiable
 # patterns / carry no `word_instances`, so `oracle_verifier`'s step-2
 # semantic check (§4) never fires and trust stays at the structural-only
-# `well_formed` tier -> confidence cap 0.55 (§2). task_wvaavRwR's
-# dcfl_pumping mock DOES carry a mandatory `word_instances` (docs/VERDICT_
-# POLICY.md §4 dcfl/dcfl_pumping) with concrete literal words at n = p + 1
-# for p in {2, 3}, and a real set_builder oracle is available for this
-# task -> the semantic check runs conditions (1)/(2)'s brute force and
-# closes for both p -- but closure at a small, fixed p in {2, 3} is NOT
-# exhaustive evidence for Yu's lemma (backlog review, BLOCKER fix: this is
-# reproducibly reachable for an ACTUALLY-DCFL language too, e.g. dozens of
-# word_instances pairs for task_grammar_aSSb close the same way), so trust
-# stays at `well_formed` -> confidence cap 0.55, same as the other two
-# dcfl_pumping-based tasks below. See dcfl_system/tests/test_verdict_policy.py
-# for more cases that exercise the step-2 oracle path (well_formed / refuted)
-# directly.
+# `well_formed` tier -> confidence cap 0.55 (§2). The exam_01 marked
+# continuation proof has complete mathematical prose but no machine-checked
+# language equality. Its structural verifier must retain this same cap.
 TASKS = [
     ("task_wvaavRwR", "non_dcfl", 0.55),
     ("task_u1au2_u3au4", "non_dcfl", 0.55),

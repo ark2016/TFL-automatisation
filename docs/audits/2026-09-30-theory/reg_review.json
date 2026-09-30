@@ -1,0 +1,150 @@
+{
+  "system": "REG",
+  "date": "2026-09-30",
+  "status": "implemented_and_mock_tested",
+  "source_reference": "docs/THEORY_REFERENCE.md#reg",
+  "claims": [
+    {
+      "id": "REG-01",
+      "finding": "Finite pumping lengths/exponents neither prove the universal pumping counterargument nor refute it from a surviving sampled partition.",
+      "fix": "Keep trust well_formed, preserve per-p partition/exponent diagnostics and known membership witnesses; refute only invalid length or confirmed chosen-word nonmembership.",
+      "paths": [
+        "agent_system/lib/claim_verifier.py",
+        "agent_system/tests/test_verdict_policy.py"
+      ],
+      "regressions": [
+        "singleton {a^10} closes every sampled partition but is regular",
+        "cofinite unary language excluding length 4: a sampled partition survives i=0,2 but escapes at i=3",
+        "unknown witness/pumped membership is never false"
+      ]
+    },
+    {
+      "id": "REG-02",
+      "finding": "Depth-bounded Nerode-index stabilization/growth cannot decide regularity; arbitrary accepted words do not refute a non-regularity claim.",
+      "fix": "Closure estimation returns scoped plausible diagnostics with well_formed trust; legacy verified/disproved empirical statuses also remain well_formed.",
+      "paths": [
+        "agent_system/graph.py",
+        "agent_system/lib/claim_verifier.py",
+        "agent_system/tests/test_graph_edges.py",
+        "agent_system/tests/test_verdict_policy.py"
+      ]
+    },
+    {
+      "id": "REG-03",
+      "finding": "Backreferences and nested productions alone imply no language verdict.",
+      "fix": "Unknown syntax hints dispatch both constructive and destructive specialists; retain exact right/left-linear sufficient criteria.",
+      "counterexamples": [
+        "(a)\\1* defines aa*",
+        "S -> aSb | aS | Sb | epsilon generates a*b*"
+      ],
+      "paths": [
+        "agent_system/lib/hypothesis_module.py",
+        "agent_system/prompts/classifier.md",
+        "agent_system/tests/test_phase2.py",
+        "agent_system/tests/test_e2e.py"
+      ]
+    },
+    {
+      "id": "REG-04",
+      "finding": "Existential even-palindromic prefix/suffix cannot be reduced to equal adjacent edge symbols; an internal reversal pair is not an edge pattern.",
+      "fix": "Downgrade unbounded reversal syntax to unknown; recognize an edge pair by actual position.",
+      "counterexamples": [
+        "abba = ab rev(ab) has an even palindromic edge without an equal-symbol edge",
+        "baaab has an internal aa but no nonempty even palindromic edge"
+      ],
+      "paths": [
+        "agent_system/lib/hypothesis_module.py",
+        "agent_system/tests/test_phase2.py",
+        "agent_system/tests/test_e2e.py"
+      ]
+    },
+    {
+      "id": "REG-05",
+      "finding": "A CFL bounded pumping window need not lie in a prefix; enumeration does not prove an infinite intersection formula.",
+      "fix": "Replace grammar worked proofs with production induction #a <= 3#b+2, recursive derivation of every a^(3n+2)b^n, and universal REG xyz pumping/Nerode proofs directly for L.",
+      "paths": [
+        "agent_system/prompts/grammar_analyzer.md",
+        "agent_system/prompts/reasoning_agent.md",
+        "agent_system/prompts/proof_checker.md"
+      ],
+      "proof_check": "S -> SaSb: deviations add then subtract 2, so two bounds <=2 yield <=2; A -> bSb subtracts 6; aa/epsilon/bb are bases. Set left S -> aa and recurse right S to add three a and one b each step. REG |xy|<=p puts y inside the a-prefix; pumping i=2 violates the global bound."
+    },
+    {
+      "id": "REG-06",
+      "finding": "Unknown membership cannot refute Nerode/free-text claims; Nerode family words need not belong to L, and an empty suffix is allowed.",
+      "fix": "Preserve unknown oracle results, permit empty/literal suffixes, label Nerode bounded_pass with explicit checked-pair scope only, and correct proof-checker instructions.",
+      "paths": [
+        "agent_system/lib/claim_verifier.py",
+        "agent_system/prompts/nerode_agent.md",
+        "agent_system/prompts/proof_checker.md",
+        "agent_system/tests/test_claim_verifier.py",
+        "agent_system/tests/test_verdict_policy.py"
+      ]
+    },
+    {
+      "id": "REG-07",
+      "finding": "A non-regular subset does not imply a non-regular containing language.",
+      "fix": "Require exact closure reductions or a direct universal argument; add core REG sources to seven active classification/proof prompts.",
+      "paths": [
+        "agent_system/prompts/classifier.md",
+        "agent_system/prompts/pumping_agent.md",
+        "agent_system/prompts/nerode_agent.md",
+        "agent_system/prompts/closure_agent.md",
+        "agent_system/prompts/grammar_analyzer.md",
+        "agent_system/prompts/proof_checker.md",
+        "agent_system/prompts/reasoning_agent.md"
+      ]
+    },
+    {
+      "id": "REG-08",
+      "finding": "Once syntax hints become unknown, destructive-only mock runs without reasoning output must export their gate-selected direction independently of the initial hypothesis.",
+      "fix": "Set top-level non_regular on destructive-only successful assembly; use that fallback before the initial hypothesis in REG export; explicitly separate known/unknown hypothesis formalization tests.",
+      "paths": [
+        "agent_system/graph.py",
+        "agent_system/orchestrator.py",
+        "agent_system/tests/test_formalize_run.py"
+      ],
+      "integration_note": "Coordinator requested to mirror the gated top-level verdict fallback in tfl_eval/runners.py, outside this agent's file ownership."
+    }
+  ],
+  "tests": [
+    {
+      "command": ".venv/Scripts/python -m pytest -q -p no:cacheprovider --basetemp=.pytest_tmp_reg_contracts_20260930_v3 agent_system/tests",
+      "result": "540 passed, 37 skipped, 2 xfailed, 16 subtests passed",
+      "elapsed_seconds": 17.46,
+      "scope": "Entire REG test directory, mock only. Final legacy empirical-status mapping adjustment happened afterwards and was rechecked by the focused run below."
+    },
+    {
+      "command": ".venv/Scripts/python -m pytest -q -p no:cacheprovider agent_system/tests/test_claim_verifier.py agent_system/tests/test_verdict_policy.py agent_system/tests/test_phase2.py agent_system/tests/test_theory_contract.py agent_system/tests/test_e2e.py agent_system/tests/test_graph_edges.py",
+      "result": "158 passed, 3 subtests passed",
+      "elapsed_seconds": 4.09,
+      "scope": "Final changed REG consistency, classifier, prompt-contract, closure, end-to-end and verdict tests."
+    }
+  ],
+  "limits": [
+    "No live API calls, no Docker/Lean theorem checking, no commits.",
+    "Tests verify bounded diagnostics and contract regressions; finite grammar enumeration is not a universal proof.",
+    "Nerode bounded_pass certifies only listed concrete distinguishing contexts, not infinite index.",
+    "Confidence and unsupported structural heuristics outside the confirmed issues remain heuristic; no claim of complete mathematical correctness.",
+    "Existing mock JSON examples were left unchanged as fixtures; some contain historical syntactic classifier claims. Active prompts and deterministic hypothesis code were corrected.",
+    "System temporary pytest directory was inaccessible; full tests used unique writable workspace basetemp directories."
+  ],
+  "sources": [
+    {
+      "id": "MATHLIB-NERODE",
+      "title": "Mathlib: Myhill?Nerode theorem",
+      "url": "https://leanprover-community.github.io/mathlib4_docs/Mathlib/Computability/MyhillNerode.html#Language.isRegular_iff_finite_range_leftQuotient",
+      "locator": "Language.isRegular_iff_finite_range_leftQuotient; leftQuotient; toDFA",
+      "status": "source_checked",
+      "scope": "??????? ?????????? ??????????? ?? ??????????????? ???????????? ? ????????? ????? ????? ????????. ??? ????????? ?????????? ????????, ? ?? ?????????? Python-????."
+    },
+    {
+      "id": "MATHLIB-REGEX",
+      "title": "Mathlib: regular expressions",
+      "url": "https://leanprover-community.github.io/mathlib4_docs/Mathlib/Computability/RegularExpressions.html",
+      "locator": "RegularExpression; matches; toENFA",
+      "status": "source_checked",
+      "scope": "??????? ????????? ??????? ?????????? ????????? ? ??????? ? ???????; ??????????? backreference ? ??? ??????????? ?? ??????."
+    }
+  ]
+}

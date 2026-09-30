@@ -291,6 +291,39 @@ class TestIsLeftRecursive:
 # ---------------------------------------------------------------------------
 
 class TestEliminateLeftRecursion:
+    def test_no_terminating_alternative_keeps_language_empty(self):
+        grammar = {
+            "nonterminals": ["S"], "terminals": ["a"], "start": "S",
+            "rules": [{"lhs": "S", "rhs": ["S", "a"]}],
+        }
+        for transform in (eliminate_left_recursion, to_ll_normal_form):
+            result = transform(grammar)
+            assert _generate_words(result, 3) == set()
+            assert not is_left_recursive(result)
+
+    def test_self_unit_loop_is_removed(self):
+        grammar = {
+            "nonterminals": ["S"], "terminals": ["a"], "start": "S",
+            "rules": [{"lhs": "S", "rhs": ["S"]}, {"lhs": "S", "rhs": ["a"]}],
+        }
+        result = eliminate_left_recursion(grammar)
+        assert not is_left_recursive(result)
+        assert _generate_words(result, 3) == {"a"}
+
+    def test_hidden_nullable_recursion_requires_preprocessing(self):
+        grammar = {
+            "nonterminals": ["S", "A"], "terminals": ["a"], "start": "S",
+            "rules": [
+                {"lhs": "S", "rhs": ["A", "S", "a"]},
+                {"lhs": "S", "rhs": ["a"]}, {"lhs": "A", "rhs": []},
+            ],
+        }
+        with pytest.raises(ValueError, match="Nullable-prefix"):
+            eliminate_left_recursion(grammar)
+        result = to_ll_normal_form(grammar)
+        assert not is_left_recursive(result)
+        assert _generate_words(result, 4) == {"a", "aa", "aaa", "aaaa"}
+
     def test_direct_lr_result_is_not_lr(self):
         result = eliminate_left_recursion(GRAMMAR_DIRECT_LR)
         assert is_left_recursive(result) is False
@@ -405,6 +438,17 @@ class TestLeftFactor:
 # ---------------------------------------------------------------------------
 
 class TestEliminateEpsilonRules:
+    def test_nullable_start_on_rhs_gets_fresh_start(self):
+        grammar = {
+            "nonterminals": ["S"], "terminals": ["a"], "start": "S",
+            "rules": [{"lhs": "S", "rhs": ["S", "a"]}, {"lhs": "S", "rhs": []}],
+        }
+        result = eliminate_epsilon_rules(grammar)
+        assert result["start"] != "S"
+        assert all(result["start"] not in rule["rhs"] for rule in result["rules"])
+        assert _generate_words(result, 3) == {"", "a", "aa", "aaa"}
+        assert _generate_words(to_ll_normal_form(grammar), 3) == {"", "a", "aa", "aaa"}
+
     def test_no_epsilon_rules_except_start(self):
         result = eliminate_epsilon_rules(GRAMMAR_WITH_EPSILON)
         assert not _has_epsilon_rules(result)

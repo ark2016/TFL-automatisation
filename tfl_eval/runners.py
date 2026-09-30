@@ -128,7 +128,7 @@ def extract(system: str, result: dict) -> dict:
     """Normalize *result* to `{verdict, confidence, k, verdict_gate, basis_trust}`.
 
     `agent_system` nests its verdict/confidence under `evidence.reasoning`
-    (or falls back to `evidence.hypothesis.hypothesis`); the other three
+    (or uses the explicit gated verdict before falling back to a hypothesis); the other three
     pipelines already expose `verdict`/`confidence` at the top level.
     """
     if system == "reg":
@@ -147,6 +147,7 @@ def extract(system: str, result: dict) -> dict:
             verdict = (
                 r_ev.get("verdict")
                 or reasoning.get("verdict")
+                or result.get("verdict")
                 or (evidence.get("hypothesis") or {}).get("hypothesis")
             )
         confidence = result.get("confidence")

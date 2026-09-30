@@ -37,6 +37,8 @@ Show that the complement of L (Sigma* \ L) is non-regular.
 
 ## Instructions
 
+Theory contract: [REG sources](../../docs/THEORY_REFERENCE.md#reg), `docs/THEORY.md`. Prove the exact reduction result in both directions; finding a non-regular subset is insufficient (a regular language can contain non-regular subsets). Finite enumeration or index estimates cannot prove an infinite-language equality or finite/infinite index.
+
 1. **Identify the non-regular "core."** Look for a pattern like a^n b^n, palindromes, or equal-count constraints hidden inside the language.
 2. **Choose the simplest method.** Intersection with regular is the most common and easiest to explain.
 3. **Specify the regular language R (or homomorphism h) precisely.** Give the regex or DFA for R, or the full definition of h.

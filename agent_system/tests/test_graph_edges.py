@@ -62,6 +62,19 @@ def _base_state(**overrides):
 
 class TestClosureVerification(unittest.TestCase):
 
+    def test_finite_and_growing_index_estimates_do_not_decide_regularity(self):
+        output = {"status": "success", "details": {"regular_language": {"regex": "a*"}}}
+        for index in (1, "infinite", "unknown"):
+            with self.subTest(index=index), patch(
+                "agent_system.graph._estimate_index_with_timeout",
+                return_value={"estimated_index": index, "confidence": 0.99},
+            ):
+                result = _verify_closure_claim(output, lambda word: True, ["a"], _base_state())
+            self.assertEqual(result["status"], "plausible")
+            self.assertEqual(result["estimated_index"], index)
+            self.assertIn("neither proves nor refutes", result["scope"])
+            self.assertNotIn("counterexamples", result)
+
     def test_timeout_returns_unknown_without_blocking(self):
         def slow_estimate(*_args, **_kwargs):
             time.sleep(0.2)

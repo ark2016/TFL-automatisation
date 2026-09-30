@@ -29,20 +29,11 @@ def _are_interleaved(pos1: list[int], pos2: list[int]) -> bool:
 
     Example: pos1=[0,2], pos2=[1,3] → True  (0 < 1 < 2 < 3)
     """
-    # We need at least one element from each list to sit between elements of
-    # the other.  Concretely: ∃ a,b in pos1, ∃ c in pos2 with a < c < b,
-    # OR ∃ a,b in pos2, ∃ c in pos1 with a < c < b.
-    s1, s2 = sorted(pos1), sorted(pos2)
-    for c in s2:
-        # Is c between any two consecutive occurrences in s1?
-        for i in range(len(s1) - 1):
-            if s1[i] < c < s1[i + 1]:
-                return True
-    for c in s1:
-        for i in range(len(s2) - 1):
-            if s2[i] < c < s2[i + 1]:
-                return True
-    return False
+    return any(
+        a < c < b < d or c < a < d < b
+        for a in pos1 for b in pos1 if a < b
+        for c in pos2 for d in pos2 if c < d
+    )
 
 
 def _is_counting_pred(constraint: Any) -> bool:
@@ -69,55 +60,27 @@ def _is_counting_pred(constraint: Any) -> bool:
     return False
 
 
-def _is_filter_regular(filter_spec: dict) -> bool | None:
-    """Decide whether a grammar_filter's filter predicate is regular.
+def _is_filter_regular(
+    filter_spec: dict, alphabet: set[str] | None = None,
+) -> bool | None:
+    """Use the same validated filter contract as preprocessing.
 
-    Returns True  → filter is regular  (CFL ∩ REG = CFL)
-    Returns False → filter is NOT regular
-    Returns None  → cannot determine
+    Bare type labels and an IR-provided is_regular flag are not proofs.
     """
-    if not filter_spec:
-        return None
+    from cfl_system.lib.language_preprocess import _analyze_filter_recursive
 
-    ftype = filter_spec.get("type", "")
-
-    # Modular constraints are regular
-    if ftype == "modular":
-        return True
-
-    # Comparison with a constant on one side is regular (e.g. |w| > 5)
-    if ftype in ("length_bound", "length_comparison"):
-        return True
-
-    # Comparison of two symbol counts (e.g. |a| = |b|) is NOT regular
-    if ftype in ("count_relation", "symbol_count_comparison"):
-        return False
-
-    # Explicit flag
-    if "is_regular" in filter_spec:
-        return bool(filter_spec["is_regular"])
-
-    # Natural-language filter — we can't tell
-    if ftype == "natural_language_filter":
-        return None
-
-    # Fallback: try to infer from structure
-    if "lhs" in filter_spec and "rhs" in filter_spec:
-        lhs, rhs = filter_spec["lhs"], filter_spec["rhs"]
-        # If one side is a constant number → regular
-        if isinstance(lhs, (int, float)) or isinstance(rhs, (int, float)):
-            return True
-        # Both sides are symbol-count references → not regular
-        if isinstance(lhs, str) and isinstance(rhs, str):
-            return False
-
-    return None
+    return _analyze_filter_recursive(filter_spec, alphabet)[0]
 
 
 def _has_counting(filter_spec: dict) -> bool:
     """Return True if *filter_spec* involves a counting constraint."""
     if not filter_spec:
         return False
+    if filter_spec.get("op") in ("and", "or", "not"):
+        return any(_has_counting(p) for p in filter_spec.get("operands", []))
+    if any(filter_spec.get(side, {}).get("kind") in ("count_symbol", "length")
+           for side in ("left", "right")):
+        return True
     ftype = filter_spec.get("type", "")
     if ftype in ("count_relation", "symbol_count_comparison"):
         return True
@@ -199,7 +162,9 @@ def _extract_features(ir: dict) -> dict:
 
     elif kind == "grammar_filter":
         filter_spec = spec.get("filter", {})
-        features["filter_is_regular"] = _is_filter_regular(filter_spec)
+        features["filter_is_regular"] = _is_filter_regular(
+            filter_spec, set(spec.get("grammar", {}).get("terminals", [])),
+        )
         features["has_counting_constraint"] = _has_counting(filter_spec)
 
     # Global: check constraints for counting
@@ -227,8 +192,8 @@ def _derive_hypothesis(
             "non_cfl",
             0.85,
             "Crossed dependencies detected — two different repeated parts "
-            "are interleaved, creating a pattern that context-free grammars "
-            "cannot generate.",
+            "are interleaved. This suggests a copying obstruction but is only "
+            "a search hint; restrictions and alternative decompositions need proof.",
         )
 
     if features["has_repeated_subword"] and not features["has_reverse"]:

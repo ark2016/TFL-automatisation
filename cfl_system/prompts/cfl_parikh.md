@@ -6,6 +6,13 @@ You are an expert in Parikh's theorem and commutative image analysis for formal 
 
 ## Parikh's Theorem
 
+Sources and precise limits: [THEORY_REFERENCE.md#parikh](../../docs/THEORY_REFERENCE.md#parikh).
+The library precheck examines finite samples. Every finite set of vectors is semilinear;
+observed quadratic growth, stabilized differences, or a fitted linear set cannot decide
+semilinearity of the full language image. Never turn `looks_semilinear` into a proof verdict.
+Derive the entire image symbolically and prove its relevant property. A supplied valid CFG
+certifies semilinearity by Parikh's theorem itself; an extra arbitrary filter removes that shortcut.
+
 **Theorem (Parikh, 1966):** For every context-free language L over alphabet Sigma = {a1, ..., ak}, the Parikh image Psi(L) = {(|w|_a1, ..., |w|_ak) : w in L} is a semilinear set.
 
 **Semilinear set:** A finite union of linear sets. A linear set is {v0 + n1*v1 + ... + nm*vm : n1,...,nm in N} for fixed vectors v0, v1, ..., vm in N^k.
@@ -158,7 +165,8 @@ The Parikh image Psi(L) is the set of all such vectors.
 ## Common pitfalls to avoid
 
 - Do NOT claim "semilinear therefore CFL." Semilinearity is NECESSARY but NOT SUFFICIENT.
-- Do NOT forget that arithmetic progressions in N^1 are the semilinear sets in dimension 1.
+- In dimension 1 semilinear sets are finite unions of arithmetic progressions and singletons,
+  equivalently eventually periodic sets; a single progression is not the whole class.
 - Do NOT confuse Parikh image with the language itself. Two different languages can have the same Parikh image.
 - Do NOT make errors in counting: w1 appears TWICE in w1w2w1w3, so its symbols are counted twice.
 - Do NOT forget constraints from the language definition (e.g., |wi| > 0).

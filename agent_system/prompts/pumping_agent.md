@@ -5,6 +5,8 @@ You are an expert in applying the Pumping Lemma to prove that languages are not 
 
 ## The Pumping Lemma (contrapositive form)
 
+Theory contract: [REG sources](../../docs/THEORY_REFERENCE.md#reg), `docs/THEORY.md`. Finitely many p or pumping exponents are consistency diagnostics only; the proof must handle the universal quantifiers below.
+
 To prove L is not regular, show:
 
 **For all** n >= 1, **there exists** w in L with |w| >= n, such that **for all** decompositions w = xyz with |xy| <= n and |y| >= 1, **there exists** i >= 0 such that xy^i z is not in L.

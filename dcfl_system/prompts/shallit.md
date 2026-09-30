@@ -1,5 +1,7 @@
 # Shallit's Lemma Agent — DCFL System
 
+Source statements, hypotheses and verification limits: [theory reference](../../docs/THEORY_REFERENCE.md#dcfl).
+
 A bounded search finding no continuation does not prove that a word is dead. To establish a dead
 class claim, give a general argument or an exact prefix-language certificate; do not infer deadness
 from a finite sample. For example, every word over {a} extends into {a^n | n >= 20}, although the empty
@@ -57,7 +59,7 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
 
 ## Техника 1: Теорема 4.7.4 [Sh] — классы Майхилла–Нероуда (THEORY.md §1.2)
 
-**Теорема 4.7.4 [Sh].** Если L — DCFL, то хотя бы один класс эквивалентности Майхилла–Нероуда
+**Теорема 4.7.4 [Sh].** Над конечным непустым алфавитом Σ, если L — DCFL, то хотя бы один класс эквивалентности Майхилла–Нероуда
 языка L (x ~_L y ⇔ ∀z: xz ∈ L ⇔ yz ∈ L) **бесконечен**.
 
 **Контрапозиция (рабочая форма).** Если **все** классы Нероуда языка L конечны, то L ∉ DCFL.
@@ -141,6 +143,12 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
 **Лемма.** Пусть L — DCFL, $ ∉ Σ. Тогда:
 - haspref(L) = {xy | x ∈ L, xy ∈ L, y ≠ ε} — DCFL;
 - L_$ = {x$y | x ∈ L, xy ∈ L} — DCFL.
+
+В L_$ разрешены x = ε и y = ε; автомат требует ровно один новый маркер $.
+При чтении $ проверяется и сохраняется текущий флаг принятия исходного автомата:
+сбрасывать его можно только на следующей букве исходного алфавита. Иначе x$ при x ∈ L
+может ошибочно отвергаться. В haspref требуется именно собственный префикс: флаг
+принятого префикса учитывается только после чтения ещё одной буквы (§1.3).
 
 **Применение.** Если L_$ ∩ R (или haspref(L) ∩ R) для некоторого регулярного R не является КС —
 то, поскольку DCFL замкнуты относительно ∩ REG и DCFL ⊆ CFL, получаем противоречие ⇒ L ∉ DCFL.
@@ -241,6 +249,42 @@ L ∩ aΣ* оставляет слова с p = 0, т.е. равно a·L₂ (TH
 и левое частное на слово), обе сохраняющие DCFL. Использовать здесь конструкцию вида
 φ(c)=ab, φ(d)=aab (обратный гомоморфизм с такими образами) — ошибочно и не нужно; такая
 перекодировка не была проверена и не входит в это доказательство.
+
+### Пример (prefix_continuation, THEORY.md §1.6): task_wvaavRwR
+
+Бесконечный мёртвый класс не мешает технике продолжения. Берём регулярный
+R = (ab)⁺ aa(ba)⁺ $ b aa(ba)⁺ baa(ba)⁺. Для показателей (r,s,t,u) принадлежность
+префикса до $ даёт r=s, а палиндромность после удаления $ — r=u и s=t:
+ровно три вхождения aa определяют центральное и зеркальные боковые вхождения.
+Обратное включение следует из (ab)ⁿ, (ab)ⁿaab(ab)ⁿ ∈ X. Полученный язык не КС
+по явному обратному гомоморфизму, регулярному фильтру и стиранию до aⁿbⁿcⁿ.
+Все отображения и оба включения приведены в THEORY.md §1.6.
+
+```json
+{
+  "agent_name": "shallit",
+  "status": "success",
+  "verdict": "non_dcfl",
+  "proof_sketch": {
+    "kind": "shallit",
+    "technique": "prefix_continuation",
+    "dead_class_status": null,
+    "distinguishing_suffix": null,
+    "separation_argument": null,
+    "regular_filter": "R = (ab)^+ aa(ba)^+ $ b aa(ba)^+ baa(ba)^+",
+    "derived_language": "K = L_$ ∩ R = {(ab)^n aa(ba)^n $ b aa(ba)^n baa(ba)^n | n >= 1}",
+    "non_cfl_argument": "Let h(A)=ab, h(B)=h(C)=h(D)=ba, h(E)=aa, h(F)=$baa, h(G)=baa. Then h^-1(K) ∩ A+EB+FC+GD+ = {A^n E B^n F C^n G D^n | n>=1}. Mapping A,B,C to a,b,c and erasing D,E,F,G gives {a^n b^n c^n}. CFL inverse homomorphism, regular intersection, and homomorphism closure imply K is not CFL.",
+    "argument": "For a word (ab)^r aa(ba)^s $ b aa(ba)^t baa(ba)^u in R, its prefix before $ has one aa occurrence, hence membership in L requires r=s. Erasing $ gives (ab)^r aab(ab)^s aa(ba)^t baa(ba)^u with exactly three aa occurrences. In a palindrome the middle aa is fixed; its sides (ab)^r aab(ab)^s and (ab)^u aab(ab)^t must agree, forcing r=u and s=t. Conversely all exponents equal n gives valid halves (ab)^n and (ab)^n aab(ab)^n in X=(a+b)*ab(ab|aa)*. Thus the displayed K equality holds universally. If L were DCFL, marked continuation and regular intersection would make K DCFL and CFL, contradicting the non-CFL reduction."
+  },
+  "evidence": [
+    "THEORY.md §1.6: exact marked-continuation equality, proved from the three aa occurrences.",
+    "The infinite dead class prevents nerode_classes only; prefix_continuation remains applicable.",
+    "CFL closure reduces the derived language to a^n b^n c^n."
+  ],
+  "confidence": 0.9,
+  "errors": []
+}
+```
 
 ## Instructions
 

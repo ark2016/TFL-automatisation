@@ -12,15 +12,16 @@ Before making your classification decision, explicitly answer these questions in
 
 Answer these questions first in your reasoning field, then make your classification.
 
-## Hard Rules (apply BEFORE any LLM reasoning)
+## Theorem-backed rules and uncertain hints
 
-These rules override your own analysis. Check them first:
+Use [REG theory sources](../../docs/THEORY_REFERENCE.md#reg) and the quantifiers in `docs/THEORY.md`. Syntactic hints below do not prove a verdict:
 
-1. **Backreferences:** If `language_spec.has_backreferences == true` -> verdict `"non_regular"`, confidence `0.7`, dispatch: `re_builder=true, pumping=true, nerode=true` (RE builder is dispatched because some backreferences are trivial, e.g. `(a)\1*` = `aa*`).
-2. **Nested recursion in grammar:** If the grammar contains rules like `S -> aSb` (nested/balanced recursion) -> verdict `"non_regular"`, confidence `0.8`, dispatch: `pumping=true, nerode=true, closure=true`.
-3. **All atoms finite:** If every atom in the hypothesis module output has `memory_type == "finite"` -> verdict `"regular"`, confidence `0.9`, dispatch: `re_builder=true, dfa_builder=true`.
+1. **Backreferences:** These can define regular or non-regular languages; `(a)\1*` defines `aa*`. Treat their presence as an uncertain hint, dispatch `re_builder=true, dfa_builder=true, pumping=true, nerode=true`, and set `hard_rule_applied=null`. Choose only a tentative direction from the actual pattern, confidence at most `0.4` unless a separate proof settles it.
+2. **Nested recursion in grammar:** A rule `S -> aSb` alone does not imply non-regularity. For example, `S -> aSb | aS | Sb | epsilon` generates `a*b*`. Treat nesting as an uncertain hint; dispatch constructive and destructive specialists, plus `grammar_analyzer=true`, and set `hard_rule_applied=null`.
+3. **Right/left-linear grammar:** If every rule is right-linear (or every rule is left-linear), the language is regular. Preserve this exact sufficient criterion; mixing the two directions is not sufficient.
+4. **All atoms finite:** For a whole-word Boolean combination of proven regular predicates, closure under Boolean operations implies regularity. Finite labels for isolated parts of an existential decomposition do not prove the entire language regular. Dispatch `re_builder=true, dfa_builder=true` to establish equivalence.
 
-If none of the hard rules apply, use your expert judgment to classify and dispatch.
+If no theorem applies, use your expert judgment to propose a hypothesis and dispatch specialists. The schema's two verdict values express a tentative direction, not a verified theorem.
 
 ## Dispatch Guidelines
 
@@ -82,7 +83,7 @@ Return **only** valid JSON matching this schema. No markdown fences, no extra te
 - `confidence`: float in [0.0, 1.0]. Higher means more certain.
 - `reasoning`: a concise explanation (1-3 sentences) of why you chose this verdict.
 - `dispatch`: which specialist agents to run. Set `grammar_analyzer: true` if the language is defined by a grammar.
-- `hard_rule_applied`: if a hard rule triggered, name it here (e.g. `"backreferences"`, `"nested_recursion"`, `"all_atoms_finite"`). Otherwise `null`.
+- `hard_rule_applied`: name only a theorem-backed rule (e.g. `"right_linear"`, `"left_linear"`, `"all_atoms_finite"`). Backreferences and nested recursion are uncertain hints, so use `null` for them.
 
 ## Examples
 

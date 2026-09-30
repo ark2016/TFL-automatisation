@@ -10,9 +10,6 @@ from __future__ import annotations
 
 from collections import deque
 from itertools import product
-from math import gcd
-from functools import reduce
-from typing import Any
 
 
 # ---------------------------------------------------------------------------
@@ -35,11 +32,38 @@ def parikh_vector(word: str, alphabet: list[str]) -> tuple[int, ...]:
 # Word generation helpers (BFS derivation from a grammar)
 # ---------------------------------------------------------------------------
 
+def _is_valid_cfg(grammar: dict) -> bool:
+    """Validate the explicit character-CFG contract before using a theorem."""
+    if not isinstance(grammar, dict):
+        return False
+    terms, nonterms = grammar.get("terminals"), grammar.get("nonterminals")
+    if not isinstance(terms, list) or not isinstance(nonterms, list) or not nonterms:
+        return False
+    if any(not isinstance(s, str) or len(s) != 1 for s in terms):
+        return False
+    if any(not isinstance(s, str) or not s for s in nonterms):
+        return False
+    terminals, nonterminals = set(terms), set(nonterms)
+    if terminals & nonterminals or grammar.get("start") not in nonterms:
+        return False
+    rules = grammar.get("rules")
+    if not isinstance(rules, list):
+        return False
+    symbols = terminals | nonterminals
+    return all(
+        isinstance(rule, dict) and isinstance(rule.get("lhs"), str)
+        and rule["lhs"] in nonterminals and isinstance(rule.get("rhs"), list)
+        and all(isinstance(s, str) and s in symbols for s in rule["rhs"])
+        for rule in rules
+    )
+
+
 def _generate_words_from_grammar(grammar: dict, max_length: int) -> set[str]:
     """BFS-derive terminal words from *grammar* up to *max_length*.
 
     *grammar* must have keys: start, rules, terminals, nonterminals.
-    Returns a set of terminal strings.
+    Returns sampled terminal strings. The sentential-form cap may omit
+    words even within the length bound, so this is not a complete image.
     """
     start = grammar["start"]
     rules = grammar["rules"]
@@ -121,250 +145,95 @@ def parikh_image_from_grammar(
 # ---------------------------------------------------------------------------
 
 def _analyze_1d(values: list[int]) -> dict:
-    """Analyze a sorted list of non-negative integers for semilinearity.
-
-    A 1-D set is semilinear iff it is eventually periodic — i.e. a finite
-    union of arithmetic progressions.
-    """
-    if not values:
-        return {
-            "is_semilinear": True,
-            "linear_sets": [],
-            "explanation": "Empty set is trivially semilinear.",
-        }
-
+    """Describe finite observed gaps; never decide eventual periodicity."""
     vals = sorted(set(values))
-
-    if len(vals) == 1:
-        return {
-            "is_semilinear": True,
-            "linear_sets": [{"base": (vals[0],), "periods": []}],
-            "explanation": f"Singleton set {{{vals[0]}}} is semilinear.",
-        }
-
-    # Compute consecutive differences
-    diffs = [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
-
-    # Check if all differences are equal (single arithmetic progression)
+    if len(vals) <= 1:
+        return {"looks_semilinear": True, "explanation": "Empty or singleton sample."}
+    diffs = [b - a for a, b in zip(vals, vals[1:])]
     if len(set(diffs)) == 1:
-        period = diffs[0]
         return {
-            "is_semilinear": True,
-            "linear_sets": [{"base": (vals[0],), "periods": [(period,)]}],
-            "explanation": (
-                f"Single arithmetic progression: base={vals[0]}, step={period}."
-            ),
+            "looks_semilinear": True,
+            "explanation": f"Observed arithmetic progression with step {diffs[0]}.",
         }
-
-    # Check if differences eventually stabilise (become periodic)
-    # Look for a repeating pattern in the last half of diffs
-    if len(diffs) >= 4:
-        # Check if the last N diffs are all the same
-        tail = diffs[len(diffs) // 2:]
-        if len(set(tail)) == 1:
-            return {
-                "is_semilinear": True,
-                "linear_sets": None,
-                "explanation": (
-                    "Differences eventually stabilise — likely a finite union "
-                    "of arithmetic progressions."
-                ),
-            }
-
-    # Check for quadratic growth (non-semilinear indicator)
-    # If diffs are strictly increasing, suspect n^2 growth
-    if len(diffs) >= 3 and all(diffs[i] < diffs[i + 1] for i in range(len(diffs) - 1)):
-        # Verify: second differences constant → quadratic
-        second_diffs = [diffs[i + 1] - diffs[i] for i in range(len(diffs) - 1)]
+    if len(diffs) >= 4 and len(set(diffs[len(diffs) // 2:])) == 1:
+        return {
+            "looks_semilinear": True,
+            "explanation": "Observed differences stabilise within the sample.",
+        }
+    if len(diffs) >= 3:
+        second_diffs = [b - a for a, b in zip(diffs, diffs[1:])]
         if len(set(second_diffs)) == 1 and second_diffs[0] > 0:
             return {
-                "is_semilinear": False,
-                "linear_sets": None,
-                "explanation": (
-                    "Quadratic growth detected (constant second differences). "
-                    "Not an eventually periodic set → not semilinear."
-                ),
+                "looks_semilinear": False,
+                "explanation": "Observed quadratic growth is a heuristic warning only.",
             }
-
-    # Try decomposing into a small number of arithmetic progressions
-    # by grouping values by residue classes
     for modulus in range(1, min(len(vals), 8)):
-        residue_groups: dict[int, list[int]] = {}
-        for v in vals:
-            residue_groups.setdefault(v % modulus if modulus else 0, []).append(v)
-
-        all_ap = True
-        for _res, group in residue_groups.items():
-            if len(group) < 2:
-                continue
-            g_diffs = [group[i + 1] - group[i] for i in range(len(group) - 1)]
-            if len(set(g_diffs)) != 1:
-                all_ap = False
-                break
-
-        if all_ap:
-            linear_sets = []
-            for _res, group in residue_groups.items():
-                base = (group[0],)
-                if len(group) >= 2:
-                    periods = [(group[1] - group[0],)]
-                else:
-                    periods = []
-                linear_sets.append({"base": base, "periods": periods})
+        groups: dict[int, list[int]] = {}
+        for value in vals:
+            groups.setdefault(value % modulus, []).append(value)
+        if all(len({b - a for a, b in zip(g, g[1:])}) <= 1 for g in groups.values()):
             return {
-                "is_semilinear": True,
-                "linear_sets": linear_sets,
-                "explanation": (
-                    f"Decomposed into {len(linear_sets)} arithmetic "
-                    f"progression(s) (modulus {modulus})."
-                ),
+                "looks_semilinear": True,
+                "explanation": f"Sample fits arithmetic progressions modulo {modulus}.",
             }
-
-    return {
-        "is_semilinear": None,
-        "linear_sets": None,
-        "explanation": "Could not determine semilinearity from sampled data.",
-    }
-
-
-def _vectors_to_projections(
-    vectors: set[tuple[int, ...]], dim: int
-) -> list[list[int]]:
-    """Project vectors onto each coordinate axis."""
-    projections: list[list[int]] = [[] for _ in range(dim)]
-    for v in vectors:
-        for i in range(dim):
-            projections[i].append(v[i])
-    return projections
+    return {"looks_semilinear": None, "explanation": "No simple observed gap pattern."}
 
 
 def check_semilinearity(
     vectors: set[tuple[int, ...]], alphabet_size: int
 ) -> dict:
-    """Heuristic semilinearity check for a finite sample of Parikh vectors.
+    """Report a finite sample separately from its unknown full Parikh image.
 
-    Returns a dict with keys ``is_semilinear``, ``linear_sets``,
-    ``explanation``.
-
-    * ``True`` — the sample is consistent with a semilinear set and a
-      decomposition was found.
-    * ``False`` — the sample exhibits a pattern (e.g. quadratic growth)
-      that is incompatible with semilinearity.
-    * ``None`` — inconclusive.
+    Every finite subset of N^d is semilinear: ``linear_sets`` is its exact
+    union of singletons, with no inferred infinite periods. The unknown
+    underlying image always has ``is_semilinear=None``. ``looks_semilinear``
+    records gap/projection diagnostics only and cannot justify a CFL verdict.
     """
-    if not vectors:
-        return {
-            "is_semilinear": True,
-            "linear_sets": [],
-            "explanation": "Empty set is trivially semilinear.",
-        }
+    if not isinstance(alphabet_size, int) or alphabet_size < 0:
+        raise ValueError("alphabet_size must be a non-negative integer")
+    if any(
+        len(v) != alphabet_size
+        or any(not isinstance(x, int) or x < 0 for x in v)
+        for v in vectors
+    ):
+        raise ValueError("vectors must lie in N^alphabet_size")
 
-    dim = alphabet_size
-    if dim == 0:
-        return {
-            "is_semilinear": True,
-            "linear_sets": [],
-            "explanation": "Alphabet is empty; only the empty word is possible.",
-        }
-
-    # --- 1-D shortcut ---
-    if dim == 1:
-        vals = sorted(v[0] for v in vectors)
-        return _analyze_1d(vals)
-
-    # --- Multi-dimensional ---
-
-    # 1. Check each projection independently
-    projections = _vectors_to_projections(vectors, dim)
-    proj_results = [_analyze_1d(sorted(set(p))) for p in projections]
-
-    any_non_semilinear = any(r["is_semilinear"] is False for r in proj_results)
-    if any_non_semilinear:
-        axis = next(
-            i for i, r in enumerate(proj_results) if r["is_semilinear"] is False
+    linear_sets = [{"base": v, "periods": []} for v in sorted(vectors)]
+    if not vectors or alphabet_size == 0 or len(vectors) == 1:
+        hint = {"looks_semilinear": True, "explanation": "Empty or singleton sample."}
+    elif alphabet_size == 1:
+        hint = _analyze_1d([v[0] for v in vectors])
+    else:
+        projections = [_analyze_1d([v[i] for v in vectors]) for i in range(alphabet_size)]
+        warning_axis = next(
+            (i for i, p in enumerate(projections) if p["looks_semilinear"] is False),
+            None,
         )
-        return {
-            "is_semilinear": False,
-            "linear_sets": None,
-            "explanation": (
-                f"Projection onto axis {axis} is not semilinear: "
-                f"{proj_results[axis]['explanation']}"
-            ),
-        }
-
-    # 2. Check if all vectors lie on a single linear set
-    #    v = base + k * period for some base and period vectors.
-    sorted_vecs = sorted(vectors)
-    if len(sorted_vecs) >= 2:
-        base = sorted_vecs[0]
-        # Compute diffs from base
-        diffs = [
-            tuple(v[i] - base[i] for i in range(dim))
-            for v in sorted_vecs[1:]
-        ]
-        # Check if all diffs are integer multiples of the first diff
-        d0 = diffs[0]
-        if all(x == 0 for x in d0):
-            # All vectors might be the same
-            if all(all(x == 0 for x in d) for d in diffs):
-                return {
-                    "is_semilinear": True,
-                    "linear_sets": [{"base": base, "periods": []}],
-                    "explanation": "All vectors are identical — singleton set.",
-                }
+        if warning_axis is not None:
+            hint = {
+                "looks_semilinear": False,
+                "explanation": f"Projection {warning_axis}: {projections[warning_axis]['explanation']}",
+            }
+        elif all(p["looks_semilinear"] is True for p in projections) and len(vectors) <= 30:
+            hint = {
+                "looks_semilinear": True,
+                "explanation": "Small sample has simple individual projection patterns.",
+            }
         else:
-            # Find a non-zero component of d0 to use as reference
-            ref_idx = next((i for i in range(dim) if d0[i] != 0), None)
-            if ref_idx is not None:
-                all_collinear = True
-                for d in diffs:
-                    if d0[ref_idx] == 0:
-                        all_collinear = False
-                        break
-                    # Check d = k * d0 for some integer k
-                    k_num = d[ref_idx]
-                    k_den = d0[ref_idx]
-                    if k_num % k_den != 0:
-                        all_collinear = False
-                        break
-                    k = k_num // k_den
-                    if k < 0:
-                        all_collinear = False
-                        break
-                    if any(d[j] != k * d0[j] for j in range(dim)):
-                        all_collinear = False
-                        break
-
-                if all_collinear:
-                    return {
-                        "is_semilinear": True,
-                        "linear_sets": [
-                            {"base": base, "periods": [d0]}
-                        ],
-                        "explanation": (
-                            f"Single linear set: base={base}, period={d0}."
-                        ),
-                    }
-
-    # 3. All projections semilinear, but can't find simple joint structure
-    all_proj_semilinear = all(r["is_semilinear"] is True for r in proj_results)
-    if all_proj_semilinear and len(vectors) <= 30:
-        return {
-            "is_semilinear": True,
-            "linear_sets": None,
-            "explanation": (
-                "All projections are semilinear and sample is small — "
-                "consistent with semilinearity."
-            ),
-        }
-
+            hint = {
+                "looks_semilinear": None,
+                "explanation": "No simple joint pattern was established from the sample.",
+            }
     return {
         "is_semilinear": None,
-        "linear_sets": None,
+        "sample_is_semilinear": True,
+        "looks_semilinear": hint["looks_semilinear"],
+        "linear_sets": linear_sets,
+        "evidence_scope": "finite_sample",
         "explanation": (
-            "Multi-dimensional analysis inconclusive. "
-            "Projections are individually semilinear but joint structure "
-            "could not be determined from sampled data."
+            f"{hint['explanation']} The finite sample is an exact union of "
+            "singleton linear sets. It cannot determine semilinearity of "
+            "the underlying full image."
         ),
     }
 
@@ -376,7 +245,8 @@ def check_semilinearity(
 def _sample_words_repeated_subword(ir_spec: dict, max_total: int = 15) -> set[str]:
     """Generate sample words from a repeated_subword language_spec.
 
-    Enumerate small assignments for each part and concatenate.
+    Enumerate candidate assignments and concatenate. Only a few constraint
+    shapes are applied below; returned words may violate other constraints.
     """
     parts = ir_spec["parts"]
     concat_pattern = ir_spec["concat_pattern"]
@@ -404,7 +274,11 @@ def _sample_words_repeated_subword(ir_spec: dict, max_total: int = 15) -> set[st
     max_combos = 2000
     for combo in product(*word_lists):
         assignment = dict(zip(part_list, combo))
-        w = "".join(assignment[p] for p in concat_pattern)
+        w = "".join(
+            assignment[p[4:-1]][::-1] if p.startswith("rev(") and p.endswith(")")
+            else assignment[p]
+            for p in concat_pattern
+        )
         if len(w) <= max_total:
             # Check constraints (basic: length > 0)
             ok = True
@@ -459,11 +333,26 @@ def _get_alphabet_from_ir(ir: dict) -> list[str]:
 def analyze_parikh(ir: dict) -> dict:
     """High-level Parikh image analysis for a CFL IR dict.
 
-    Returns a dict with human-readable description, semilinearity
-    verdict, sampled vectors, explanation, and optional conclusion.
+    Certifies the full image only for a valid, unfiltered explicit CFG,
+    by Parikh's theorem. All finite-pattern diagnostics remain heuristic.
+    Filtered/repeated-subword samplers return candidate vectors from a
+    superset because they apply only some predicates; provenance exposes
+    this limitation. No negative CFL conclusion is inferred from a sample.
     """
     spec = ir.get("language_spec", {})
     kind = spec.get("kind")
+    if kind in ("grammar", "grammar_filter"):
+        grammar = spec if kind == "grammar" else spec.get("grammar", {})
+        if not _is_valid_cfg(grammar):
+            return {
+                "commutative_image": "Invalid or unsupported CFG representation.",
+                "is_semilinear": None,
+                "looks_semilinear": None,
+                "evidence_scope": "not_verified",
+                "vectors_sampled": [],
+                "explanation": "Cannot apply Parikh's theorem to an invalid CFG.",
+                "conclusion": None,
+            }
     alphabet = _get_alphabet_from_ir(ir)
 
     vectors: set[tuple[int, ...]] = set()
@@ -499,6 +388,8 @@ def analyze_parikh(ir: dict) -> dict:
         return {
             "commutative_image": f"Unsupported language kind: {kind}",
             "is_semilinear": None,
+            "looks_semilinear": None,
+            "evidence_scope": "not_verified",
             "vectors_sampled": [],
             "explanation": f"Cannot compute Parikh image for kind '{kind}'.",
             "conclusion": None,
@@ -506,21 +397,40 @@ def analyze_parikh(ir: dict) -> dict:
 
     semi = check_semilinearity(vectors, len(alphabet))
 
-    conclusion = None
-    if semi["is_semilinear"] is False:
-        conclusion = "non_semilinear → not CFL"
+    theorem_applies = kind == "grammar"
+    provenance = {
+        "kind": "language_members" if theorem_applies else "candidate_superset",
+        "max_length": 15,
+        "complete_within_bound": False,
+        "membership_verified": theorem_applies,
+        "limitations": (
+            "BFS sentential-form cap may omit words."
+            if theorem_applies else
+            "Only selected filter/constraint shapes are applied; candidate "
+            "vectors may not belong to the target language image."
+        ),
+    }
 
     # Build commutative image description
     if len(vectors) <= 10:
-        ci_desc = f"Sampled vectors: {sorted(vectors)}"
+        ci_desc = f"Sampled {'member' if theorem_applies else 'candidate'} vectors: {sorted(vectors)}"
     else:
         sample = sorted(vectors)[:5]
-        ci_desc = f"Sampled {len(vectors)} vectors, first 5: {sample}"
+        ci_desc = f"Sampled {len(vectors)} {'member' if theorem_applies else 'candidate'} vectors, first 5: {sample}"
 
     return {
         "commutative_image": ci_desc,
-        "is_semilinear": semi["is_semilinear"],
+        "is_semilinear": True if theorem_applies else None,
+        "looks_semilinear": semi["looks_semilinear"],
+        "sample_is_semilinear": semi["sample_is_semilinear"],
+        "linear_sets": semi["linear_sets"],
+        "evidence_scope": "grammar_theorem" if theorem_applies else "finite_sample",
+        "sample_provenance": provenance,
         "vectors_sampled": sorted(vectors),
-        "explanation": semi["explanation"],
-        "conclusion": conclusion,
+        "explanation": (
+            "Parikh's theorem certifies semilinearity of the full image of "
+            "this valid CFG, independently of the sampled pattern. "
+            if theorem_applies else provenance["limitations"] + " "
+        ) + semi["explanation"],
+        "conclusion": None,
     }

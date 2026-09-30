@@ -1,0 +1,250 @@
+{
+  "date": "2026-09-30",
+  "scope": "CFL mathematical contracts, selected worked examples, preprocessing, and REG worked grammar",
+  "paid_api_calls": 0,
+  "sources": {
+    "GS": {
+      "url": "https://msp.org/pjm/1966/16-2/pjm-v16-n2-p09-p.pdf",
+      "read": "Definitions, Lemmas 2.1-2.2 and Theorem 2.1, printed pp.289-291; printed p.289 also rendered and visually inspected",
+      "type": "original full text"
+    },
+    "EGKL": {
+      "url": "https://arxiv.org/html/1006.3825",
+      "read": "Introduction and Theorem 1.1; not all proof dependencies",
+      "type": "primary constructive proof of Parikh theorem"
+    },
+    "Pasti": {
+      "url": "https://arxiv.org/pdf/2209.06809",
+      "read": "Construction Figure 2, Theorem 1, Corollary 1, PDF p.5; Boolean-semiring specialization used",
+      "type": "primary research"
+    },
+    "MathlibNerode": {
+      "url": "https://leanprover-community.github.io/mathlib4_docs/Mathlib/Computability/MyhillNerode.html",
+      "read": "leftQuotient, toDFA, isRegular_iff_finite_range_leftQuotient",
+      "type": "primary formal specification/proof library"
+    },
+    "MathlibRegex": {
+      "url": "https://leanprover-community.github.io/mathlib4_docs/Mathlib/Computability/RegularExpressions.html",
+      "read": "Regex constructors, semantics and automaton conversion declarations",
+      "type": "primary formal library"
+    },
+    "Ramos": {
+      "url": "https://arxiv.org/abs/1510.04748",
+      "read": "Local PDF: cfl definition and pumping_lemma statement, p.7",
+      "type": "Coq formalization, not Lean certification"
+    },
+    "Hoogeboom": {
+      "url": "https://liacs.leidenuniv.nl/~hoogeboomhj/second/secondcourse.pdf",
+      "read": "Ogden PDF p.110; interchange p.116 and worked example p.119",
+      "type": "secondary course slides"
+    }
+  },
+  "assertions": [
+    {
+      "id": "REG-GRAMMAR-EXAMPLE",
+      "status": "proved_locally",
+      "statement": "For S→SaSb|ε|A, A→bb|aa|bSb, L∩a*b*={a^m b^k:m≡k mod2,m≤3k+2}, hence nonregular",
+      "hypotheses": "Whole CFG, no extra filter",
+      "evidence": "Induction for count invariant and converse construction; infinite Nerode family in THEORY.md §0",
+      "issue": "Old finite enumeration was insufficient by itself; prompt incorrectly used CFL pumping window for REG proof",
+      "mapping": [
+        "docs/THEORY.md",
+        "agent_system/prompts/grammar_analyzer.md"
+      ]
+    },
+    {
+      "id": "CFL-PUMP",
+      "status": "source_checked",
+      "statement": "CFL pumping: exists p, forall sufficiently long z, exists decomposition, forall exponents",
+      "hypotheses": "Nonempty combined pumped factors; short middle window anywhere in word",
+      "evidence": "Ramos p.7 and explicit quantifiers in THEORY_REFERENCE.md#cfl",
+      "mapping": [
+        "cfl_system/prompts/cfl_pumping.md",
+        "cfl_system/lib/claim_verifier.py"
+      ]
+    },
+    {
+      "id": "CFL-OGDEN",
+      "status": "source_checked_secondary",
+      "statement": "Ogden bounds marked positions, not total middle-window length",
+      "hypotheses": "At least p marked positions; pumped factors contain a mark",
+      "evidence": "Hoogeboom p.110",
+      "mapping": [
+        "cfl_system/prompts/cfl_ogden.md"
+      ]
+    },
+    {
+      "id": "CFL-INTERCHANGE",
+      "status": "corrected",
+      "statement": "Interchange guarantees |Z|≥|R|/(c(n+1)^2); any proved smaller upper bound gives contradiction",
+      "hypotheses": "n≥m≥2, equal prefix/suffix lengths, m/2<block length≤m; not restricted to exponential R or large alphabets",
+      "evidence": "Hoogeboom p.116; local context-count and rounding explanation",
+      "issue": "JSON schema and later instructions still imposed false exponential-density requirement; example confused block values with whole-word count and rounded strictly",
+      "mapping": [
+        "cfl_system/prompts/cfl_interchange.md",
+        "docs/THEORY.md"
+      ]
+    },
+    {
+      "id": "CFL-CLOSURE",
+      "status": "source_checked_and_local_constructions",
+      "statement": "CFL closed under REG intersection and usual CFL operations; arbitrary subset containment is not a negative criterion",
+      "hypotheses": "Exact transformed language, both inclusion directions; correct epsilon handling",
+      "evidence": "Pasti Theorem 1/Corollary 1 for intersection; Ramos for basic grammar operations; local standard constructions listed separately",
+      "mapping": [
+        "cfl_system/prompts/cfl_closure_reduction.md",
+        "cfl_system/prompts/cfl_morphism.md",
+        "docs/THEORY_REFERENCE.md"
+      ]
+    },
+    {
+      "id": "CFL-FILTER-SIGNS",
+      "status": "corrected",
+      "statement": "Signed modular sums are regular; mixed-sign threshold sums need not be",
+      "hypotheses": "Fixed positive modulus; nonnegative coefficients for saturation argument",
+      "evidence": "Local DFA construction and Nerode counterexample #a−#b≥0",
+      "issue": "Classifier called every linear-combination threshold regular",
+      "mapping": [
+        "cfl_system/prompts/cfl_classifier.md"
+      ]
+    },
+    {
+      "id": "CFL-FILTER-BOOLEAN",
+      "status": "corrected",
+      "statement": "Nonregularity does not propagate through union/intersection",
+      "hypotheses": "Same alphabet; F∨¬F=Σ*, F∧¬F=∅",
+      "evidence": "Local counterexamples and test_filter_theory_contracts.py",
+      "issue": "Recursive filter analyzer returned false if any operand was nonregular",
+      "mapping": [
+        "cfl_system/lib/language_preprocess.py"
+      ]
+    },
+    {
+      "id": "CFL-FILTER-DEGENERACY",
+      "status": "corrected",
+      "statement": "Identical counts, absent symbols, length versus a letter count and malformed modular predicates require separate handling",
+      "hypotheses": "Whole-word variable w and known alphabet; valid supported expression and positive integer modulus",
+      "evidence": "40 preprocessing/filter tests in initial targeted run",
+      "issue": "All count comparisons were called nonregular; any modulus key certified regularity",
+      "mapping": [
+        "cfl_system/lib/language_preprocess.py",
+        "cfl_system/tests/test_filter_theory_contracts.py"
+      ]
+    },
+    {
+      "id": "CFL-HYPOTHESIS-DUPLICATION",
+      "status": "corrected",
+      "statement": "Hypothesis and preprocessing share one filter classifier; bare labels/flags do not prove regularity",
+      "hypotheses": "Canonical structured filter expressions",
+      "evidence": "test_hypothesis.py",
+      "issue": "Duplicate heuristic trusted is_regular flag and arbitrary lhs/rhs strings; nested occurrences were called crossed",
+      "mapping": [
+        "cfl_system/lib/cfl_hypothesis.py"
+      ]
+    },
+    {
+      "id": "CFL-PARIKH",
+      "status": "source_checked",
+      "statement": "Every CFL has semilinear Parikh image; converse false",
+      "hypotheses": "Image of entire language, not sampled subset",
+      "evidence": "EGKL Theorem 1.1; a^n b^n c^n local counterexample to converse",
+      "mapping": [
+        "cfl_system/prompts/cfl_parikh.md",
+        "docs/THEORY_REFERENCE.md#parikh"
+      ]
+    },
+    {
+      "id": "CFL-PARIKH-SAMPLE",
+      "status": "corrected",
+      "statement": "Any finite vector set is semilinear; its observed growth cannot decide the full image",
+      "hypotheses": "Finite sample; full-language conclusion only with exact theorem/certificate",
+      "evidence": "Finite singleton-union proof; CFG S→ε|a|a^4|a^9 refutes old heuristic",
+      "issue": "Quadratic finite sample yielded non_semilinear and non_cfl conclusion",
+      "mapping": [
+        "cfl_system/lib/parikh.py",
+        "cfl_system/lib/language_preprocess.py"
+      ]
+    },
+    {
+      "id": "CFL-STRATIFICATION",
+      "status": "source_checked",
+      "statement": "A letter-bounded language is CFL iff its exponent set has a finite stratified-linear representation",
+      "hypotheses": "Distinct ordered letters, exact full exponent set, existence of some representation",
+      "evidence": "GS Theorem 2.1; reduction for word bounds by inverse homomorphism and REG intersection",
+      "mapping": [
+        "docs/THEORY_REFERENCE.md#parikh",
+        "cfl_system/lib/stratification.py"
+      ]
+    },
+    {
+      "id": "CFL-BOUNDS",
+      "status": "corrected",
+      "statement": "Per-production terminal order does not prove global letter-boundedness",
+      "hypotheses": "Must account for nonterminal expansions",
+      "evidence": "S→aS|bS|ε generates Σ*; exact finite DFA-relation fixed point used for positive certificates",
+      "mapping": [
+        "cfl_system/lib/stratification.py"
+      ]
+    },
+    {
+      "id": "CFL-EXPONENT-SAMPLE",
+      "status": "corrected",
+      "statement": "Greedy decomposition can fail and empty bounded samples do not prove empty language",
+      "hypotheses": "One sampled decomposition is not the whole exponent relation",
+      "evidence": "word ab with bounds [a,ab] admits exponents (0,1); minimum word length can exceed sample limit",
+      "mapping": [
+        "cfl_system/lib/stratification.py"
+      ]
+    },
+    {
+      "id": "CFL-CLOSURE-LITERAL",
+      "status": "corrected",
+      "statement": "aabacaabac is in the copied-block language and regular filter",
+      "hypotheses": "w1=aaba,w2=c,w3=c; n=2,m=1",
+      "evidence": "IR oracle check in test_prompt_witnesses.py; replaced negative example with aabacabac",
+      "issue": "Prompt supplied a positive word as a negative witness",
+      "mapping": [
+        "cfl_system/prompts/cfl_closure_reduction.md"
+      ]
+    },
+    {
+      "id": "CFL-FILTER49",
+      "status": "proved_locally",
+      "statement": "Grammar-filter49 is non-CFL by a regular slice and Ogden",
+      "hypotheses": "Four nonempty blocks in chosen word, mark first b-block",
+      "evidence": "THEORY.md §2.3 now uses i=2 uniformly, preserving block boundaries; equality equations force zero pumped marks",
+      "mapping": [
+        "docs/THEORY.md"
+      ]
+    },
+    {
+      "id": "CFL-COPIED-EXAMPLES",
+      "status": "reviewed_local_proofs",
+      "statement": "w1w2w1w3 and wwvvR worked non-CFL reductions in THEORY.md remain supported by explicit decompositions and pumping",
+      "hypotheses": "Exact alphabets/nonemptiness and chosen regular slices; binary alphabet for wwvvR",
+      "evidence": "Root reviewed both inclusion arguments and all window cases; historical bounded checks not relabeled as new proofs",
+      "mapping": [
+        "docs/THEORY.md §2",
+        "docs/THEORY.md §2.5"
+      ]
+    },
+    {
+      "id": "CFL-CFG-FILTER-GUARD",
+      "status": "corrected",
+      "statement": "A regular filter yields a CFL certificate only after validating its underlying CFG",
+      "hypotheses": "Declared start/nonterminal/rule symbols; malformed expressions remain unknown",
+      "evidence": "Independent Sol review reproduced invalid start and LHS certificates; root added five regressions before final core run",
+      "mapping": [
+        "cfl_system/lib/language_preprocess.py",
+        "cfl_system/tests/test_filter_theory_contracts.py"
+      ]
+    }
+  ],
+  "limits": [
+    "No claim that every assertion in every historical report or every future LLM answer is proved",
+    "Ogden/interchange originals not read in full; exact statements checked in secondary slides",
+    "Parikh original 1966 not read in full; constructive primary reproof used",
+    "Python algorithms and IR translation are tested, not globally verified in Lean",
+    "Sampler candidate sets may ignore unsupported filter constraints; provenance is explicit and no full-language conclusion follows"
+  ]
+}

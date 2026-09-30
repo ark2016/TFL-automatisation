@@ -314,25 +314,63 @@ class TestPumpingStep2Check(unittest.TestCase):
         result = verify_pumping_claim(pumping_output, oracle=None)
         self.assertEqual(result["trust"], "well_formed")
 
-    def test_valid_anbn_proof_is_bounded_pass(self):
+    def test_valid_anbn_finite_pumping_checks_remain_well_formed(self):
         pumping_output = {
             "status": "success",
             "evidence": {"verdict": "non_regular", "word_family": "a^p b^p"},
         }
         result = verify_pumping_claim(pumping_output, oracle=_anbn_oracle)
-        self.assertEqual(result["trust"], "bounded_pass")
+        self.assertEqual(result["trust"], "well_formed")
         self.assertEqual(result["checked_p"], [2, 3, 4])
+        self.assertTrue(all(d["escaping_partitions"] == d["sampled_partitions"] for d in result["diagnostics"]))
 
-    def test_bogus_proof_against_trivial_language_is_refuted(self):
-        """Every word is in L (regular), so no partition of a^p b^p ever
-        escapes -- the claimed pumping proof must be refuted."""
+    def test_surviving_sampled_exponents_are_inconclusive(self):
+        """The finite oracle interface cannot establish all exponents."""
         pumping_output = {
             "status": "success",
             "evidence": {"verdict": "non_regular", "word_family": "a^p b^p"},
         }
         result = verify_pumping_claim(pumping_output, oracle=_all_words_oracle)
+        self.assertEqual(result["trust"], "well_formed")
+        self.assertNotIn("counterexample", result)
+        self.assertIsNotNone(result["diagnostics"][0]["surviving_sampled_partition"])
+
+    def test_finite_singleton_can_close_all_sampled_partitions(self):
+        proof = {"status": "success", "evidence": {"verdict": "non_regular", "word_family": "a^(0p+10)"}}
+        result = verify_pumping_claim(proof, oracle=lambda word: word == "a" * 10)
+        self.assertEqual(result["trust"], "well_formed")
+        self.assertEqual(result["checked_p"], [2, 3, 4])
+        self.assertTrue(all(d["escaping_partitions"] == d["sampled_partitions"] for d in result["diagnostics"]))
+
+    def test_cofinite_unary_survivor_can_escape_at_an_unsampled_exponent(self):
+        proof = {"status": "success", "evidence": {"verdict": "non_regular", "word_family": "a^p"}}
+        result = verify_pumping_claim(proof, oracle=lambda word: len(word) != 4)
+        # At p=2, x='', y='a', z='a' survives 0 and 2 but escapes at 3.
+        first = result["diagnostics"][0]
+        self.assertEqual(first["surviving_sampled_partition"], {"x": "", "y": "a", "z": "a"})
+        self.assertEqual(first["tested_exponents"], [0, 2])
+        # The actual refutation is the explicit witness at p=4, not this split.
         self.assertEqual(result["trust"], "refuted")
-        self.assertIn("counterexample", result)
+        self.assertEqual(result["counterexample"]["p"], 4)
+
+    def test_unknown_witness_membership_is_not_refuted(self):
+        proof = {"status": "success", "evidence": {"verdict": "non_regular", "word_family": "a^p"}}
+        result = verify_pumping_claim(proof, oracle=lambda word: None)
+        self.assertEqual(result["trust"], "well_formed")
+        self.assertEqual(result["witnesses"], [])
+
+    def test_unknown_pumped_membership_is_not_recorded_as_nonmembership(self):
+        proof = {"status": "success", "evidence": {"verdict": "non_regular", "word_family": "a^p b^p"}}
+        result = verify_pumping_claim(proof, oracle=lambda word: True if _anbn_oracle(word) else None)
+        self.assertEqual(result["trust"], "well_formed")
+        self.assertTrue(all(w["expected_in_l"] is True for w in result["witnesses"]))
+        self.assertTrue(all(d["unknown_memberships"] > 0 for d in result["diagnostics"]))
+
+    def test_short_witness_refutes_explicit_length_requirement(self):
+        proof = {"status": "success", "evidence": {"verdict": "non_regular", "word_family": "a^(p-1)"}}
+        result = verify_pumping_claim(proof, oracle=lambda word: True)
+        self.assertEqual(result["trust"], "refuted")
+        self.assertIn("shorter", result["reason"])
 
     def test_two_letter_family_falls_back_to_well_formed(self):
         """Patterns with more than one free variable are out of scope for
@@ -382,6 +420,21 @@ class TestNerodeStep2Check(unittest.TestCase):
     def test_without_oracle_is_well_formed(self):
         result = verify_nerode_claim(self._proof(), oracle=None)
         self.assertEqual(result["trust"], "well_formed")
+
+    def test_unknown_membership_on_either_side_is_inconclusive(self):
+        for oracle in (lambda word: None, lambda word: True if _anbn_oracle(word) else None):
+            result = verify_nerode_claim(self._proof(), oracle=oracle)
+            self.assertEqual(result["trust"], "well_formed")
+            self.assertEqual(result["witnesses"], [])
+
+    def test_empty_distinguishing_suffix_is_valid(self):
+        proof = self._proof()
+        proof["proof"]["distinguishing_contexts"][0]["context"] = ""
+        result = verify_nerode_claim(proof, oracle=lambda word: word == "aa")
+        self.assertEqual(result["trust"], "refuted")
+        self.assertEqual(result["counterexample"]["context"], "")
+        self.assertEqual(result["counterexample"]["i"], 3)
+        self.assertTrue(any(w["word"] == "aa" and w["expected_in_l"] for w in result["witnesses"]))
 
     def test_context_using_the_second_pair_variable_is_matched_by_name(self):
         """docs/VERDICT_POLICY.md fix (reviewer finding): the context always
@@ -462,24 +515,22 @@ class TestComputeDestructiveTrust(unittest.TestCase):
         evidence = {"pumping_verification": {"trust": "refuted"}}
         self.assertEqual(compute_destructive_trust(evidence)["trust"], "refuted")
 
-    def test_closure_verified_status_is_only_bounded_pass(self):
-        """The closure agent's empirical Nerode-index estimate is bounded
-        (timeout + depth cutoff) -- it must never reach the full `verified`
-        trust reserved for deterministic checks."""
+    def test_closure_empirical_index_estimate_stays_well_formed(self):
+        """Finite-depth class growth cannot establish infinite index."""
         trust = closure_trust_from_verification(
             {"status": "success"}, {"status": "verified", "confidence": 0.95},
         )
-        self.assertEqual(trust, "bounded_pass")
+        self.assertEqual(trust, "well_formed")
 
     def test_closure_without_verification_is_well_formed(self):
         trust = closure_trust_from_verification({"status": "success"}, None)
         self.assertEqual(trust, "well_formed")
 
-    def test_closure_disproved_is_refuted(self):
+    def test_legacy_empirical_disproved_status_is_not_a_counterexample(self):
         trust = closure_trust_from_verification(
             {"status": "success"}, {"status": "disproved"},
         )
-        self.assertEqual(trust, "refuted")
+        self.assertEqual(trust, "well_formed")
 
 
 # ---------------------------------------------------------------------------
