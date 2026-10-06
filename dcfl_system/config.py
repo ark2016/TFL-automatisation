@@ -78,6 +78,14 @@ REFUSAL_FALLBACK = True
 #     does not refuse large budgets.
 MAX_TOKENS = 64000
 MAX_TOKENS_PER_AGENT: dict[str, int] = {}
+
+# Haiku JSON-repair call: output ceiling. A repair re-emits the whole object,
+# so a truncated 64K-token answer cannot be repaired within 8000 tokens.
+# Haiku 4.5 allows 64K output; 32000 leaves headroom. The call is
+# non-streaming, so it passes an explicit timeout (JSON_REPAIR_TIMEOUT_S) --
+# without one the SDK refuses non-streaming max_tokens > ~21333.
+JSON_REPAIR_MAX_TOKENS = 32000
+JSON_REPAIR_TIMEOUT_S = 600.0
 LLM_JSON_RETRIES = 2
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 

@@ -349,6 +349,112 @@ def _render_pumping_cases(cases: list[dict]) -> str:
 # Markdown renderer
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Lean 4 formalization block (result["formalization"], docs/VERDICT_POLICY.md R-Lean)
+# Shared with dcfl_system.renderer (dcfl may import from cfl).
+# ---------------------------------------------------------------------------
+
+def _lean_statement_text(fm: dict) -> str:
+    st = fm.get("statement")
+    if isinstance(st, dict):
+        parts = [st.get(k) for k in ("imports", "alphabet_decl", "language_decl", "theorem_decl")]
+        return "\n".join(str(x) for x in parts if x).strip()
+    return str(st).strip() if st else ""
+
+
+def _lean_cost(fm: dict) -> float | None:
+    for k in ("cost_usd", "estimated_cost_usd"):
+        if isinstance(fm.get(k), (int, float)):
+            return float(fm[k])
+    total, seen = 0.0, False
+    for a in fm.get("attempts") or []:
+        if isinstance(a, dict):
+            for k in ("cost_usd", "estimated_cost_usd"):
+                if isinstance(a.get(k), (int, float)):
+                    total += float(a[k])
+                    seen = True
+                    break
+    return total if seen else None
+
+
+def _lean_summary_bits(fm: dict) -> list[str]:
+    attempts = fm.get("attempts") or []
+    bits = [f"Статус: {fm.get('status', 'skipped')}"]
+    if fm.get("direction"):
+        bits.append(f"Направление: {fm['direction']}")
+    bits.append(f"Попыток: {len(attempts)}")
+    if isinstance(fm.get("elapsed"), (int, float)):
+        bits.append(f"Время Lean: {fm['elapsed']:.1f}s")
+    cost = _lean_cost(fm)
+    if cost is not None:
+        bits.append(f"Стоимость: ${cost:.4f}")
+    return bits
+
+
+def render_lean_block_md(fm: Any) -> list[str]:
+    """Markdown lines for ``result["formalization"]``; ``[]`` when absent."""
+    if not isinstance(fm, dict) or not fm:
+        return []
+    out = ["### Формализация (Lean 4)", ""]
+    out.append(" · ".join(_lean_summary_bits(fm)))
+    out.append("")
+    if fm.get("reason"):
+        out.append(f"Причина: {fm['reason']}")
+        out.append("")
+    stmt = _lean_statement_text(fm)
+    if stmt:
+        out += ["**Утверждение:**", "", "```lean", stmt, "```", ""]
+    body = fm.get("proof_body")
+    if isinstance(body, str) and body.strip():
+        out += ["**Тело доказательства:**", "", "```lean", body.strip("\n"), "```", ""]
+    axioms = fm.get("axioms") or []
+    if axioms:
+        out.append("**Аксиомы:** " + ", ".join(f"`{a}`" for a in axioms))
+        out.append("")
+    attempts = [a for a in (fm.get("attempts") or []) if isinstance(a, dict)]
+    if attempts:
+        out.append("**Попытки:**")
+        for a in attempts:
+            out.append(f"- #{a.get('attempt', '?')}: {a.get('status', '?')}")
+        out.append("")
+    errs = fm.get("errors") or []
+    if errs and fm.get("status") != "proved":
+        out.append("**Ошибки Lean:**")
+        for e in errs:
+            out.append(f"- {str(e)[:500]}")
+        out.append("")
+    return out
+
+
+def render_lean_block_html(fm: Any) -> str:
+    """HTML fragment for ``result["formalization"]``; ``""`` when absent."""
+    if not isinstance(fm, dict) or not fm:
+        return ""
+    status = fm.get("status", "skipped")
+    parts = ['<div class="s-sec">Формализация (Lean 4)</div>',
+             f'<div class="s-meta">{_esc(" · ".join(_lean_summary_bits(fm)))}</div>']
+    if fm.get("reason"):
+        parts.append(f'<div class="s-p">Причина: {_esc(fm["reason"])}</div>')
+    stmt = _lean_statement_text(fm)
+    if stmt:
+        parts.append(f'<div class="s-p"><b>Утверждение:</b></div><pre>{_esc(stmt)}</pre>')
+    body = fm.get("proof_body")
+    if isinstance(body, str) and body.strip():
+        parts.append(f'<div class="s-p"><b>Тело доказательства:</b></div><pre>{_esc(body.strip(chr(10)))}</pre>')
+    axioms = fm.get("axioms") or []
+    if axioms:
+        parts.append('<div class="s-p"><b>Аксиомы:</b> ' + ", ".join(f"<code>{_esc(a)}</code>" for a in axioms) + "</div>")
+    attempts = [a for a in (fm.get("attempts") or []) if isinstance(a, dict)]
+    if attempts:
+        items = "".join(f"<li>#{_esc(a.get('attempt', '?'))}: {_esc(a.get('status', '?'))}</li>" for a in attempts)
+        parts.append(f'<div class="s-p"><b>Попытки:</b></div><ul>{items}</ul>')
+    errs = fm.get("errors") or []
+    if errs and status != "proved":
+        items = "".join(f"<li>{_esc(str(e)[:500])}</li>" for e in errs)
+        parts.append(f'<div class="s-p"><b>Ошибки Lean:</b></div><ul>{items}</ul>')
+    return "\n".join(parts)
+
+
 def render_markdown(result: dict) -> str:
     """Convert CFL pipeline result to Obsidian-compatible Markdown."""
     if result is None:
@@ -571,6 +677,11 @@ def render_markdown(result: dict) -> str:
         sections.append(f"\n### Ошибки пайплайна ({len(errs)})\n")
         for e in errs:
             sections.append(f"- {e}")
+
+    lean_md = render_lean_block_md(result.get("formalization"))
+    if lean_md:
+        sections.append("")
+        sections.extend(lean_md)
 
     usage_line = _usage_summary_line(result)
     if usage_line:
@@ -1368,6 +1479,10 @@ def render_html(result: dict) -> str:
             "window.mermaid=mermaid;"
             '</script>'
         )
+
+    lean_html = render_lean_block_html(result.get("formalization"))
+    if lean_html:
+        parts.append(lean_html)
 
     usage_line = _usage_summary_line(result)
     if usage_line:
