@@ -178,6 +178,25 @@ def test_student_notes_appear_only_once(runner):
     assert "student_notes" not in user_content
 
 
+def test_student_notes_nested_in_ir_appear_only_once(runner):
+    """The IR dict embedded in the input carries student_notes too; that
+    copy must be stripped from the user JSON as well."""
+    message = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[SimpleNamespace(type="text", text='{"verdict": "regular"}')],
+    )
+    _mock_stream(runner, message)
+
+    note = "maybe the language is context-free"
+    runner.run_agent("classifier", {"ir": {"language_spec": {}, "student_notes": note}})
+
+    kwargs = runner._client.messages.stream.call_args.kwargs
+    user_content = kwargs["messages"][0]["content"]
+    assert kwargs["system"].count(note) == 1
+    assert note not in user_content
+    assert "language_spec" in user_content
+
+
 def test_model_override_env(monkeypatch, runner):
     monkeypatch.setenv("TFL_MODEL_DEEP", "claude-opus-5-5")
     monkeypatch.setenv("TFL_MODEL_OVERRIDE", "claude-haiku-4-5")
