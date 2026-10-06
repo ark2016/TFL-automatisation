@@ -127,3 +127,17 @@ def test_verify_claims_scans_every_known_specialist_agent():
     assert result["disproved"] == 0
     agents = {c["agent"] for c in result["verified_claims"]}
     assert agents == {"pumping", "nerode"}
+
+
+def test_word_has_left_boundary():
+    """A word must not be carved out of the tail of a longer token."""
+    assert _extract_claims("the table in L is fine, stab ∈ L", ["a", "b"]) == []
+    assert _extract_claims("xaabb in L", ["a", "b"]) == []
+    # a 16-letter run is not truncated to its last 12 letters
+    assert _extract_claims("a" * 16 + " in L", ["a", "b"]) == []
+
+
+def test_in_l_does_not_match_in_lean_or_language():
+    assert _extract_claims("aabb in Lean is checked", ["a", "b"]) == []
+    assert _extract_claims("aabb in language terms", ["a", "b"]) == []
+    assert _extract_claims("слово w = aabb in Lean", ["a", "b"]) == []

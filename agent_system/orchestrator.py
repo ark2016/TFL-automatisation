@@ -322,6 +322,13 @@ class Pipeline:
         """Read a prompt file from the prompts/ directory.
 
         Returns the prompt text, or None if the file is not found.
+
+        DEFERRED: the ``input_parser`` agent (prompts/input_parser.md and its
+        entries in config.py) is configured but NOT called anywhere in this
+        pipeline -- REG runs take an already-built IR JSON. A free-text
+        ``--text`` entry (as in ll_system/orchestrator.py) is a possible
+        follow-up; until it is wired, this default exists only so the
+        prompt file can be loaded by tests and tooling.
         """
         prompt_dir = Path(__file__).parent / "prompts"
         prompt_file = prompt_dir / f"{name}.md"

@@ -1329,9 +1329,17 @@ class LLMRunner:
         # which doubles its apparent weight and blurs which copy the agent
         # should treat as authoritative.
         student_notes = ""
-        if isinstance(input_data, dict) and input_data.get("student_notes"):
-            student_notes = input_data["student_notes"]
-            input_data = {k: v for k, v in input_data.items() if k != "student_notes"}
+        if isinstance(input_data, dict):
+            student_notes = input_data.get("student_notes") or ""
+            nested_ir = input_data.get("ir")
+            if isinstance(nested_ir, dict) and "student_notes" in nested_ir:
+                # The IR itself carries the notes too (ir_schema.py); strip
+                # that copy as well so the text is not repeated in the JSON.
+                student_notes = student_notes or nested_ir.get("student_notes") or ""
+                nested_ir = {k: v for k, v in nested_ir.items() if k != "student_notes"}
+                input_data = {**input_data, "ir": nested_ir}
+            if "student_notes" in input_data:
+                input_data = {k: v for k, v in input_data.items() if k != "student_notes"}
 
         if isinstance(input_data, (dict, list)):
             user_msg = json.dumps(input_data, indent=2, ensure_ascii=False)
