@@ -146,7 +146,7 @@ and closure verification follows oracle construction.
   return `well_formed` (see trust taxonomy below); semantic (word-level) verification of the claim's content is only
   partial so far — implemented where an oracle already exists (CFL pumping/ogden/closure_reduction, DCFL pumping/Shallit,
   LL constructive/substitution/prefix_classes, REG pumping/Nerode), not yet for set_builder languages without a
-  word-oracle. Treat a verdict's confidence per its `trust` level, not as a proof; see [`TODO.md`](TODO.md) §1 and
+  word-oracle. Treat a verdict's confidence per its `trust` level, not as a proof; see
   [`docs/VERDICT_POLICY.md`](docs/VERDICT_POLICY.md) §4.
 
 - **Trust taxonomy and confidence caps.** Every artifact/claim carries a `trust` level, and the orchestrator caps the
@@ -325,7 +325,7 @@ flowchart LR
   constraints) into a membership predicate and a word generator, so the `prefix_classes` claim-verifier step can
   check membership semantically (`docs/VERDICT_POLICY.md` §4 step 2) instead of leaving trust at `well_formed`.
   Only Format 1 (`set_builder`) is covered this way; Format 2/3 (grammar given explicitly) still has no semantic
-  check (`TODO.md` §1).
+  check.
 
 ---
 
@@ -399,7 +399,6 @@ Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a 
 ├── pumping_lemma/          # Legacy pumping-lemma checker (reference, not maintained)
 ├── reverse_morfism/        # Legacy inverse-homomorphism solver
 ├── pumping_len.py          # Min pumping-length finder for regex (standalone, see below)
-├── TODO.md                 # backlog: open audit findings
 ├── .env                    # ANTHROPIC_API_KEY (git-ignored)
 └── README.md               # you are here
 ```
@@ -587,19 +586,19 @@ Without `--live`, a task runs through its pipeline's `MockRunner` when the manif
 fixture; otherwise it is reported `skipped` rather than guessed at. Metrics (`tfl_eval/metrics.py`): overall /
 per-system / trap-task accuracy, a Brier score for confidence calibration, the inconclusive rate, and the
 "false confident wrong" rate (confidence ≥ 0.6 but incorrect verdict). Results land under `.tfl_lab_runs/evals/`.
-This is what lets a prompt or model change be measured rather than eyeballed (`TODO.md` §7).
+This is what lets a prompt or model change be measured rather than eyeballed.
 
 The first `--live` run (24 trap tasks, Haiku, 2026-09-27) is written up in
 [`docs/EVAL_RESULTS.md`](docs/EVAL_RESULTS.md): 19/19 solved tasks correct, 0 false-confident-wrong, with
 per-task tables, per-pipeline token/cost usage, and the diagnoses that fed the DCFL certificate, R4′ and the
-structured-output fixes below. A full-74-task run and a re-run after those fixes are still open (`TODO.md` §7).
+structured-output fixes below. A full-74-task run and a re-run after those fixes are still open.
 
 ---
 
 ## External dependencies
 
 - **Python 3.12+** — `anthropic>=0.77`, `langgraph`, `python-dotenv` (declared in `pyproject.toml`), `pytest` for tests
-- **Graphviz `dot` binary** — rendering PDA state diagrams as inline SVG in HTML reports. Falls back to [Mermaid](https://mermaid.js.org/) via CDN if `dot` is absent. See [`cfl_system/CLAUDE.md`](cfl_system/CLAUDE.md) for install notes.
+- **Graphviz `dot` binary** — rendering PDA state diagrams as inline SVG in HTML reports. Falls back to [Mermaid](https://mermaid.js.org/) via CDN if `dot` is absent. Install it from https://graphviz.org/download/ and make sure `dot` is on `PATH`.
 - **Lean 4 + Docker** (optional) — `--formalize` type-checks generated proofs against the `tfl-lean4` image
   (Lean/Mathlib v4.33.0 + langlib); see "R-Lean architecture" above.
 - **Anthropic API key** in `.env` for `--live` runs. Offline / mock mode needs no key.
