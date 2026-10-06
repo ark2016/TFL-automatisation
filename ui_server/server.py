@@ -84,6 +84,7 @@ as flags: --first-model --retry-model --retries --max-tokens.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 import mimetypes
@@ -359,7 +360,10 @@ def _settings_env(settings: dict, project: str) -> dict[str, str]:
     step inside its own graph here: the formalization is a separate entry
     (`<system>.formalize`, chained after the result when the setting is on), so
     an inherited TFL_FORMALIZATION=1 must not switch the in-graph step on."""
-    return {"TFL_FORMALIZATION": "0"}
+    # The child's stderr is decoded as UTF-8 by _spawn_and_wait; without these
+    # Windows children write the ANSI code page and a Cyrillic path in the log
+    # turns into mojibake.
+    return {"TFL_FORMALIZATION": "0", "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
 
 
 # ---------------------------------------------------------------------------
@@ -667,7 +671,7 @@ def _wait_for_process(run_id: str, proc: subprocess.Popen):
 
 _RECORD_KEYS = ("run_id", "status", "project", "started", "finished", "pid", "server_pid",
                 "pid_identity", "server_identity", "live", "verdict", "confidence", "error", "formalize_error", "cost",
-                "formalize_in_run")
+                "formalize_in_run", "result_status", "result_errors")
 
 
 def _source_mode(run: dict) -> str:
@@ -729,6 +733,11 @@ def _apply_results_locked(run: dict) -> None:
             data = json.loads(result_json.read_text(encoding="utf-8"))
             run["verdict"] = data.get("verdict")
             run["confidence"] = data.get("confidence")
+            # The pipeline's own outcome, separate from the process status
+            # ("completed" only says the subprocess produced a result file).
+            run["result_status"] = data.get("status") if isinstance(data.get("status"), str) else None
+            errs = data.get("errors")
+            run["result_errors"] = [str(e) for e in errs] if isinstance(errs, list) else []
         except Exception:
             pass
     _refresh_cost_locked(run)
@@ -754,6 +763,8 @@ def _new_run_entry(run_id: str, project: str, run_dir: Path, live: bool) -> dict
         "result_md_url": None,
         "verdict": None,
         "confidence": None,
+        "result_status": None,
+        "result_errors": [],
         "error": None,
         "formalize_error": None,
         "formalize_in_run": False,
@@ -833,7 +844,8 @@ def restore_runs() -> list[str]:
         run = _new_run_entry(run_id, rec.get("project"), run_dir, bool(rec.get("live")))
         for key in ("status", "started", "finished", "pid", "pid_identity", "server_pid",
                     "server_identity", "live", "verdict",
-                    "confidence", "error", "formalize_error", "cost", "formalize_in_run"):
+                    "confidence", "error", "formalize_error", "cost", "formalize_in_run",
+                    "result_status", "result_errors"):
             if key in rec:
                 run[key] = rec[key]
         urls = rec.get("urls") if isinstance(rec.get("urls"), dict) else {}
@@ -858,8 +870,8 @@ def restore_runs() -> list[str]:
                     _runs[run_id] = run
                     _settle_dead_locked(run, "server restarted while the run was in progress")
                 continue
-        elif legacy:
-            _apply_results_locked(run)
+        elif legacy or ("result_status" not in rec and run.get("result_json_url")):
+            _apply_results_locked(run)  # legacy dir / record from before result_status existed
         with _runs_lock:
             _runs[run_id] = run
     return live_ids
@@ -907,7 +919,8 @@ def _watch_orphan(run_id: str) -> None:
 
 def api_projects() -> dict:
     return {"projects": [
-        {"id": p["id"], "label": p["label"], "formalize": bool(p["formalize_module"])}
+        {"id": p["id"], "label": p["label"], "formalize": bool(p["formalize_module"]),
+         "task_types": accepted_task_types(p["id"])}
         for p in PROJECTS
     ]}
 
@@ -954,6 +967,8 @@ def _summary_locked(run: dict) -> dict:
         "elapsed": _elapsed(run),
         "verdict": run.get("verdict"),
         "confidence": run.get("confidence"),
+        "result_status": run.get("result_status"),
+        "result_errors": run.get("result_errors") or [],
         "error": run.get("error"),
         "formalize_error": run.get("formalize_error"),
         "cost": cost,
@@ -1016,6 +1031,49 @@ def api_run_detail(run_id: str, after: object = None, limit: object = None) -> d
     }
 
 
+# task_type values accepted per pipeline, read from each pipeline's own IR
+# validator module so they cannot drift.
+_TASK_TYPE_SOURCES = {
+    "agent_system": ("agent_system.lib.ir_schema", "_VALID_TASK_TYPES"),
+    "cfl_system": ("cfl_system.lib.cfl_ir_schema", "_CFL_TASK_TYPES"),
+    "dcfl_system": ("dcfl_system.lib.dcfl_ir_schema", "_DCFL_TASK_TYPES"),
+    "ll_system": ("ll_system.lib.ll_ir_schema", "_LL_TASK_TYPES"),
+}
+
+
+def accepted_task_types(project: str) -> list[str] | None:
+    """Sorted task_type values a project accepts, or None if they cannot be
+    determined (then no check is made)."""
+    src = _TASK_TYPE_SOURCES.get(project)
+    if src is None:
+        return None
+    module, attr = src
+    try:
+        return sorted(getattr(importlib.import_module(module), attr))
+    except Exception:
+        logger.warning("cannot read task types of %s", project, exc_info=True)
+        return None
+
+
+def check_task_type(project: str, ir: dict) -> str | None:
+    """Error message when the IR's task_type does not belong to `project`
+    (e.g. a CFL IR submitted in the REG tab), else None. An IR without
+    task_type is never blocked here: dcfl accepts it, and the other pipelines
+    report the missing field themselves."""
+    allowed = accepted_task_types(project)
+    if allowed is None or "task_type" not in ir:
+        return None
+    tt = ir.get("task_type")
+    if isinstance(tt, str) and tt in allowed:
+        return None
+    label = next(p["label"] for p in PROJECTS if p["id"] == project)
+    owners = [p["label"] for p in PROJECTS if p["id"] != project
+              and isinstance(tt, str) and tt in (accepted_task_types(p["id"]) or [])]
+    hint = f" (it belongs to the {'/'.join(owners)} pipeline)" if owners else ""
+    return (f"task_type {tt!r} is not valid for the {label} pipeline{hint}; "
+            f"expected one of: {', '.join(allowed)}")
+
+
 def api_run(payload: dict) -> dict:
     project = payload.get("project")
     ir = payload.get("ir")
@@ -1025,6 +1083,9 @@ def api_run(payload: dict) -> dict:
         raise ValueError(f"unknown project: {project}")
     if not isinstance(ir, dict):
         raise ValueError("ir must be a JSON object")
+    task_error = check_task_type(project, ir)
+    if task_error:
+        raise ValueError(task_error)
 
     settings = load_settings()  # snapshot: a queued run keeps the settings it was started with
     run_id = uuid.uuid4().hex[:12]
@@ -1352,6 +1413,10 @@ def api_formalize(run_id: str, payload: dict | None = None) -> dict:
         if run["status"] != "completed" or not run.get("result_json_url"):
             raise ConflictError(
                 f"only a completed run with a result can be formalized (status: {run['status']})")
+        if run.get("result_status") == "failure":
+            raise ValueError("the pipeline reported a failure for this run; there is nothing to formalize")
+        if not run.get("verdict"):
+            raise ValueError("the run has no verdict; there is nothing to formalize")
         run_dir = Path(run["run_dir"])
         if not force and _has_proved_formalization(run_dir):
             raise ConflictError(
