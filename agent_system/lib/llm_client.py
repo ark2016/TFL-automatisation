@@ -906,6 +906,21 @@ def format_structured_output_flag(result: "CallResult") -> str:
     return " so=no"
 
 
+# Hard per-model output limits (prefix match, so dated variants are covered).
+# Models not listed are not clamped.
+MODEL_MAX_OUTPUT_TOKENS: dict[str, int] = {
+    "claude-haiku-4-5": 64000,
+}
+
+
+def clamp_max_tokens(model: str, requested: int) -> int:
+    """Clamp ``requested`` to the model's known output cap (unknown: unchanged)."""
+    for prefix, cap in MODEL_MAX_OUTPUT_TOKENS.items():
+        if model.startswith(prefix):
+            return min(requested, cap)
+    return requested
+
+
 class AnthropicClient:
     """Shared call machinery for every pipeline's LiveRunner/LLMRunner.
 
@@ -961,7 +976,7 @@ class AnthropicClient:
         """
         kwargs: dict[str, Any] = {
             "model": model,
-            "max_tokens": max_tokens,
+            "max_tokens": clamp_max_tokens(model, max_tokens),
             "system": system,
             "messages": [{"role": "user", "content": user}],
         }

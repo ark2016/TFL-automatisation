@@ -672,6 +672,11 @@ def run_formalization(
     settings = (settings or FormalizeSettings.defaults(spec))
     prep = prepare(run_dir, spec, stem=stem, direction=direction)
     result = prep.result
+    verdict = result.get("verdict")
+    if result.get("status") == "failure" or verdict == "failure":
+        raise ValueError("the pipeline reported a failure for this run; there is nothing to formalize")
+    if not verdict:
+        raise ValueError("the run has no verdict; there is nothing to formalize")
     old_block = _get_path(result, spec.block_path)
     old_block = old_block if isinstance(old_block, dict) else None
 

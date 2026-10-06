@@ -1,8 +1,5 @@
 {
-  "status": "success",
-  "evidence": {
-    "proof_body": "",
-    "lemmas_used": [],
-    "notes": "Mock give-up: grammar-defined DCFL (S -> aSSb | ba | Ab, A -> aAb | a): the image has no grammar-to-DPDA bridge; a hand DPDA plus a derivation-level invariant is out of scope for a mock."
-  }
+  "proof_body": "",
+  "lemmas_used": [],
+  "notes": "Mock give-up: grammar-defined DCFL (S -> aSSb | ba | Ab, A -> aAb | a): the image has no grammar-to-DPDA bridge; a hand DPDA plus a derivation-level invariant is out of scope for a mock."
 }

@@ -541,8 +541,10 @@ def test_no_direction_at_all(tmp_path, spec, check):
     result["evidence"]["reasoning"] = {}
     result["evidence"]["hypothesis"] = {}
     (run_dir / "input_result.json").write_text(json.dumps(result), encoding="utf-8")
-    summary, client = run(run_dir, spec, [])
-    assert summary["status"] == "not_formalizable" and client.stream_calls == []
+    client = FakeAnthropic([])
+    with pytest.raises(ValueError, match="no verdict"):     # a missing verdict is refused up front
+        fr.run_formalization(run_dir, spec, client=client)
+    assert client.stream_calls == []
 
 
 def test_direction_falls_back_to_the_hypothesis_when_the_verdict_was_cleared(tmp_path, spec):
@@ -789,3 +791,17 @@ def test_render_failure_midway_leaves_the_previous_file_intact(tmp_path, spec, c
     assert not list(run_dir.glob("*.tmp"))
     other = "html" if fmt == "md" else "md"
     assert "Lean" in (run_dir / f"input_result.{other}").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("patch", [{"verdict": "failure"}, {"status": "failure"}, {"verdict": None}])
+def test_failed_or_verdictless_result_is_refused_without_api_call(tmp_path, spec, patch, monkeypatch):
+    run_dir = make_run_dir(tmp_path)
+    result = load_result(run_dir)
+    result.update(patch)
+    (run_dir / "input_result.json").write_text(json.dumps(result), encoding="utf-8")
+    client = FakeAnthropic([])
+    with pytest.raises(ValueError, match="nothing to formalize"):
+        fr.run_formalization(run_dir, spec, client=client)
+    monkeypatch.setattr(fr, "make_live_client", lambda: client)
+    assert fr.cli_main(spec, [str(run_dir), "--live"]) == 1
+    assert client.stream_calls == []

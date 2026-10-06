@@ -238,3 +238,19 @@ def test_default_stack_uses_sonnet_5_5_everywhere():
         models = importlib.import_module(f"{pkg}.config").MODELS
         assert "claude-sonnet-5" not in models.values(), pkg
         assert "claude-sonnet-5-5" in models.values(), pkg
+
+
+def test_max_tokens_clamped_to_known_model_cap():
+    from agent_system.lib.llm_client import AnthropicClient, MODEL_MAX_OUTPUT_TOKENS
+    c = AnthropicClient()
+    cap = MODEL_MAX_OUTPUT_TOKENS["claude-haiku-4-5"]
+    assert cap == 64000
+    for model in ("claude-haiku-4-5", "claude-haiku-4-5-20251001"):
+        assert c.build_request_kwargs(model, 128000, "s", "u")["max_tokens"] == cap
+        assert c.build_request_kwargs(model, 4000, "s", "u")["max_tokens"] == 4000
+
+
+def test_max_tokens_unknown_model_not_clamped():
+    from agent_system.lib.llm_client import AnthropicClient
+    kw = AnthropicClient().build_request_kwargs("claude-some-future-model", 128000, "s", "u")
+    assert kw["max_tokens"] == 128000

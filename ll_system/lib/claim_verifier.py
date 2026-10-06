@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import re
+import time
 from typing import Any
 
 # Defensive import — may not be available in test environment
@@ -530,9 +531,34 @@ class _SearchBudgetExceededLL(Exception):
     never as evidence either way."""
 
 
+class _GlobalSearchBudget:
+    """Node / wall-clock budget shared by all `_continuable_ll` searches of one
+    check. Once spent, `exhausted` stays True and every further node raises
+    `_SearchBudgetExceededLL`, so the premise is unknown (None), never definite."""
+
+    def __init__(self, max_nodes: int, max_seconds: float | None, clock=time.monotonic) -> None:
+        self.nodes_left = max_nodes
+        self.clock = clock
+        self.deadline = None if max_seconds is None else clock() + max_seconds
+        self.exhausted = False
+
+    def spend(self) -> None:
+        if not self.exhausted:
+            self.nodes_left -= 1
+            if self.nodes_left < 0 or (self.deadline is not None and self.clock() > self.deadline):
+                self.exhausted = True
+        if self.exhausted:
+            raise _SearchBudgetExceededLL()
+
+
+_DEAD_CLASS_TOTAL_NODES = 100_000
+_DEAD_CLASS_TOTAL_SECONDS = 20.0
+
+
 def _continuable_ll(
     oracle, word: str, alphabet: list[str],
     max_extra: int = 6, node_budget: int = 20_000,
+    global_budget: "_GlobalSearchBudget | None" = None,
 ) -> bool | None:
     """Whether some extension of `word` (up to `max_extra` more symbols) is
     in L, decided by an EXHAUSTIVE depth-first search over that bound (mirrors
@@ -548,6 +574,8 @@ def _continuable_ll(
     budget = [node_budget]
 
     def dfs(w: str, depth: int) -> bool:
+        if global_budget is not None:
+            global_budget.spend()
         budget[0] -= 1
         if budget[0] <= 0:
             raise _SearchBudgetExceededLL()
@@ -580,7 +608,10 @@ def _all_words_ll(alphabet: list[str], max_len: int) -> list[str]:
     return words
 
 
-def _check_dead_class_finite_ll(ir: dict) -> tuple[bool | None, list[str]]:
+def _check_dead_class_finite_ll(
+    ir: dict, *, total_node_budget: int = _DEAD_CLASS_TOTAL_NODES,
+    total_seconds: float | None = _DEAD_CLASS_TOTAL_SECONDS, clock=time.monotonic,
+) -> tuple[bool | None, list[str]]:
     """Find continuations for sampled prefixes, without certifying deadness.
 
     True is bounded supporting evidence: every sampled prefix had a witness.
@@ -598,8 +629,15 @@ def _check_dead_class_finite_ll(ir: dict) -> tuple[bool | None, list[str]]:
         return None, []
     issues: list[str] = []
     checked = 0
+    gb = _GlobalSearchBudget(total_node_budget, total_seconds, clock)
     for w in short_words[:200]:
-        cont = _continuable_ll(oracle, w, alphabet)
+        if gb.exhausted:
+            issues.append(
+                "dead_class_finite check: global search budget exhausted; "
+                "remaining prefixes unchecked, continuability remains unknown"
+            )
+            break
+        cont = _continuable_ll(oracle, w, alphabet, global_budget=gb)
         if cont is not True:
             issues.append(
                 f"dead_class_finite check: no continuation witness for {w!r} "
