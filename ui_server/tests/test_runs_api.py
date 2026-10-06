@@ -829,7 +829,35 @@ def test_projects_listing_flags_formalize_support(port):
 def test_process_identity_of_self_and_dead():
     ident = srv.process_identity(os.getpid())
     assert ident and ident["image"] and abs(ident["created"] - time.time()) < 10 ** 9
-    assert srv.process_identity(_dead_pid()) is None
+    # A short-lived child: record its identity while it is alive, then let it
+    # exit. Its pid may be recycled by an unrelated process under parallel load,
+    # so "dead" is asserted by identity (creation time), not by the pid being free.
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        child_ident = None
+        for _ in range(100):
+            child_ident = srv.process_identity(child.pid)
+            if child_ident:
+                break
+            time.sleep(0.05)
+        assert child_ident and child_ident["image"]
+        assert srv._pid_matches(child.pid, child_ident)
+    finally:
+        child.kill()
+        child.wait()
+        # On Windows the Popen handle keeps the exited process object (and its
+        # creation time) queryable; release it so the pid is truly free.
+        handle = getattr(child, "_handle", None)
+        if handle is not None and hasattr(handle, "Close"):
+            handle.Close()
+    # The recorded process must no longer count as "our live process": either
+    # the pid is dead (even if some inherited handle keeps the exited process
+    # object queryable) or it was recycled by another process, whose creation
+    # time differs. PID reuse therefore cannot make this flaky.
+    assert not (srv._pid_alive(child.pid) and srv._pid_matches(child.pid, child_ident))
+    after = srv.process_identity(child.pid)
+    if after is not None and srv._pid_alive(child.pid):
+        assert abs(after["created"] - child_ident["created"]) > srv._IDENTITY_TOLERANCE_S
     assert srv._pid_matches(os.getpid(), ident)
     assert srv._pid_matches(os.getpid(), None)          # legacy record: liveness only
     assert not srv._pid_matches(os.getpid(), {"created": ident["created"] - 3600, "image": ident["image"]})

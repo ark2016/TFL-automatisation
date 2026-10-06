@@ -1663,6 +1663,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_body_request(self, method: str) -> None:
         if not self._host_ok() or not self._post_ok():
+            # Drain the (bounded) unread body first: closing a socket with
+            # unread data makes Windows reset the connection (WinError 10053)
+            # and the client then loses the 403 response.
+            try:
+                pending = int(self.headers.get("Content-Length", "0"))
+                if 0 < pending <= MAX_BODY_BYTES:
+                    self.rfile.read(pending)
+            except (ValueError, OSError):
+                pass
             self._send_error_json(403, "forbidden: same-origin application/json requests only")
             return
         try:

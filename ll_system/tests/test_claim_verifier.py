@@ -282,8 +282,8 @@ class TestVerifyLlClaim:
 
     def test_ll_grammar_claim_status_verified_or_inconclusive(self):
         result = verify_ll_claim(AGENT_LL_CLAIM, IR_SIMPLE)
-        # docs/VERDICT_POLICY.md §1/§2: IR_SIMPLE has no language_spec, so the
-        # language-equivalence oracle is unavailable and a structural pass
+        # docs/VERDICT_POLICY.md §1/§2: IR_SIMPLE's language_spec is natural-language
+        # (kind "natural"), so the language-equivalence oracle is unavailable and a structural pass
         # (even with check_ll_k confirming LL(k)) stays well_formed, not
         # verified/bounded_pass.
         assert result["verification_status"] in ("well_formed", "not_verified")
@@ -396,7 +396,7 @@ class TestVerifySubstitutionClaim:
 
     def test_complete_witness_verified(self):
         # docs/VERDICT_POLICY.md §1: structural pass with no oracle available
-        # (IR_SIMPLE has no language_spec) is well_formed, not verified.
+        # (IR_SIMPLE's natural-language language_spec) is well_formed, not verified.
         proof = AGENT_NOT_LL_CLAIM["proof_sketch"]
         result = verify_substitution_claim(proof, IR_SIMPLE)
         assert result["verification_status"] == "well_formed", result["issues"]
