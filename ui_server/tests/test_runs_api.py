@@ -965,3 +965,26 @@ def test_in_run_chain_skips_failed_or_verdictless_result(monkeypatch, stub):
     data = wait_status(run_id, {"completed"})
     assert FORMALIZE_CALLS == []
     assert "--- formalize (in-run setting) ---" not in data["lines"]
+
+
+def test_formalize_estimate_refuses_what_formalize_refuses(port, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("no estimate subprocess for a blocked run")
+    monkeypatch.setattr(srv, "build_formalize_estimate_command", boom)
+    stub_pipeline(monkeypatch, FAILED_PIPELINE_STUB)
+    run_id = start_run("cfl_system")
+    wait_status(run_id, {"completed"})
+    status, d = http_req(port, "GET", f"/api/runs/{run_id}/formalize/estimate")
+    assert status == 200 and d["formalizable"] is False and "failure" in d["reason"]
+    assert d["expected_usd"] is None and d["max_usd"] is None
+
+
+def test_in_run_skip_by_guard_is_logged(monkeypatch):
+    stub_formalize(monkeypatch)
+    srv.api_put_settings({"formalize_in_run": True})
+    stub_pipeline(monkeypatch, NO_VERDICT_PIPELINE_STUB)
+    run_id = srv.api_run({"project": "cfl_system", "ir": {"task": "x"}, "live": True})["run_id"]
+    data = wait_status(run_id, {"completed"})
+    assert FORMALIZE_CALLS == []
+    assert any(line.startswith("in-run formalization skipped:") and "no verdict" in line
+               for line in data["lines"])

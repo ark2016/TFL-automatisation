@@ -60,6 +60,7 @@ from .llm_client import (
     RetryableAPIError,
     UsageTracker,
     build_agent_output_schema,
+    clamp_max_tokens,
     estimate_cost_usd,
     extract_json,
     schema_string,
@@ -74,13 +75,9 @@ from .type_check import check_lean_file, compose_lean_file, is_docker_available
 
 #: API maximum output for Opus 5.5 / Sonnet 5.5 (decision 2026-09-29: 128000
 #: for both attempts).  Models with a lower ceiling are clamped, see
-#: :data:`MODEL_MAX_OUTPUT`.
+#: ``llm_client.clamp_max_tokens``.
 DEFAULT_MAX_TOKENS = 128000
 DEFAULT_RETRIES = 2
-
-#: Output ceilings of models that cannot take 128000 (TFL_MODEL_OVERRIDE=haiku
-#: live checks would get a 400 otherwise).
-MODEL_MAX_OUTPUT: dict[str, int] = {"claude-haiku-4-5": 64000}
 
 BODY_ONLY_INSTRUCTION = (
     "Your previous response was cut off by the output limit before the answer was "
@@ -181,7 +178,7 @@ class FormalizeSettings:
         return self
 
     def max_tokens_for(self, model: str) -> int:
-        return min(self.max_tokens, MODEL_MAX_OUTPUT.get(model, self.max_tokens))
+        return clamp_max_tokens(model, self.max_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -675,8 +672,6 @@ def run_formalization(
     verdict = result.get("verdict")
     if result.get("status") == "failure" or verdict == "failure":
         raise ValueError("the pipeline reported a failure for this run; there is nothing to formalize")
-    if not verdict:
-        raise ValueError("the run has no verdict; there is nothing to formalize")
     old_block = _get_path(result, spec.block_path)
     old_block = old_block if isinstance(old_block, dict) else None
 

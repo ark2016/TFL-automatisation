@@ -322,6 +322,10 @@ def api_formalize_estimate(run_id: str) -> dict:
             raise ValueError(f"formalization is not available for {project}")
         if not run.get("result_json_url"):
             raise ConflictError("the run has no result to formalize yet")
+        reason = _formalize_block_reason(run)
+        if reason:
+            return {"run_id": run_id, "formalizable": False, "reason": reason,
+                    "min_usd": None, "expected_usd": None, "max_usd": None}
         run_dir = Path(run["run_dir"])
     cmd = build_formalize_estimate_command(project, run_dir, settings)
     try:
@@ -1342,8 +1346,10 @@ def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
             elif has_result and rc in (0, 1, 2):
                 # Exit codes: 0=ok, 1=failure, 2=inconclusive (per orchestrator CLI)
                 run["status"] = "completed"
-                if _formalize_block_reason(run) is not None:
-                    pass  # failed / verdict-less result: nothing to formalize, no spend
+                block_reason = _formalize_block_reason(run)
+                if block_reason is not None:
+                    if settings.get("formalize_in_run"):
+                        _append_log_locked(run_id, f"in-run formalization skipped: {block_reason}")
                 elif settings.get("formalize_in_run") and next(
                         p for p in PROJECTS if p["id"] == project)["formalize_module"]:
                     chain_formalize = live

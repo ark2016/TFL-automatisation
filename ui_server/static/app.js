@@ -207,7 +207,7 @@ const shownStatus = (r) => (isFailedResult(r) ? 'failed' : ((r && r.status) || '
 const resultErrorText = (r) => (r && Array.isArray(r.result_errors) ? r.result_errors.join('; ') : '');
 // Why Formalize cannot apply to this run (null = it can).
 function formalizeBlockReason(r) {
-  if (isFailedResult(r)) return 'the pipeline reported a failure for this run, there is nothing to formalize'
+  if (isFailedResult(r) || (r && r.status === 'completed' && r.verdict === 'failure')) return 'the pipeline reported a failure for this run, there is nothing to formalize'
     + (resultErrorText(r) ? ` (${resultErrorText(r)})` : '');
   if (r && r.status === 'completed' && !r.verdict) return 'the run has no verdict, there is nothing to formalize';
   return null;
