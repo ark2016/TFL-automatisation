@@ -736,6 +736,9 @@ def _apply_results_locked(run: dict) -> None:
             # The pipeline's own outcome, separate from the process status
             # ("completed" only says the subprocess produced a result file).
             run["result_status"] = data.get("status") if isinstance(data.get("status"), str) else None
+            # cfl/dcfl report a failed pipeline as verdict "failure" (no status field).
+            if data.get("verdict") == "failure":
+                run["result_status"] = "failure"
             errs = data.get("errors")
             run["result_errors"] = [str(e) for e in errs] if isinstance(errs, list) else []
         except Exception:
@@ -1339,7 +1342,9 @@ def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
             elif has_result and rc in (0, 1, 2):
                 # Exit codes: 0=ok, 1=failure, 2=inconclusive (per orchestrator CLI)
                 run["status"] = "completed"
-                if settings.get("formalize_in_run") and next(
+                if _formalize_block_reason(run) is not None:
+                    pass  # failed / verdict-less result: nothing to formalize, no spend
+                elif settings.get("formalize_in_run") and next(
                         p for p in PROJECTS if p["id"] == project)["formalize_module"]:
                     chain_formalize = live
                     if chain_formalize:
@@ -1388,6 +1393,15 @@ def _has_proved_formalization(run_dir: Path) -> bool:
     return bool(last) and (last.get("proved") is True or last.get("status") == "proved")
 
 
+def _formalize_block_reason(run: dict) -> str | None:
+    """Why a run's result cannot be formalized (failed pipeline / no verdict)."""
+    if run.get("result_status") == "failure" or run.get("verdict") == "failure":
+        return "the pipeline reported a failure for this run; there is nothing to formalize"
+    if not run.get("verdict"):
+        return "the run has no verdict; there is nothing to formalize"
+    return None
+
+
 def api_formalize(run_id: str, payload: dict | None = None) -> dict:
     """Formalize a finished run (its own entry point, over an existing result).
 
@@ -1413,10 +1427,9 @@ def api_formalize(run_id: str, payload: dict | None = None) -> dict:
         if run["status"] != "completed" or not run.get("result_json_url"):
             raise ConflictError(
                 f"only a completed run with a result can be formalized (status: {run['status']})")
-        if run.get("result_status") == "failure":
-            raise ValueError("the pipeline reported a failure for this run; there is nothing to formalize")
-        if not run.get("verdict"):
-            raise ValueError("the run has no verdict; there is nothing to formalize")
+        reason = _formalize_block_reason(run)
+        if reason:
+            raise ValueError(reason)
         run_dir = Path(run["run_dir"])
         if not force and _has_proved_formalization(run_dir):
             raise ConflictError(

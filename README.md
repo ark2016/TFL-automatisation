@@ -324,8 +324,10 @@ flowchart LR
   `set_builder`-format language description (`nat`/`enum`/`word` variable domains, `rev(...)`, shared-variable
   constraints) into a membership predicate and a word generator, so the `prefix_classes` claim-verifier step can
   check membership semantically (`docs/VERDICT_POLICY.md` §4 step 2) instead of leaving trust at `well_formed`.
-  Only Format 1 (`set_builder`) is covered this way; Format 2/3 (grammar given explicitly) still has no semantic
-  check.
+  Format 1 (`set_builder`) uses this oracle. Format 2/3 (grammar given explicitly) has its own semantic check: an exact CYK
+  membership oracle built from the given grammar, constructive sample-equivalence and `prefix_classes` checks. `None` means
+  unknown (no oracle, budget exhausted, or an inconclusive answer), never a definite verdict, and trust reaches at most
+  `bounded_pass`.
 
 ---
 

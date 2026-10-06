@@ -937,3 +937,31 @@ def test_formalize_of_a_live_run_has_no_mock_warning(port, monkeypatch):
     assert status == 200 and d["source_mode"] == "live" and "warning" not in d
     wait_status(run_id, {"completed"})
     assert read_record(run_id)["source_mode"] == "live"
+
+
+FAILED_PIPELINE_STUB = PIPELINE_STUB.replace('{"verdict": "regular", "confidence": 0.9}',
+                                             '{"verdict": "failure", "confidence": 0.0}')
+NO_VERDICT_PIPELINE_STUB = PIPELINE_STUB.replace('{"verdict": "regular", "confidence": 0.9}',
+                                                 '{"confidence": 0.0}')
+
+
+def test_verdict_failure_result_sets_result_status_and_blocks_formalize(monkeypatch):
+    """cfl/dcfl report failure as verdict "failure": treated as a failed result."""
+    stub_pipeline(monkeypatch, FAILED_PIPELINE_STUB)
+    run_id = start_run("cfl_system")
+    data = wait_status(run_id, {"completed"})
+    assert srv.api_log(run_id)["status"] == "completed"
+    assert srv._runs[run_id]["result_status"] == "failure"
+    with pytest.raises(ValueError, match="failure"):
+        srv.api_formalize(run_id, {"confirm_spend": True})
+
+
+@pytest.mark.parametrize("stub", [FAILED_PIPELINE_STUB, NO_VERDICT_PIPELINE_STUB])
+def test_in_run_chain_skips_failed_or_verdictless_result(monkeypatch, stub):
+    stub_formalize(monkeypatch)
+    srv.api_put_settings({"formalize_in_run": True})
+    stub_pipeline(monkeypatch, stub)
+    run_id = srv.api_run({"project": "cfl_system", "ir": {"task": "x"}, "live": True})["run_id"]
+    data = wait_status(run_id, {"completed"})
+    assert FORMALIZE_CALLS == []
+    assert "--- formalize (in-run setting) ---" not in data["lines"]
