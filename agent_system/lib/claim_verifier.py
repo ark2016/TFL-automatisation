@@ -9,8 +9,9 @@ Also implements the trust taxonomy and step-2 semantic checks from
 ``docs/VERDICT_POLICY.md`` §1/§4: a purely structural pass (fields present,
 JSON parsed) is ``well_formed``, never ``verified``; ``verified`` is
 reserved for deterministic full checks; a bounded, oracle-backed
-instantiation of the pumping/Myhill-Nerode proof is ``bounded_pass``; and
-an oracle counterexample to the proof itself is ``refuted``.
+check of explicit Myhill-Nerode contexts is ``bounded_pass`` for those
+pairs only. Finite pumping samples stay ``well_formed``; an oracle
+counterexample to an explicit proof claim is ``refuted``.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ CONFIDENCE_CAPS: dict[str, float] = {
 
 def verify_claims(
     evidence: dict[str, Any],
-    oracle: Callable[[str], bool],
+    oracle: Callable[[str], bool | None],
     alphabet: list[str] | None = None,
 ) -> dict[str, Any]:
     """Extract membership claims from all agent outputs and verify via oracle.
@@ -83,6 +84,8 @@ def verify_claims(
             actual = oracle(word)
         except (ValueError, Exception):
             continue  # word too long for oracle
+        if actual is None:
+            continue  # unknown membership cannot contradict a claim
 
         claim["oracle_says"] = actual
         claim["correct"] = (claimed_in_L == actual)
@@ -334,40 +337,51 @@ def _witness_collector(cap: int = 30) -> tuple[list[dict], Any]:
     return witnesses, _add
 
 
-def _find_pumpable_partition(
+def _sample_pumping_partitions(
     word: str,
     p: int,
-    oracle: Callable[[str], bool],
+    oracle: Callable[[str], bool | None],
     iters: tuple[int, ...] = (0, 2),
     add_witness: Callable[[str, bool, str], None] | None = None,
-) -> tuple[str, str, str] | None:
+) -> dict[str, Any]:
     """Brute-force every xyz split of *word* with |xy| <= p, |y| >= 1.
 
-    Returns the first split where pumping to every i in *iters* stays in L
-    (i.e. the proof's claim that some i escapes L is wrong for that
-    split), or None if all splits are closed (the proof holds). When
-    *add_witness* is given, every pumped word found NOT in L along the way
-    is recorded as a destructive witness (docs/VERDICT_POLICY.md R3') --
-    these are the concrete words that "close" the proof at each split.
+    This is a finite diagnostic, not a universal pumping test. A split
+    surviving these exponents may escape at another exponent. Closing
+    every split at this p says nothing about all other pumping lengths.
+    Record only oracle-confirmed membership, never unknown results.
     """
     n = len(word)
     max_xy = min(p, n)
+    sampled = escaped = unknown = 0
+    surviving_partition = None
     for len_xy in range(1, max_xy + 1):
         for len_x in range(len_xy):
             x, y, z = word[:len_x], word[len_x:len_xy], word[len_xy:]
             if not y:
                 continue
-            try:
-                in_l = {i: oracle(x + y * i + z) for i in iters}
-            except Exception:
-                continue
-            if all(in_l.values()):
-                return (x, y, z)
-            if add_witness is not None:
-                for i, was_in_l in in_l.items():
-                    if not was_in_l:
-                        add_witness(x + y * i + z, False, f"reg pumping p={p} x={x!r} y={y!r} i={i}")
-    return None
+            sampled += 1
+            in_l = {}
+            for i in iters:
+                pumped_word = x + y * i + z
+                try:
+                    membership = oracle(pumped_word)
+                except Exception:
+                    membership = None
+                in_l[i] = membership
+                if membership is None:
+                    unknown += 1
+                elif add_witness is not None:
+                    add_witness(pumped_word, membership, f"reg pumping p={p} x={x!r} y={y!r} i={i}")
+            if any(value is False for value in in_l.values()):
+                escaped += 1
+            elif all(value is True for value in in_l.values()) and surviving_partition is None:
+                surviving_partition = {"x": x, "y": y, "z": z}
+    return {
+        "p": p, "sampled_partitions": sampled, "escaping_partitions": escaped,
+        "unknown_memberships": unknown, "surviving_sampled_partition": surviving_partition,
+        "tested_exponents": list(iters),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -376,17 +390,17 @@ def _find_pumpable_partition(
 
 def verify_pumping_claim(
     pumping_output: dict | None,
-    oracle: Callable[[str], bool] | None,
+    oracle: Callable[[str], bool | None] | None,
     alphabet: list[str] | None = None,
 ) -> dict[str, Any]:
     """Semantic step-2 check for a pumping-lemma proof.
 
     Instantiates the claimed word family at p in {2, 3, 4}, checks that
     the chosen word is in L via the oracle, and brute-forces every xyz
-    split with |xy| <= p: if every split has some i in {0, 2} that leaves
-    L, the proof is `bounded_pass` at those p; if some split pumps to L at
-    both i=0 and i=2, the proof is `refuted`; if there is no oracle or the
-    word pattern can't be parsed, it stays `well_formed` (structural only).
+    split with |xy| <= p at exponents 0 and 2. Neither finite successes
+    nor surviving splits settle the universal claim: trust remains
+    `well_formed`. Invalid witness length or confirmed nonmembership
+    refutes the explicit chosen-word claim; unknown membership does not.
     """
     if not pumping_output or not isinstance(pumping_output, dict):
         return {"trust": "not_verified", "reason": "no pumping output"}
@@ -414,31 +428,35 @@ def verify_pumping_claim(
 
     witnesses, add_witness = _witness_collector()
     checked_p: list[int] = []
+    diagnostics: list[dict] = []
     for p in (2, 3, 4):
         word = instantiate_word_pattern(word_family, var_name, p)
         if word is None:
             return {"trust": "well_formed", "reason": "could not instantiate word pattern"}
+        if len(word) < p:
+            return {
+                "trust": "refuted", "reason": f"chosen word is shorter than p={p}",
+                "counterexample": {"p": p, "word": word}, "witnesses": witnesses,
+            }
         try:
             in_l = oracle(word)
         except Exception as exc:
             return {"trust": "well_formed", "reason": f"oracle error: {exc}"}
-        if not in_l:
+        if in_l is None:
+            return {
+                "trust": "well_formed", "reason": f"oracle membership unknown for p={p}",
+                "checked_p": checked_p, "diagnostics": diagnostics, "witnesses": witnesses,
+            }
+        if in_l is False:
             return {
                 "trust": "refuted",
                 "reason": f"chosen word is not in L for p={p}",
                 "counterexample": {"p": p, "word": word},
                 "witnesses": witnesses,
+                "checked_p": checked_p, "diagnostics": diagnostics,
             }
         add_witness(word, True, f"word_family p={p}")
-        pumpable = _find_pumpable_partition(word, p, oracle, add_witness=add_witness)
-        if pumpable is not None:
-            x, y, z = pumpable
-            return {
-                "trust": "refuted",
-                "reason": f"partition x={x!r} y={y!r} z={z!r} pumps within L at p={p}",
-                "counterexample": {"p": p, "word": word, "x": x, "y": y, "z": z},
-                "witnesses": witnesses,
-            }
+        diagnostics.append(_sample_pumping_partitions(word, p, oracle, add_witness=add_witness))
         checked_p.append(p)
 
     # docs/VERDICT_POLICY.md R3': `witnesses` are the concrete instantiated/
@@ -447,7 +465,11 @@ def verify_pumping_claim(
     # artifact (DFA) instead of re-deriving them, the same way
     # cfl_system.orchestrator._cross_check_r3prime reuses cfl_system.lib.
     # claim_verifier's `destructive_witnesses`.
-    return {"trust": "bounded_pass", "checked_p": checked_p, "witnesses": witnesses}
+    return {
+        "trust": "well_formed", "checked_p": checked_p, "witnesses": witnesses,
+        "diagnostics": diagnostics, "scope": "finite pumping consistency samples only",
+        "reason": "finite p/exponent samples do not decide the universal pumping claim",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +478,7 @@ def verify_pumping_claim(
 
 def verify_nerode_claim(
     nerode_output: dict | None,
-    oracle: Callable[[str], bool] | None,
+    oracle: Callable[[str], bool | None] | None,
     alphabet: list[str] | None = None,
 ) -> dict[str, Any]:
     """Semantic step-2 check for a Myhill-Nerode (distinguishability) proof.
@@ -485,14 +507,17 @@ def verify_nerode_claim(
     ctx0 = contexts[0]
     pair = ctx0.get("pair") or []
     context_pattern = ctx0.get("context")
-    if len(pair) != 2 or not context_pattern:
+    if len(pair) != 2 or not isinstance(context_pattern, str):
         return {"trust": "well_formed", "reason": "missing pair/context fields"}
 
     pattern_i, pattern_j = pair
     var_i = detect_pattern_param(pattern_i)
     var_j = detect_pattern_param(pattern_j)
     var_ctx = detect_pattern_param(context_pattern)
-    if var_i is None or var_j is None or var_ctx is None:
+    literal_context = context_pattern if var_ctx is None and (
+        context_pattern == "" or all(ch in (alphabet or []) for ch in context_pattern)
+    ) else None
+    if var_i is None or var_j is None or (var_ctx is None and literal_context is None):
         return {"trust": "well_formed", "reason": "could not detect pair/context variable"}
 
     # docs/VERDICT_POLICY.md fix (reviewer finding): the context can be
@@ -502,7 +527,9 @@ def verify_nerode_claim(
     # context uses pair[1]'s variable, wrongly refuting a correct proof.
     # Match by name; an ambiguous/unrelated variable name is left at
     # well_formed rather than guessed.
-    if var_ctx == var_i:
+    if literal_context is not None:
+        ctx_var_is_i = True
+    elif var_ctx == var_i:
         ctx_var_is_i = True
     elif var_ctx == var_j:
         ctx_var_is_i = False
@@ -525,7 +552,9 @@ def verify_nerode_claim(
     for m, n in ((2, 3), (2, 4), (3, 4)):
         w_i = instantiate_word_pattern(pattern_i, var_i, m)
         w_j = instantiate_word_pattern(pattern_j, var_j, n)
-        ctx = instantiate_word_pattern(context_pattern, var_ctx, m if ctx_var_is_i else n)
+        ctx = literal_context if literal_context is not None else instantiate_word_pattern(
+            context_pattern, var_ctx, m if ctx_var_is_i else n,
+        )
         if w_i is None or w_j is None or ctx is None:
             return {"trust": "well_formed", "reason": "could not instantiate pair/context"}
         try:
@@ -533,6 +562,11 @@ def verify_nerode_claim(
             in_j = oracle(w_j + ctx)
         except Exception as exc:
             return {"trust": "well_formed", "reason": f"oracle error: {exc}"}
+        if in_i is None or in_j is None:
+            return {
+                "trust": "well_formed", "reason": "oracle membership unknown for pair/context",
+                "checked_pairs": checked_pairs, "witnesses": witnesses,
+            }
         if in_i == in_j:
             return {
                 "trust": "refuted",
@@ -549,7 +583,10 @@ def verify_nerode_claim(
 
     # docs/VERDICT_POLICY.md R3' -- see the matching comment in
     # verify_pumping_claim above.
-    return {"trust": "bounded_pass", "checked_pairs": checked_pairs, "witnesses": witnesses}
+    return {
+        "trust": "bounded_pass", "checked_pairs": checked_pairs, "witnesses": witnesses,
+        "scope": "explicit distinguishing contexts at the listed pairs only; not infinite index",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -561,9 +598,8 @@ def closure_trust_from_verification(
     closure_verification: dict | None,
 ) -> str:
     """Map `_verify_closure_claim`'s empirical Nerode-index estimate onto
-    the trust taxonomy. The estimate is always bounded (timeout + depth
-    cutoff), so even a confirmed "verified" status is only `bounded_pass`,
-    never the full `verified` level reserved for deterministic checks."""
+    the trust taxonomy. A depth-bounded index estimate cannot prove
+    either finite or infinite index; it remains `well_formed`."""
     if not closure_output or closure_output.get("status") != "success":
         return "not_verified"
     if closure_verification is None:
@@ -572,9 +608,9 @@ def closure_trust_from_verification(
         return "well_formed"
     status = closure_verification.get("status")
     return {
-        "verified": "bounded_pass",
+        "verified": "well_formed",
         "plausible": "well_formed",
-        "disproved": "refuted",
+        "disproved": "well_formed",
     }.get(status, "well_formed")
 
 

@@ -1,15 +1,23 @@
 {
   "agent_name": "shallit",
-  "status": "not_applicable",
-  "verdict": null,
-  "proof_sketch": null,
+  "status": "success",
+  "verdict": "non_dcfl",
+  "proof_sketch": {
+    "kind": "shallit",
+    "technique": "prefix_continuation",
+    "dead_class_status": null,
+    "distinguishing_suffix": null,
+    "separation_argument": null,
+    "regular_filter": "R = (ab)^+ aa(ba)^+ $ b aa(ba)^+ baa(ba)^+",
+    "derived_language": "K = L_$ ∩ R = {(ab)^n aa(ba)^n $ b aa(ba)^n baa(ba)^n | n >= 1}",
+    "non_cfl_argument": "Let h(A)=ab, h(B)=h(C)=h(D)=ba, h(E)=aa, h(F)=$baa, h(G)=baa. Then h^-1(K) ∩ A+EB+FC+GD+ = {A^n E B^n F C^n G D^n | n>=1}. Mapping A,B,C to a,b,c and erasing D,E,F,G gives {a^n b^n c^n}. CFL inverse homomorphism, regular intersection, and homomorphism closure imply K is not CFL.",
+    "argument": "For a word (ab)^r aa(ba)^s $ b aa(ba)^t baa(ba)^u in R, its prefix before $ has one aa occurrence, hence membership in L requires r=s. Erasing $ gives (ab)^r aab(ab)^s aa(ba)^t baa(ba)^u with exactly three aa occurrences. In a palindrome the middle aa is fixed; its sides (ab)^r aab(ab)^s and (ab)^u aab(ab)^t must agree, forcing r=u and s=t. Conversely all exponents equal n gives valid halves (ab)^n and (ab)^n aab(ab)^n in X=(a+b)*ab(ab|aa)*. Thus the displayed K equality holds universally. If L were DCFL, marked continuation and regular intersection would make K DCFL and CFL, contradicting the non-CFL reduction."
+  },
   "evidence": [
-    "L = {x aa x^R | x ∈ X}, X = (a⁺b)* ab (ab|aa)* — сильно упорядоченный по структуре язык",
-    "Мёртвый класс D = {u | ни для какого z uz ∈ L} бесконечен: любое слово вне Pref(X·aa·X^R) (например, bb, bbb, ... — начинающееся не с блока a⁺b) не продолжается ни до какого слова из L и остаётся мёртвым для любого продолжения",
-    "По ограничению метода (THEORY.md §1.2/§1.6): теорема 4.7.4 выполняется автоматически из-за бесконечного D и ничего не доказывает — техника nerode_classes неприменима",
-    "prefix_continuation тоже не даёт очевидного регулярного R: обращение строки не согласовано с блоками (a·(aab)^R = abaa != aab·a), перекодировка через обратный гомоморфизм не проходит",
-    "Возврат not_applicable; для этого языка работает лемма Ю (агент dcfl_pumping), а не теорема 4.7.4"
+    "THEORY.md §1.6: exact marked-continuation equality, proved from the three aa occurrences.",
+    "The infinite dead class prevents nerode_classes only; prefix_continuation remains applicable.",
+    "CFL closure reduces the derived language to a^n b^n c^n."
   ],
-  "confidence": 0.0,
+  "confidence": 0.9,
   "errors": []
 }

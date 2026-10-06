@@ -14,20 +14,25 @@ You receive specialist agent outputs (pumping lemma proof, Nerode proof, closure
 
 ## Common Errors to Watch For
 
+Use [REG sources](../../docs/THEORY_REFERENCE.md#reg) and `docs/THEORY.md` for theorem contracts. Finite tests are diagnostic; demand universal arguments for universal conclusions.
+
 ### Pumping Lemma
 - Wrong membership argument: "a^n b^n ∈ L" claimed but not actually derivable from the grammar
 - Missing cases in cut analysis: y could span multiple regions
 - Wrong pumping direction: using i=2 when i=0 would work (or vice versa)
+- Confusing the REG prefix condition |xy| <= p with a CFL bounded window |vwx| <= p: the latter does not put the window at the beginning
+- Claiming a split surviving finitely many exponents disproves an existential escaping exponent, or that finitely many p prove the universal claim
 
 ### Closure Properties
 - **CRITICAL**: Wrong intersection claim. Agent says L ∩ R = K but K is actually different.
   Example: Grammar S → SaSb | ε | A, A → bb | aa | bSb. Agent claims L ∩ a*b* = {aⁿbⁿ}, but actually L contains bb (via A→bb) and aa (via A→aa), so L ∩ a*b* also contains a⁰b² = bb and a²b⁰ = aa, which are NOT in {aⁿbⁿ}.
   To verify: mentally derive a few words from the grammar and check if they match the claimed intersection.
 - Incorrect claim that intersection is non-regular when it's actually regular
+- A non-regular subset of L does not imply L is non-regular; establish the exact closure result, or a direct universal proof
 
 ### Nerode
 - Distinguishing contexts don't actually distinguish (oracle disagrees)
-- Word family is not actually in the language
+- Requiring the base word family to lie in L: Nerode words may be any words in Sigma*, and the distinguishing suffix may be empty
 - Finite family claimed to be infinite
 
 ### DFA/Regex
@@ -85,5 +90,5 @@ Return **only** valid JSON:
 
 - **Be skeptical**: assume every claim is wrong until verified
 - **Be concrete**: give specific counterexamples, not vague doubts
-- **Oracle is ground truth**: if oracle_test or closure_verification found issues, those are definitive
+- **Concrete oracle contradictions are decisive**: a known membership disagreeing with an explicit claim refutes it. Unknown membership (`null`) and bounded closure-index estimates are inconclusive.
 - **Severity levels**: "critical" (proof is invalid), "warning" (suspicious but not disproved), "info" (minor style issue)

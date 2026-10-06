@@ -350,9 +350,9 @@ class TestClaimVerifierPrefixClassesStep2:
     """prefix_classes (dead_class_finite / distinguishing_suffix): a literal
     distinguishing_suffix checked against representative_pairs via the
     set_builder oracle must upgrade well_formed to bounded_pass/refuted --
-    but only when the dead class genuinely is finite (`_check_dead_class_finite_ll`
-    must not be fooled by a language whose dead class is actually infinite,
-    see `test_dead_class_check_catches_aibj_ileqj_infinite_dead_class` below).
+    but only when every sampled prefix has a continuation witness.
+    Missing bounded continuation witnesses leaves the dead-class premise
+    unknown, with trust capped at well_formed.
 
     IR_WWREV ({w w^R}) is used for the "dead class really is finite" cases:
     its dead class is empty, since every prefix p is continuable into L via
@@ -360,7 +360,7 @@ class TestClaimVerifierPrefixClassesStep2:
     ({a^i b^j | i <= j}) is a DCFL whose dead class is genuinely infinite
     (any word with a 'b' before an 'a', e.g. "ba", can never be continued),
     so THEORY §1.2's Theorem 4.7.4 does not apply to it -- it is used below
-    to check that the dead-class check actually catches that."""
+    to check that the bounded search cannot support the dead-class premise."""
 
     WWREV_PS = {
         "method": "prefix_classes",
@@ -408,13 +408,14 @@ class TestClaimVerifierPrefixClassesStep2:
         "representative_pairs": [{"u": "aa", "v": "aaaaa"}],
     }
 
-    def test_dead_class_check_catches_aibj_ileqj_infinite_dead_class(self):
+    def test_dead_class_check_is_unknown_without_continuation_witnesses(self):
         """The distinguishing_suffix/representative_pairs check alone passes
         here (u="aa" not in L+"bbb"... in_u=True, v="aaaaa"+"bbb" in_v=False:
         a valid separation) -- but the proof's 'dead_class_finite' premise is
-        false for this language (see class docstring), and the dead-class
-        check must catch that and cap trust at well_formed rather than
-        upgrade to bounded_pass, per docs/VERDICT_POLICY.md §4."""
+        false for this language (see class docstring). The finite search
+        cannot establish deadness; without continuation witnesses its
+        result is unknown and trust stays well_formed."""
         result = verify_prefix_classes_claim(self.AIBJ_PS, IR_AIBJ_ILEQJ)
         assert result["trust"] == "well_formed"
         assert "dead_class_finite_issues" in result["details"]["distinguishing_suffix_check"]
+        assert result["details"]["distinguishing_suffix_check"]["dead_class_finite_check"] == "unknown"

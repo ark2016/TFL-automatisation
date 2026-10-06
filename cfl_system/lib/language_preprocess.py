@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cfl_system.lib.parikh import analyze_parikh
+from cfl_system.lib.parikh import analyze_parikh, _is_valid_cfg
 from cfl_system.lib.stratification import is_bounded_language, check_stratification
 
 
@@ -18,7 +18,25 @@ from cfl_system.lib.stratification import is_bounded_language, check_stratificat
 # Filter analysis (grammar_filter kind)
 # ---------------------------------------------------------------------------
 
-def _classify_single_filter(filt: dict) -> tuple[bool | None, str]:
+def _whole_word_counter(expr: dict) -> bool:
+    if not isinstance(expr, dict):
+        return False
+    if expr.get("kind") == "length":
+        return expr.get("of_var") == "w"
+    return (expr.get("kind") == "count_symbol"
+            and expr.get("in_var") == "w"
+            and isinstance(expr.get("symbol"), str)
+            and len(expr["symbol"]) == 1)
+
+
+def _integer_constant(expr: dict) -> bool:
+    return (isinstance(expr, dict) and expr.get("kind") == "constant"
+            and type(expr.get("value")) is int)
+
+
+def _classify_single_filter(
+    filt: dict, alphabet: set[str] | None = None,
+) -> tuple[bool | None, str]:
     """Classify a single (non-boolean) filter predicate.
 
     Returns (is_regular, filter_type).
@@ -32,10 +50,17 @@ def _classify_single_filter(filt: dict) -> tuple[bool | None, str]:
     op = filt.get("op")
     left = filt.get("left", {})
     right = filt.get("right", {})
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return None, "complex"
 
     # --- Modular predicate ---
     if "modulus" in filt:
-        return True, "modular"
+        if (op is None and type(filt.get("modulus")) is int and filt["modulus"] > 0
+                and type(filt.get("remainder")) is int
+                and (_whole_word_counter(filt.get("expr"))
+                     or _integer_constant(filt.get("expr")))):
+            return True, "modular"
+        return None, "unsupported_modular"
 
     # --- Boolean combinations ---
     if op in ("and", "or"):
@@ -50,18 +75,33 @@ def _classify_single_filter(filt: dict) -> tuple[bool | None, str]:
         right_kind = right.get("kind")
 
         # Comparison with constant: length/count vs constant
-        if right_kind == "constant" and left_kind in ("length", "count_symbol"):
+        if _integer_constant(right) and _whole_word_counter(left):
             return True, "comparison_with_constant"
-        if left_kind == "constant" and right_kind in ("length", "count_symbol"):
+        if _integer_constant(left) and _whole_word_counter(right):
             return True, "comparison_with_constant"
+
+        if _integer_constant(left) and _integer_constant(right):
+            return True, "constant_predicate"
+
+        if not (_whole_word_counter(left) and _whole_word_counter(right)):
+            return None, "complex"
+
+        if left == right:
+            return True, "identical_expressions"
 
         # Two count_symbol comparisons (e.g. |w|_a = |w|_b) -- NOT regular
         if left_kind == "count_symbol" and right_kind == "count_symbol":
-            return False, "comparison_of_counts"
+            if left["symbol"] == right["symbol"]:
+                return True, "identical_expressions"
+            if alphabet is not None:
+                if left["symbol"] not in alphabet or right["symbol"] not in alphabet:
+                    return True, "comparison_with_zero_count"
+                return False, "comparison_of_counts"
+            return None, "comparison_of_counts"
 
-        # Two non-constant expressions -- generally not regular
+        # |w| compared with #a(w) reduces to whether any non-a symbol occurs.
         if left_kind in ("length", "count_symbol") and right_kind in ("length", "count_symbol"):
-            return False, "comparison_of_expressions"
+            return True, "length_vs_count"
 
         # Fallback
         return None, "complex"
@@ -69,20 +109,24 @@ def _classify_single_filter(filt: dict) -> tuple[bool | None, str]:
     return None, "complex"
 
 
-def _analyze_filter_recursive(filt: dict) -> tuple[bool | None, str]:
+def _analyze_filter_recursive(
+    filt: dict, alphabet: set[str] | None = None,
+) -> tuple[bool | None, str]:
     """Recursively analyze a filter, handling boolean combinations.
 
     Returns (is_regular, filter_type).
     """
+    if not isinstance(filt, dict):
+        return None, "complex"
     op = filt.get("op")
 
     # Boolean AND / OR
     if op in ("and", "or"):
         operands = filt.get("operands", [])
-        if not operands:
+        if not isinstance(operands, list) or not operands:
             return None, "complex"
 
-        sub_results = [_analyze_filter_recursive(sub) for sub in operands]
+        sub_results = [_analyze_filter_recursive(sub, alphabet) for sub in operands]
         sub_regulars = [r for r, _ in sub_results]
         sub_types = [t for _, t in sub_results]
 
@@ -92,8 +136,8 @@ def _analyze_filter_recursive(filt: dict) -> tuple[bool | None, str]:
         # If all regular -> regular
         if all(r is True for r in sub_regulars):
             return True, f"boolean_{op}_of_regular"
-        # If any non-regular -> non-regular
-        return False, f"boolean_{op}_with_non_regular"
+        # Nonregularity does not propagate: F union complement(F) is regular.
+        return None, f"boolean_{op}_with_non_regular"
 
     # Boolean NOT — schema uses `operands: [predicate]`; accept legacy `operand` too
     if op == "not":
@@ -102,24 +146,24 @@ def _analyze_filter_recursive(filt: dict) -> tuple[bool | None, str]:
             operand = filt.get("operand")
         else:
             ops_list = filt.get("operands") or []
-            if isinstance(ops_list, list) and ops_list:
+            if isinstance(ops_list, list) and len(ops_list) == 1:
                 operand = ops_list[0]
         if not isinstance(operand, dict):
             return None, "complex"
-        r, t = _analyze_filter_recursive(operand)
+        r, t = _analyze_filter_recursive(operand, alphabet)
         # Regular languages are closed under complement
         return r, f"not_{t}"
 
     # Leaf filter
-    return _classify_single_filter(filt)
+    return _classify_single_filter(filt, alphabet)
 
 
-def _analyze_filter(filter_spec: dict) -> dict:
+def _analyze_filter(filter_spec: dict, alphabet: set[str] | None = None) -> dict:
     """Analyze whether a filter predicate is regular.
 
     Returns filter_analysis dict.
     """
-    is_regular, filter_type = _analyze_filter_recursive(filter_spec)
+    is_regular, filter_type = _analyze_filter_recursive(filter_spec, alphabet)
 
     if is_regular is True:
         strategy = "pda_x_dfa"
@@ -213,6 +257,10 @@ def _parikh_precheck(ir: dict) -> dict | None:
 
     return {
         "is_semilinear": parikh.get("is_semilinear"),
+        "looks_semilinear": parikh.get("looks_semilinear"),
+        "sample_is_semilinear": parikh.get("sample_is_semilinear"),
+        "evidence_scope": parikh.get("evidence_scope"),
+        "sample_provenance": parikh.get("sample_provenance"),
         "conclusion": conclusion,
         "explanation": parikh.get("explanation", ""),
     }
@@ -257,7 +305,7 @@ def _determine_quick_verdict(
         if strat:
             if strat.get("is_cfl") is True:
                 return "cfl", (
-                    "Language is bounded and exponent vectors are semilinear "
+                    "Language is bounded and its exact exponent set is stratified semilinear "
                     "(Ginsburg-Spanier theorem)."
                 )
             if strat.get("is_cfl") is False:
@@ -294,9 +342,21 @@ def preprocess_language(ir: dict) -> dict:
     # Filter analysis (only for grammar_filter)
     filter_analysis = None
     filter_uncomputable = False
+    if kind in ("grammar", "grammar_filter"):
+        grammar = spec if kind == "grammar" else spec.get("grammar", {})
+        if not _is_valid_cfg(grammar):
+            return {
+                "filter_analysis": None,
+                "bounded_analysis": None,
+                "parikh_precheck": None,
+                "quick_verdict": None,
+                "quick_verdict_reason": "Invalid or unsupported CFG; closure theorem does not apply.",
+            }
     if kind == "grammar_filter":
         filt = spec.get("filter", {})
-        filter_analysis = _analyze_filter(filt)
+        grammar = spec.get("grammar", {})
+        alphabet = set(grammar.get("terminals", [])) if isinstance(grammar, dict) else None
+        filter_analysis = _analyze_filter(filt, alphabet)
         # Natural-language filter or anything we can't classify as regular
         # means we should NOT compute bounded/Parikh over the raw grammar
         # and present it as if it described the whole language.

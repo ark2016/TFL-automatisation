@@ -92,6 +92,13 @@ def test_verify_claims_all_correct_is_well_formed_not_verified_label():
     assert result["verified"] == 1
 
 
+def test_unknown_membership_cannot_refute_a_free_text_claim():
+    evidence = {"pumping": {"evidence": {"proof": "the word aabb in L holds"}}}
+    result = verify_claims(evidence, lambda word: None, alphabet=["a", "b"])
+    assert result["trust"] == "well_formed"
+    assert result["disproved"] == result["verified"] == 0
+
+
 def test_verify_claims_no_claims_found_is_not_verified():
     evidence = {"pumping": {"evidence": {"proof": "a purely qualitative argument"}}}
     oracle = lambda w: True  # noqa: E731

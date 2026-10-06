@@ -1,0 +1,533 @@
+{
+  "audit": "LL theory, proofs, prompts and local code",
+  "date": "2026-09-30",
+  "branch": "audit/theory-contracts-2026-09-30",
+  "scope": [
+    "docs/THEORY.md section 3",
+    "docs/THEORY.md II sections 3.4-3.5",
+    "ll_system"
+  ],
+  "method": "Definitions and proof obligations first, then prompt alignment, reproducible counterexamples, code fixes, targeted and LL-wide mock tests. No live model calls or credential access.",
+  "sources": [
+    {
+      "id": "NI1980",
+      "title": "A. Nijholt, Context-Free Grammars: Covers, Normal Forms, and Parsing, LNCS 93 (1980)",
+      "url": "https://ris.utwente.nl/ws/files/5126205/lncs93.pdf",
+      "local_file": ".tfl_lab_runs/theory_audit/nijholt_1980.pdf",
+      "actually_read": [
+        {
+          "printed_pages": "109-110",
+          "pdf_pages": "116-117",
+          "locators": "Definitions 8.7 and 8.8, comparison of LL and strong LL; hierarchy stated"
+        },
+        {
+          "printed_pages": "140-141",
+          "pdf_pages": "147-148",
+          "locators": "Theorem 10.4 and its annotated-grammar construction and cover proof"
+        },
+        {
+          "printed_pages": "212-213",
+          "pdf_pages": "219-220",
+          "locators": "Definition 12.1, Lemma 12.2 (director-set characterization)"
+        }
+      ],
+      "read_mode": "pypdf extraction plus rendered-page visual inspection of all six pages",
+      "limitation": "Theorem 10.4 proves cover properties but cites RS for strong-LL property; the latter is additionally justified locally through fixed annotations. Hierarchy proof itself was not re-read."
+    },
+    {
+      "id": "RS1970",
+      "title": "D. J. Rosenkrantz and R. E. Stearns, Properties of deterministic top-down grammars",
+      "url": "https://doi.org/10.1016/S0019-9958(70)90446-8",
+      "actually_read": [],
+      "status": "full_text_not_obtained",
+      "attempts": [
+        "ScienceDirect article: 403",
+        "ScienceDirect pdf/pdfft: cache miss",
+        "ACM STOC1969 PDF: 403"
+      ],
+      "limitation": "Publisher abstract/search metadata is not treated as theorem or algorithm verification. Historical Theorem 2 attribution not independently confirmed in original."
+    },
+    {
+      "id": "AU1972",
+      "title": "Aho and Ullman, The Theory of Parsing, Translation and Compiling, volume 1",
+      "url": "https://dl.acm.org/doi/pdf/10.5555/578789",
+      "actually_read": [],
+      "status": "full_text_not_obtained",
+      "limitation": "Section 5.1 attribution inherited from repository is not asserted as source-checked; current algorithm justified directly from definitions."
+    },
+    {
+      "id": "COURSE",
+      "url": null,
+      "path": "../iu9-tfl-practice",
+      "actually_read": [
+        "Theory/lookahead.md (Russian directory name): regular-expression lookahead, not LL grammar theory"
+      ],
+      "status": "context_only",
+      "limitation": "Course text is not mathematical authority for these LL claims; read-only."
+    }
+  ],
+  "claims": [
+    {
+      "id": "LL-001",
+      "location": "THEORY 3.1",
+      "hypotheses": "Finite CFG, fixed integer k>=1; language L",
+      "statement": "G is LL(k) is a grammar property. L is LL(k) iff some LL(k) grammar generates L. Failure for the supplied grammar does not refute the language property.",
+      "status": "source_checked",
+      "sources": [
+        "NI1980 pp109-110 definitions"
+      ],
+      "prompt_code_mapping": [
+        "ll_input_parser.md formats 2/3",
+        "ll_table_builder.check_ll_k",
+        "orchestrator format3"
+      ]
+    },
+    {
+      "id": "LL-002",
+      "location": "THEORY 3.1",
+      "hypotheses": "Two complete leftmost derivations share the same reachable w A alpha",
+      "statement": "Equal truncated next k terminal symbols force the same production A->beta. Equivalently distinct alternatives have disjoint FIRST_k(beta alpha).",
+      "status": "source_checked",
+      "sources": [
+        "NI1980 Definition8.7 p109/PDF116"
+      ],
+      "prompt_code_mapping": [
+        "first_follow.compute_local_follow_sets",
+        "ll_table_builder._full_ll_k_test"
+      ]
+    },
+    {
+      "id": "LL-003",
+      "location": "THEORY 3.1, 3.5",
+      "hypotheses": "Strong LL(k), reachable productive contexts; terminal end marker fresh",
+      "statement": "Director sets FIRST_k(beta) concat_k FOLLOW_k(A) are pairwise disjoint. The global FOLLOW combines different contexts, unlike ordinary LL.",
+      "status": "source_checked",
+      "sources": [
+        "NI1980 Definition8.8 p109, Definition12.1/Lemma12.2 pp212-213"
+      ],
+      "correction": "Builder now uses concatenation even for non-nullable RHS shorter than k. For k=1 remove epsilon from FIRST before nullable union.",
+      "prompt_code_mapping": [
+        "ll_grammar_builder.md Step4",
+        "ll_grammar_transformer.md Step5",
+        "first_follow.director_set"
+      ]
+    },
+    {
+      "id": "LL-004",
+      "location": "THEORY 3.1",
+      "hypotheses": "Same grammar and k>=1",
+      "statement": "SLL(k) implies LL(k); LL(1)=SLL(1); for k>=2 equality of grammar classes fails.",
+      "status": "proved_locally",
+      "sources": [
+        "NI1980 pp109-110"
+      ],
+      "proof": "A local follow is contained in the global union. At k=1 a global conflict either uses a first terminal from both alternatives, or a nullable alternative and an actual follow context, or two nullable alternatives in a productive context. Each realizes one local conflict. Counterexample S->aAaa|bAba,A->b|epsilon passes LL2 but fails SLL2; SLL3 passes.",
+      "prompt_code_mapping": [
+        "test_ll_k_full.py",
+        "ll_table_builder.check_ll_k"
+      ]
+    },
+    {
+      "id": "LL-005",
+      "location": "THEORY 3.1",
+      "hypotheses": "LL(k) grammar G, fixed k",
+      "statement": "An equivalent strong LL(k) grammar exists; grammar-level distinction does not separate language classes.",
+      "status": "source_checked",
+      "sources": [
+        "NI1980 Theorem10.4 pp140-141/PDF147-148"
+      ],
+      "proof": "Annotate each nonterminal by the finite FIRST_k set of its right context; transfer annotations through productions. Erasing annotations recovers exactly original derivations. All occurrences of one (A,R) have context R, so its global test equals the original local test. This supplies the property referred to RS by Nijholt.",
+      "correction": "Cite the actually read Nijholt theorem rather than claiming RS original was checked.",
+      "prompt_code_mapping": [
+        "CLAUDE.md",
+        "THEORY 3.1"
+      ]
+    },
+    {
+      "id": "LL-006",
+      "location": "THEORY 3.1 local follows",
+      "hypotheses": "Finite CFG; FIRST_k contains truncated complete terminal yields",
+      "statement": "Seed sigma(S)={{epsilon}}; transfer FIRST_k(tail) concat_k context at occurrences with productive preceding symbols; least fixed point equals all reachable local contexts. Per-context alternative intersections decide ordinary LL(k).",
+      "status": "proved_locally",
+      "sources": [
+        "NI1980 Definition8.7 and annotated construction motivate the proof"
+      ],
+      "proof": "Each transfer is realized by expanding a reachable parent and terminally deriving the preceding siblings. Conversely every occurrence in a leftmost derivation arises from such a parent; induction proves completeness. Finite subsets of Sigma^{<=k} ensure termination. FIRST of concatenation distributes through truncated concatenation, yielding the exact LL definition.",
+      "prompt_code_mapping": [
+        "first_follow._follow_dependencies",
+        "compute_local_follow_sets",
+        "ll_table_builder._full_ll_k_test",
+        "tz_ll_agent_system.md 5.1"
+      ],
+      "finite_check": "ll_finite_check.py: 150 acyclic CFGs, all their derivations, k=1,2,3; 450 comparisons, no mismatch. This experiment is not the general proof."
+    },
+    {
+      "id": "LL-007",
+      "location": "THEORY 3.1 FIRST and limits",
+      "hypotheses": "A nonproductive suffix; any k>=1",
+      "statement": "A previously accumulated length-k prefix does not survive concatenation with an empty yield language. An incomplete fixed point cannot certify absence of conflicts.",
+      "status": "proved_locally",
+      "sources": [],
+      "proof": "FIRST_k is the image of complete terminal words under truncation; if either concatenated language is empty so is the product.",
+      "prompt_code_mapping": [
+        "first_follow.compute_first_k_seq",
+        "worklist FIRST/FOLLOW",
+        "existing fixed-point regressions"
+      ],
+      "change": "Retained recent correct fixes; removed stale CLAUDE max-iterations guidance."
+    },
+    {
+      "id": "LL-008",
+      "location": "THEORY 3.1 minimal k",
+      "hypotheses": "Search positive k starting at1; some smaller check may be unknown",
+      "statement": "A witnessed LL(k) does not prove minimality unless every smaller positive k has a conclusive negative result.",
+      "status": "proved_locally",
+      "sources": [],
+      "prompt_code_mapping": [
+        "ll_table_builder.find_min_ll_k",
+        "ll_reasoning_agent.md minimum_proven"
+      ],
+      "change": "Recent early-stop-on-unknown fix retained; no new algorithm change."
+    },
+    {
+      "id": "LL-009",
+      "location": "THEORY 3.1 nonLL grammar certificates",
+      "hypotheses": "Useful reachable productive left recursion or two successful parse trees of one word",
+      "statement": "Such a grammar is not LL(k) for any k; this does not establish a nonLL language.",
+      "status": "source_checked",
+      "sources": [
+        "NI1980 discussion of non-left-recursive LL grammars pp140-141; Definition8.7 for unique leftmost derivation"
+      ],
+      "limitation": "Full original AU proof of left-recursion theorem was not read. Productive/reachable reduction is required and retained.",
+      "prompt_code_mapping": [
+        "grammar_transforms.remove_useless_symbols",
+        "is_left_recursive",
+        "ll_table_builder.find_min_ll_k"
+      ]
+    },
+    {
+      "id": "LL-010",
+      "location": "THEORY 3.2 hierarchy",
+      "hypotheses": "Language classes, positive k",
+      "statement": "REG is properly contained in LL(1); LL(k) properly contained in LL(k+1); union over k properly contained in DCFL=LR(1). LL grammars are unambiguous and LR(k).",
+      "status": "source_checked",
+      "sources": [
+        "NI1980 p109/PDF116 statements"
+      ],
+      "proof": "REG inclusion directly by DFA right-linear grammar; properness uses a^n b^n. LL-to-DCFL follows finite-buffer predictive stack parser. Properness versus DCFL follows locally proved union example below.",
+      "limitation": "Strict language hierarchy and general LL-to-LR theorem statements read; their original proofs not rechecked. No k=1<k=1 strict chain allowed.",
+      "prompt_code_mapping": [
+        "CLAUDE.md hierarchy corrected",
+        "THEORY3.2"
+      ]
+    },
+    {
+      "id": "LL-011",
+      "location": "THEORY 3.3(C)",
+      "hypotheses": "Two distinct accepted words with longest common prefix length ell>=k",
+      "statement": "Their leftmost derivations share a form w delta with ell-k<|w|<=ell.",
+      "status": "corrected",
+      "sources": [],
+      "proof": "Inductively the rules agree while the maximal exposed terminal prefix has length<=ell-k. Take the first step crossing that bound. It exists in finite successful derivations. Its exposed terminal prefix is a prefix of both words, hence length<=ell.",
+      "counterexample_to_old": "LL1: S->a^100 A,A->b|c; choose x=a and tails a^99b/a^99c. Forms expose prefixes of length0 or100, none satisfying0<|w|<=2. Also tails b^n/c^n in union example do not satisfy the old unnecessary tail-lookahead hypothesis.",
+      "prompt_code_mapping": [
+        "ll_substitution_agent.md theory and recipe",
+        "tz_ll_agent_system.md substitution",
+        "THEORY3.3"
+      ]
+    },
+    {
+      "id": "LL-012",
+      "location": "THEORY 3.3 union example",
+      "hypotheses": "n>=1; language a^n b^n union a^n c^n",
+      "statement": "The language is DCFL but not LL(k) for any k.",
+      "status": "corrected",
+      "sources": [],
+      "proof": "In shared a^j delta (n-k<j<=n), if a b-producing index differs from a c-producing index, independent choices yield both letters, impossible. Thus both tails belong to one nonterminal X. Other unary-a components must retain length under one-component replacement. X gives a^s b^n and a^s c^n with s<k. Infinitely many n reuse (X,s); replacing only X's b-yield and retaining the entire n-context yields a^n b^{n'}, contradiction. DPDA counts a and chooses b/c mode at first non-a.",
+      "correction": "Made independence argument explicit and removed false assertion that outside contexts for different n are identical.",
+      "prompt_code_mapping": [
+        "ll_substitution_agent.md worked example and JSON",
+        "examples/mock/anbn_ancn_substitution_agent.json"
+      ]
+    },
+    {
+      "id": "LL-013",
+      "location": "THEORY 3.2 closures",
+      "hypotheses": "LL denotes union over finite k",
+      "statement": "LL languages are not closed under union or intersection with regular languages.",
+      "status": "proved_locally",
+      "sources": [],
+      "proof": "The two equal-counter components are LL1, but their union is LL-012. Language a^n w with w in {b,c}^n has LL1 grammar S->aSX|epsilon,X->b|c. Intersect with regular a*b* union a*c* to obtain the same nonLL union (epsilon does not alter the proof).",
+      "prompt_code_mapping": [
+        "CLAUDE.md closures",
+        "THEORY3.2",
+        "LL closure warnings"
+      ]
+    },
+    {
+      "id": "LL-014",
+      "location": "THEORY 3.3 second example",
+      "hypotheses": "n>=1; a^n0b^n union a^n1b^{2n}",
+      "statement": "DCFL but not LL(k) for any k.",
+      "status": "corrected",
+      "sources": [],
+      "proof": "Markers0/1 must belong to one shared component or mixing yields both markers. For another component, let substitutions change counts by Da,Db. Keeping0 forces Db=Da, keeping1 forces Db=2Da, so both zero and component strings agree. Marker component yields a^s0b^r and a^s1b^{n+r}, s<k. Reuse(X,s) for n!=n'; substituting0 fixes r'=r; substituting1 gives n+n'=2n, contradiction.",
+      "prompt_code_mapping": [
+        "THEORY3.3 second example",
+        "ll_substitution_agent.md second example"
+      ]
+    },
+    {
+      "id": "LL-015",
+      "location": "THEORY 3.3 invalid prefix theories",
+      "hypotheses": "LL1 language a^n b^n",
+      "statement": "Finite prefix equivalence classes are not an LL characterization; equal lookahead does not imply equal parser stack/configuration.",
+      "status": "proved_locally",
+      "sources": [],
+      "proof": "Prefixes a^n need different matching numbers of b; their continuations distinguish them while an LL1 grammar exists.",
+      "prompt_code_mapping": [
+        "ll_prefix_classes_agent.md",
+        "ll_substitution_agent.md"
+      ]
+    },
+    {
+      "id": "LL-016",
+      "location": "THEORY II3.4 lemma",
+      "hypotheses": "G unambiguous CFG; S=>*u delta for terminal u; nonempty finite L(delta) subset b*",
+      "statement": "Diameter of lengths in L(delta) is bounded by W_G independent of u,delta, where W_G sums maxlen-minlen over finite nonempty unary nonterminal languages.",
+      "status": "corrected",
+      "sources": [],
+      "proof": "Every component is productive, finite and unary by fixing all other yields. A component with two unary yields cannot occur twice: swapping them gives two trees for the same word in reachable u delta. Therefore each flexible nonterminal occurs at most once and diameters add; singleton components have width0.",
+      "correction": "Old wording about finitely many b-extensions omitted u and did not explicitly imply finite suffix language. Corrected theorem needs only unambiguity, not LL.",
+      "prompt_code_mapping": [
+        "ll_substitution_agent.md both lemma copies and example fields",
+        "THEORYII3.4"
+      ]
+    },
+    {
+      "id": "LL-017",
+      "location": "THEORY II3.4 upper inequality",
+      "hypotheses": "L={a^i b^j:i>=j>=0}",
+      "statement": "L is DCFL and not LL(k) for any k.",
+      "status": "proved_locally",
+      "sources": [],
+      "proof": "Choose n>k+W_G and words a^n b^k,a^n b^n. Their longest common prefix has length n+k; LL-011 gives a^n b^r delta,1<=r<=k. Nonempty L(delta) subset {b^t:0<=t<=n-r}, finite. Its two lengths k-r and n-r differ by n-k>W_G, contradicting LL-016. DPDA counts leading a and rejects underflow on b.",
+      "prompt_code_mapping": [
+        "ll_substitution_agent.md inequality example",
+        "THEORYII3.4",
+        "classifier catalog"
+      ]
+    },
+    {
+      "id": "LL-018",
+      "location": "THEORY II3.4 marked upper inequality",
+      "hypotheses": "L={b^M c b^j:0<=j<=M}; M ranges over nonnegative integers",
+      "statement": "L is DCFL and not LL(k) for any k.",
+      "status": "proved_locally",
+      "sources": [],
+      "proof": "Same finite residual argument using words b^M c b^k and b^M c b^M; longest common prefix length M+1+k, not M+k. Push/pop around unique c gives DPDA.",
+      "prompt_code_mapping": [
+        "THEORYII3.4 catalog",
+        "ll_substitution_agent.md"
+      ]
+    },
+    {
+      "id": "LL-019",
+      "location": "THEORY II3.4 w b* c reverse(w)",
+      "hypotheses": "w in {a,b}*, c outside that alphabet",
+      "statement": "L={w b* c reverse(w)} is DCFL and not LL(k) for any k.",
+      "status": "proved_locally",
+      "sources": [],
+      "proof": "Directly in L, after prefix b^M c b^r, residual is exactly b^{0..M-r}; use the same two accepted words as LL-018. This is not inference through LL intersection closure. DPDA pushes full pre-c word, matches right leading b's, holds first right a while discarding remaining top b's by epsilon moves, then matches exactly. End acceptance permits only b remainder if no right a occurred, otherwise empty stack.",
+      "correction": "Removed guessed split of w versus b* in DPDA sketch and repaired common-prefix length.",
+      "prompt_code_mapping": [
+        "ll_substitution_agent.md trap",
+        "THEORYII3.4",
+        "tz classifier incorrect marker hint"
+      ]
+    },
+    {
+      "id": "LL-020",
+      "location": "THEORY 3.3/II3.4 positive examples",
+      "hypotheses": "All counters nonnegative; w in {a,b}*; c fresh",
+      "statement": "a^i b^j with i<=j; w c reverse(w); w b c reverse(w) are LL1.",
+      "status": "proved_locally",
+      "sources": [],
+      "proof": "First grammar S->TB,T->aTb|epsilon,B->bB|epsilon. Second S->aSa|bSb|c. Third S->aSa|bT,T->c|aSab|bTb, obtained by factoring S->aSa|bSb|bc then inlining S in T->Sb|c. Terminal FIRST sets disjoint; first grammar nullable directors separated by a versus b/end. Induction gives languages.",
+      "prompt_code_mapping": [
+        "ll_grammar_builder.md",
+        "classifier catalog",
+        "THEORYII3.4"
+      ]
+    },
+    {
+      "id": "LL-021",
+      "location": "THEORY II3.5 ambiguity reduction",
+      "hypotheses": "L is CFL, R regular; L intersect R inherently ambiguous",
+      "statement": "L is inherently ambiguous, hence not an LL language.",
+      "status": "proved_locally",
+      "sources": [],
+      "proof": "If L had an unambiguous CFG, product with a DFA for R associates exactly one state-run annotation to each parse tree and preserves unambiguity. Contradiction.",
+      "prompt_code_mapping": [
+        "ll_ambiguity_detector.md",
+        "THEORYII3.5"
+      ]
+    },
+    {
+      "id": "LL-022",
+      "location": "grammar_transforms.eliminate_left_recursion",
+      "hypotheses": "Direct-recursion transformation A->A alpha_i | beta_j",
+      "statement": "If there is no beta, L(A) is empty and transformation must not create epsilon or alpha*.",
+      "status": "corrected",
+      "sources": [],
+      "counterexample": "S->Sa was transformed to S->S',S'->aS'|epsilon, incorrectly replacing empty language with a*.",
+      "fix": "Remove rules when no terminating alternative; discard A->A self loops; preserve no-derivation semantics.",
+      "prompt_code_mapping": [
+        "grammar_transforms.eliminate_left_recursion",
+        "to_ll_normal_form",
+        "ll_grammar_transformer.md",
+        "test_grammar_transforms.py new regressions"
+      ]
+    },
+    {
+      "id": "LL-023",
+      "location": "grammar_transforms hidden recursion",
+      "hypotheses": "Ordered substitution applied to CFG with nullable-prefix left recursion",
+      "statement": "Direct ordered algorithm needs preprocessing or explicit failure; it cannot claim all recursion eliminated while hidden recursion remains.",
+      "status": "corrected",
+      "sources": [],
+      "counterexample": "S->ASa|a,A->epsilon previously returned unchanged left-recursive grammar.",
+      "fix": "Check resulting grammar; raise actionable ValueError if recursion remains. Normal-form pipeline eliminates epsilon/unit first. Nullable start occurring on RHS gets fresh start before epsilon elimination.",
+      "prompt_code_mapping": [
+        "grammar_transforms.eliminate_left_recursion",
+        "eliminate_epsilon_rules",
+        "ll_grammar_transformer.md",
+        "test_grammar_transforms.py"
+      ]
+    },
+    {
+      "id": "LL-024",
+      "location": "grammar equivalence spot checks",
+      "hypotheses": "Generator has form-size and queue caps",
+      "statement": "Absence from generated samples is unknown, not exact nonmembership. Refutation needs exact membership on the opposite grammar.",
+      "status": "corrected",
+      "sources": [],
+      "counterexample": "S->A^30,A->epsilon and S->epsilon both denote {epsilon}, but max_len=1 sample comparator returned False because long sentential form was pruned.",
+      "fix": "Use exact CNF+CYK to confirm apparent grammar-vs-grammar mismatches and missing candidate words in oracle comparison. Still report only bounded_pass for successful samples.",
+      "prompt_code_mapping": [
+        "grammar_transforms.is_grammar_equivalent_sample",
+        "_grammar_membership",
+        "claim_verifier._task_language_equivalence_trust",
+        "test_claim_verifier.py"
+      ]
+    },
+    {
+      "id": "LL-025",
+      "location": "claim_verifier oracle uncertainty",
+      "hypotheses": "Membership oracle may return None or raise",
+      "statement": "Unknown membership cannot refute a grammar or justify a bounded equivalence pass.",
+      "status": "corrected",
+      "sources": [],
+      "counterexample": "if not oracle(w) treated None as nonmembership; reverse-direction exceptions were skipped then success returned.",
+      "fix": "None/exception returns unknown comparison; only literal False refutes forward inclusion. Added forward and reverse unknown regressions.",
+      "prompt_code_mapping": [
+        "claim_verifier._task_language_equivalence_trust",
+        "test_claim_verifier.py"
+      ]
+    },
+    {
+      "id": "LL-026",
+      "location": "unbounded decision problems",
+      "hypotheses": "Arbitrary CFG, no k bound, or question about existence of equivalent LL grammar",
+      "statement": "Fixed-k decision is proved here; no decision algorithm for these stronger questions is asserted. Their usual undecidability results need original theorem verification before adding a source-checked statement.",
+      "status": "unresolved",
+      "sources": [
+        "RS1970 full text unavailable",
+        "AU1972 full text unavailable"
+      ],
+      "prompt_code_mapping": [
+        "find_min_ll_k bounded search",
+        "format2 versus format3",
+        "no new undecidability assertion inserted"
+      ]
+    },
+    {
+      "id": "LL-027",
+      "location": "THEORY 3.2 additional closures",
+      "hypotheses": "LL language complement/concatenation closure claims",
+      "statement": "No general closure assertion made without a checked theorem. The explicit union and regular-intersection counterexamples are established independently.",
+      "status": "unresolved",
+      "sources": [],
+      "prompt_code_mapping": [
+        "THEORY3.2 caution retained"
+      ]
+    },
+    {
+      "id": "LL-028",
+      "location": "LL resource budgets",
+      "hypotheses": "Current check_ll_k API",
+      "statement": "time_budget_s covers local-context and full-test work after exact FIRST/FOLLOW/strong test. max_tables does not cap prior sigma construction. No full wall-clock or memory bound is guaranteed.",
+      "status": "source_checked",
+      "sources": [
+        "ll_table_builder.py and first_follow.py source inspected"
+      ],
+      "correction": "Removed stale spec assertion of automatic five-second timeout. Mathematical finiteness is not a practical resource guarantee.",
+      "prompt_code_mapping": [
+        "tz_ll_agent_system.md 5.1",
+        "check_ll_k docstring"
+      ]
+    },
+    {
+      "id": "LL-029",
+      "location": "THEORY3.3 delegated nonDCFL examples",
+      "hypotheses": "Language proven not DCFL or inherently ambiguous by the corresponding DCFL audit",
+      "statement": "Then it is not LL, since every LL language is DCFL and has an unambiguous grammar.",
+      "status": "proved_locally",
+      "sources": [],
+      "limitation": "PAL, ww^R, a^n b^n union a^n b^{2n}, a^n b^n union a^n b^m c^n, and equal-counter disjunction rely on separately audited DCFL/CFL proofs; no duplicate source verification claimed here.",
+      "prompt_code_mapping": [
+        "THEORY3.3 A/B and catalog",
+        "ll_prefix_classes_agent.md",
+        "ll_ambiguity_detector.md"
+      ]
+    },
+    {
+      "id": "LL-UNKNOWN-FOLLOWUP",
+      "status": "corrected",
+      "statement": "Unknown membership must remain unknown in branch templates, literal branches and Nerode representative pairs",
+      "hypotheses": "Oracle may return None; epsilon suffix is valid",
+      "evidence": "Additional root regressions in test_claim_verifier.py",
+      "issue": "Three bool(oracle(...)) conversions remained after initial LL constructive-check repair",
+      "mapping": [
+        "ll_system/lib/claim_verifier.py"
+      ]
+    }
+  ],
+  "validation": {
+    "targeted_tests": {
+      "command": ".venv/Scripts/python -m pytest ll_system/tests/test_grammar_transforms.py ll_system/tests/test_claim_verifier.py -q",
+      "passed": 170
+    },
+    "ll_suite": {
+      "command": ".venv/Scripts/python -m pytest ll_system/tests -q -p no:cacheprovider --basetemp=.tfl_lab_runs/theory_audit/pytest_ll_20260930",
+      "passed": 743,
+      "failed": 0
+    },
+    "initial_suite_environment_failure": "737 passed, six setup errors from inaccessible default pytest temp directory; rerun with workspace basetemp completed successfully.",
+    "independent_algorithm_experiment": {
+      "script": ".tfl_lab_runs/theory_audit/ll_finite_check.py",
+      "seed": 20260930,
+      "acyclic_grammars": 150,
+      "k_values": [
+        1,
+        2,
+        3
+      ],
+      "comparisons": 450,
+      "mismatches": 0,
+      "boundary": "Finite experiment, not a proof for arbitrary recursive CFGs."
+    },
+    "formal_proofs": "Local mathematical proofs are written arguments, not Lean/Coq certificates. Python tests do not certify universal nonLL theorems.",
+    "live_api_calls": 0
+  }
+}

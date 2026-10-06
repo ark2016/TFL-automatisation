@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 from collections import defaultdict, deque
-from typing import Optional
+from typing import Callable, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +252,9 @@ def eliminate_left_recursion(grammar: dict) -> dict:
     """Eliminate all left recursion (direct and indirect).
 
     Returns a new grammar dict. Language is preserved.
+    The ordered substitution algorithm requires no hidden nullable-prefix
+    recursion. If it remains, raises ValueError; use to_ll_normal_form to
+    eliminate epsilon/unit rules first.
     Uses the standard algorithm (Aho, Sethi, Ullman §4.3):
 
     1. Order nonterminals: A1, A2, ..., An
@@ -315,6 +318,9 @@ def eliminate_left_recursion(grammar: dict) -> dict:
         non_left_rec: list[list[str]] = []  # Ai → β
 
         for rhs in _get_rules(ai):
+            if rhs == [ai]:
+                # A -> A adds no terminal derivations and needs no new loop.
+                continue
             if rhs and rhs[0] == ai:
                 left_rec.append(rhs[1:])
             else:
@@ -323,6 +329,11 @@ def eliminate_left_recursion(grammar: dict) -> dict:
         if not left_rec:
             # No direct left recursion for Ai
             _set_rules(ai, non_left_rec)
+            continue
+
+        if not non_left_rec:
+            # There is no terminating alternative: L(Ai) is empty.
+            _set_rules(ai, [])
             continue
 
         # Create new nonterminal Ai'
@@ -334,10 +345,6 @@ def eliminate_left_recursion(grammar: dict) -> dict:
         new_ai_alts: list[list[str]] = []
         for beta in non_left_rec:
             new_ai_alts.append(list(beta) + [prime_name])
-        if not non_left_rec:
-            # Grammar has only left-recursive rules for Ai (infinite loop in original)
-            # Add Ai → Ai' as fallback (empty β)
-            new_ai_alts.append([prime_name])
 
         # Ai' → α Ai' | ε
         prime_alts: list[list[str]] = []
@@ -356,12 +363,18 @@ def eliminate_left_recursion(grammar: dict) -> dict:
             result_rules.append((nt, list(rhs)))
     result_rules = _dedup_rules(result_rules)
 
-    return {
+    result = {
         "nonterminals": all_nts,
         "terminals": list(terminals),
         "start": start,
         "rules": _rules_to_dicts(result_rules),
     }
+    if is_left_recursive(result):
+        raise ValueError(
+            "Nullable-prefix left recursion remains; eliminate epsilon and unit "
+            "rules first (use to_ll_normal_form)."
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +522,12 @@ def eliminate_epsilon_rules(grammar: dict) -> dict:
 
     nullable = _compute_nullable(rules)
     epsilon_in_language = start in nullable
+    if epsilon_in_language and any(start in rhs for _, rhs in rules):
+        fresh_start = _NameGen(nonterminals | terminals).fresh(f"{start}_start")
+        rules.append((fresh_start, [start]))
+        g["nonterminals"].append(fresh_start)
+        nullable.add(fresh_start)
+        start = fresh_start
 
     # Generate all subsets of positions to omit for nullable symbols
     new_rules_set: set[tuple[str, tuple[str, ...]]] = set()
@@ -640,10 +659,11 @@ def to_ll_normal_form(grammar: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _generate_words(grammar: dict, max_len: int) -> set[str]:
-    """BFS generation: collect all words up to max_len from grammar.
+    """BFS generation: collect some words up to max_len from grammar.
 
-    Returns a frozenset of terminal strings. Uses sentential-form BFS.
-    Limits iterations to avoid blowup.
+    Returns a set of terminal strings. Uses bounded sentential-form BFS.
+    Missing words are unknown: the form-size and queue limits can omit even
+    short words. Use exact membership before reporting a counterexample.
     """
     g = _normalize_grammar(grammar)
     terminals: set[str] = set(g["terminals"])
@@ -717,25 +737,38 @@ def is_grammar_equivalent_sample(
     Returns (all_equal, mismatches).
     mismatches: list of words where grammars disagree (up to 5 examples).
 
-    Uses BFS generation from each grammar to collect all words up to max_len.
-    This is approximate — not a proof of equivalence.
+    Uses bounded BFS to propose words, then exact CNF/CYK membership to
+    confirm mismatches. No observed mismatch is not a proof of equivalence.
     """
     words1 = _generate_words(grammar1, max_len)
     words2 = _generate_words(grammar2, max_len)
+    accepts1 = _grammar_membership(grammar1)
+    accepts2 = _grammar_membership(grammar2)
 
     mismatches: list[str] = []
 
     # Words in g1 but not g2
     for w in sorted(words1 - words2):
-        mismatches.append(f"+g1:{w!r}")
+        if not accepts2(w):
+            mismatches.append(f"+g1:{w!r}")
         if len(mismatches) >= 5:
             break
 
     # Words in g2 but not g1
     if len(mismatches) < 5:
         for w in sorted(words2 - words1):
-            mismatches.append(f"+g2:{w!r}")
+            if not accepts1(w):
+                mismatches.append(f"+g2:{w!r}")
             if len(mismatches) >= 5:
                 break
 
     return (len(mismatches) == 0, mismatches)
+
+
+def _grammar_membership(grammar: dict) -> Callable[[str], bool]:
+    """Build an exact membership check; conversion/parsing failures propagate."""
+    from cfl_system.lib.cnf import to_cnf
+    from cfl_system.lib.cyk import cyk_parse
+
+    cnf = to_cnf(_normalize_grammar(grammar))
+    return lambda word: cyk_parse(cnf, word)

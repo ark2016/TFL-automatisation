@@ -12,6 +12,7 @@ import sys
 from typing import Any
 
 from agent_system.lib.ir_schema import IRValidationError
+from dcfl_system.lib.constraints import parse_constraint
 
 # ---------------------------------------------------------------------------
 # DCFL-specific constants
@@ -88,7 +89,7 @@ def _validate_variable(var: Any, path: str) -> None:
 # Constraint validation
 # ---------------------------------------------------------------------------
 
-def _validate_constraint(constraint: Any, path: str) -> None:
+def _validate_constraint(constraint: Any, path: str, variable_names: set[str]) -> None:
     """Validate a single Constraint object."""
     _dcfl_check(isinstance(constraint, dict), f"{path}: constraint must be an object")
     _dcfl_check(
@@ -99,6 +100,10 @@ def _validate_constraint(constraint: Any, path: str) -> None:
         "args" in constraint and isinstance(constraint["args"], dict),
         f"{path}: constraint requires 'args' dict",
     )
+    try:
+        parse_constraint(constraint, variable_names)
+    except (ValueError, TypeError) as exc:
+        raise DCFLIRValidationError(f"{path}: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +127,8 @@ def _validate_set_builder_spec(spec: dict, path: str) -> None:
     )
     for i, var in enumerate(variables):
         _validate_variable(var, f"{path}.variables[{i}]")
+    variable_names = {v["name"] for v in variables}
+    _dcfl_check(len(variable_names) == len(variables), f"{path}: duplicate variable names")
 
     # constraints
     _dcfl_check("constraints" in spec, f"{path}: set_builder requires 'constraints'")
@@ -131,7 +138,7 @@ def _validate_set_builder_spec(spec: dict, path: str) -> None:
         f"{path}: constraints must be a list",
     )
     for i, c in enumerate(constraints):
-        _validate_constraint(c, f"{path}.constraints[{i}]")
+        _validate_constraint(c, f"{path}.constraints[{i}]", variable_names)
 
 
 def _validate_grammar_spec(spec: dict, path: str) -> None:

@@ -24,8 +24,8 @@ def _run_mock(task_name: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-class TestTask1PalindromeRegular(unittest.TestCase):
-    """Task 1: palindrome prefix/suffix — REGULAR language.
+class TestTask1PalindromeRefutedConstructiveFixture(unittest.TestCase):
+    """Task 1: palindrome prefix/suffix — uncertain syntactic hypothesis.
 
     NOTE: The mock DFA for this task is intentionally incorrect so that
     the oracle detects a counterexample.  This exercises the refuted
@@ -40,9 +40,9 @@ class TestTask1PalindromeRegular(unittest.TestCase):
         self.assertIn("module", self.result)
         self.assertEqual(self.result["module"], "orchestrator")
 
-    def test_hypothesis_is_regular(self):
+    def test_palindromic_edge_hypothesis_requires_a_separate_proof(self):
         hyp = self.result["evidence"]["hypothesis"]
-        self.assertEqual(hyp["hypothesis"], "regular")
+        self.assertEqual(hyp["hypothesis"], "unknown")
 
     def test_classifier_loaded(self):
         self.assertIn("classifier", self.result["evidence"])
@@ -92,9 +92,9 @@ class TestTask2GrammarNonRegular(unittest.TestCase):
     def setUp(self):
         self.result = _run_mock("task2_grammar_sasb")
 
-    def test_hypothesis_non_regular(self):
+    def test_nested_grammar_hypothesis_is_unknown_before_proof(self):
         hyp = self.result["evidence"]["hypothesis"]
-        self.assertEqual(hyp["hypothesis"], "non_regular")
+        self.assertEqual(hyp["hypothesis"], "unknown")
 
     def test_classifier_non_regular(self):
         clf = self.result["evidence"]["classifier"]
@@ -111,17 +111,12 @@ class TestTask2GrammarNonRegular(unittest.TestCase):
         self.assertNotIn("dfa_builder", self.result["evidence"])
         self.assertNotIn("oracle_test", self.result["evidence"])
 
-    def test_status_success_pumping_oracle_verified(self):
-        """No oracle_test ran (non-regular track has no DFA), but the
-        pumping proof's word family is instantiated at p in {2,3,4} and
-        checked against the grammar oracle (docs/VERDICT_POLICY.md §4) ->
-        bounded_pass, confidence <= 0.85 (R6), not the old flat "partial"
-        with an unverified proof. The non_regular verdict itself is
-        unchanged from before."""
+    def test_success_with_pumping_consistency_samples_is_capped(self):
+        """Finite pumping lengths remain diagnostic, with trust <=0.55."""
         self.assertEqual(self.result["status"], "success")
-        self.assertLessEqual(self.result["confidence"], 0.85)
+        self.assertLessEqual(self.result["confidence"], 0.55)
         pumping_check = self.result["evidence"]["pumping_verification"]
-        self.assertEqual(pumping_check["trust"], "bounded_pass")
+        self.assertEqual(pumping_check["trust"], "well_formed")
 
 
 class TestTask3RegexBackref(unittest.TestCase):
@@ -130,9 +125,9 @@ class TestTask3RegexBackref(unittest.TestCase):
     def setUp(self):
         self.result = _run_mock("task3_regex_backref")
 
-    def test_hypothesis_non_regular(self):
+    def test_backreference_hypothesis_is_unknown_before_proof(self):
         hyp = self.result["evidence"]["hypothesis"]
-        self.assertEqual(hyp["hypothesis"], "non_regular")
+        self.assertEqual(hyp["hypothesis"], "unknown")
 
     def test_pumping_and_closure_loaded(self):
         self.assertIn("pumping", self.result["evidence"])

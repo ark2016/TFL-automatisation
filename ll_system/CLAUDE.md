@@ -49,7 +49,7 @@ Full spec: `ll_system/tz_ll_agent_system.md`
 - Substitution method ≠ Pumping Lemma — different technique, don't confuse
 - Language vs grammar: left recursion ≠ not LL (language may still be LL)
 - LL(k) ⊂ LL(k+1) strictly; minimum k is part of the answer
-- FIRST/FOLLOW fixed-point computation must converge (max iterations guard)
+- FIRST/FOLLOW fixed-point computation must reach convergence; a resource guard must return unknown, never partial sets as complete
 - `ll_table_builder`/`orchestrator` now run the full LL(k)-table test (§3.1, `docs/THEORY.md`),
   not just strong LL(k); `is_strong_ll_k` is reported separately for diagnostics
 - k-prefix concatenation: X ⊕_k Y = {(xy)[:k] | x ∈ X, y ∈ Y}
@@ -60,10 +60,11 @@ Full spec: `ll_system/tz_ll_agent_system.md`
     L = {aⁿw | w ∈ {b,c}ⁿ, n ≥ 0} is LL(1) (`S → aSX | ε`, `X → b | c`), R = a\*b\* ∪ a\*c\* is
     regular, but L ∩ R = {aⁿbⁿ} ∪ {aⁿcⁿ} is not LL.
   - LL(k)-**languages** coincide with strong-LL(k)-languages [RS, Thm 2]: every LL(k) grammar has
-    a structurally equivalent strong-LL(k) grammar for the same language. The strong/non-strong
+  a structurally equivalent strong-LL(k) grammar for the same language (checked via Nijholt,
+  Theorem 10.4; original RS full text not read in this audit). The strong/non-strong
     distinction only matters at the level of *grammars* (a grammar can be LL(k) without being
     SLL(k), e.g. `S → aAaa | bAba, A → b | ε`), never at the level of languages.
-- Hierarchy (strict): REG ⊂ LL(1) ⊊ LL(k) ⊊ LL(k+1) ⊊ ⋃_k LL(k) ⊊ DCFL = LR(1) ⊂ CFL
+- Hierarchy (languages): REG ⊊ LL(1), LL(k) ⊊ LL(k+1) for k>=1, ⋃_k LL(k) ⊊ DCFL = LR(1) ⊊ CFL
 - Catalog of worked LL / not-LL examples (`docs/THEORY.md` §3.4): DCFL-not-LL —
   `{aⁱbʲ | i ≥ j}`, `{bᴹcbʲ | j ≤ M}`, `{w b* c w^R}`; LL(1) — `{aⁱbʲ | i ≤ j}` (`S → TB, T → aTb | ε,
   B → bB | ε`), `{w c w^R}`, `{w b c w^R}`

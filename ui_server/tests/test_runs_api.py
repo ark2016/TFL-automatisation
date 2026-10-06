@@ -702,9 +702,54 @@ def test_in_run_setting_is_off_by_default_and_never_for_mock_or_ll(monkeypatch):
     ll = _run_live(monkeypatch, "ll_system")                  # no Lean step for LL
     data = wait_status(mock, {"completed"})
     wait_status(ll, {"completed"})
-    time.sleep(0.3)
     assert FORMALIZE_CALLS == []
     assert any("skipped" in line for line in data["lines"])
+
+
+@pytest.mark.parametrize("project", ["agent_system", "cfl_system", "dcfl_system"])
+def test_completed_mock_run_includes_skip_log_before_releasing_slot(monkeypatch, project):
+    run_id = "final_skip_log"
+    run_dir = srv.RUNS_DIR / run_id
+    run_dir.mkdir()
+    ir_path = run_dir / "input.json"
+    ir_path.write_text("{}", encoding="utf-8")
+    settings = {**srv.DEFAULT_SETTINGS, "formalize_in_run": True}
+    with srv._runs_lock:
+        srv._runs[run_id] = srv._new_run_entry(run_id, project, run_dir, live=False)
+
+    def finish_pipeline(*_args):
+        (run_dir / "input_result.json").write_text(
+            json.dumps({"verdict": "regular", "confidence": 0.9}), encoding="utf-8")
+        return 0, "finished", []
+
+    release_entered = threading.Event()
+    resume_release = threading.Event()
+    release_slot = srv._release_run_slot
+
+    def paused_release():
+        release_entered.set()
+        resume_release.wait(timeout=5)
+        release_slot()
+
+    monkeypatch.setattr(srv, "_spawn_and_wait", finish_pipeline)
+    monkeypatch.setattr(srv, "_release_run_slot", paused_release)
+    worker = threading.Thread(
+        target=srv._run_pipeline_worker,
+        args=(run_id, project, ir_path, run_dir, False, False, settings), daemon=True,
+    )
+    worker.start()
+    try:
+        assert release_entered.wait(timeout=5), "worker did not reach slot release"
+        data = srv.api_log(run_id)
+        assert data["status"] == read_record(run_id)["status"] == "completed"
+        skip_line = "in-run formalization skipped: a mock run makes no live API calls"
+        assert data["lines"].count(skip_line) == 1
+        assert (run_dir / "run.log").read_text(encoding="utf-8").splitlines() == [skip_line]
+    finally:
+        resume_release.set()
+        worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert srv.api_log(run_id)["lines"] == data["lines"]
 
 
 def test_in_run_formalize_can_be_cancelled(monkeypatch):

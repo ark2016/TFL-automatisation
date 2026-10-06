@@ -41,6 +41,7 @@ class TestCrossedDependencies:
     def test_interleaved_helper(self):
         assert _are_interleaved([0, 2], [1, 3]) is True
         assert _are_interleaved([0, 1], [2, 3]) is False
+        assert _are_interleaved([0, 3], [1, 2]) is False
 
 
 # ── 2. Repeated subword without crossed deps → non_cfl, moderate ────────
@@ -112,7 +113,7 @@ class TestGrammarFilter:
         ir = _make_ir(
             "grammar_filter",
             grammar={"rules": []},
-            filter={"type": "modular", "mod": 2, "remainder": 0},
+            filter={"modulus": 2, "remainder": 0, "expr": {"kind": "length", "of_var": "w"}},
         )
         result = analyze_cfl_hypothesis(ir)
         assert result["hypothesis"] == "cfl"
@@ -123,8 +124,9 @@ class TestGrammarFilter:
         """Grammar + non-regular filter (|a| = |b|) → unknown."""
         ir = _make_ir(
             "grammar_filter",
-            grammar={"rules": []},
-            filter={"type": "symbol_count_comparison", "lhs": "a", "rhs": "b"},
+            grammar={"rules": [], "terminals": ["a", "b"]},
+            filter={"op": "eq", "left": {"kind": "count_symbol", "symbol": "a", "in_var": "w"},
+                    "right": {"kind": "count_symbol", "symbol": "b", "in_var": "w"}},
         )
         result = analyze_cfl_hypothesis(ir)
         assert result["hypothesis"] == "unknown"
@@ -176,7 +178,8 @@ class TestFeatureExtraction:
         ir = _make_ir(
             "grammar_filter",
             grammar={"rules": []},
-            filter={"type": "length_bound", "bound": 10},
+            filter={"op": "lt", "left": {"kind": "length", "of_var": "w"},
+                    "right": {"kind": "constant", "value": 10}},
         )
         features = _extract_features(ir)
         assert features["is_grammar_filter"] is True
@@ -232,14 +235,14 @@ class TestIsFilterRegular:
         assert _is_filter_regular({}) is None
 
     def test_explicit_is_regular_flag(self):
-        assert _is_filter_regular({"is_regular": True}) is True
-        assert _is_filter_regular({"is_regular": False}) is False
+        assert _is_filter_regular({"is_regular": True}) is None
+        assert _is_filter_regular({"is_regular": False}) is None
 
     def test_constant_comparison_is_regular(self):
-        assert _is_filter_regular({"lhs": "count_a", "rhs": 5}) is True
+        assert _is_filter_regular({"lhs": "count_a", "rhs": 5}) is None
 
     def test_symbol_comparison_not_regular(self):
-        assert _is_filter_regular({"lhs": "count_a", "rhs": "count_b"}) is False
+        assert _is_filter_regular({"lhs": "count_a", "rhs": "count_b"}) is None
 
 
 # ── 10. exists_decomposition with rev + repeated subword ─────────────────

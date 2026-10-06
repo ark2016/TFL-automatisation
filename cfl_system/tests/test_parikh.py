@@ -98,37 +98,49 @@ class TestParikhImageFromGrammar:
 
 class TestCheckSemilinearity:
     def test_single_linear_set(self):
-        """Vectors {(n, n) | n=0..10} form a single linear set."""
+        """Finite diagonal vectors suggest a linear pattern, without proving the full image."""
         vectors = {(n, n) for n in range(11)}
         result = check_semilinearity(vectors, alphabet_size=2)
-        assert result["is_semilinear"] is True
+        assert result["is_semilinear"] is None
+        assert result["sample_is_semilinear"] is True
+        assert result["looks_semilinear"] is True
 
     def test_arithmetic_progression_1d(self):
         """1D set {0, 2, 4, 6, 8} is semilinear."""
         vectors = {(n,) for n in range(0, 10, 2)}
         result = check_semilinearity(vectors, alphabet_size=1)
-        assert result["is_semilinear"] is True
+        assert result["is_semilinear"] is None
+        assert result["sample_is_semilinear"] is True
+        assert result["looks_semilinear"] is True
 
     def test_empty_set(self):
         result = check_semilinearity(set(), alphabet_size=2)
-        assert result["is_semilinear"] is True
+        assert result["is_semilinear"] is None
+        assert result["sample_is_semilinear"] is True
+        assert result["looks_semilinear"] is True
 
     def test_singleton(self):
         result = check_semilinearity({(3, 5)}, alphabet_size=2)
-        assert result["is_semilinear"] is True
+        assert result["is_semilinear"] is None
+        assert result["sample_is_semilinear"] is True
+        assert result["looks_semilinear"] is True
 
     def test_quadratic_growth_1d(self):
-        """1D set {0, 1, 4, 9, 16, 25, ...} (squares) is NOT semilinear."""
+        """Finite square values warn about quadratic growth but are semilinear themselves."""
         vectors = {(n * n,) for n in range(8)}
         result = check_semilinearity(vectors, alphabet_size=1)
-        assert result["is_semilinear"] is False
+        assert result["is_semilinear"] is None
+        assert result["sample_is_semilinear"] is True
+        assert result["looks_semilinear"] is False
 
     def test_non_semilinear_via_projection(self):
-        """If one projection is non-semilinear, the whole set is."""
+        """A quadratic finite projection gives only a heuristic warning."""
         # (n², n) — first projection is quadratic
         vectors = {(n * n, n) for n in range(8)}
         result = check_semilinearity(vectors, alphabet_size=2)
-        assert result["is_semilinear"] is False
+        assert result["is_semilinear"] is None
+        assert result["sample_is_semilinear"] is True
+        assert result["looks_semilinear"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +181,8 @@ class TestAnalyzeParikh:
             },
         }
         result = analyze_parikh(ir)
-        assert result["is_semilinear"] is not False
+        assert result["is_semilinear"] is None
+        assert result["sample_provenance"]["kind"] == "candidate_superset"
         assert len(result["vectors_sampled"]) > 0
 
     def test_unsupported_kind(self):
@@ -204,5 +217,6 @@ class TestAnalyzeParikh:
             },
         }
         result = analyze_parikh(ir)
-        # aⁿbⁿ already has equal a/b counts, so filter keeps everything
-        assert result["is_semilinear"] is True
+        # Sampling the filtered grammar does not certify the full image.
+        assert result["is_semilinear"] is None
+        assert result["sample_provenance"]["kind"] == "candidate_superset"

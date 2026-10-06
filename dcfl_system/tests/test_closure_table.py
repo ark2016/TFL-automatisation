@@ -98,11 +98,11 @@ class TestGetProofDirection:
     def test_complement_both(self):
         assert get_proof_direction("complement") == "both"
 
-    def test_inverse_homomorphism_constructive(self):
-        assert get_proof_direction("inverse_homomorphism") == "constructive"
+    def test_inverse_homomorphism_supports_contrapositive(self):
+        assert get_proof_direction("inverse_homomorphism") == "both"
 
     def test_reg_intersection_constructive(self):
-        assert get_proof_direction("reg_intersection") == "constructive"
+        assert get_proof_direction("reg_intersection") == "both"
 
     @pytest.mark.parametrize(
         "operation",

@@ -40,7 +40,7 @@ from cfl_system.lib.cfl_hypothesis import analyze_cfl_hypothesis
 from cfl_system.lib.language_preprocess import preprocess_language
 from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir, grammar_oracle, pda_oracle
 from cfl_system.lib.cfl_oracle_test import normalize_agent_pda, oracle_test
-from cfl_system.lib.claim_verifier import verify_agent_claims
+from cfl_system.lib.claim_verifier import input_grammar_is_cfg, verify_agent_claims
 from cfl_system.lib.lean_ir import render_statement_verbose
 
 # R-Lean (docs/VERDICT_POLICY.md): the Lean toolchain and the proof-status ->
@@ -1201,11 +1201,13 @@ def _cross_check_r3prime(
             continue
         word = w.get("word")
         expected_in_l = w.get("expected_in_l")
-        if not isinstance(word, str) or not word or not isinstance(expected_in_l, bool):
+        if not isinstance(word, str) or not isinstance(expected_in_l, bool):
             continue
         try:
-            oracle_says = bool(lang_oracle(word))
+            oracle_says = lang_oracle(word)
         except Exception:
+            continue
+        if not isinstance(oracle_says, bool):
             continue
 
         if not result["destructive_refuted"] and oracle_says != expected_in_l:
@@ -1224,8 +1226,10 @@ def _cross_check_r3prime(
                 if agent in result["constructive_refuted_agents"]:
                     continue
                 try:
-                    artifact_says = bool(artifact_oracle(word))
+                    artifact_says = artifact_oracle(word)
                 except Exception:
+                    continue
+                if not isinstance(artifact_says, bool):
                     continue
                 if artifact_says != expected_in_l:
                     result["constructive_refuted_agents"].append(agent)
@@ -1258,6 +1262,25 @@ def apply_verdict_gate(state: PipelineState) -> dict:
     """
     reasoning = dict(state.get("reasoning_output") or {})
     trust_map = _collect_agent_trust(state)
+
+    # R2-CFG: here G defines the target language itself; no equivalence
+    # sampling or agent opinion can overturn the existence of this CFG.
+    if input_grammar_is_cfg(state.get("ir") or {}):
+        trust_map["input_grammar"] = "verified"
+        note = "Язык задан корректной КС-грамматикой G, поэтому L = L(G) является КС."
+        reasoning.update({
+            "action": "done", "decision": "done", "verdict": "cfl",
+            "confidence": _CONFIDENCE_CAP_BY_TRUST["verified"],
+            "primary_evidence": "input_grammar", "summary": note,
+            "proof": {"source": "input_grammar", "summary": note},
+        })
+        reasoning.pop("retry_plan", None)
+        return {"reasoning_output": reasoning, "trust": trust_map, "verdict_gate": {
+            "basis": [{"agent": name, "trust": trust} for name, trust in sorted(trust_map.items())],
+            "basis_trust": "verified", "basis_note": "input_grammar",
+            "contradiction": False, "confidence_cap": 0.98, "proof_verified": True,
+            "downgrades": ["R2-CFG: the input CFG itself certifies cfl; agent proposals cannot override it"],
+        }}
 
     action = _get_action(reasoning)
     verdict = _normalize_verdict(reasoning.get("verdict"))
@@ -2322,6 +2345,8 @@ def formalize_node(state: PipelineState) -> dict:
         return {}
 
     reasoning = state.get("reasoning_output", {})
+    if reasoning.get("primary_evidence") == "input_grammar":
+        return {}  # The exact definitional proof was already produced by the gate.
     verdict = reasoning.get("verdict")
     if not verdict or verdict == "inconclusive":
         return {}
@@ -2719,6 +2744,10 @@ def assemble_result_node(state: PipelineState) -> dict:
             grammar = output.get("grammar") or (output.get("evidence", {}) or {}).get("grammar")
         if not pda:
             pda = output.get("pda") or (output.get("evidence", {}) or {}).get("pda")
+
+    if reasoning.get("primary_evidence") == "input_grammar" and input_grammar_is_cfg(ir):
+        grammar = ir["language_spec"]
+        pda = None
 
     # Proof source priority:
     #   1. reasoning.proof (rarely set — reasoning prompt returns summary only)

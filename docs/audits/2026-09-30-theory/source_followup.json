@@ -1,0 +1,175 @@
+{
+  "date": "2026-09-30",
+  "scope": "Сводка источников и consequential findings по inventory/DCFL/LL JSON. Это не аудит всего проекта и не подтверждение всех доказательств.",
+  "original_source_followup": [
+    {
+      "work": "William F. Ogden, A helpful result for proving inherent ambiguity (1968)",
+      "url": "https://doi.org/10.1007/BF01694004",
+      "locator": "Math. Systems Theory 2, pp. 191-194; theorem/page locator не установлен",
+      "status": "full_text_not_read",
+      "source_level": "official publisher metadata only",
+      "read": "Springer confirms title, author, issue, pages and DOI; the full text requires subscription.",
+      "gap": "Exact lemma quantifiers and theorem numbering were not checked. Do not label the original as read."
+    },
+    {
+      "work": "Ogden, Ross, Winklmann, An 'Interchange Lemma' for Context-Free Languages (1985)",
+      "url": "https://epubs.siam.org/doi/10.1137/0214031",
+      "locator": "SIAM J. Comput. 14(2), pp. 410-415; exact lemma page/theorem not established",
+      "status": "abstract_only_full_text_unread",
+      "source_level": "official publisher abstract and metadata",
+      "read": "SIAM abstract says the paper proves a necessary condition for CFLs and applies it to repetitive strings xyyz with nonempty y over alphabets of size at least three; DOI and pages verified.",
+      "gap": "The official page requires access for the article. Exact bounds/quantifiers in the interchange lemma remain supported by Hoogeboom slides, PDF p.116, a secondary source."
+    },
+    {
+      "work": "Seymour Ginsburg and Sheila A. Greibach, Deterministic Context Free Languages (1966)",
+      "url": "https://doi.org/10.1016/S0019-9958(66)80019-0",
+      "locator": "Information and Control 9(6), pp. 620-648; theorem/page locators not verified",
+      "status": "metadata_only_full_text_unread",
+      "source_level": "publisher DOI inaccessible; bibliographic records only",
+      "read": "No original article text read. The existing DCFL review records bibliographic metadata only at this DOI.",
+      "gap": "GG theorem numbering and MIN/MAX/inverse GSM hypotheses cannot be verified here. Do not upgrade related claims to original-source checked."
+    }
+  ],
+  "findings": [
+    {
+      "id": "REG-1", "status": "inventory_flag_needs_review",
+      "finding": "Hard classifier rules treat backreferences and nested recursion as nonregular; the rules need precise exceptions and language-level proof conditions.",
+      "counterexample": "(a)\\1* denotes aa*, which is regular; S→aSb|aS|Sb|ε denotes a*b* despite nested recursion.",
+      "affected_paths": ["agent_system/prompts/classifier.md:15-21", "agent_system/lib/hypothesis_module.py:286-357"],
+      "source": "Local finite-state/grammar constructions; inventory raised this as a review flag."
+    },
+    {
+      "id": "REG-2", "status": "bounded_check_only",
+      "finding": "Finite pumping and finite Nerode searches cannot certify an unbounded theorem unless reported as finite evidence.",
+      "counterexample": "Checking finitely many pumping lengths, words or residual representatives does not quantify over all decompositions or all residuals.",
+      "affected_paths": ["agent_system/lib/claim_verifier.py:337-552"],
+      "source": "Inventory explicitly classifies these as bounded semantic checks."
+    },
+    {
+      "id": "CFL-1", "status": "inventory_flag_needs_review",
+      "finding": "The classifier's regularity heuristic for signed linear-combination thresholds is too broad; mixed signs can encode unbounded comparison.",
+      "counterexample": "{w : #a(w)-#b(w) >= 0} is nonregular; prefixes a^n and a^m, n<m, are distinguished by suffix b^m.",
+      "affected_paths": ["cfl_system/prompts/cfl_classifier.md:22-29"],
+      "source": "Local Myhill-Nerode argument; inventory raised this as a high-priority flag."
+    },
+    {
+      "id": "CFL-2", "status": "secondary_source_checked_original_unread",
+      "finding": "The Ogden marked-position statement in THEORY cites a secondary source; Ogden's 1968 original was not read.",
+      "counterexample": null,
+      "affected_paths": ["docs/THEORY.md:158-181", "docs/THEORY_REFERENCE.md CFL-OGDEN", "cfl_system/prompts/cfl_ogden.md"],
+      "source": "Hoogeboom course slides PDF p.110, Lemma 4.3.1 (secondary). Springer DOI page confirms metadata only."
+    },
+    {
+      "id": "CFL-3", "status": "secondary_source_checked_original_unread",
+      "finding": "The interchange formula remains supported by secondary lecture notes; the 1985 original was opened only to its official abstract.",
+      "counterexample": null,
+      "affected_paths": ["docs/THEORY.md:524-546", "docs/THEORY_REFERENCE.md CFL-INTERCHANGE", "cfl_system/prompts/cfl_interchange.md"],
+      "source": "Hoogeboom slides PDF p.116, Lemma 4.5.1 (secondary); SIAM official abstract confirms paper purpose, not exact lemma."
+    },
+    {
+      "id": "DCFL-1", "status": "source_checked_with_scope_limit",
+      "finding": "The two-word Yu pumping alternatives are stated as necessary, but the source actually read for that statement is Yamakami 2021 restating Yu, not Yu's 1989 original.",
+      "counterexample": "The old course witnesses fail to refute the full alternative; the audit records a separate proof for non-DCFL status.",
+      "affected_paths": ["docs/THEORY.md:35-83", "dcfl_system/prompts/dcfl_pumping.md:89-137", ".tfl_lab_runs/theory_audit/dcfl_review.json DCFL-002,006"],
+      "source": "https://arxiv.org/pdf/2112.09383v3, PDF p.7 Lemma 3.2 statement read; proof dependencies not all checked. Yu original unread."
+    },
+    {
+      "id": "DCFL-2", "status": "local_proof_corrected",
+      "finding": "A Yu refutation must cover every permitted pumping decomposition; showing that one chosen decomposition fails is insufficient.",
+      "counterexample": "The old course witness for S does not refute Yu; a separate local proof establishes S is non-DCFL.",
+      "affected_paths": ["docs/THEORY.md:35-83", "dcfl_system/prompts/dcfl_pumping.md", ".tfl_lab_runs/theory_audit/dcfl_review.json DCFL-006,007"],
+      "source": "Local universal marked-continuation proof, not original-source verification."
+    },
+    {
+      "id": "DCFL-3", "status": "secondary_source_checked_plus_local_completion",
+      "finding": "A DCFL has an infinite Nerode class; a non-DCFL proof via finite classes must establish finiteness for every class.",
+      "counterexample": "One infinite distinguishable family alone does not show that all Nerode classes are finite.",
+      "affected_paths": ["docs/THEORY.md:85-118", "dcfl_system/prompts/shallit.md:58-134", ".tfl_lab_runs/theory_audit/dcfl_review.json DCFL-008,010"],
+      "source": "Hoogeboom slides following Shallit, statement/sketch at PDF pp.113, 128-130; Shallit book proof unread."
+    },
+    {
+      "id": "DCFL-4", "status": "source_checked_secondary",
+      "finding": "Complement and right quotient by regular languages are listed as DCFL closures in the reviewed contract.",
+      "counterexample": null,
+      "affected_paths": ["docs/THEORY.md:120-149", "dcfl_system/lib/closure_table.py", ".tfl_lab_runs/theory_audit/dcfl_review.json DCFL-017,020"],
+      "source": "Hoogeboom slides following Shallit, PDF pp.122, 128-130; secondary source, not original GG."
+    },
+    {
+      "id": "DCFL-5", "status": "local_proofs",
+      "finding": "Inverse homomorphism (including erasing images), regular intersection, and left quotient by a fixed word were separately established by constructions; do not attribute them to unread GG text.",
+      "counterexample": "General left quotient by a regular language does not preserve DCFL; fixed-word left quotient is narrower.",
+      "affected_paths": ["docs/THEORY.md:120-149", "dcfl_system/lib/closure_table.py", ".tfl_lab_runs/theory_audit/dcfl_review.json DCFL-018,019,024"],
+      "source": "Local constructions in DCFL review; GG original unread."
+    },
+    {
+      "id": "DCFL-6", "status": "source_checked_secondary",
+      "finding": "DCFL languages are unambiguous; ambiguity of one supplied grammar does not prove its language is not DCFL.",
+      "counterexample": "An ambiguous CFG can describe a DCFL that also has another unambiguous grammar.",
+      "affected_paths": ["docs/THEORY.md:150-156", "dcfl_system/prompts/inh_ambiguity.md", ".tfl_lab_runs/theory_audit/dcfl_review.json DCFL-030,040"],
+      "source": "Hoogeboom slides following Shallit, PDF pp.132-134; original GG proof unavailable."
+    },
+    {
+      "id": "LL-1", "status": "source_checked_definition",
+      "finding": "LL(k) is a grammar property; language membership in the LL(k) class asks whether some LL(k) grammar generates it.",
+      "counterexample": "Failure of the supplied grammar's LL(k) table does not refute existence of another grammar for that language.",
+      "affected_paths": ["docs/THEORY.md:218-259", "ll_system/lib/ll_table_builder.py", ".tfl_lab_runs/theory_audit/ll_review.json LL-001"],
+      "source": "Nijholt 1980, Definition 8.7, printed pp.109-110 / PDF pp.116-117; extracted and visually checked."
+    },
+    {
+      "id": "LL-2", "status": "source_checked_definition",
+      "finding": "Ordinary LL(k) tests alternatives against the actual local continuation; global FOLLOW can combine incompatible occurrence contexts.",
+      "counterexample": "A global FOLLOW conflict need not be a local LL conflict at any occurrence.",
+      "affected_paths": ["docs/THEORY.md:218-259", "ll_system/lib/first_follow.py:273-340", ".tfl_lab_runs/theory_audit/ll_review.json LL-002,003,006"],
+      "source": "Nijholt 1980, Definitions 8.7/8.8, pp.109-110; director characterization Lemma 12.2, pp.212-213; fixed-point completeness proof is local."
+    },
+    {
+      "id": "LL-3", "status": "source_checked_with_local_construction",
+      "finding": "Strong LL(k) and LL(k) differ at grammar level for k≥2; an equivalent strong grammar can be constructed by annotating nonterminals with finite right-context summaries.",
+      "counterexample": "S→aAaa | bAba, A→b | ε is LL(2) but not SLL(2); it passes SLL(3).",
+      "affected_paths": ["docs/THEORY.md:218-259", "ll_system/lib/ll_table_builder.py", ".tfl_lab_runs/theory_audit/ll_review.json LL-004,005"],
+      "source": "Nijholt 1980 pp.109-110 and Theorem 10.4 pp.140-141 (PDF pp.116-117,147-148); one equivalent-cover step uses a local annotation justification because Nijholt cites RS."
+    },
+    {
+      "id": "LL-4", "status": "local_proof_corrected",
+      "finding": "Branch-point prefix bound was corrected: two words with common-prefix length ell yield a shared sentential form wδ with ell-k < |w| ≤ ell.",
+      "counterexample": "The old stronger bound fails for LL(1) S→a^100A, A→b|c when taking a one-character shared prefix.",
+      "affected_paths": ["docs/THEORY.md:269-317", "ll_system/prompts/ll_substitution_agent.md", ".tfl_lab_runs/theory_audit/ll_review.json LL-011"],
+      "source": "Local proof takes the first derivation step crossing ell-k; counterexample is recorded in LL JSON."
+    },
+    {
+      "id": "LL-5", "status": "locally_proved",
+      "finding": "The union {a^n b^n}∪{a^n c^n} is DCFL but not LL(k) for any fixed k, separating the union of LL(k) classes from DCFL.",
+      "counterexample": "Mixing independently chosen b- and c-producing derivation components creates an impossible mixed word; reusing a (nonterminal, suffix-length) pair yields the contradiction.",
+      "affected_paths": ["docs/THEORY.md:269-317", "ll_system/prompts/ll_substitution_agent.md", ".tfl_lab_runs/theory_audit/ll_review.json LL-012,013"],
+      "source": "Local substitution proof plus explicit DPDA; no external source claimed."
+    },
+    {
+      "id": "LL-6", "status": "local_proof_corrected",
+      "finding": "Left-recursion elimination must preserve empty-language cases and detect nullable-prefix hidden recursion.",
+      "counterexample": "S→Sa has empty language but the old transform produced a*; S→ASa|a with A→ε can retain hidden left recursion.",
+      "affected_paths": ["ll_system/lib/grammar_transforms.py", "ll_system/prompts/ll_grammar_transformer.md", ".tfl_lab_runs/theory_audit/ll_review.json LL-022,023"],
+      "source": "Exact grammar counterexamples and fixes documented in LL review; implementation verification is separate."
+    },
+    {
+      "id": "LL-7", "status": "bounded_or_unknown",
+      "finding": "Sample absence and oracle None/exception cannot certify nonmembership or equivalence; only conclusive negative membership can refute a candidate word.",
+      "counterexample": "S→A^30, A→ε and S→ε both generate {ε}, but a capped sentential-form sampler returned false.",
+      "affected_paths": ["ll_system/lib/grammar_transforms.py", "ll_system/lib/claim_verifier.py", ".tfl_lab_runs/theory_audit/ll_review.json LL-024,025"],
+      "source": "Local counterexample; review recommends CNF+CYK for refuting apparent CFG mismatches and still labels positive sample checks bounded."
+    },
+    {
+      "id": "LL-8", "status": "unresolved_source_gap",
+      "finding": "Do not add blanket undecidability or further LL closure claims without theorem-level verification; current contract limits itself to fixed-k decision and explicit counterexamples.",
+      "counterexample": null,
+      "affected_paths": ["docs/THEORY.md:261-317", ".tfl_lab_runs/theory_audit/ll_review.json LL-026,027"],
+      "source": "RS1970 and AU1972 full texts were not obtained; no original theorem locator verified."
+    }
+  ],
+  "global_boundaries": [
+    "Hoogeboom slide locators already in THEORY_REFERENCE remain secondary: PDF p.110 for Ogden and p.116 for interchange.",
+    "Official primary publisher pages were found for the three requested works, but none yielded accessible full original text; metadata/abstracts do not verify exact theorem formulations.",
+    "proved_locally means a written local argument, not a proof assistant certificate or source-checked theorem.",
+    "Python tests and finite experiments do not establish universal language claims or full implementation equivalence.",
+    "This is a targeted evidence summary, not proof of the whole project or all four pipelines."
+  ]
+}

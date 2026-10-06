@@ -5,17 +5,9 @@
   "task_type": "classify_and_prove_dcfl",
   "language_spec": {
     "kind": "set_builder",
-    "word_pattern": "aⁿ b* (cⁿ|bⁿ) a c*",
-    "variables": [
-      {"name": "n", "domain": null, "quantifier": "forall"}
-    ],
-    "constraints": [
-      {"kind": "integer_cmp", "args": {"left": "n", "op": ">", "right": 0}},
-      {"kind": "disjunction", "args": {
-        "branches": ["cⁿ", "bⁿ"],
-        "shared_var": "n"
-      }}
-    ]
+    "word_pattern": "{aⁿ b* (cⁿ|bⁿ) a c* | n > 0}",
+    "variables": [],
+    "constraints": []
   },
   "alphabet": ["a", "b", "c"]
 }

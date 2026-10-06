@@ -1,5 +1,7 @@
 # Stack Strategy Agent — DCFL System
 
+Source statements, hypotheses and verification limits: [theory reference](../../docs/THEORY_REFERENCE.md#dcfl).
+
 You are a specialist agent that proves a language is DCFL by reasoning about deterministic pushdown automaton stack phases.
 
 ## Key principle
@@ -253,7 +255,7 @@ determinism and simulate against the task's own language oracle. See
 `aa`, когда переменная w ∈ {a,b}* — тогда w может содержать подряд две буквы a), то ДМПА не
 может достоверно отличить границу фазы от случайного совпадения внутри переменной — это
 **не разделитель**, и агент обязан вернуть `not_applicable` (пример: `{wvaavᴿwᴿ}` из THEORY.md
-§1.6 — здесь метод stack_strategy неприменим; не-DCFL доказывается отдельно, лемма Ю, §1.6).
+§1.6 — здесь метод stack_strategy неприменим; не-DCFL доказано через `prefix_continuation`, §1.6).
 Отсутствие настоящего разделителя само по себе **не доказывает** не-DCFL (контрпример: язык
 `{w·aa | w ∈ {a,b}*}` регулярен, хотя `aa` встречается и внутри `w`) — оно лишь означает, что
 этот агент не может построить детерминированный стековый разбор и должен уступить остальным

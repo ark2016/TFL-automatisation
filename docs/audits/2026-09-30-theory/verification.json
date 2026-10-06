@@ -1,0 +1,182 @@
+{
+  "date": "2026-09-30",
+  "created_at_utc": "2026-09-30T20:22:15.667346+00:00",
+  "branch": "audit/theory-contracts-2026-09-30",
+  "base_commit": "264cc40",
+  "paid_api_calls": 0,
+  "runs": [
+    {
+      "name": "core",
+      "passed": 2964,
+      "passed_subtests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 99,
+      "xfailed": 2,
+      "seconds": 113.21,
+      "command": "python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests tests tfl_eval/tests -q -m 'not slow' -n 2 --dist loadfile",
+      "env": {
+        "TFL_ALLOW_LIVE": "0"
+      },
+      "junit_path": ".tfl_lab_runs/theory_audit/final_core.xml",
+      "skip_reasons": [
+        {
+          "type": "pytest.skip",
+          "reason": "Docker with tfl-lean4 image not available",
+          "count": 71
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "Docker with the tfl-lean4 image not available",
+          "count": 19
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{ww | w in {a,b}*} -- a repeated-WORD pattern (w then w again), not exponent/block notation over letters.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{a^(2^n) | n>=0} -- nested exponent (2^n as an exponent's own exponent); exponent_pattern's arithmetic grammar has no '^' operator.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{w in {a,b}* | #a(w) = 2*#b(w)} -- a symbol-count predicate over an unconstrained string, not expressible as letter/word exponent blocks.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{w c reverse(w) | w in {a,b}*} -- a reverse-pattern set_builder (needs a `variables` IR with a 'w^R' word pattern, like task_wvaavRwR.json, not exponent notation).",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{w reverse(w) | w in {a,b}*} -- same reverse-pattern gap as dcfl-02.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "task_anb_cnbn.json's word_pattern mixes Kleene star and alternation with exponents ('a^n b* (c^n|b^n) a c*') -- outside exponent_pattern's block grammar.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "'{$ a^n b^n c^m} union {d a^m b^n c^n}, n,m >= 1' -- the domain declaration trails OUTSIDE both union braces, so neither branch parses as a self-contained group.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{w in {a,b}* | w != x x for every decomposition w = x x} -- a universally-quantified 'for every decomposition' condition, not a single block/exponent pattern.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "Docker with tfl-lean4 image, or agent_system.lib.lean_ir, not available",
+          "count": 1
+        },
+        {
+          "type": "pytest.xfail",
+          "reason": "Known limitation (TODO.md §3, owned by a parallel llm_client.py change): same first-'{'-to-last-'}' issue as the set-builder case above, for a bare '{}' before an unfenced JSON object.",
+          "count": 1
+        },
+        {
+          "type": "pytest.xfail",
+          "reason": "Known limitation (TODO.md §3, owned by a parallel llm_client.py change): a brace pair in prose BEFORE an unfenced (no ```json) JSON object is included in the first-'{'-to-last-'}' substring the fallback strategy parses, so the whole thing fails to parse and nothing is returned. Documented here, not fixed here -- llm_client.py is out of scope for this change.",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "ui",
+      "passed": 106,
+      "passed_subtests": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xfailed": 0,
+      "seconds": 31.548,
+      "command": "python -m pytest ui_server/tests -q (Windows process termination rights required)",
+      "env": {
+        "TFL_ALLOW_LIVE": "0"
+      },
+      "junit_path": ".tfl_lab_runs/theory_audit/ui_privileged.xml",
+      "skip_reasons": []
+    }
+  ],
+  "lean": {
+    "status": "proved",
+    "axioms": [
+      "propext",
+      "Classical.choice",
+      "Quot.sound"
+    ],
+    "sha256": "39b73694dcf4637192c08cd8d18c82cf85c06bbe0bec4bd97e61002bc0e09fa8",
+    "elapsed": 56.77,
+    "scope": "Existing ticket50 theorem only; not formal verification of all pipeline code or all theory claims.",
+    "evidence_file": "lean_ticket50.json"
+  },
+  "additional_checks": {
+    "ll_finite_grammars": 150,
+    "ll_k_values": [
+      1,
+      2,
+      3
+    ],
+    "ll_comparisons": 450,
+    "ll_mismatches": 0,
+    "review_bounded_cfg_probes": 120,
+    "review_certificate_counterexamples_found": 0
+  },
+  "environment_retry": {
+    "ui_sandbox": {
+      "passed": 104,
+      "failed": 2,
+      "reason": "Sandbox prevented terminating own Windows test processes; clean privileged rerun passed all 106."
+    }
+  },
+  "limits": [
+    "Finite tests do not prove every Python algorithm or future LLM-generated proof.",
+    "Most Docker-dependent tests skipped in sandbox core run; ticket50 Lean proof separately rechecked with Docker access.",
+    "Slow historical exhaustive DPDA enumerations were not rerun; affected mathematical arguments were reviewed.",
+    "Original Yu/GG/RS/AU and original Ogden/interchange articles not all read in full; precise source boundaries are in individual reviews.",
+    "No paid model APIs or live pipeline runs were performed."
+  ],
+  "component_test_boundaries": "Individual REG/DCFL/LL reports record component runs before integration; the core and UI runs here are the final integrated runs.",
+  "theory_scope": {
+    "active_pipelines": [
+      "REG",
+      "CFL",
+      "DCFL",
+      "LL(k)"
+    ],
+    "legacy_excluded": [
+      "pumping_lemma/",
+      "reverse_morfism/"
+    ],
+    "claim_registry_entries": 100
+  },
+  "artifact_check": {
+    "browser": "Playwright Chromium",
+    "entries": 100,
+    "pipeline_counts": {
+      "REG": 8,
+      "CFL": 18,
+      "DCFL": 44,
+      "LL(k)": 30
+    },
+    "cfl_parikh_search_results": 3,
+    "corrected_status_results": 34,
+    "reset_results": 100,
+    "viewport_widths": [
+      390,
+      1280
+    ],
+    "page_horizontal_overflow": false,
+    "wide_verification_table_scrolls_locally": true,
+    "console_errors": 0,
+    "external_assets": 0,
+    "object_object_placeholders": 0,
+    "paid_api_calls": 0
+  }
+}

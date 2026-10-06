@@ -32,7 +32,7 @@ _SUPER_LINEAR_MARKERS = ("^2", "^3", "**2", "**3", "log", "2^", "!", "n*n")
 _SUGGESTED_AGENTS = {
     "regular": ["dfa_builder", "re_builder"],
     "non_regular": ["pumping", "nerode", "closure"],
-    "unknown": ["pumping", "nerode", "dfa_builder"],
+    "unknown": ["pumping", "nerode", "dfa_builder", "re_builder"],
 }
 
 
@@ -154,15 +154,10 @@ def _quantity_description(node: dict) -> str:
 
 
 def _is_palindromic_prefix_or_suffix(pred: dict) -> bool:
-    """Check if the decomposition is a palindromic prefix/suffix pattern.
+    """Recognize an adjacent reversal pair at the edge syntactically.
 
-    Patterns like w = v·rev(v)·u  or  w = u·v·rev(v)  with ∃v (|v|≥1)
-    mean "w starts/ends with a 2-char palindrome (aa or bb)" — finite memory.
-
-    The key: v·rev(v) appears at the start or end of concat_pattern,
-    and there is at least one OTHER part (u) absorbing the rest of w.
-    If v·rev(v) IS the entire word (no u), then it's "w is a palindrome"
-    which requires infinite memory.
+    This does not reduce an arbitrary even palindrome to two equal
+    symbols: abba is a counterexample to that former shortcut.
     """
     concat_pattern = pred.get("concat_pattern", [])
     if len(concat_pattern) < 2:
@@ -176,11 +171,11 @@ def _is_palindromic_prefix_or_suffix(pred: dict) -> bool:
         # Check if the non-reversed version is adjacent
         if i > 0 and concat_pattern[i - 1] == inner:
             # Found X, rev(X) pair. Is there anything else in the pattern?
-            if len(concat_pattern) > 2:
-                return True  # prefix/suffix palindrome — finite
+            if len(concat_pattern) > 2 and (i == 1 or i == len(concat_pattern) - 1):
+                return True
         if i < len(concat_pattern) - 1 and concat_pattern[i + 1] == inner:
             # Found rev(X), X pair
-            if len(concat_pattern) > 2:
+            if len(concat_pattern) > 2 and (i == 0 or i == len(concat_pattern) - 2):
                 return True
 
     return False
@@ -199,10 +194,10 @@ def _classify_decomposition(pred: dict, atoms: list[dict]) -> None:
     if has_rev and _is_palindromic_prefix_or_suffix(pred):
         atoms.append({
             "description": "palindromic prefix/suffix (vv^R as part of word)",
-            "memory_type": "finite",
+            "memory_type": "unknown",
             "reason": (
-                "palindromic prefix/suffix with ∃v,|v|≥1 reduces to "
-                "checking first/last 2 symbols (e.g. aa or bb) — finite memory"
+                "an unbounded even palindrome need not start/end with equal symbols "
+                "(e.g. abba); the decomposition needs a separate proof"
             ),
         })
     elif has_rev:
@@ -217,11 +212,11 @@ def _classify_decomposition(pred: dict, atoms: list[dict]) -> None:
             })
         else:
             atoms.append({
-                "description": "whole-word reversal pattern (e.g. w = u·rev(u))",
-                "memory_type": "infinite",
+                "description": "unbounded reversal decomposition",
+                "memory_type": "unknown",
                 "reason": (
-                    "reversal over unbounded parts requires "
-                    "unbounded memory (palindrome testing)"
+                    "reversal is a structural hint; regularity depends on the "
+                    "alphabet, surrounding parts, and constraints"
                 ),
             })
     else:
@@ -314,8 +309,8 @@ def _analyze_grammar_atoms(spec: dict, atoms: list[dict]) -> None:
     if has_nested:
         atoms.append({
             "description": "grammar with nested recursion (e.g. S->aSb)",
-            "memory_type": "infinite",
-            "reason": "nested recursion generates non-regular patterns",
+            "memory_type": "unknown",
+            "reason": "nested recursion alone does not decide regularity; other rules may generate a regular language",
         })
     elif all_right_linear:
         atoms.append({
@@ -346,8 +341,8 @@ def _analyze_regex_atoms(spec: dict, atoms: list[dict]) -> None:
     if spec.get("has_backreferences"):
         atoms.append({
             "description": "regex with backreferences",
-            "memory_type": "infinite",
-            "reason": "backreferences can encode non-regular patterns",
+            "memory_type": "unknown",
+            "reason": "backreferences can define regular or non-regular languages; analyze this pattern",
         })
     else:
         atoms.append({

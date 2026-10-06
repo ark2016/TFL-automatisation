@@ -746,7 +746,7 @@ def _pump_outcome(
         return "closed"
     if in_w3 is None or in_wp3 is None:
         return "inconclusive"
-    return "refuted"
+    return "inconclusive"
 
 
 _COND1_MAX_DECOMPOSITIONS = 600
@@ -799,12 +799,6 @@ def _check_condition1(
                         return prefix + y, prefix + z
 
                     outcome = _pump_outcome(oracle, pump)
-                    if outcome == "refuted":
-                        return "refuted", (
-                            f"condition (1) p={p}: window x[{start}:{end}]={window!r}, "
-                            f"split x2={x2!r}/x3={x3!r}/x4={x4!r} keeps both pumped "
-                            f"words in L at i=0,2,3"
-                        )
                     if outcome == "closed":
                         any_closed = True
                     elif outcome == "inconclusive":
@@ -875,12 +869,6 @@ def _check_condition2(
                         )
 
                     outcome = _pump_outcome(oracle, pump)
-                    if outcome == "refuted":
-                        return "refuted", (
-                            f"condition (2) p={p}: x2={x2!r} in tail x[{pos}:{n}], "
-                            f"y=({y1!r}+{y2!r}+{y3!r}), z=({z1!r}+{z2!r}+{z3!r}) "
-                            f"keeps both pumped words in L at i=0,2,3"
-                        )
                     if outcome == "closed":
                         any_closed = True
                     elif outcome == "inconclusive":
@@ -1120,6 +1108,13 @@ def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
         return isinstance(value, str) and len(value) > 0
 
     if technique == "nerode_classes":
+        if task_ir.get("alphabet") == []:
+            return _make_result(
+                "refuted", checks_run + ["nerode_nonempty_alphabet"],
+                sum(1 for value in passed if value),
+                ["Shallit's infinite-class theorem requires a nonempty alphabet; "
+                 "over the empty alphabet every language is finite and regular"],
+            )
         # dead_class_status is a closed enum, not a free-text field (VERDICT_POLICY.md
         # §4 dcfl/shallit): absent/invalid ⇒ this check fails ⇒ not_verified below;
         # "infinite" is a valid VALUE but makes the technique self-admittedly
@@ -1217,6 +1212,8 @@ def _verify_shallit(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
                 issues.append(semantic_issue)
             if semantic_status != "refuted":
                 n_passed += 1
+        elif semantic_issue:
+            issues.append(semantic_issue)
     elif status == "well_formed" and technique == "prefix_continuation":
         semantic_status, semantic_check, semantic_issue = (
             _semantic_check_shallit_prefix_continuation(proof_sketch, task_ir)
@@ -1279,7 +1276,7 @@ _DEAD_CLASS_MAX_WORD_LEN = 8
 _DEAD_CLASS_WORD_LIMIT = 5000
 # _continuable's node budget for the dead-class search: with max_extra now
 # scaling up to 2 * _DEAD_CLASS_MAX_WORD_LEN + 2 = 18, an exhaustive DFS
-# proving a genuine "no continuation" (which must visit the whole bounded
+# checking "no continuation within this bound" (which visits the bounded
 # tree, unlike finding a witness, which can return early) needs real
 # headroom -- well beyond _continuable's own 20_000 default -- so a
 # longer/larger-alphabet word doesn't spuriously exceed budget (and get
@@ -1329,60 +1326,13 @@ def _normalize_dead_class_status(raw: Any) -> Any:
 def _check_dead_class_finite(
     task_ir: dict, claimed_status: str | None,
 ) -> tuple[str | None, list[str] | None, list[str]]:
-    """Step 2, dead-class part (VERDICT_POLICY.md §4 dcfl/shallit): cross-
-    check the proof's own ``dead_class_status`` claim (``"empty"``, after
-    :func:`_normalize_dead_class_status` maps the retired legacy value
-    ``"finite"`` onto it) against the oracle. Runs ALWAYS whenever a membership
-    oracle exists for this task, independent of the shape of
-    ``distinguishing_suffix`` (the caller, ``_semantic_check_shallit_nerode``,
-    no longer gates this on a literal suffix).
+    """Look for continuations without mistaking a finite failure for deadness.
 
-    Enumerates EVERY word of length <= 8 over the task alphabet (capped at
-    5000 words, shortest first) and, for each, checks continuability into L
-    via ``_continuable`` — an EXHAUSTIVE bounded search of up to
-    ``max(6, 2 * len(w) + 2)`` more symbols (never fewer than 6, but growing
-    with the word's own length), not a truncated heuristic, so a ``False``
-    result is a genuine (if bounded) counterexample. The bound must scale
-    with ``len(w)``: a fixed ``+6`` regardless of ``w``'s length is unsound
-    once ``w`` itself is close to the 8-symbol enumeration cap. Two
-    concrete counterexamples drove the ``2 * len(w) + 2`` choice (a plain
-    ``len(w)`` is NOT always enough): (1) the generic "double the word to
-    close it" witness that proves many languages' dead class empty (e.g.
-    {ww^R}'s own `x -> x·x^R`, shallit.md's own worked example) needs
-    exactly ``len(w)`` extra symbols — an 8-symbol word needs up to 8 more,
-    not 6; a fixed ``+6`` bound falsely called such words dead ('aaaaaab'
-    wrongly 'refuted' an 'empty' claim, needing the 7-symbol continuation
-    'baaaaaa'); (2) `task_u1au2_u3au4`'s own language needs as much as
-    ``len(w) + 2`` for an all-one-letter word (e.g. a run of b's has to
-    wait for two fresh 'a's plus a padding block at least as long as the
-    run itself) — strictly more than ``len(w)``, which is why the bound
-    uses ``2 * len(w) + 2`` and not just ``len(w)``. On `task_grammar_aSSb`
-    the old fixed bound also wrongly listed 'aaaaaaa'/'aaaaaaaa' (7/8 a's)
-    as dead even though a⁷b⁷, a⁸b⁸ ∈ L (continuations of length 7/8).
-    Words where the oracle can't decide some extension, or where the
-    deeper search exceeds its node budget, are skipped entirely
-    (``_continuable`` returns ``None``; R1: absence of evidence is not
-    evidence) — never miscounted as dead.
-
-    - ``claimed_status == "empty"``: ANY single dead word found ⇒
-      contradicted. D is closed under right-extension: if x has no
-      continuation into L, then neither does xy for any y (a continuation z
-      of xy would make yz a continuation of x). So a nonempty D is always
-      infinite (xΣ* ⊆ D for any x ∈ D) -- one confirmed dead word is enough,
-      there is no theoretical basis for demanding dead words at
-      multiple/every length first.
-    - any other ``claimed_status`` (``"infinite"``, missing, invalid,
-      including the legacy ``"finite"`` -- callers normalize that to
-      ``"empty"`` via :func:`_normalize_dead_class_status` before calling
-      this function): this function does nothing (those cases are handled
-      structurally by ``_verify_shallit`` itself, or aren't a claim this
-      check can test).
-
-    Returns ``(outcome, evidence_words, issues)``:
-    - ``(None, None, [])`` — no oracle / no alphabet / no contradiction
-      found (genuinely inconclusive or consistent with the claim; the
-      caller must NOT treat this as confirming the claim either).
-    - ``("empty_contradicted", [word], [msg])`` (``claimed_status == "empty"``)
+    Finding wz in L proves that w is live. Exhausting the bounded search
+    proves only that no short z was found; no global upper bound on the
+    shortest extension follows from a membership oracle. Therefore this
+    helper never refutes dead_class_status without an exact prefix-language
+    certificate (VERDICT_POLICY.md section 4).
     """
     if claimed_status != "empty":
         return None, None, []
@@ -1397,16 +1347,13 @@ def _check_dead_class_finite(
         max_extra = max(6, 2 * len(w) + 2)
         cont = _continuable(oracle, w, alphabet, max_extra=max_extra,
                              node_budget=_DEAD_CLASS_NODE_BUDGET)
-        if cont is None or cont:
+        if cont:
             continue
-        # w is dead (provably no continuation into L within the bound) --
-        # D is not empty.
-        return "empty_contradicted", [w], [
-            f"dead_class_status claims 'empty' but {w!r} has NO continuation "
-            "into L within an exhaustive bounded search (up to "
-            f"{max_extra} more symbols) -- the dead class D is not empty"
+        return None, None, [
+            f"dead_class_status unresolved: {w!r} has no continuation found "
+            f"within {max_extra} extra symbols; this does not prove it is dead"
         ]
-    return None, None, []
+    return "bounded_pass", None, []
 
 
 def _semantic_check_shallit_nerode(
@@ -1446,21 +1393,21 @@ def _semantic_check_shallit_nerode(
     dead_outcome, _dead_evidence, dead_issues = _check_dead_class_finite(
         task_ir, claimed_status,
     )
-    if dead_outcome is not None:
+    if dead_outcome == "empty_contradicted":
         return "refuted", check_name + " + dead_class_status", "; ".join(dead_issues)
 
     distinguishing_suffix = proof_sketch.get("distinguishing_suffix")
     if not isinstance(distinguishing_suffix, str) or not distinguishing_suffix:
-        return None, check_name, ""
+        return None, check_name, "; ".join(dead_issues)
 
     if any(ch not in alphabet_set for ch in distinguishing_suffix):
         # Contains variables/prose (e.g. "b a^N b u^R") — not a literal we
         # can instantiate mechanically.
-        return None, check_name, ""
+        return None, check_name, "; ".join(dead_issues)
 
     oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
-        return None, check_name, ""
+        return None, check_name, "; ".join(dead_issues)
 
     status: str | None = None
     issue = ""
@@ -1502,7 +1449,10 @@ def _semantic_check_shallit_nerode(
             continue
         n_definite += 1
         if not ((in_u and not in_v) or (in_v and not in_u)):
-            bad.append(f"u={u!r}, v={v!r}: uw in L={in_u}, vw in L={in_v} (same class)")
+            bad.append(
+                f"u={u!r}, v={v!r}: uw in L={in_u}, vw in L={in_v} "
+                "(this suffix does not distinguish the pair)"
+            )
 
     if bad:
         return "refuted", check_name, (
@@ -1554,6 +1504,11 @@ def _semantic_check_shallit_nerode(
         # NOT evidence against the proof (VERDICT_POLICY.md §4 fix) — leave
         # status None so trust stays at well_formed.
 
+    if dead_outcome is None:
+        # Successful sampled pairs cannot discharge an unresolved premise
+        # about the dead class; retain both the lower trust and its reason.
+        status = None
+    issue = "; ".join([*dead_issues, *([issue] if issue else [])])
     return status, check_name, issue
 
 

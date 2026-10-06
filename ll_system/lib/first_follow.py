@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import time
-
-_MAX_ITER = 1000
+from collections import defaultdict, deque
 
 
 # ---------------------------------------------------------------------------
@@ -13,6 +12,17 @@ _MAX_ITER = 1000
 def _is_epsilon_rhs(rhs: list[str]) -> bool:
     """Return True if *rhs* represents an epsilon production."""
     return len(rhs) == 0 or rhs == ["ε"]
+
+
+def _rule_dependencies(grammar: dict) -> dict[str, set[int]]:
+    """Index rules to revisit when a right-hand-side nonterminal changes."""
+    dependencies: dict[str, set[int]] = defaultdict(set)
+    nonterminals = set(grammar["nonterminals"])
+    for index, rule in enumerate(grammar["rules"]):
+        for symbol in rule["rhs"]:
+            if symbol in nonterminals:
+                dependencies[symbol].add(index)
+    return dependencies
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +36,7 @@ def k_concat(X: set[str], Y: set[str], k: int) -> set[str]:
     characters.  Strings already of length k are left unchanged (y is ignored).
     """
     if k == 0:
-        return {""}
+        return {""} if X and Y else set()
     result: set[str] = set()
     for x in X:
         for y in Y:
@@ -41,22 +51,26 @@ def k_concat(X: set[str], Y: set[str], k: int) -> set[str]:
 def compute_nullable(grammar: dict) -> set[str]:
     """Return the set of nonterminals A such that A =>* ε.
 
-    Uses fixed-point iteration (Kleene ascending chain).
+    Uses a dependency worklist until the finite ascending chain stabilizes.
     """
     nullable: set[str] = set()
 
-    for _ in range(_MAX_ITER):
-        changed = False
-        for rule in grammar["rules"]:
-            lhs: str = rule["lhs"]
-            rhs: list[str] = rule["rhs"]
-            if lhs in nullable:
-                continue
-            if _is_epsilon_rhs(rhs) or all(sym in nullable for sym in rhs):
-                nullable.add(lhs)
-                changed = True
-        if not changed:
-            break
+    dependencies = _rule_dependencies(grammar)
+    pending = deque(range(len(grammar["rules"])))
+    queued = set(pending)
+    while pending:
+        index = pending.popleft()
+        queued.remove(index)
+        rule = grammar["rules"][index]
+        lhs, rhs = rule["lhs"], rule["rhs"]
+        if lhs not in nullable and (
+            _is_epsilon_rhs(rhs) or all(sym in nullable for sym in rhs)
+        ):
+            nullable.add(lhs)
+            for dependent in dependencies.get(lhs, set()):
+                if dependent not in queued:
+                    pending.append(dependent)
+                    queued.add(dependent)
 
     return nullable
 
@@ -78,8 +92,6 @@ def compute_first_k_seq(
     Returns a set of strings of length ≤ k; ``""`` in the result means *seq*
     can derive ε.
     """
-    if k == 0:
-        return {""}
     if not seq:
         return {""}
 
@@ -100,8 +112,9 @@ def compute_first_k_seq(
         # k_concat handles the truncation correctly.
         result = k_concat(result, sym_first, k)
 
-        # If no prefix in *result* can still grow (all are length k), stop early.
-        if all(len(s) >= k for s in result):
+        # Even a length-k prefix needs a productive suffix: FIRST_k consists
+        # of prefixes of complete terminal derivations, not partial ones.
+        if not result:
             break
 
     return result
@@ -117,7 +130,8 @@ def compute_first_k(grammar: dict, k: int) -> dict[str, set[str]]:
     Returns a dict mapping each nonterminal to its FIRST_k set (strings of
     length ≤ k; ``""`` means A can derive ε).
 
-    Uses fixed-point iteration (at most *_MAX_ITER* passes).
+    Uses a dependency worklist with no arbitrary iteration cutoff. Each set
+    grows monotonically within the finite universe of strings of length ≤ k.
     """
     nonterminals: list[str] = grammar["nonterminals"]
     nullable = compute_nullable(grammar)
@@ -125,24 +139,21 @@ def compute_first_k(grammar: dict, k: int) -> dict[str, set[str]]:
     # Initialise: every nonterminal starts with an empty FIRST_k set.
     first_k: dict[str, set[str]] = {nt: set() for nt in nonterminals}
 
-    for _ in range(_MAX_ITER):
-        changed = False
-        for rule in grammar["rules"]:
-            lhs: str = rule["lhs"]
-            rhs: list[str] = rule["rhs"]
-
-            if _is_epsilon_rhs(rhs):
-                new_strings = {""}
-            else:
-                new_strings = compute_first_k_seq(rhs, grammar, k, first_k, nullable)
-
-            before = len(first_k[lhs])
+    dependencies = _rule_dependencies(grammar)
+    pending = deque(range(len(grammar["rules"])))
+    queued = set(pending)
+    while pending:
+        index = pending.popleft()
+        queued.remove(index)
+        rule = grammar["rules"][index]
+        lhs, rhs = rule["lhs"], rule["rhs"]
+        new_strings = compute_first_k_seq(rhs, grammar, k, first_k, nullable)
+        if not new_strings.issubset(first_k[lhs]):
             first_k[lhs].update(new_strings)
-            if len(first_k[lhs]) != before:
-                changed = True
-
-        if not changed:
-            break
+            for dependent in dependencies.get(lhs, set()):
+                if dependent not in queued:
+                    pending.append(dependent)
+                    queued.add(dependent)
 
     return first_k
 
@@ -168,7 +179,7 @@ def compute_follow_k(
     For each rule B → α A β:
         FOLLOW_k(A) ⊇ k_concat(FIRST_k(β), FOLLOW_k(B), k)
 
-    Iterates to fixed point (at most *_MAX_ITER* passes).
+    Propagates changes through a worklist until the finite fixed point.
     """
     nonterminals: list[str] = grammar["nonterminals"]
     start: str = grammar["start"]
@@ -179,38 +190,44 @@ def compute_follow_k(
     eos = "$" * k if k > 0 else ""
     follow_k[start].add(eos)
 
-    for _ in range(_MAX_ITER):
-        changed = False
-        for rule in grammar["rules"]:
-            lhs_b: str = rule["lhs"]
-            rhs: list[str] = rule["rhs"]
-
-            if _is_epsilon_rhs(rhs):
-                continue
-
-            for i, sym in enumerate(rhs):
-                if sym == "ε":
-                    continue
-                if sym not in nonterminals:
-                    # sym is a terminal — terminals have no FOLLOW set
-                    continue
-
-                # β is everything after position i in the rhs
-                beta = rhs[i + 1:]
-
-                # FIRST_k(β) ⊕_k FOLLOW_k(B)
-                first_beta = compute_first_k_seq(beta, grammar, k, first_k, nullable)
-                contribution = k_concat(first_beta, follow_k[lhs_b], k)
-
-                before = len(follow_k[sym])
-                follow_k[sym].update(contribution)
-                if len(follow_k[sym]) != before:
-                    changed = True
-
-        if not changed:
-            break
+    edges = _follow_dependencies(grammar, k, first_k, nullable)
+    pending = deque([start])
+    queued = {start}
+    while pending:
+        lhs = pending.popleft()
+        queued.remove(lhs)
+        for symbol, first_tail in edges.get(lhs, []):
+            contribution = k_concat(first_tail, follow_k[lhs], k)
+            if not contribution.issubset(follow_k[symbol]):
+                follow_k[symbol].update(contribution)
+                if symbol not in queued:
+                    pending.append(symbol)
+                    queued.add(symbol)
 
     return follow_k
+
+
+def _follow_dependencies(
+    grammar: dict, k: int, first_k: dict[str, set[str]], nullable: set[str]
+) -> dict[str, list[tuple[str, set[str]]]]:
+    """Transfer continuations at occurrences with a productive left prefix.
+
+    S ⇒*_lm w A α requires the preceding symbols to derive terminal w.
+    An occurrence behind a nonproductive symbol can never be reached there.
+    """
+    edges: dict[str, list[tuple[str, set[str]]]] = defaultdict(list)
+    nonterminals = set(grammar["nonterminals"])
+    for rule in grammar["rules"]:
+        rhs = rule["rhs"]
+        for index, symbol in enumerate(rhs):
+            if symbol in nonterminals:
+                first_tail = compute_first_k_seq(
+                    rhs[index + 1:], grammar, k, first_k, nullable
+                )
+                edges[rule["lhs"]].append((symbol, first_tail))
+                if not first_k[symbol]:
+                    break
+    return edges
 
 
 # ---------------------------------------------------------------------------
@@ -283,11 +300,12 @@ def compute_local_follow_sets(
     not LL(2) only when {aa, ba} is tested together as one context).
 
     The strong-LL(k) director-set test uses a single global FOLLOW_k(A)
-    instead and is strictly weaker for k ≥ 2.
+    instead and is strictly more restrictive for k ≥ 2.
 
     Fixed-point construction:
         σ(S) ∋ {frozenset({""})}  (start symbol followed by end-of-input only)
-        for each rule A → X1 … Xn, each L ∈ σ(A), each nonterminal Xi:
+        for each rule A → X1 … Xn, each L ∈ σ(A), each nonterminal Xi
+        whose preceding symbols X1 … X_{i-1} derive a terminal string:
             σ(Xi) ⊇ {frozenset(k_concat(FIRST_k(X_{i+1}…Xn), L, k))}
     iterated to a fixed point. Each individual σ(A) is finite (⊆ 2^(Σ^{≤k})),
     so this always terminates in the absence of a *deadline*, though the
@@ -296,7 +314,7 @@ def compute_local_follow_sets(
     экспоненциально — нужен бюджет").
 
     Returns ``(sigma, complete)``. *complete* is False when *deadline* (a
-    ``time.monotonic()`` timestamp) is reached, or the iteration cap is hit,
+    ``time.monotonic()`` timestamp) is reached,
     before the fixed point is reached; in that case *sigma* is a sound but
     possibly incomplete (under-approximated) set of local follow contexts —
     safe to use for reporting conflicts actually found, but not to certify
@@ -309,32 +327,17 @@ def compute_local_follow_sets(
     if start in sigma:
         sigma[start].add(frozenset({""}))
 
-    rules: list[tuple[str, list[str]]] = [
-        (r["lhs"], [] if _is_epsilon_rhs(r["rhs"]) else list(r["rhs"]))
-        for r in grammar["rules"]
-    ]
-
-    for _ in range(_MAX_ITER):
-        changed = False
-        for lhs, rhs in rules:
-            if lhs not in sigma:
-                continue
-            local_contexts = list(sigma[lhs])
-            if not local_contexts:
-                continue
-            for i, sym in enumerate(rhs):
-                if sym == "ε" or sym not in nonterminals:
-                    continue
-                tail = rhs[i + 1:]
-                first_tail = compute_first_k_seq(tail, grammar, k, first_k, nullable)
-                for local_follow in local_contexts:
-                    new_context = frozenset(k_concat(first_tail, set(local_follow), k))
-                    if new_context not in sigma[sym]:
-                        sigma[sym].add(new_context)
-                        changed = True
+    edges = _follow_dependencies(grammar, k, first_k, nullable)
+    pending = deque((start, context) for context in sigma.get(start, set()))
+    while pending:
+        if deadline is not None and time.monotonic() > deadline:
+            return sigma, False
+        lhs, local_follow = pending.popleft()
+        for symbol, first_tail in edges.get(lhs, []):
+            new_context = frozenset(k_concat(first_tail, set(local_follow), k))
+            if new_context not in sigma[symbol]:
+                sigma[symbol].add(new_context)
+                pending.append((symbol, new_context))
             if deadline is not None and time.monotonic() > deadline:
                 return sigma, False
-        if not changed:
-            return sigma, True
-
-    return sigma, False
+    return sigma, True

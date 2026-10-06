@@ -1012,6 +1012,14 @@ class AnthropicClient:
             RetryableAPIError: every attempt (``self.max_retries``, default
                 3, exponential backoff + jitter) hit a retryable error.
         """
+        # Own transport retries here, including for SDK clients supplied by
+        # callers. Otherwise each wrapper attempt also spends the SDK's
+        # default retry budget. A request-local copy preserves the caller's
+        # client settings; lightweight fake clients need no options API.
+        sdk_retries = getattr(client, "max_retries", None)
+        with_options = getattr(client, "with_options", None)
+        if isinstance(sdk_retries, int) and sdk_retries and callable(with_options):
+            client = with_options(max_retries=0)
         requested = output_schema is not None
         if requested and _model_schema_known_rejected(model):
             result = self._call_once(
@@ -1288,14 +1296,11 @@ class LLMRunner:
 
     # ---- main API ---------------------------------------------------------
 
-    # Agents that return plain text (not JSON)
-    _RAW_TEXT_AGENTS = frozenset({"formalizer"})
-
     def run_agent(self, agent_name: str, input_data: Any = None) -> dict:
         """Call an LLM agent and return parsed output.
 
-        For most agents: parses JSON from the response.
-        For formalizer: returns raw text (Lean 4 code) wrapped in evidence.
+        Parses the agent's JSON contract, including the formalizer's
+        ``proof_body``/``lemmas_used``/``notes`` response.
 
         Never returns ``None``: an API error, a refusal, or a response that
         is still not valid JSON after one retry all come back as an
@@ -1310,7 +1315,7 @@ class LLMRunner:
         effort = self._get_effort(agent_name)
         # Structured outputs (TODO.md §3 M): None for agents with no closed
         # top-level contract (input_parser's shape depends on IR `kind`) or
-        # that return raw text (formalizer) — those keep the legacy
+        # no server-side schema (formalizer) — those keep the legacy
         # "extract JSON from prose" path.
         from agent_system.lib.agent_output_schema import schema_for
         output_schema = schema_for(self._resolve_prompt_name(agent_name))
@@ -1343,28 +1348,6 @@ class LLMRunner:
                 "insights, hypotheses to verify, or mistakes to address:\n\n"
                 f"{student_notes}\n"
             )
-
-        # Formalizer: return raw text, not JSON
-        if agent_name in self._RAW_TEXT_AGENTS:
-            try:
-                raw = self._call_raw(system_prompt, user_msg, model, effort, agent_name=agent_name)
-            except (_AgentAPIError, _AgentRefusal) as exc:
-                return self._error_output(agent_name, str(exc))
-            # Strip markdown fences if present
-            code = raw.strip()
-            if code.startswith("```"):
-                lines = code.split("\n")
-                lines = lines[1:]  # remove opening fence
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                code = "\n".join(lines)
-            return {
-                "module": agent_name,
-                "status": "success",
-                "evidence": {"lean_code": code, "output": code},
-                "confidence": 0.8,
-                "errors": [],
-            }
 
         # Standard JSON agents
         try:

@@ -1,0 +1,448 @@
+{
+  "date": "2026-09-30",
+  "branch": "fix/architecture-audit-2026-09-30",
+  "base_commit": "a616009af920f370ecd5e4194fb028a37917e5a5",
+  "paid_api_calls": 0,
+  "runs": [
+    {
+      "name": "final_core",
+      "command": "python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests tests tfl_eval/tests -q -m 'not slow' -n 2 --dist loadfile",
+      "env": {
+        "TFL_ALLOW_LIVE": "0"
+      },
+      "passed": 2880,
+      "passed_subtests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 99,
+      "xfailed": 2,
+      "junit_testcases": 2994,
+      "seconds": 103.453,
+      "timestamp": "2026-09-30T14:56:14.123819+03:00",
+      "junit_path": ".tfl_lab_runs/architecture_review/final_core.xml",
+      "skip_reasons": [
+        {
+          "type": "pytest.skip",
+          "reason": "Docker with tfl-lean4 image not available",
+          "count": 71
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "Docker with the tfl-lean4 image not available",
+          "count": 19
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{ww | w in {a,b}*} -- a repeated-WORD pattern (w then w again), not exponent/block notation over letters.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{a^(2^n) | n>=0} -- nested exponent (2^n as an exponent's own exponent); exponent_pattern's arithmetic grammar has no '^' operator.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{w in {a,b}* | #a(w) = 2*#b(w)} -- a symbol-count predicate over an unconstrained string, not expressible as letter/word exponent blocks.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{w c reverse(w) | w in {a,b}*} -- a reverse-pattern set_builder (needs a `variables` IR with a 'w^R' word pattern, like task_wvaavRwR.json, not exponent notation).",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{w reverse(w) | w in {a,b}*} -- same reverse-pattern gap as dcfl-02.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "task_anb_cnbn.json's word_pattern mixes Kleene star and alternation with exponents ('a^n b* (c^n|b^n) a c*') -- outside exponent_pattern's block grammar.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "'{$ a^n b^n c^m} union {d a^m b^n c^n}, n,m >= 1' -- the domain declaration trails OUTSIDE both union braces, so neither branch parses as a self-contained group.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "{w in {a,b}* | w != x x for every decomposition w = x x} -- a universally-quantified 'for every decomposition' condition, not a single block/exponent pattern.",
+          "count": 1
+        },
+        {
+          "type": "pytest.skip",
+          "reason": "Docker with tfl-lean4 image, or agent_system.lib.lean_ir, not available",
+          "count": 1
+        },
+        {
+          "type": "pytest.xfail",
+          "reason": "Known limitation (TODO.md §3, owned by a parallel llm_client.py change): same first-'{'-to-last-'}' issue as the set-builder case above, for a bare '{}' before an unfenced JSON object.",
+          "count": 1
+        },
+        {
+          "type": "pytest.xfail",
+          "reason": "Known limitation (TODO.md §3, owned by a parallel llm_client.py change): a brace pair in prose BEFORE an unfenced (no ```json) JSON object is included in the first-'{'-to-last-'}' substring the fallback strategy parses, so the whole thing fails to parse and nothing is returned. Documented here, not fixed here -- llm_client.py is out of scope for this change.",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "final_ui",
+      "command": "python -m pytest ui_server/tests -q",
+      "env": {
+        "TFL_ALLOW_LIVE": "0"
+      },
+      "passed": 106,
+      "passed_subtests": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xfailed": 0,
+      "junit_testcases": 106,
+      "seconds": 31.985,
+      "timestamp": "2026-09-30T15:02:13.306970+03:00",
+      "junit_path": ".tfl_lab_runs/architecture_review/final_ui.xml",
+      "skip_reasons": []
+    },
+    {
+      "name": "slow",
+      "command": "python -m pytest -q -m slow -n 2",
+      "env": {
+        "TFL_ALLOW_LIVE": "0"
+      },
+      "passed": 2,
+      "passed_subtests": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xfailed": 0,
+      "junit_testcases": 2,
+      "seconds": 21.067,
+      "timestamp": "2026-09-30T14:50:07.971760+03:00",
+      "junit_path": ".tfl_lab_runs/architecture_review/slow.xml",
+      "skip_reasons": []
+    },
+    {
+      "name": "final_lean_semantics",
+      "command": "python -m pytest dcfl_system/tests/test_constraint_semantics.py -q",
+      "env": {
+        "TFL_ALLOW_LIVE": "0"
+      },
+      "passed": 24,
+      "passed_subtests": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xfailed": 0,
+      "junit_testcases": 24,
+      "seconds": 28.783,
+      "timestamp": "2026-09-30T15:02:33.734060+03:00",
+      "junit_path": ".tfl_lab_runs/architecture_review/final_lean_semantics.xml",
+      "skip_reasons": []
+    }
+  ],
+  "overlap_note": "final_lean_semantics repeats 22 pure tests from final_core and executes 2 previously skipped Docker tests. Subtests are reported separately.",
+  "build": {
+    "command": "python -m build --wheel --no-isolation",
+    "status": "passed",
+    "smoke": "six pipeline/UI/eval modules imported from extracted wheel with python -I; all module origins checked"
+  },
+  "remote_ci_run": false,
+  "ticket50": {
+    "proof_sha256": "39b73694dcf4637192c08cd8d18c82cf85c06bbe0bec4bd97e61002bc0e09fa8",
+    "changed": false,
+    "note": "Existing proof was checked earlier in this review; this revision does not modify it."
+  },
+  "fixed_findings": [
+    "F01",
+    "F02",
+    "F03",
+    "F04",
+    "F05",
+    "F06",
+    "F07",
+    "F08",
+    "F09"
+  ],
+  "additional_fixes": [
+    "pumping exponent quantifiers",
+    "unknown oracle results and epsilon",
+    "bounded dead-class search",
+    "Ogden unmarked windows",
+    "interchange context count",
+    "Shallit L2 distinguishing suffix",
+    "UI completed/log race"
+  ],
+  "limitations": [
+    "No live model evaluation or paid API calls",
+    "No claim of complete formal verification of the Python system",
+    "Two existing JSON extraction cases remain xfailed",
+    "Most Docker tests skipped under sandbox; two changed semantics cases rerun with Docker",
+    "Unsupported oracle families remain explicitly skipped",
+    "LL time budget is not a wall-clock limit on exact FIRST/FOLLOW"
+  ],
+  "source_review": {
+    "review_date": "2026-09-30",
+    "scope": "Focused mathematical audit of CFL/DCFL trust gates, pumping/Ogden/Yu/Shallit/interchange statements and selected LL(k) definitions; not an exhaustive verification of all examples, papers or code.",
+    "conclusion": "Confirmed quantifier and finite-search errors were fixed. A bounded search is diagnostic evidence, not a universal proof. A valid original CFG is decisive evidence that its whole generated language is CFL. Uploaded Coq papers support these mathematical distinctions but do not certify this repository's Python or Lean implementation.",
+    "sources": [
+      {
+        "id": "R-Pump",
+        "title": "Formalization of the pumping lemma for context-free languages",
+        "authors": "Marcus V. M. Ramos, Ruy J. G. B. de Queiroz, Nelma Moreira, Jose Carlos Bacelar Almeida",
+        "url": "https://arxiv.org/abs/1510.04748",
+        "local_path": "C:/Users/Admin/Downloads/Formalization of the pumping lemma for context-free languages.pdf",
+        "total_pdf_pages": 13,
+        "version_evidence": "Title page prints arXiv:1510.04748v1, 16 Oct 2015; preprint date August 26, 2018; PDF creation metadata 2018-09-10. These dates are reported separately, not silently treated as one publication date.",
+        "reviewed_locations": [
+          "PDF page 1: title, authors, Coq scope",
+          "PDF page 7: Lemma pumping_lemma; definitions lang, lang_eq, cfl and lang_of_g"
+        ],
+        "verified_claims": [
+          "Pumping quantifiers are exists bound, forall sufficiently long member, exists decomposition, forall natural pumping exponent.",
+          "Context-free means generated by some context-free grammar.",
+          "The displayed Coq theorem carries explicit excluded-middle premises about empty/nonempty members; classical use may discharge them, but they are not omitted from the evidence record."
+        ],
+        "visual_check": ".tfl_lab_runs/architecture_review/ramos_pumping_p7.png was rendered and inspected.",
+        "limits": "Read the stated definitions and theorem, not every proof step. The authors' Coq development was not compiled. This is not Lean certification. No complete PDF was copied into the repository."
+      },
+      {
+        "id": "R-CFL",
+        "title": "Formalization of context-free language theory",
+        "authors": "Marcus V. M. Ramos, Ruy J. G. B. de Queiroz, Nelma Moreira, Jose Carlos Bacelar Almeida",
+        "url": "https://arxiv.org/abs/1510.09092",
+        "local_path": "C:/Users/Admin/Downloads/Formalization of context-free language theory.pdf",
+        "total_pdf_pages": 29,
+        "version_evidence": "Title page prints arXiv:1510.09092v1, 30 Oct 2015; preprint date March 6, 2022; PDF creation metadata 2024-07-15.",
+        "reviewed_locations": [
+          "PDF pages 1, 3-4: scope, finite cfg record, single-nonterminal LHS and list RHS, derivations",
+          "PDF pages 10-15: grammar union/concatenation/star constructions and language closure statements; especially page 15 l_uni_is_cfl, l_cat_is_cfl, l_clo_is_cfl"
+        ],
+        "verified_claims": [
+          "A finite well-formed CFG is itself a CFL witness, including empty-language and epsilon cases.",
+          "The paper states and formalizes CFL union, concatenation and Kleene-star closure.",
+          "Page 3 explicitly distinguishes its declarative Prop-based representation from direct executable-code extraction."
+        ],
+        "limits": "Does not validate our CYK implementation, IR parser, CFG equivalence checks, DCFL/LL classification, or every simplification/CNF proof. No Coq compilation or full PDF copy was performed."
+      },
+      {
+        "id": "Yamakami-v3",
+        "title": "Intersection and Union Hierarchies of Deterministic Context-Free Languages and Pumping Lemmas",
+        "author": "Tomoyuki Yamakami",
+        "url": "https://arxiv.org/pdf/2112.09383v3",
+        "version_evidence": "arXiv v3, 6 October 2025; 26 PDF pages",
+        "reviewed_locations": [
+          "PDF page 7, Lemma 3.2, and surrounding relation to Yu's lemma",
+          "PDF pages 1-2: closure background"
+        ],
+        "verified_claims": [
+          "At least one of the two pumping alternatives holds; the alternatives are not a conjunction.",
+          "Alternative 1 permits a pair of pumped factors anywhere in the common prefix, within a bounded window.",
+          "Alternative 2 pumps a suffix-window factor in the prefix synchronously with factors in each suffix.",
+          "The displayed state-dependent bound applies to an n-state DPDA in ideal shape.",
+          "No matching-first-suffix-letter hypothesis appears in Lemma 3.2; keeping it in our counterexample contract restricts witnesses and does not invalidate the implication."
+        ],
+        "limits": "The lemma statement and relevant definitions were checked; its entire machine-normalization and pumping proof was not independently reconstructed. Original Yu 1989 full text was not retrieved."
+      },
+      {
+        "id": "Hoogeboom-Shallit",
+        "title": "Slides accompanying A Second Course in Formal Languages and Automata Theory",
+        "author": "Hendrik Jan Hoogeboom",
+        "url": "https://liacs.leidenuniv.nl/~hoogeboomhj/second/secondcourse.pdf",
+        "course_url": "https://liacs.leidenuniv.nl/~hoogeboomhj/second/",
+        "total_pdf_pages": 235,
+        "reviewed_locations": [
+          "PDF page 109: ordinary CFL pumping quantifiers",
+          "PDF page 110, slide IV 21, Lemma 4.3.1: marked-position Ogden formulation",
+          "PDF page 116, slide IV 26, Lemma 4.5.1: interchange cardinality and fixed lengths",
+          "PDF page 119, slide IV 29, Theorem 4.5.4: square-containing language example",
+          "PDF pages 129-130: DCFL complement",
+          "PDF page 132, slide IV 39, Theorem 4.7.4: one infinite Nerode class for a DCFL",
+          "PDF page 134, slide IV 40: prefix-continuation observation"
+        ],
+        "verified_claims": [
+          "Ogden bounds marked positions, not total window length.",
+          "Interchange supplies a quantitative lower bound; common middle factors alone do not bound the number of surrounding contexts.",
+          "Shallit's necessary condition concerns all Nerode classes, including the dead class; infinitely many pairwise distinguishable representatives alone is insufficient."
+        ],
+        "limits": "This is a university course source linked to the book, not the original book text or an independent check of every proof. The audit does not certify the entire closure catalogue, every historical example, or every reference in THEORY.md."
+      },
+      {
+        "id": "Local-course",
+        "title": "IU-9 course notes: CFL pumping lemma",
+        "local_path": "../iu9-tfl-practice/Теория/Лемма о накачке для КС-языков.md",
+        "reviewed_locations": [
+          "Complete short theorem note"
+        ],
+        "verified_claims": [
+          "Matches the ordinary pumping quantifier order used in the fix."
+        ],
+        "limits": "Course exercise solutions are secondary material and may contain mistakes; the sibling course repository was not audited exhaustively."
+      }
+    ],
+    "unverified_reference_boundaries": [
+      {
+        "title": "S. Yu, A pumping lemma for deterministic context-free languages (1989)",
+        "url": "https://doi.org/10.1016/0020-0190(89)90108-7",
+        "status": "Original full text not retrieved; the needed machine-form statement was checked in Yamakami Lemma 3.2 instead."
+      },
+      {
+        "title": "Rosenkrantz and Stearns, Properties of deterministic top-down grammars (1970)",
+        "url": "https://doi.org/10.1016/S0019-9958(70)90446-8",
+        "status": "Publisher abstract confirms fixed-k decidability and DPDA connection, but full text was unavailable. It does not independently validate every local LL algorithm formula."
+      },
+      {
+        "title": "Aho and Ullman, The Theory of Parsing, Translation and Compiling, vol. 1",
+        "status": "Full book text was not retrieved. Fixed-point/productivity/minimum-search corrections were checked against the stated definitions and concrete regressions, not claimed to be a fresh line-by-line source verification."
+      },
+      {
+        "title": "Ginsburg and Greibach, Deterministic context free languages (1966)",
+        "status": "Original full text not retrieved; the full DCFL closure catalogue, especially MAX/MIN and general mappings, was not reverified in this audit."
+      },
+      {
+        "title": "Other uploaded commutative-grammar, group-language, monoid-control and exam PDFs",
+        "status": "Not read by this focused theorem sub-audit; no claim that their entire contents were covered."
+      }
+    ],
+    "fixes": [
+      {
+        "id": "F03-finite-p",
+        "files": [
+          "docs/VERDICT_POLICY.md",
+          "cfl_system/lib/claim_verifier.py",
+          "cfl_system/orchestrator.py",
+          "cfl_system/tests/test_pumping_quantifiers.py"
+        ],
+        "problem": "Closing pumping decompositions only at p=3,4 could promote a false universal non-CFL claim; L={a^10} is a finite counterexample.",
+        "change": "Finite closure remains well_formed with explicit bounded diagnostics. A syntactically valid whole input CFG establishes verified CFL evidence and the report returns that original grammar.",
+        "boundary": "A grammar_filter input is excluded. For non-CFG inputs a heuristic low-confidence result can still exist; this change does not solve universal CFL decision problems."
+      },
+      {
+        "id": "finite-i",
+        "files": [
+          "cfl_system/lib/claim_verifier.py",
+          "dcfl_system/lib/oracle_verifier.py",
+          "cfl_system/prompts/cfl_pumping.md",
+          "cfl_system/prompts/cfl_ogden.md",
+          "dcfl_system/prompts/dcfl_pumping.md"
+        ],
+        "problem": "Surviving i=0,2,3 was treated as a universal surviving decomposition.",
+        "change": "Surviving finite exponents is unresolved, not refuted. The regression cofinite unary oracle excludes only length 4 and exposes the missing quantifier."
+      },
+      {
+        "id": "three-valued-membership",
+        "files": [
+          "cfl_system/lib/claim_verifier.py",
+          "cfl_system/orchestrator.py"
+        ],
+        "problem": "Unknown oracle answers could become false membership or sample coverage, including nested intersections and constructive/destructive cross-checks.",
+        "change": "Only actual booleans count as evidence; None stays unknown. The nested oracle checks L intersect R or returns unknown. Epsilon witnesses are retained."
+      },
+      {
+        "id": "finite-dead-prefix",
+        "files": [
+          "dcfl_system/lib/oracle_verifier.py",
+          "dcfl_system/tests/test_finite_search_limits.py",
+          "dcfl_system/tests/test_verdict_policy.py",
+          "docs/VERDICT_POLICY.md",
+          "dcfl_system/prompts/shallit.md"
+        ],
+        "problem": "No continuation found within a finite search was mistaken for a dead prefix, and successful representative pairs could hide an unresolved dead-class premise.",
+        "change": "Missing or unknown extension remains unresolved and caps trust at well_formed. Finding continuations for every sampled prefix is only bounded_pass. L={a^n | n>=20} is the regression. Failing one suffix now says this suffix does not distinguish the pair, not that the words share a Nerode class.",
+        "boundary": "No complete Pref(L) solver was added; the expensive search limits remain explicit limits. The LL counterpart was independently fixed by the LL agent."
+      },
+      {
+        "id": "ogden-example",
+        "files": [
+          "docs/THEORY.md",
+          "cfl_system/prompts/cfl_ogden.md"
+        ],
+        "problem": "The example with z=ab^pc^pd^p wrongly excluded windows reaching d because only b positions were marked.",
+        "change": "All windows are covered by classifying the two pumped factors: a mixed factor breaks block order at i=2; two homogeneous factors containing a marked b leave c or d unchanged. The reason ordinary pumping is insufficient is now proved for every nonempty word with bound 1."
+      },
+      {
+        "id": "yu-example-and-disjunction",
+        "files": [
+          "docs/THEORY.md",
+          "dcfl_system/prompts/dcfl_pumping.md"
+        ],
+        "problem": "One sentence said both Yu alternatives must hold; the worked proof omitted a pumped factor crossing a/b and reversed a count comparison.",
+        "change": "States the disjunction, covers mixed factors via the created ba, fixes a/b count relations and the explicit window ab with empty middle. The ideal-shape prerequisite is retained with the state bound."
+      },
+      {
+        "id": "interchange-counting",
+        "files": [
+          "docs/THEORY.md",
+          "cfl_system/prompts/cfl_interchange.md"
+        ],
+        "problem": "Equal middle factors were used as if they bounded family size; heuristic density/alphabet choices were described as theorem hypotheses.",
+        "change": "Requires bounding contexts at a fixed middle factor. Exponential families and large alphabets are example techniques, not lemma conditions."
+      },
+      {
+        "id": "shallit-example-suffix",
+        "files": [
+          "docs/THEORY.md",
+          "dcfl_system/prompts/shallit.md"
+        ],
+        "problem": "For L2={u3 a u4 | |u3|>=|u4|}, the claimed suffix b^t a accepts every word and distinguishes none.",
+        "change": "For |u|=m<|v|, use z=a b^(m+1). Then uz is outside and vz is inside. Each Nerode class contains only one word length, hence finitely many words. This covers epsilon and words without a."
+      },
+      {
+        "id": "ll-definition-boundaries",
+        "files": [
+          "docs/THEORY.md"
+        ],
+        "problem": "An iteration cap was not a fixed point; unproductive prefixes/suffixes and unknown smaller k affect exact LL claims.",
+        "change": "Documents genuine fixed points or unknown, productive preceding symbols for leftmost local-context transfer, and the requirement to conclusively reject every smaller k before calling a higher k minimal.",
+        "boundary": "Implementation and its tests belong to the LL agent; full RS/AU proofs were not independently rerun here."
+      }
+    ],
+    "validation": [
+      {
+        "command": ".venv\\Scripts\\python.exe -m pytest cfl_system/tests/test_claim_verifier.py cfl_system/tests/test_pumping_quantifiers.py cfl_system/tests/test_verdict_policy.py -q --basetemp .tfl_lab_runs/architecture_review/pytest_cfl -p no:cacheprovider",
+        "result": "75 passed in 1.80s"
+      },
+      {
+        "command": ".venv\\Scripts\\python.exe -m pytest cfl_system/tests dcfl_system/tests/test_oracle_verifier.py dcfl_system/tests/test_finite_search_limits.py dcfl_system/tests/test_theory_contract.py -q --basetemp .tfl_lab_runs/architecture_review/pytest_math_broader -p no:cacheprovider",
+        "result": "801 passed, 31 skipped in 28.52s; predates final dead-premise gate refinement"
+      },
+      {
+        "command": ".venv\\Scripts\\python.exe -m pytest dcfl_system/tests/test_verdict_policy.py dcfl_system/tests/test_oracle_verifier.py dcfl_system/tests/test_finite_search_limits.py -q --basetemp .tfl_lab_runs/architecture_review/pytest_dcfl_math_done -p no:cacheprovider",
+        "result": "115 passed in 15.69s after final DCFL gate refinement"
+      },
+      {
+        "command": ".venv\\Scripts\\python.exe -m pytest cfl_system/tests/test_pumping_quantifiers.py -q --basetemp .tfl_lab_runs/architecture_review/pytest_cfl_final_strings -p no:cacheprovider",
+        "result": "17 passed in 0.73s after diagnostic-string and unreachable-branch cleanup"
+      },
+      {
+        "check": "Ogden worked-example enumeration at p=1..6",
+        "result": "All 12082 marked-admissible decompositions exit at i=2; supporting regression only, not a replacement for the universal argument."
+      },
+      {
+        "check": "Concrete JSON output examples in the four edited Ogden/interchange/DCFL pumping/Shallit prompts",
+        "result": "11 concrete output examples parsed after all final prompt edits; schema pseudocode blocks excluded."
+      },
+      {
+        "check": "Shallit L2 worked-example suffix, all binary words of lengths 0..6",
+        "result": "5334 ordered pairs of distinct lengths distinguished by a b^(shorter_length+1); finite regression supplements the general length argument."
+      }
+    ]
+  },
+  "html_verification": {
+    "desktop": "1440x1000",
+    "mobile": "390x844",
+    "script_errors": 0,
+    "external_requests": 0,
+    "anchor_failures": 0,
+    "checks": [
+      "filter shows 3 math cards out of 10",
+      "details expansion",
+      "p=11,N=10 illustrates vacuous bound",
+      "three local artifact links HTTP200",
+      "architecture snapshot banner",
+      "desktop and mobile screenshots visually inspected"
+    ]
+  }
+}

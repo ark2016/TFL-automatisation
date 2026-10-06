@@ -22,7 +22,7 @@ from agent_system.lib.testing.fake_anthropic import FakeAnthropic, raises_turn, 
 from agent_system.orchestrator import MockRunner, Pipeline, _result_verdict
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
-TASK = "task2_grammar_sasb"          # mock run: non_regular, 0.85, formalizable both ways
+TASK = "task2_grammar_sasb"          # mock run: non_regular, 0.55, formalizable both ways
 NOT_FORMALIZABLE_TASK = "task3_regex_backref"
 
 OPUS, SONNET = "claude-opus-5-5", "claude-sonnet-5-5"
@@ -550,9 +550,21 @@ def test_direction_falls_back_to_the_hypothesis_when_the_verdict_was_cleared(tmp
     result = load_result(run_dir)
     result["verdict"] = None
     result["evidence"]["reasoning"] = {}
+    result["evidence"]["hypothesis"]["hypothesis"] = "non_regular"
     (run_dir / "input_result.json").write_text(json.dumps(result), encoding="utf-8")
     prep = fr.prepare(run_dir, spec)
     assert prep.direction in ("regular", "non_regular") and prep.direction_source == "hypothesis"
+
+
+def test_unknown_nested_hint_is_not_a_formalization_direction(tmp_path, spec):
+    run_dir = make_run_dir(tmp_path)
+    result = load_result(run_dir)
+    result["verdict"] = None
+    result["evidence"]["reasoning"] = {}
+    assert result["evidence"]["hypothesis"]["hypothesis"] == "unknown"
+    (run_dir / "input_result.json").write_text(json.dumps(result), encoding="utf-8")
+    prep = fr.prepare(run_dir, spec)
+    assert prep.direction is None and prep.direction_source == "none"
 
 
 def test_missing_input_json_is_an_error(tmp_path, spec):

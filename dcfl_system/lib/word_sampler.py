@@ -20,6 +20,7 @@ from typing import Any
 
 from cfl_system.lib.cfl_oracle import grammar_oracle
 from cfl_system.lib.exponent_pattern import parse_exponent_pattern
+from dcfl_system.lib.constraints import Constraint, evaluate_constraints, parse_constraints
 
 # ---------------------------------------------------------------------------
 # Internal RNG (deterministic seed for reproducibility)
@@ -53,86 +54,13 @@ def _sample_word(
 # Constraint checking
 # ===================================================================
 
-_CMP_OPS: dict[str, Any] = {
-    "<=": lambda a, b: a <= b,
-    ">=": lambda a, b: a >= b,
-    "==": lambda a, b: a == b,
-    "<": lambda a, b: a < b,
-    ">": lambda a, b: a > b,
-    "!=": lambda a, b: a != b,
-}
-
-
 def check_constraints(variables: dict[str, str], constraints: list[dict]) -> bool:
-    """Check if *variables* satisfy every constraint in *constraints*.
-
-    Supported constraint kinds:
-    - length_cmp:    |left_var| op |right_var|
-    - integer_cmp:   integer_var op value
-    - regex_member:  variable value matches regex
-    - equal:         left_var == right_var (string equality)
-    - reverse:       left_var == reverse(right_var)
-    - disjunction:   at least one branch must hold
-    """
-    for c in constraints:
-        kind = c.get("kind", "")
-        args = c.get("args", {})
-
-        if kind == "length_cmp":
-            left = variables.get(args.get("left", ""), "")
-            right = variables.get(args.get("right", ""), "")
-            op = args.get("op", "==")
-            cmp_fn = _CMP_OPS.get(op)
-            if cmp_fn is None:
-                return False
-            if not cmp_fn(len(left), len(right)):
-                return False
-
-        elif kind == "integer_cmp":
-            var_name = args.get("var", "")
-            op = args.get("op", "==")
-            value = args.get("value", 0)
-            cmp_fn = _CMP_OPS.get(op)
-            if cmp_fn is None:
-                return False
-            try:
-                var_val = int(variables.get(var_name, "0"))
-            except (ValueError, TypeError):
-                return False
-            if not cmp_fn(var_val, value):
-                return False
-
-        elif kind == "regex_member":
-            var_name = args.get("var", "")
-            pattern = args.get("pattern", ".*")
-            val = variables.get(var_name, "")
-            if not re.fullmatch(pattern, val):
-                return False
-
-        elif kind == "equal":
-            left = variables.get(args.get("left", ""), "")
-            right = variables.get(args.get("right", ""), "")
-            if left != right:
-                return False
-
-        elif kind == "reverse":
-            left = variables.get(args.get("left", ""), "")
-            right = variables.get(args.get("right", ""), "")
-            if left != right[::-1]:
-                return False
-
-        elif kind == "disjunction":
-            branches = args.get("branches", [])
-            if not branches:
-                return False
-            if not any(check_constraints(variables, [b]) for b in branches):
-                return False
-
-        else:
-            # Unknown constraint kind — fail safe
-            return False
-
-    return True
+    """Check a complete assignment using the shared typed constraint AST."""
+    try:
+        parsed = parse_constraints(constraints, set(variables))
+    except (ValueError, TypeError):
+        return False
+    return evaluate_constraints(variables, parsed)
 
 
 # ===================================================================
@@ -200,7 +128,7 @@ def _match_segments(
     idx: int,
     pos: int,
     assignments: dict[str, str],
-    constraints: list[dict],
+    constraints: tuple[Constraint, ...],
     domain_map: dict[str, str | None],
     budget: list[int],
 ) -> bool:
@@ -214,7 +142,7 @@ def _match_segments(
     if idx == len(segments):
         if pos != len(word):
             return False
-        return check_constraints(assignments, constraints)
+        return evaluate_constraints(assignments, constraints)
 
     seg = segments[idx]
     if seg["type"] == "literal":
@@ -278,10 +206,14 @@ def build_set_builder_membership_oracle(
     """
     variables: list[dict] = spec.get("variables", [])
     var_names = [v["name"] for v in variables]
+    if len(var_names) != len(set(var_names)):
+        return None
     word_pattern: str = spec.get("word_pattern", "")
     segments = _parse_word_pattern(word_pattern, var_names)
 
     if not any(s["type"] == "var" for s in segments):
+        return None
+    if {s["name"] for s in segments if s["type"] == "var"} != set(var_names):
         return None
 
     alphabet_set = set(alphabet)
@@ -292,11 +224,19 @@ def build_set_builder_membership_oracle(
             return None
 
     domain_map: dict[str, str | None] = {v["name"]: v.get("domain") for v in variables}
-    constraints: list[dict] = spec.get("constraints", [])
+    try:
+        constraints = parse_constraints(spec.get("constraints", []), set(var_names))
+        for domain in domain_map.values():
+            if domain is not None:
+                re.compile(domain)
+    except (ValueError, TypeError, re.error):
+        return None
 
     def oracle(word: str) -> bool | None:
         if not isinstance(word, str) or len(word) > max_word_len:
             return None
+        if any(ch not in alphabet_set for ch in word):
+            return False
         budget = [step_budget]
         try:
             return _match_segments(word, segments, 0, 0, {}, constraints, domain_map, budget)
@@ -351,6 +291,10 @@ def _build_exponent_pattern_membership_oracle(
     is a parseable pattern (prose, plain set-builder notation like
     ``"u1 a u2"``, etc.) -- never a guess.
     """
+    # This parser consumes only text. Never discard a separate domain or
+    # predicate when its structured representation could not be translated.
+    if spec.get("variables") or spec.get("constraints"):
+        return None
     text = spec.get("word_pattern")
     if not isinstance(text, str) or not text.strip():
         text = spec.get("description")
@@ -598,6 +542,8 @@ def sample_from_set_builder(
     word_pattern: str = spec.get("word_pattern", "")
     variables: list[dict] = spec.get("variables", [])
     constraints: list[dict] = spec.get("constraints", [])
+    if build_set_builder_membership_oracle(spec, alphabet, max_word_len=max_len) is None:
+        return []
 
     var_names = [v["name"] for v in variables]
     segments = _parse_word_pattern(word_pattern, var_names)
@@ -613,8 +559,8 @@ def sample_from_set_builder(
             )
         else:
             candidates = _random_words(alphabet, rng, count=per_var_count, max_len=max_len)
-        # Always include the empty string as a candidate.
-        if "" not in candidates:
+        # Empty words are legal candidates only when the domain admits ε.
+        if "" not in candidates and (domain is None or re.fullmatch(domain, "")):
             candidates.append("")
         var_candidates[v["name"]] = candidates
 

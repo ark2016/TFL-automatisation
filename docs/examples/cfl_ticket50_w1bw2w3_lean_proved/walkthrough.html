@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light"><meta name="description" content="Подробный разбор доказательства неконтекстной свободы языка из билета №50: интерактивные примеры, лемма о накачке и Lean для знакомого с Haskell.">
+<link rel="icon" href="data:,"><title>Билет №50 — понятный разбор решения и Lean</title>
+<style>:root{--ink:#203349;--muted:#56687b;--paper:#fff;--page:#edf2f7;--line:#ced9e4;--blue:#174d91;--teal:#066755;--rose:#873c67;--gold:#80530a;--p1:#dceafa;--p2:#fff0c9;--p3:#d7eee7;--p4:#efe1f2;--error:#9d2136;--error-bg:#fff0f2;--soft:#f3f7fb}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:28px}body{margin:0;background:var(--page);color:var(--ink);font:17px/1.7 "Segoe UI",Tahoma,Arial,sans-serif}a{color:var(--blue);text-underline-offset:3px}a:hover{text-decoration-thickness:2px}button,input,select{font:inherit}button,a,input,summary{touch-action:manipulation}:focus-visible{outline:3px solid var(--blue);outline-offset:4px}button{border:1px solid #a5b8cb;border-radius:7px;background:#fff;color:var(--blue);padding:.5rem .85rem;cursor:pointer;font-weight:600;line-height:1.4}button:hover{background:#eaf2fa;border-color:var(--blue)}input{min-width:0;border:1px solid #9eafc0;border-radius:5px;padding:8px 10px;color:var(--ink);background:#fff}input[type=range]{padding:0;accent-color:var(--teal);width:100%;margin:16px 0}input[type=number]{width:100%}input[type=text]{flex:1;width:100%}label{display:block;font-weight:600;font-size:.93rem}output{color:var(--teal);font-size:1.1em}
+.layout{display:grid;grid-template-columns:250px minmax(0,960px);gap:36px;max-width:1310px;margin:auto;padding:0 32px}.sidebar{position:sticky;top:20px;align-self:start;max-height:calc(100vh - 40px);overflow-y:auto;padding:28px 10px 24px 0;font-size:.88rem;line-height:1.45}.sidebar strong{display:block;font-size:1.1rem;margin-bottom:4px}.sidebar p{margin:0 0 18px;color:var(--muted);font-size:.85rem}.sidebar ol{list-style:none;margin:0;padding:0}.sidebar a{display:block;text-decoration:none;color:var(--muted);border-left:2px solid var(--line);padding:8px 10px}.sidebar a.active{color:var(--blue);background:#e0eaf5;border-left-color:var(--blue);font-weight:600}.sidebar a:hover{color:var(--blue);background:#e5eef7}.sidebar .nav-break{margin-top:15px}.sidebar .nav-small{font-size:.8rem;padding-top:18px}.progress-track{height:4px;background:#d0ddea;margin:18px 0;border-radius:2px;overflow:hidden}.progress-fill{height:100%;background:var(--teal);width:0}.main{background:var(--paper);padding:60px 52px 34px;min-width:0;box-shadow:0 0 0 1px #e1e7ee}.hero{padding-bottom:36px}.edition{font-size:.85rem;color:var(--muted);margin:0 0 20px}.hero h1{font-family:Cambria,Georgia,serif;font-size:clamp(2.35rem,4.25vw,3.85rem);font-weight:600;line-height:1.1;letter-spacing:-.025em;margin:0 0 24px}.lead{font-size:1.13rem;line-height:1.65;color:#42566b}.hero-word{display:flex;gap:7px;align-items:stretch;margin:26px 0 10px;flex-wrap:wrap}.part{border-radius:6px;padding:12px 16px;text-align:center;flex:1;min-width:72px}.part span,.part small{display:block;font-size:.74rem;line-height:1.45}.part strong{font:600 1.42rem/1.5 Consolas,"Courier New",monospace;display:block;overflow-wrap:anywhere;white-space:normal}.part-a{background:var(--p1);color:var(--blue)}.part-b{background:var(--p2);color:var(--gold)}.part-c{background:var(--p3);color:var(--teal)}.part-d{background:var(--p4);color:var(--rose)}.hero-caption{font-size:.88rem;color:var(--muted);margin-top:12px}.route{display:flex;gap:18px;flex-wrap:wrap;margin-top:24px;font-size:.9rem}.route a:first-child{font-weight:700}
+section{padding:35px 0 20px;border-top:1px solid var(--line);scroll-margin-top:22px}h2{font:600 2rem/1.2 Cambria,Georgia,serif;letter-spacing:-.015em;margin:0 0 22px;color:#173951}h3{font-size:1.17rem;line-height:1.4;margin:32px 0 12px}h4{font-size:1rem;margin:22px 0 8px}p{margin:0 0 17px}li{margin:8px 0}ul,ol{padding-left:25px}strong{font-weight:650}code{font: .88em/1.55 Consolas,"Cascadia Code","Courier New",monospace;background:#edf3f8;border-radius:3px;padding:2px 4px;overflow-wrap:anywhere}pre{background:#edf3f8;color:#163b55;border:1px solid #dbe5ee;border-radius:7px;padding:18px 20px;overflow-x:auto;line-height:1.6;font-size:.86rem;margin:16px 0 20px;white-space:pre-wrap;overflow-wrap:anywhere}pre code{padding:0;background:transparent;font-size:inherit}.code-caption{font-size:.86rem;color:var(--muted);margin-bottom:4px}.formula{font:1.14rem/1.8 Cambria,"Segoe UI",serif;padding:18px 22px;margin:22px 0;background:#f0f6fb;border-left:4px solid #5987b4;border-radius:0 6px 6px 0;overflow-wrap:anywhere}.math{font-family:Cambria,"Segoe UI",serif;font-size:1.08em}.callout{border-left:4px solid var(--teal);background:#eaf6f2;padding:18px 22px;margin:22px 0;border-radius:0 6px 6px 0}.callout p:last-child{margin-bottom:0}.note{font-size:.94rem;color:#3d5368;background:#f3f6fa;padding:17px 20px;border-radius:7px;margin:22px 0}.fine{font-size:.84rem;color:var(--muted);line-height:1.6}.hash{word-break:break-all}.table-wrap{overflow-x:auto;margin:20px 0 24px;border:1px solid var(--line);border-radius:7px}table{border-collapse:collapse;width:100%;font-size:.9rem;line-height:1.6}td,th{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{font-size:.87rem;background:#eaf1f7;font-weight:650}tr:last-child td{border-bottom:0}td:first-child{min-width:120px}details{border:1px solid var(--line);border-radius:7px;background:#fbfcfe;padding:0 18px;margin:18px 0}summary{cursor:pointer;line-height:1.5;padding:15px 0;color:var(--blue);font-weight:600}details[open] summary{border-bottom:1px solid var(--line);margin-bottom:16px}details>p:last-child{margin-bottom:18px}.checkpoint{border-left:4px solid #658bac}.checkpoint summary{color:#234f71}.interactive{border:1px solid #a8bfce;background:#f8fbfd;border-radius:10px;padding:24px;margin:22px 0}.input-row{display:flex;gap:10px;align-items:center;margin:12px 0}.preset-row{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 20px}.preset-row button{font-size:.82rem;padding:8px 11px}.controls{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.controls label{font-size:.78rem;line-height:1.5}.controls input{margin-top:5px}.lab-result{background:#eaf2f8;padding:12px 14px;border-radius:6px;font-size:.93rem;margin:18px 0}.lab-result.bad{background:var(--error-bg);color:var(--error)}.lab-result.good{background:#e4f4ed;color:#145342}.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:.76rem;color:var(--muted);margin:18px 0}.legend-item{display:inline-flex;align-items:center;gap:5px}.swatch{display:inline-block;width:12px;height:12px;border-radius:2px}.tape{display:flex;flex-wrap:wrap;gap:4px;padding:12px 0 16px;align-items:start}.cell{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;min-width:25px;height:48px;padding:1px 4px;border:1px solid transparent;border-radius:4px;position:relative}.cell .idx{font:10px/1.3 "Segoe UI",sans-serif;opacity:.85}.cell .letter{font:600 16px/1.45 Consolas,monospace}.cell.in-window{border-bottom:3px solid #617d96}.cell.deleted{background:#f7e7ec;color:#8c354b}.cell.deleted .letter{text-decoration:line-through;text-decoration-thickness:2px}.cell.target{outline:3px solid var(--error);outline-offset:1px;z-index:1}.pumping-lab h3{font-size:1rem;margin:20px 0 2px}.result-parts{display:flex;gap:5px;flex-wrap:wrap;margin:12px 0}.result-parts .part{padding:8px 12px}.result-parts .part strong{font-size:1rem}.proof-case{color:var(--blue);font-weight:650}.source-lines{background:#edf3f8;padding:20px 12px 20px 58px;margin:18px -8px;border-radius:5px;font:13px/1.65 Consolas,monospace;overflow:hidden}.source-lines li{margin:0;padding:1px 4px 1px 10px;border-left:1px solid #bccddd;white-space:pre-wrap;overflow-wrap:anywhere;scroll-margin-top:40px}.source-lines li::marker{color:#718398;font-size:11px}.source-lines li:target{background:#fff0c9}.source-lines code{background:none;padding:0;font:inherit}.source-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:.8rem}footer{border-top:1px solid var(--line);margin-top:24px;padding-top:24px;color:var(--muted);font-size:.86rem}footer button{margin-right:22px;font-size:.86rem}.skip{position:absolute;top:-60px;left:12px;background:white;padding:10px;z-index:10}.skip:focus{top:10px}.noscript{background:#fff0c9;padding:15px;border:1px solid #ab852e}
+@media(min-width:1400px){.layout{gap:45px}.main{padding-left:60px;padding-right:60px}}@media(max-width:1050px){.layout{grid-template-columns:205px minmax(0,1fr);gap:20px;padding:0 18px}.main{padding:40px 28px}.sidebar{font-size:.81rem}.controls{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:760px){.layout{display:block;padding:0}.sidebar{position:static;padding:18px 20px;max-height:none;border-bottom:1px solid var(--line)}.sidebar strong{font-size:1rem}.sidebar p,.sidebar .nav-small,.progress-track{display:none}.sidebar ol{display:grid;grid-template-columns:1fr 1fr;gap:0 8px}.sidebar a{font-size:.8rem;padding:6px 8px}.sidebar .nav-break{margin-top:0}.main{padding:32px 22px 24px;box-shadow:none}.hero h1{font-size:2.7rem}h2{font-size:1.8rem}.lead{font-size:1.05rem}.hero-word{gap:5px}.part{padding:10px 8px;min-width:62px}.part strong{font-size:1.17rem}.interactive{padding:17px 14px}.formula{padding:15px 16px;font-size:1.04rem}td,th{padding:10px}section{padding-top:30px}.source-lines{padding-left:42px;font-size:12px}.controls{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:400px){body{font-size:16px}.main{padding-left:17px;padding-right:17px}.hero h1{font-size:2.3rem}.input-row{flex-wrap:wrap}.input-row input{flex-basis:100%}.hero-word .part{min-width:56px}.cell{min-width:23px;padding-left:3px;padding-right:3px}.sidebar ol{column-gap:2px}.sidebar a{font-size:.76rem}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}@media print{body{background:white;font-size:11pt;line-height:1.5}.layout{display:block;padding:0}.sidebar,.route,.skip,button,.controls,.preset-row,input,.source-toolbar,footer{display:none!important}.main{padding:0;box-shadow:none;max-width:none}.hero h1{font-size:30pt}.lead{font-size:12pt}section{padding:20px 0 12px}h2{font-size:22pt}h3{font-size:14pt}.interactive{padding:14px}.formula,.callout,pre,details,table{break-inside:avoid}.table-wrap{overflow:visible}a{color:inherit}a[href^='#']{text-decoration:none}details:not([open])>*:not(summary){display:block!important}.source-lines{font-size:8pt}summary{list-style:none}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}.hero-word{max-width:600px}}
+</style></head>
+<body><a class="skip" href="#content">Перейти к разбору</a>
+<div class="layout"><nav class="sidebar" aria-label="Содержание пособия"><strong>Билет №50</strong><p>От слова к доказательству</p>
+<div class="progress-track" aria-hidden="true"><div class="progress-fill" id="reading-progress"></div></div>
+<ol><li><a href="#reading-map">Как читать отчёт</a></li>
+<li><a href="#language">Условие и границы</a></li>
+<li><a href="#pumping">Лемма и порядок выбора</a></li>
+<li><a href="#witness">Слово-свидетель</a></li>
+<li><a href="#cases">Три случая подробно</a></li>
+<li><a href="#conclusion">Противоречие</a></li>
+<li><a href="#lab">Попробовать удаление</a></li>
+<li class="nav-break"><a href="#lean-intro">Lean через Haskell</a></li>
+<li><a href="#lean-reading">Читаем определение L</a></li>
+<li><a href="#lean-proof">Два случая в Lean</a></li>
+<li><a href="#trust">Что именно проверено</a></li>
+<li class="nav-break"><a href="#report-notes">Неточности отчёта</a></li>
+<li><a href="#recall">Проверить понимание</a></li>
+<li><a href="#source">Полный код Lean</a></li></ol><p class="nav-small">Все примеры работают без интернета.<br>Исходный отчёт сохранён.</p></nav>
+<main class="main" id="content"><noscript><p class="noscript">Текст и код доступны целиком. Для интерактивных примеров включи JavaScript в браузере.</p></noscript>
+<header class="hero" id="top">
+  <p class="edition">Билет №50, ИУ-9 • Пособие для самостоятельного разбора</p>
+  <h1>Почему этот язык<br>не контекстно-свободный</h1>
+  <p class="lead">Разбираем готовое решение по шагам: сначала слова и их границы, затем лемму о накачке, потом доказательство в Lean. Для знакомства с Lean достаточно вспомнить списки, типы и сопоставление с образцом из Haskell.</p>
+  <div class="hero-word" aria-label="Слово aaaa b abab aaaa, три блока длины четыре и отдельный разделитель b">
+    <div class="part part-a"><span>w₁</span><strong>aaaa</strong><small>4 буквы</small></div>
+    <div class="part part-b"><span>разделитель</span><strong>b</strong><small>1 буква</small></div>
+    <div class="part part-c"><span>w₂</span><strong>abab</strong><small>4 буквы</small></div>
+    <div class="part part-d"><span>w₃</span><strong>aaaa</strong><small>4 буквы</small></div>
+  </div>
+  <p class="hero-caption">Одно слово из языка: <span class="math">4 + 1 + 4 + 4 = 13</span> символов. Цвета обозначают части, а не разные алфавиты.</p>
+  <div class="route"><a href="#language">Начать с условия</a><a href="#lab">Открыть наглядный пример</a><a href="#lean-intro">Перейти к Lean</a></div>
+</header>
+
+<section id="reading-map">
+<h2>Что именно мы разбираем</h2>
+<p>Это самостоятельный комментарий к <code>result.html</code> из папки <code>cfl_ticket50_w1bw2w3_lean_proved</code>. Исходный отчёт и его доказательство сохранены. Все объяснения, интерактивные примеры и полный исходник Lean встроены в этот файл; интернет для чтения не нужен.</p>
+<p>В исходном HTML рядом стоят математическое решение, результаты работы агентов и формальный код. У этих частей разные роли:</p>
+<div class="table-wrap"><table><thead><tr><th>Часть исходного отчёта</th><th>Как её понимать</th><th>Где разбор</th></tr></thead><tbody>
+<tr><td>Вердикт «не КС», уверенность 98%</td><td>Вердикт — утверждение о языке. Процент — показатель системы, а не вероятность истинности теоремы.</td><td><a href="#trust">Что подтверждает Lean</a></td></tr>
+<tr><td>Шаг 2: структура слов</td><td>Длина однозначно определяет места всех границ. Это ключ к доказательству.</td><td><a href="#language">Условие и границы</a></td></tr>
+<tr><td>Шаги 1, 3–5</td><td>Предположение о КС, выбор длинного слова и условия на произвольное разбиение.</td><td><a href="#pumping">Лемма</a>, <a href="#witness">слово-свидетель</a></td></tr>
+<tr><td>Шаги 6–7</td><td>Три случая: длина не подходит, обязательный разделитель стал a, либо последний символ w₂ стал a.</td><td><a href="#cases">Разбор случаев</a></td></tr>
+<tr><td>Агенты, usage, стоимость, число попыток</td><td>История получения решения. Количество согласившихся агентов само по себе ничего не доказывает.</td><td><a href="#report-notes">Примечания к отчёту</a></td></tr>
+<tr><td>Lean 4 formalization</td><td>Определение языка и проверяемое ядром доказательство отсутствия КС-грамматики.</td><td><a href="#lean-intro">Введение</a>, <a href="#lean-proof">разбор кода</a></td></tr>
+</tbody></table></div>
+<p class="note">Удобный темп: сначала дойти до интерактивного примера и объяснить себе три случая. Затем читать Lean. Свёрнутые блоки «Проверить себя» раскрывай после собственной попытки ответить. Оценка времени: около 40–60 минут с экспериментами.</p>
+</section>
+
+<section id="language">
+<h2>Читаем условие без спешки</h2>
+<div class="formula">L = { w₁ b w₂ w₃ ∣ |w₁| = |w₂| = |w₃|, w₂ ∈ (ab)* },<br>w₁, w₃ ∈ {a,b}*</div>
+<p><strong>Алфавит</strong> — набор разрешённых символов, здесь <code>a</code> и <code>b</code>. <strong>Слово</strong> — конечный список этих символов. <strong>Язык</strong> — множество слов, удовлетворяющих правилу. Слово не обязано иметь смысл на естественном языке.</p>
+<div class="table-wrap"><table><thead><tr><th>Запись</th><th>Что означает</th><th>Пример</th></tr></thead><tbody>
+<tr><td>|w|</td><td>Длина слова w</td><td>|abba| = 4</td></tr>
+<tr><td>ε</td><td>Пустое слово, длина 0</td><td>ε · ab = ab</td></tr>
+<tr><td>w₁ b w₂ w₃</td><td>Склеить четыре части подряд</td><td>aa · b · ab · aa = aababaa</td></tr>
+<tr><td>{a,b}*</td><td>Все конечные слова из a и b, включая ε</td><td>ε, a, bb, abba, …</td></tr>
+<tr><td>(ab)*</td><td>Повторить целую пару ab любое неотрицательное число раз</td><td>ε, ab, abab, ababab, …</td></tr>
+<tr><td>aʳ, (ab)ʳ</td><td>r повторений буквы a или целого блока ab</td><td>a³ = aaa, (ab)³ = ababab</td></tr>
+</tbody></table></div>
+<p>Звёздочка — операция Клини; здесь она разрешает и ноль повторений. В частности, <code>ba</code> не лежит в <code>(ab)*</code>, хотя его буквы тоже чередуются: начало должно быть <code>a</code>.</p>
+<p>Для w₁ и w₃ ограничений на порядок букв нет. Они <strong>не обязаны совпадать</strong>: совпадают только длины. Например, <code>ab · b · ab · ba</code> подходит. Единственный отдельно вставленный символ — <code>b</code> между w₁ и w₂. Другие буквы <code>b</code> внутри частей разрешены.</p>
+<h3>Из длины получаем единственное возможное разбиение</h3>
+<p>Пусть длина каждой из трёх частей равна n. Длина всего слова t тогда равна n + 1 + n + n. А поскольку w₂ состоит из k пар <code>ab</code>, имеем n = 2k:</p>
+<div class="formula">|t| = 3n + 1 = 6k + 1,<br>n = (|t| − 1) / 3, &nbsp; k = (|t| − 1) / 6.</div>
+<p>Возможные длины слов языка: <strong>1, 7, 13, 19, 25, …</strong> Запись <span class="math">|t| ≡ 1 (mod 6)</span> означает, что при делении длины на 6 остаток равен 1.</p>
+<p>Длина определяет n, а n определяет все границы. Если длина 13, то n = 4: первые четыре символа — w₁, пятый — обязательный <code>b</code>, следующие четыре — w₂, последние четыре — w₃. Нельзя выбрать более удобную букву <code>b</code> в другом месте: длины частей тогда не совпадут.</p>
+<div class="callout"><strong>Необходимое условие ещё не достаточно.</strong> Длина 7 разрешена, но слово <code>aaaaaaa</code> не подходит: в нужном месте нет разделителя b, а средний блок не равен ab. Нужно одновременно проверить длину, разделитель и содержимое w₂.</div>
+<h3>Индексы: начинаем с нуля, как в программировании</h3>
+<div class="table-wrap"><table><thead><tr><th>Часть</th><th>Индексы включительно</th><th>Длина</th></tr></thead><tbody>
+<tr><td>w₁</td><td>0 … n−1</td><td>n</td></tr><tr><td>отдельный b</td><td>n</td><td>1</td></tr><tr><td>w₂</td><td>n+1 … 2n</td><td>n</td></tr><tr><td>w₃</td><td>2n+1 … 3n</td><td>n</td></tr>
+</tbody></table></div>
+<p>В отчёте диапазон <span class="math">t[n+1..2n]</span> включает правую границу. В Python или JavaScript такой блок задаётся с исключённой правой границей: <code>t[n+1 : 2*n+1]</code> либо <code>t.slice(n+1, 2*n+1)</code>. При n = 0 средний блок пустой, а всё слово равно <code>b</code>.</p>
+<h3>Собери слово из языка</h3>
+<div class="interactive" aria-label="Конструктор слова из языка">
+<label for="construct-k">Число пар ab в w₂: <output id="construct-value">2</output></label>
+<input id="construct-k" type="range" min="0" max="6" value="2">
+<div id="constructor-word" class="hero-word"></div>
+<p id="constructor-explain" class="lab-result" aria-live="polite"></p>
+<p class="fine">Здесь для удобства w₁ и w₃ состоят из a. Это допустимые частные примеры; сам язык разрешает там любые a и b.</p>
+</div>
+<h3>Проверь произвольное слово</h3>
+<div class="interactive" aria-label="Проверка принадлежности слов языку">
+<label for="member-word">Слово из букв a и b; пробелы для разделения частей допустимы</label>
+<div class="input-row"><input id="member-word" type="text" value="aa b ab aa" maxlength="181" autocomplete="off" spellcheck="false"><button type="button" id="member-check">Проверить</button></div>
+<div class="preset-row"><button type="button" data-word="b">Пустые три части</button><button type="button" data-word="ab b ab ba">Разные w₁ и w₃</button><button type="button" data-word="aa b bb aa">Ошибка в w₂</button><button type="button" data-word="aaaaaa">Неверная длина</button></div>
+<div id="member-result" role="status" aria-live="polite"></div>
+</div>
+<details class="checkpoint"><summary>Проверить себя: почему в слове длины 19 разделитель обязан стоять на позиции 6?</summary><p>Из 19 = 3n+1 следует n = 6. Первые шесть символов имеют индексы 0…5, поэтому отдельный b стоит на индексе 6. Блок w₂ занимает индексы 7…12 и должен равняться <code>ababab</code>. Любое другое положение разделителя противоречит равенству длин.</p></details>
+</section>
+<section id="pumping">
+  <h2>Шаг 1. Что именно нужно опровергнуть</h2>
+  <p>Контекстно-свободный язык, сокращённо КС-язык, — язык, который можно задать контекстно-свободной грамматикой. В такой грамматике есть терминальные символы, например <code>a</code> и <code>b</code>, и вспомогательные символы — нетерминалы. Каждое правило заменяет один нетерминал некоторой последовательностью символов. Например, правило <code>S → aSb</code> разрешает заменить <code>S</code> независимо от его соседей. Именно эта независимость от окружения объясняет название «контекстно-свободный».</p>
+  <p>Перебрать все возможные грамматики и убедиться, что подходящей нет, невозможно. Поэтому доказательство использует общее свойство всех КС-языков: лемму о накачке. Это <strong>необходимое условие</strong>. Если язык контекстно-свободен, условие обязательно выполняется. Следовательно, если условие нарушается, язык не контекстно-свободен. Обратное рассуждение не разрешено: одного выполнения условия недостаточно, чтобы доказать контекстную свободу.</p>
+  <h3>Что обещает лемма</h3>
+  <p>Допустим, наш язык контекстно-свободен. Тогда существует целое число <code>p ≥ 1</code>, называемое длиной накачки. Любое достаточно длинное слово <code>z ∈ L</code>, для которого <code>|z| ≥ p</code>, можно разрезать на пять последовательных частей:</p>
+  <div class="formula">z = u · v · w · x · y.</div>
+  <p>Здесь точка означает склеивание строк. Названия <code>u, v, w, x, y</code> относятся к новому разрезанию слова; <code>w</code> здесь не является ни <code>w₁</code>, ни <code>w₂</code>, ни <code>w₃</code> из условия задачи. Лемма требует одновременно:</p>
+  <ol>
+    <li><code>|vwx| ≤ p</code>: весь участок от начала <code>v</code> до конца <code>x</code> короткий.</li>
+    <li><code>|vx| ≥ 1</code>: повторяемые части вместе непусты. Одна из них может быть пустой.</li>
+    <li>Для каждого целого <code>i ≥ 0</code> слово <code>u · vⁱ · w · xⁱ · y</code> остаётся в языке.</li>
+  </ol>
+  <p>При <code>i = 1</code> получается исходное слово, при <code>i = 2</code> части <code>v</code> и <code>x</code> удваиваются. При <code>i = 0</code> обе исчезают: результат равен <code>uwy</code>. Между ними может находиться непустая часть <code>w</code>, которая сохраняется. Поэтому два удаления необязательно образуют один непрерывный отрезок.</p>
+  <h3>Почему нельзя самому выбрать удобное разбиение</h3>
+  <p>Порядок выбора здесь принципиален. Сначала лемма предоставляет неизвестное нам <code>p</code>. Затем мы выбираем слово в зависимости от <code>p</code>. После этого лемма вправе выбрать удобное ей разбиение. Нужно показать, что <strong>ни одно допустимое разбиение не спасает слово</strong>. Плохое поведение одного выбранного нами разбиения ничего не опровергло бы: могло существовать другое, хорошее.</p>
+  <div class="formula">КС ⇒ существует p, для каждого подходящего z существует разбиение, для каждого i результат принадлежит L.</div>
+  <p>Наше доказательство отвечает так: для любого предложенного <code>p</code> найдём слово <code>z</code>, для каждого допустимого разбиения найдём показатель <code>i</code>, выводящий результат из языка. Более того, здесь один показатель <code>i = 0</code> подходит сразу для всех разбиений. Числа <code>p = 6</code> и <code>p = 12</code> ниже служат примерами; основное рассуждение не подменяет неизвестную константу конкретным числом.</p>
+  <h3>Почему в отчёте упоминается Огден</h3>
+  <p>В лемме Огдена можно отметить выбранные позиции слова. Ограничения относятся к количеству отмеченных позиций в <code>vx</code> и <code>vwx</code>. В отчёте отмечены все позиции. Тогда число отмеченных позиций совпадает с длиной участка, и получаются ровно приведённые условия обычной леммы о накачке. Для этой задачи достаточно обычной леммы; дополнительная возможность выбирать разметку не используется.</p>
+  <details>
+    <summary>Самопроверка: почему не хватает найти одно разбиение, которое ломается при удалении?</summary>
+    <p>Лемма обещает существование хотя бы одного удачного разбиения. Неудача другого ей не противоречит. Нужно охватить все разбиения, удовлетворяющие ограничениям длины.</p>
+  </details>
+</section>
+
+<section id="witness">
+  <h2>Шаги 2–5. Свидетель и то, что меняется при удалении</h2>
+  <p>Из разбора условия нам понадобятся два факта. Длина любого слова языка имеет вид <code>6k + 1</code>. Кроме того, длина слова однозначно определяет общую длину трёх блоков и положение разделителя. Поэтому после удаления нельзя произвольно выбрать другое вхождение <code>b</code> и объявить его разделителем: его индекс уже задан новой общей длиной.</p>
+  <h3>Выбираем слово под неизвестную длину накачки</h3>
+  <div class="formula">z = a²ᵖ · b · (ab)ᵖ · a²ᵖ, &nbsp; |z| = 6p + 1.</div>
+  <p>Запись <code>a²ᵖ</code> означает <code>2p</code> последовательных букв <code>a</code>, а <code>(ab)ᵖ</code> — <code>p</code> копий пары <code>ab</code>. Три больших блока имеют одинаковую длину <code>2p</code>, средний из них принадлежит <code>(ab)*</code>. Следовательно, слово принадлежит языку. Оно достаточно длинное: <code>6p + 1 ≥ p</code>.</p>
+  <p>Все индексы дальше начинаются с нуля. При длине <code>6p + 1</code> последний индекс равен <code>6p</code>. Границы включаются с обеих сторон:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Часть слова</th><th>Индексы в исходном z</th><th>Содержимое</th></tr></thead>
+      <tbody>
+        <tr><td>Первый блок</td><td>0 … 2p − 1</td><td>Только a</td></tr>
+        <tr><td>Разделитель</td><td>2p</td><td>b</td></tr>
+        <tr><td>Средний блок</td><td>2p + 1 … 4p</td><td>Чередование ab, последняя буква b</td></tr>
+        <tr><td>Последний блок</td><td>4p + 1 … 6p</td><td>Только a</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Длинные края из одинаковых букв выбраны специально: после удаления требуемый разделитель либо конец нового среднего блока попадёт на букву <code>a</code>. Доказательство установит это для любого положения удаляемых частей.</p>
+  <p>Теперь берём произвольное допустимое разбиение <code>z = uvwxy</code>. Обозначим общее число удаляемых букв через <code>d = |v| + |x|</code>. Из условий леммы получаем:</p>
+  <div class="formula">1 ≤ d ≤ |vwx| ≤ p, &nbsp; z₀ = uwy, &nbsp; |z₀| = 6p + 1 − d.</div>
+  <p>Важно различать исходные индексы и новые. Если до сохранившейся буквы удалено <code>r</code> символов, её индекс уменьшается на <code>r</code>. Если удалений перед ней нет, индекс сохраняется. Если все <code>d</code> удалений находятся перед ней, новый индекс равен старому минус <code>d</code>.</p>
+  <details>
+    <summary>Самопроверка: какие части слова сохраняются при i = 0?</summary>
+    <p>Сохраняются <code>u</code>, <code>w</code> и <code>y</code>. Удаляются только <code>v</code> и <code>x</code>; весь участок <code>vwx</code> исчезает лишь тогда, когда <code>w</code> пуст.</p>
+  </details>
+</section>
+
+<section id="cases">
+  <h2>Шаг 6. Почему любое удаление выводит слово из языка</h2>
+  <h3>Случай 1: число удалённых букв не кратно шести</h3>
+  <p>Если <code>6 ∤ d</code>, длина <code>6p + 1 − d</code> не имеет вид <code>6k + 1</code>. Этого уже достаточно: <code>z₀ ∉ L</code>. Расположение удалений не играет роли. Например, удаление одной буквы даёт длину <code>6p</code>, а допустимая длина должна оставлять остаток один при делении на шесть.</p>
+  <p>При <code>p ≤ 5</code> этим всё и заканчивается: положительное <code>d ≤ p</code> не может делиться на шесть. Дальше остаются только разбиения, для которых <code>d = 6e</code> с целым <code>e ≥ 1</code>.</p>
+  <h3>Что обязана означать новая длина</h3>
+  <div class="formula">|z₀| = 6(p − e) + 1, &nbsp; n′ = 2(p − e) = 2p − 2e.</div>
+  <p>Здесь <code>n′</code> — единственная возможная длина каждого блока, если предположить <code>z₀ ∈ L</code>. Обязательно должны выполняться два требования:</p>
+  <ol>
+    <li>На индексе <code>n′ = 2p − 2e</code> стоит разделитель <code>b</code>.</li>
+    <li>На индексе <code>2n′ = 4p − 4e</code> стоит последняя буква среднего блока, тоже <code>b</code>.</li>
+  </ol>
+  <p>Второе требование использует непустоту среднего блока. Она обеспечена: из <code>6e = d ≤ p</code> следует <code>p − e ≥ 5e ≥ 5</code>. Значит, предполагаемый средний блок содержит хотя бы одну пару <code>ab</code>. Достаточно нарушить любое из двух требований.</p>
+  <h3>Случай 2: первая удаляемая позиция правее n′</h3>
+  <p>Хотя бы одна буква удаляется, поэтому первая удаляемая позиция существует. Если она строго больше <code>n′</code>, весь префикс до индекса <code>n′</code> включительно сохраняется без сдвигов. Следовательно:</p>
+  <div class="formula">z₀[n′] = z[n′] = a.</div>
+  <p>Последнее равенство следует из <code>0 ≤ n′ = 2p − 2e &lt; 2p</code>: это индекс внутри исходного первого блока из букв <code>a</code>. Но разделителем обязана быть буква <code>b</code>. Получено противоречие.</p>
+  <p><strong>Пример: p = 6, e = 1.</strong> Исходное слово равно <code>a¹²b(ab)⁶a¹²</code>, его длина — 37. Удалим шесть букв на индексах <code>13…18</code>: можно взять <code>|u| = 13</code>, <code>|v| = 6</code>, а <code>w</code> и <code>x</code> пустыми. Новая длина равна 31, поэтому <code>n′ = 10</code>. Удаления начинаются после индекса 10; на нём по-прежнему стоит <code>a</code>.</p>
+  <h3>Случай 3: хотя бы одна удаляемая позиция не правее n′</h3>
+  <p>Обозначим индекс такой позиции через <code>r</code>, так что <code>r ≤ n′</code>. Пусть <code>s = |u|</code> — индекс начала окна <code>vwx</code>, а <code>ℓ = |vwx|</code> — его длина. Поскольку удаляемая позиция находится внутри окна, <code>s ≤ r</code>. Последний индекс окна равен <code>s + ℓ − 1</code>. Получаем всю цепочку:</p>
+  <div class="formula">s + ℓ − 1 ≤ r + p − 1 ≤ n′ + p − 1 = 3p − 2e − 1.</div>
+  <p>Здесь первое неравенство использует <code>s ≤ r</code> и <code>ℓ ≤ p</code>. Значит, <strong>каждая удалённая позиция</strong> не превосходит <code>3p − 2e − 1</code>. Даже если два удаления разделены сохраняемой частью <code>w</code>, оба лежат в этом коротком окне.</p>
+  <p>Теперь ищем исходную букву, которая после всех удалений попадёт на требуемый конец среднего блока, то есть на индекс <code>2n′ = 4p − 4e</code>. Добавляем число удалений и получаем кандидат:</p>
+  <div class="formula">j = (4p − 4e) + d = (4p − 4e) + 6e = 4p + 2e.</div>
+  <p>Нельзя просто объявить, что эта буква сдвинется на <code>d</code>: сначала нужно проверить, что все удаления находятся перед ней. Это следует из строгого неравенства:</p>
+  <div class="formula">3p − 2e − 1 &lt; 4p + 2e = j.</div>
+  <p>Разность правой и левой частей равна <code>p + 4e + 1 &gt; 0</code>. Таким образом, сама буква на индексе <code>j</code> не удалена, и перед ней удалены все <code>d</code> букв. Её новый индекс действительно равен <code>j − d = 4p − 4e</code>.</p>
+  <p>Осталось определить эту букву. Из <code>e ≥ 1</code> следует <code>4p + 1 ≤ 4p + 2e</code>. Из <code>6e ≤ p</code> следует <code>2e ≤ p/3 ≤ 2p</code>, поэтому <code>4p + 2e ≤ 6p</code>. Вместе:</p>
+  <div class="formula">4p + 1 ≤ j ≤ 6p.</div>
+  <p>Это ровно диапазон исходного последнего блока из букв <code>a</code>. Следовательно, <code>z₀[2n′] = z[j] = a</code>, хотя последний символ непустого блока <code>(ab)*</code> должен быть <code>b</code>. Снова противоречие.</p>
+  <p><strong>Пример: p = 6, e = 1.</strong> Удалим первые шесть букв: <code>u = ε</code>, <code>v = a⁶</code>, <code>w = x = ε</code>. Получится <code>a⁶b(ab)⁶a¹²</code>. Новая длина 31 требует <code>n′ = 10</code>. На индексе 10 действительно стоит <code>b</code>, поэтому проверка одного разделителя здесь не помогла бы. Но конец нового среднего блока должен находиться на индексе 20. Он происходит из исходного индекса <code>20 + 6 = 26</code>, где стоит <code>a</code>. Это и есть нужное нарушение.</p>
+  <h3>Небольшая неточность исходной таблицы</h3>
+  <p class="note">Во втором случае отчёт пишет, что окно <code>vwx</code> начинается правее <code>n′</code>. Это сильнее необходимого условия и не всегда верно. Правильная формулировка: <strong>первая удаляемая позиция находится правее n′</strong>. Сам аргумент отчёта использует именно это корректное условие.</p>
+  <p>Например, возьмём <code>p = 12</code>, <code>e = 1</code>, тогда <code>n′ = 22</code>. Пусть <code>|u| = 18</code>, <code>v = ε</code>, <code>|w| = 5</code>, <code>|x| = 6</code>. Окно занимает индексы <code>18…28</code>, его длина <code>11 ≤ 12</code>. Удаляется только <code>x</code> на индексах <code>23…28</code>. Все удаления правее 22, хотя окно начинается левее. Индекс 22 остаётся нетронутым, поэтому доказательство случая 2 работает.</p>
+  <details>
+    <summary>Самопроверка: почему в случае 3 к новому индексу прибавляется именно 6e?</summary>
+    <p>Мы отдельно доказали, что все <code>d = 6e</code> удаляемых букв стоят перед исходной позицией <code>j = 4p + 2e</code>. Поэтому она сдвигается влево ровно на <code>6e</code>. Одной общей длины удалений для такого вывода было бы недостаточно.</p>
+  </details>
+</section>
+
+<section id="conclusion">
+  <h2>Шаг 7. Где возникает окончательное противоречие</h2>
+  <p>Мы начали с произвольного допустимого разбиения. Если число удалений не кратно шести, нарушается допустимая длина. Иначе первая удаляемая позиция либо правее <code>n′</code>, либо не правее него. В первом варианте неверен разделитель, во втором — последняя буква среднего блока. Других вариантов нет.</p>
+  <p>Следовательно, для выбранного слова <code>z ∈ L</code> каждое разбиение, удовлетворяющее ограничениям леммы, даёт <code>uwy ∉ L</code>. Это несовместимо с обещанием существования разбиения, которое сохраняет принадлежность языку при всех <code>i ≥ 0</code>, включая ноль. Исходное предположение о контекстной свободе ложно.</p>
+  <p class="callout"><strong>Вывод: L не является контекстно-свободным.</strong> Перебор маленьких примеров помогает понять механизм. Общий результат обеспечивает доказательство для произвольного <code>p</code> и всех допустимых разбиений.</p>
+  <details>
+    <summary>Последняя самопроверка: почему нельзя переразбить получившееся слово на другие w₁, w₂, w₃?</summary>
+    <p>Его длина уже требует <code>|w₁| = |w₂| = |w₃| = (|z₀| − 1)/3</code>. Значит, фиксированы и индекс разделителя, и начало с концом среднего блока. Выбор другого вхождения <code>b</code> нарушил бы равенство длин.</p>
+  </details>
+</section>
+<section id="lab">
+<h2>Удаляем части своими руками</h2>
+<p>Ниже используется обозначение исходного отчёта: <span class="math">z = u v w x y</span>. Удаляются <strong>v и x</strong>, часть w между ними сохраняется. Мы всё время выбираем i = 0. Над каждой буквой стоит её индекс в показанном слове; после удаления индексы пересчитываются.</p>
+<div class="interactive pumping-lab">
+<div class="preset-row"><button type="button" data-preset="length">Случай 1: длина</button><button type="button" data-preset="right">Случай 2: разделитель</button><button type="button" data-preset="left">Случай 3: конец w₂</button><button type="button" data-preset="empty">Неточность: v пусто</button></div>
+<div class="controls">
+<label>Константа p<input id="pump-p" type="number" min="1" max="18" step="1" value="6"></label>
+<label>Начало окна = |u|<input id="pump-start" type="number" min="0" max="109" step="1" value="11"></label>
+<label>|v| — удалить<input id="pump-v" type="number" min="0" max="18" step="1" value="3"></label>
+<label>|w| — сохранить<input id="pump-w" type="number" min="0" max="18" step="1" value="0"></label>
+<label>|x| — удалить<input id="pump-x" type="number" min="0" max="18" step="1" value="3"></label>
+</div>
+<p id="pump-valid" class="lab-result" aria-live="polite"></p>
+<div class="legend"><span class="legend-item"><i class="swatch part-a"></i>w₁</span><span class="legend-item"><i class="swatch part-b"></i>b</span><span class="legend-item"><i class="swatch part-c"></i>w₂</span><span class="legend-item"><i class="swatch part-d"></i>w₃</span><span>Перечёркнуто = удаляется</span><span>Рамка = проверяемая позиция</span></div>
+<h3>Исходное слово z</h3><div id="tape-before" class="tape" role="img" aria-label="Исходное слово с отмеченными удаляемыми буквами"></div>
+<h3>После удаления: z₀ = uwy</h3><div id="tape-after" class="tape" role="img" aria-label="Укороченное слово"></div>
+<div id="pump-explain" aria-live="polite"></div>
+<p class="fine">Цвет после удаления показывает происхождение буквы. Новое предполагаемое разбиение в языке задаётся длиной z₀ и может пересекать прежние цветные блоки. Именно это учитывается в доказательстве.</p>
+</div>
+<details class="checkpoint"><summary>Сначала предскажи: p = 6, удалили 6 букв. Какой должна стать длина каждой из трёх частей?</summary><p>Исходная длина 6·6+1 = 37. После удаления получаем 31 = 3·10+1, значит n′ = 10. Отдельный b обязан оказаться на индексе 10, а последняя буква w₂ — на индексе 20. То, где эти места были до удаления, зависит от расположения удалённых букв.</p></details>
+<p class="note">Интерактив показывает конечные примеры и помогает понять индексы. Универсальность доказательства обеспечивается разбором произвольного p и произвольного допустимого разбиения выше.</p>
+</section>
+<section id="lean-intro">
+  <h2>Lean с нуля: что здесь похоже на Haskell</h2>
+  <p>Lean — язык программирования и система проверки математических доказательств. Знакомство с Haskell поможет читать типы, списки и разбор по конструкторам. Новое здесь: тип может выражать математическое утверждение, а корректное значение этого типа служит его доказательством. Поэтому файл <code>proof.lean</code> содержит не только описание языка L, но и объект, который удостоверяет его неконтекстную свободу.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Идея</th><th>Haskell</th><th>Lean в этом файле</th></tr></thead>
+    <tbody>
+      <tr><td>Алгебраический тип из двух конструкторов</td><td><code>data Letter = A | B</code></td><td><code>inductive Letter | a | b</code></td></tr>
+      <tr><td>Список букв</td><td><code>[Letter]</code></td><td><code>List Letter</code></td></tr>
+      <tr><td>Пустой список, добавление головы</td><td><code>[]</code>, <code>a : xs</code></td><td><code>[]</code>, <code>a :: xs</code></td></tr>
+      <tr><td>Склеивание списков</td><td><code>xs ++ ys</code></td><td><code>xs ++ ys</code></td></tr>
+      <tr><td>Повторение, склеивание списка списков</td><td><code>replicate n x</code>, <code>concat xss</code></td><td><code>List.replicate n x</code>, <code>xss.flatten</code></td></tr>
+      <tr><td>Разбор по конструкторам</td><td><code>case xs of ...</code></td><td><code>cases xs with</code>; для доказательства по индукции — <code>induction</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="code-caption">Настоящие строки 8–10: за пределами a и b букв нет.</p>
+  <pre><code>inductive Letter
+  | a | b
+  deriving DecidableEq, Repr</code></pre>
+  <p><code>DecidableEq</code> даёт процедуру решения равенства двух букв; <code>Repr</code> — представление для вывода. Это похоже на автоматически полученные экземпляры классов типов. Ни один из этих двух пунктов не доказывает основную теорему.</p>
+
+  <h3>Утверждение как тип, доказательство как значение</h3>
+  <p>Соответствие Карри — Говарда связывает логику с типами: доказательство «P и Q» содержит оба доказательства; доказательство «P влечёт Q» преобразует доказательство P в доказательство Q. Отрицание <code>¬ P</code> означает <code>P → False</code>: из предположения P можно получить противоречие. Именно такой преобразователь строит наша теорема.</p>
+  <p class="note">Аналогия с Haskell имеет границу. В Haskell выражение <code>undefined</code> можно объявить почти любого типа; бесконечное вычисление тоже не доказывает утверждение. Обычное доказательство Lean должно пройти проверку ядра. <code>sorry</code> обозначает незаполненное место через специальную аксиому и не считается законченным доказательством. В проверяемом файле таких пропусков нет.</p>
+
+  <h3>Language — свойство списка, а не список всех слов</h3>
+  <p><code>Language Letter</code> — множество конечных списков букв. Множество задаётся предикатом: для каждого слова сформулировано утверждение о принадлежности. Поэтому <code>x ∈ L</code> имеет тип <code>Prop</code>. <code>Bool</code> — вычисляемое значение <code>true</code> или <code>false</code>; <code>Prop</code> — логическое утверждение, для которого ищут доказательство. Запись условия в <code>Prop</code> сама по себе не запускает алгоритм проверки всех слов.</p>
+  <p><code>L.IsContextFree</code> выражает существование контекстно-свободной грамматики, порождающей в точности L. Теорема отрицает существование любой такой грамматики. Здесь нет перебора грамматик или ограничения на их размер.</p>
+</section>
+
+<section id="lean-reading">
+  <h2>Как прочитать определение языка и первые команды</h2>
+  <p>Длинная строка 12 — центральная связь между условием билета и машинным доказательством. Ниже она разбита переносами для чтения; имена и условия сохранены.</p>
+  <pre><code>def L : Language Letter := {x : List Letter |
+  ∃ p_w1 p_m p_w2 p_w3 : List Letter,
+    x = p_w1 ++ p_m ++ p_w2 ++ p_w3 ∧
+    (∀ ch ∈ p_m, ch = Letter.b) ∧
+    (p_m.length = 1) ∧
+    (p_w1.length = p_w2.length) ∧
+    (p_w1.length = p_w3.length) ∧
+    ((p_w2.length) % 2 = 0) ∧
+    (¬ ([Letter.a, Letter.a] &lt;:+: p_w2)) ∧
+    (¬ ([Letter.b, Letter.b] &lt;:+: p_w2)) ∧
+    ((p_w2.length = 0) ∨ ([Letter.a] &lt;+: p_w2))}</code></pre>
+  <p>Читаем слева направо: L состоит из слов x, для которых существуют четыре списка с указанными свойствами. <code>p_w1</code>, <code>p_w2</code>, <code>p_w3</code> — три блока задачи. <code>p_m</code> — список длины один, каждый элемент которого равен b; значит, это в точности <code>[Letter.b]</code>. Условия равенства длин скрепляют три блока. Их буквы уже ограничены типом <code>Letter</code>.</p>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Запись</th><th>Чтение</th></tr></thead>
+    <tbody>
+      <tr><td><code>∃</code>, <code>∀</code></td><td>«Существуют», «для всех».</td></tr>
+      <tr><td><code>∧</code>, <code>∨</code>, <code>¬</code></td><td>«И», «или», «не».</td></tr>
+      <tr><td><code>∀ ch ∈ p_m, ...</code></td><td>Для любой буквы ch, принадлежащей списку p_m.</td></tr>
+      <tr><td><code>xs &lt;+: ys</code></td><td>xs является префиксом ys.</td></tr>
+      <tr><td><code>xs &lt;:+: ys</code></td><td>xs является непрерывным подсловом ys, не произвольной подпоследовательностью.</td></tr>
+      <tr><td><code>n % 2 = 0</code></td><td>Остаток от деления n на 2 равен нулю: n чётно.</td></tr>
+      <tr><td><code>h : P</code>, <code>:=</code></td><td>h — доказательство или предположение P; справа от <code>:=</code> задаётся значение.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Где спрятано (ab)*</h3>
+  <p>Последние четыре условия ровно описывают <code>(ab)*</code>. Пустое слово подходит. Непустое начинается с a. Из запретов aa и bb следует, что каждая следующая буква отличается от предыдущей: других букв в алфавите нет. Поэтому слово имеет вид ababab…; чётная длина обрывает его после b. Получается целое число пар ab. Обратно, любое число пар ab удовлетворяет всем четырём условиям.</p>
+  <p class="note">Важны все части описания. Без условия начала подошло бы ba; без чётности — aba. В файле нет отдельной теоремы с названием «эквивалентно (ab)*»: это соответствие исходной задачи и формального определения мы проверяем отдельно. Само отрицание контекстной свободы Lean доказывает уже для точного предиката выше.</p>
+
+  <details>
+    <summary>Самопроверка 1. Принадлежит ли L односимвольное слово b?</summary>
+    <p>Да. Берём w₁ = w₂ = w₃ = ε и m = b. Все три длины нулевые; ε принадлежит (ab)*. В формальном определении работают чётность нуля и первая ветвь условия «длина ноль или начинается с a». Случай нулевых блоков не потерян.</p>
+  </details>
+
+  <h3>Что делают тактики</h3>
+  <p class="code-caption">Строки 14–16: предположение и применение библиотечной леммы.</p>
+  <pre><code>theorem tfl_main : ¬ L.IsContextFree := by
+  intro h
+  obtain ⟨p, hp⟩ := h.pumping</code></pre>
+  <p><code>by</code> открывает описание построения доказательства тактиками. <code>intro h</code> принимает временное предположение о контекстной свободе. После этого цель — противоречие. <code>h.pumping</code> применяет лемму о накачке к этому предположению; <code>obtain</code> извлекает существующую константу p и свойство hp. Угловые скобки перечисляют извлекаемые компоненты.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Команда</th><th>Работа в доказательстве</th></tr></thead>
+    <tbody>
+      <tr><td><code>have</code>, <code>exact</code></td><td>Назвать промежуточный факт; предъявить доказательство текущей цели.</td></tr>
+      <tr><td><code>rw</code>, <code>simp only</code></td><td>Переписать выражение по равенству; упростить его указанными правилами.</td></tr>
+      <tr><td><code>constructor</code>, <code>cases</code></td><td>Разделить составную цель; разобрать возможные конструкторы значения или доказательства.</td></tr>
+      <tr><td><code>induction</code></td><td>Доказать базовый случай и переход с индукционным предположением.</td></tr>
+      <tr><td><code>omega</code></td><td>Построить доказательство арифметического следствия из доступных равенств и неравенств.</td></tr>
+      <tr><td><code>congrArg List.length h</code></td><td>Из равенства списков h получить равенство их длин.</td></tr>
+      <tr><td><code>first | ... | ...</code></td><td>Попробовать варианты тактического построения; результат всё равно проверяет ядро.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="lean-proof">
+  <h2>Что именно доказывают 196 строк</h2>
+  <p>Чтобы не перепутать обозначения, целое выбранное слово далее всегда называем W. Формальный файл и текст отчёта по-разному называют пять частей накачки. Это только переименование; три блока определения языка w₁, w₂, w₃ — ещё одна отдельная группа обозначений.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Роль</th><th>Отчёт</th><th>Lean</th></tr></thead>
+    <tbody>
+      <tr><td>Целое слово</td><td>z</td><td>W</td></tr>
+      <tr><td>Неизменный префикс</td><td>u</td><td>u</td></tr>
+      <tr><td>Первая удаляемая часть</td><td>v</td><td>v</td></tr>
+      <tr><td>Неизменная середина</td><td>w</td><td>x</td></tr>
+      <tr><td>Вторая удаляемая часть</td><td>x</td><td>y</td></tr>
+      <tr><td>Неизменный суффикс</td><td>y</td><td>z</td></tr>
+      <tr><td>После удаления</td><td>uwy</td><td>uxz</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Подготовка свидетеля и нового разбиения</h3>
+  <p>Берётся W = a<sup>2p</sup>b(ab)<sup>p</sup>a<sup>2p</sup>. Все три блока имеют длину 2p, поэтому W ∈ L; общая длина равна 6p + 1. Для проверки принадлежности сначала доказывается, что повторённое ab не содержит aa или bb и начинается с a при непустоте. Этому посвящена значительная часть файла.</p>
+  <p class="code-caption">Строки 112–113: извлечение разбиения и применение накачки с i = 0.</p>
+  <pre><code>obtain ⟨u, v, x, y, z, hsplit, hvy, hvxy, hpump⟩ := hp W hWL hWlen
+obtain ⟨w1, m, w2, w3, hw, hm, hml, h12, h13, hev, hnaa, -, -⟩ := hpump 0</code></pre>
+  <p>Первая строка даёт W = uvxyz, |vy| &gt; 0, |vxy| ≤ p и принадлежность всех uv<sup>i</sup>xy<sup>i</sup>z языку. Вторая использует i = 0: слово uxz якобы принадлежит L. Значит, существуют <em>новые</em> блоки w1, m, w2, w3. Они не объявляются остатками старых блоков: разрешено любое представление, допустимое определением L. Дефисы отбрасывают два свойства, которые дальше не понадобятся.</p>
+
+  <h3>Арифметика: откуда 2 ≤ N ≤ 2p − 2</h3>
+  <p>Обозначим N = <code>w1.length</code> и d = |v| + |y|. В исходнике отдельной переменной N нет; это сокращение для чтения. Имеем 1 ≤ d ≤ p, поэтому p ≥ 1. Если uxz принадлежит L, его длина равна 3N + 1, а N чётно. С другой стороны, удалено d букв:</p>
+  <p class="formula">3N + 1 = 6p + 1 − d, следовательно 3N = 6p − d.</p>
+  <p>Из d ≥ 1 получается N &lt; 2p. Оба числа N и 2p чётны, поэтому N ≤ 2p − 2. Из d ≤ p следует 3N ≥ 5p &gt; 0. Значит, N положительно; учитывая чётность, N ≥ 2. Эти выводы Lean получает командой <code>omega</code> из ранее названных фактов. Арифметика также означает d = 3(2p − N), кратное шести. Отчёт выделяет некратные шести значения d в отдельный случай; формальный файл исключает их внутри этого рассуждения.</p>
+
+  <h3>Случай A: |u| ≤ N — в новом w₂ появляется aa</h3>
+  <p>Файл делит случаи командой <code>rcases Nat.lt_or_ge u.length (w1.length + 1)</code>. Для натуральных длин первая ветвь означает |u| ≤ N. Так как весь промежуток vxy не длиннее p, оставшийся суффикс длинный:</p>
+  <p class="formula">|z| = 6p + 1 − |u| − |vxy| ≥ 5p + 1 − N ≥ N + 2.</p>
+  <p>Проверим последнее неравенство без пропуска: разность между 5p + 1 − N и N + 2 равна 5p − 2N − 1. Из N ≤ 2p − 2 она не меньше p + 3, то есть положительна. Кроме того, N + 2 ≤ 2p. Поэтому последние N + 2 букв z лежат внутри конечного блока a<sup>2p</sup> исходного W и все равны a.</p>
+  <p>Удаление v и y не меняет z. В новом представлении uxz = w1 · b · w2 · w3 последние N букв занимает w3. Ещё две буквы перед ним — последние две буквы w2, поскольку |w2| = N ≥ 2. Но весь этот суффикс из N + 2 букв состоит из a. Следовательно, w2 оканчивается на aa, вопреки запрету aa в определении L.</p>
+  <p>В строках 121–145 Lean выделяет последние две буквы w2 и последние N + 2 букв z через <code>take</code> и <code>drop</code>, затем сопоставляет суффиксы одинаковой длины. Текст отчёта пользуется близким противоречием: последний символ нового w₂ должен быть b, а оказывается a. Формальное доказательство использует запрет aa; доказывать отдельно свойство «оканчивается на b» ему не нужно.</p>
+
+  <h3>Случай B: |u| ≥ N + 1 — обязательная b оказывается a</h3>
+  <p>Первые N + 1 букв uxz целиком находятся в u и совпадают с первыми N + 1 буквами W. Но N + 1 ≤ 2p, поэтому это только a из начального блока a<sup>2p</sup>. В любом допустимом новом разбиении первые N букв составляют w1, а следующая буква — односимвольный m = b. Она одновременно равна a и b: противоречие.</p>
+  <p>В строках 147–170 операция <code>List.take</code> формально сопоставляет эти префиксы. Затем из непустоты m извлекается буква c; принадлежность списку из одних a даёт c = a, а свойство m даёт c = b. Конструкторы <code>Letter.a</code> и <code>Letter.b</code> различны, поэтому последняя команда <code>cases hcb</code> закрывает невозможный случай.</p>
+
+  <details>
+    <summary>Самопроверка 2. Почему нельзя после удаления оставить длину блоков равной 2p?</summary>
+    <p>Потому что слово стало короче на d &gt; 0. Если оно всё ещё принадлежит L, длина каждого нового блока обязана быть N = 2p − d/3. Граница разделителя b и границы w₂ сдвигаются. Доказательство опровергает принадлежность именно при этих новых границах; сохранение старых границ оставило бы логический пробел.</p>
+  </details>
+
+  <h3>Карта всего файла</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Строки proof.lean</th><th>Назначение</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#lean-L1">1–6</a></td><td>Импорт библиотек и средств повторной проверки.</td></tr>
+      <tr><td><a href="#lean-L8">8–10; 12</a></td><td>Алфавит; точное определение L.</td></tr>
+      <tr><td><a href="#lean-L14">14–16</a></td><td>Основная теорема, предположение, константа накачки.</td></tr>
+      <tr><td><a href="#lean-L17">17–70</a></td><td>Индукция: ни (ab)ᑫ, ни b(ab)ᑫ не содержат одинаковых соседних букв.</td></tr>
+      <tr><td><a href="#lean-L71">71–75</a></td><td>Разбиение повторения a на два последовательных блока.</td></tr>
+      <tr><td><a href="#lean-L76">76–83; 84–90</a></td><td>Длина (ab)ᑫ равна 2q; непустое повторение начинается с a.</td></tr>
+      <tr><td><a href="#lean-L91">91–101</a></td><td>Введение M = (ab)ᵖ и сбор его свойств.</td></tr>
+      <tr><td><a href="#lean-L102">102–111</a></td><td>Введение W, его длина и принадлежность L.</td></tr>
+      <tr><td><a href="#lean-L112">112–118</a></td><td>Разбиение накачки, удаление частей, новый разбор принадлежности, равенства длин.</td></tr>
+      <tr><td><a href="#lean-L119">119; 120–145</a></td><td>Полное разделение случаев; противоречие aa в суффиксе.</td></tr>
+      <tr><td><a href="#lean-L146">146–180</a></td><td>Противоречие a = b в префиксе; математическая теорема закончена.</td></tr>
+      <tr><td><a href="#lean-L182">182–194; 196</a></td><td>Повторная проверка деклараций; вывод используемых аксиом.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="trust">
+  <h2>Что удостоверяют proved, replay и список аксиом</h2>
+  <p>Тактики помогают построить объект доказательства. Ядро Lean проверяет, что этот объект имеет заявленный тип <code>¬ L.IsContextFree</code>. Параметры и кванторы остаются общими: доказательство охватывает любое допустимое разбиение выбранного слова при константе, полученной из леммы. Никаких «бесконечных тестов» здесь нет; проверяется конечное доказательство общего утверждения.</p>
+  <p>Блок <code>run_cmd</code> собирает декларации текущего файла и повторно проверяет их через <code>Lean.Environment.replay</code> на основе импортированного окружения с <code>trustLevel := 0</code>. При успехе он выводит <code>TFL_REPLAY_OK</code>, при ошибке — <code>TFL_REPLAY_FAIL</code> как сообщение об ошибке. Эта проверка относится к формальным декларациям. Она не читает русский HTML-отчёт и не удостоверяет приведённые в нём числовые примеры.</p>
+  <p>При свежей проверке исходного файла Lean 4.33.0 завершился с кодом 0 и вывел <code>TFL_REPLAY_OK</code>. Команда <code>#print axioms tfl_main</code> показала только три стандартные аксиомы, от которых транзитивно зависит теорема:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Аксиома</th><th>Смысл на уровне чтения</th></tr></thead>
+    <tbody>
+      <tr><td><code>propext</code></td><td>Логически эквивалентные утверждения можно считать равными.</td></tr>
+      <tr><td><code>Classical.choice</code></td><td>Из существования можно выбрать объект; это основа используемой классической логики.</td></tr>
+      <tr><td><code>Quot.sound</code></td><td>Эквивалентные элементы задают один элемент фактор-типа.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Это не предположение «наш язык не КС» и не специальные аксиомы, добавленные ради задачи. В списке законченного доказательства не должно быть <code>sorryAx</code> — следа пропуска <code>sorry</code>. Наличие только стандартных аксиом нужно рассматривать вместе с успешной компиляцией, а не вместо неё.</p>
+  <p>Шесть предупреждений линтера относятся к неиспользованным или недостижимым запасным тактикам в ветвях <code>first</code>: первая попытка уже сработала. Это замечания к записи доказательства, а не незакрытые цели. Сгенерированное из входного описания определение вместе с сохранённым телом доказательства также сверено с отдельным <code>proof.lean</code>: текст совпадает.</p>
+  <p class="callout">Граница результата: Lean проверяет теорему о записанном определении L в принятой логической системе. Человек проверяет, что это определение соответствует билету и что поясняющий текст верно передаёт доказательство. Надпись <code>proved</code> означает успешное прохождение формальной проверки в соответствующем запуске, а не вероятность правильности в процентах и не сертификат каждой фразы отчёта.</p>
+
+  <details>
+    <summary>Самопроверка 3. Может ли Lean принять верное доказательство не той задачи?</summary>
+    <p>Да. Если ошибиться в определении L, можно безупречно доказать утверждение о другом языке. Поэтому мы отдельно проверили односимвольный разделитель b, равенство трёх длин, бинарный алфавит и эквивалентность ограничения на w₂ выражению (ab)*. Компиляция подтверждает рассуждение после этой границы; смысл исходного задания требует такой сверки.</p>
+  </details>
+</section>
+<section id="report-notes">
+<h2>Что учитывать при чтении исходного отчёта</h2>
+<p>Отчёт уже содержит правильный параметрический аргумент и проверенное формальное доказательство. Следующие замечания помогают не споткнуться о формулировки в его HTML-версии.</p>
+<div class="table-wrap"><table><thead><tr><th>Место</th><th>Что уточнить</th><th>Влияние на результат</th></tr></thead><tbody>
+<tr><td>Шаг 6, случай 2, столбец о расположении vwx</td><td>Правильно: «первая удаляемая позиция находится правее 2p−2e». Всё окно vwx может начинаться раньше, когда v пусто.</td><td>Условие случая и вывод о неизменной позиции n′ верны; ошибочен только более сильный текст в соседнем столбце.</td></tr>
+<tr><td>Заключение: «независимая автоматическая проверка не проводилась»</td><td>Это устаревший текст до добавления формализации. Итоговое утверждение проверено в Lean.</td><td>Не отменяет успешную проверку proof.lean.</td></tr>
+<tr><td>README: предупреждение о неправильном примере при p = 4</td><td>Ошибочное a⁸b(ab)⁵a⁸ сохранилось во вспомогательном выводе агента в JSON. Текущий основной отчёт использует правильное a⁸b(ab)⁴a⁸ длины 25.</td><td>Ошибочный вспомогательный пример отмечен как refuted; основной свидетель и код Lean правильны.</td></tr>
+<tr><td>Ссылка на лемму Огдена</td><td>Все позиции отмечены, поэтому для этого решения хватает обычной леммы о накачке для КС-языков. Lean использует именно pumping.</td><td>Использование более сильной леммы допустимо; для понимания её общая форма здесь не нужна.</td></tr>
+<tr><td>«Агенты (успешно)», confidence, стоимость</td><td>Успешный запуск агента не гарантирует правильность всех его предложений. Процент, стоимость и число вызовов не являются математическими аргументами.</td><td>Доказательством служат общий аргумент и проверенная теорема.</td></tr>
+</tbody></table></div>
+<p>В конце математической части упомянуто пересечение с регулярным языком <span class="math">R = a⁺bb(ab)⁺ba⁺</span>. Здесь «+» означает одно или более повторений. Это лишь указание на другой возможный маршрут: в основном доказательстве R нигде не используется. Для понимания и проверки уже данного решения этот маршрут развивать не требуется.</p>
+<details><summary>Краткое пояснение неточностей к сообщению преподавателю</summary><p>В текстовом отчёте есть две неточности: в таблице случая 2 следует читать «первая удаляемая позиция правее 2p−2e», а не «всё окно vwx начинается правее»; в заключении осталась устаревшая фраза об отсутствии автоматической проверки. Итоговая теорема о неконтекстной свободе языка проверена Lean 4 без sorry и дополнительных аксиом сверх стандартных. Основное доказательство учитывает обе поправки.</p></details>
+</section>
+
+<section id="recall">
+<h2>Проверка понимания без подсказок</h2>
+<p>Попробуй вслух ответить на вопросы. После каждого ответа можно раскрыть короткую проверку. Если ответ не складывается, вернись к указанному шагу — не обязательно перечитывать весь файл.</p>
+<details class="checkpoint"><summary>1. Что именно надо опровергнуть, чтобы показать, что язык не КС?</summary><p>Предположение о существовании КС-грамматики для всего языка. Из него следует лемма о накачке. Мы строим слово, для которого каждое допустимое разбиение ломается уже при i = 0, и получаем противоречие с этой леммой. <a href="#pumping">Вернуться к порядку кванторов.</a></p></details>
+<details class="checkpoint"><summary>2. Почему нельзя просто сказать «после удаления длины исходных трёх блоков различаются»?</summary><p>Укороченное слово могло бы иметь другое разбиение на три равные части и отдельный b. Нужно исключить и это. Новая длина задаёт n′, затем проверяются символы именно на новых обязательных позициях n′ и 2n′. <a href="#cases">Вернуться к случаям.</a></p></details>
+<details class="checkpoint"><summary>3. Почему удаление двух непустых частей не требуется?</summary><p>Лемма требует |vx| ≥ 1. Значит, хотя бы одна из частей непуста, а другая может быть пустой. Из этого и возникает неточность в описании начала окна. <a href="#lab">Открыть пример «v пусто».</a></p></details>
+<details class="checkpoint"><summary>4. Если длина после удаления всё ещё равна 6k+1, почему слово всё равно не подходит?</summary><p>Тогда число удалений d = 6e. Если все удаления справа от n′, на позиции обязательного b остаётся a из левого блока. Если хотя бы одно удаление не правее n′, короткое окно заканчивается достаточно рано: на место конца нового w₂ попадает a из правого блока. <a href="#cases">Вернуться к пересчёту индексов.</a></p></details>
+<details class="checkpoint"><summary>5. Почему успешная компиляция proof.lean значима, а компиляция произвольной Haskell-программы не доказывает её правильность?</summary><p>В Lean тип самой теоремы — математическое утверждение, а тело — его доказательство. Ядро проверяет соответствие доказательства утверждению. В Haskell обычный тип функции описывает входы и выход, не обязательно её спецификацию; кроме того, undefined и незавершение мешают прямому отождествлению всех программ с доказательствами. <a href="#lean-intro">Вернуться к введению в Lean.</a></p></details>
+<details class="checkpoint"><summary>6. Где проходит граница между машинной проверкой и человеческой интерпретацией?</summary><p>Lean проверяет записанную формальную теорему о записанном L. Соответствие этого L исходному русскому условию проверяется отдельно. Здесь это соответствие разобрано через односимвольный блок b, равные длины и эквивалентное описание (ab)*. Отдельной Lean-теоремы об эквивалентности двух определений в исходном файле нет. <a href="#lean-reading">Вернуться к определению языка.</a></p></details>
+<div class="callout"><strong>Короткая цепочка, которую стоит уметь восстановить:</strong><p>L — КС ⇒ есть константа p ⇒ берём a²ᵖb(ab)ᵖa²ᵖ ⇒ рассматриваем любое допустимое разбиение ⇒ удаляем v и x ⇒ либо неверная длина, либо неверная буква на обязательной позиции ⇒ противоречие ⇒ L не КС.</p></div>
+</section>
+
+<section id="source">
+<h2>Полный Lean-файл для сопоставления</h2>
+<p>Ниже встроена точная копия <code>proof.lean</code>, который проверялся в Docker. Номера строк позволяют сопоставить обзор кода с исходником. Это текст для чтения; браузер не запускает Lean.</p>
+<details id="source-details"><summary>Раскрыть все 196 строк исходного доказательства</summary>
+<div class="source-toolbar"><button type="button" id="copy-proof">Скопировать Lean-код</button><span id="copy-status" role="status"></span></div>
+<ol class="source-lines"><li id="lean-L1"><code>import Lean.Replay</code></li>
+<li id="lean-L2"><code>import Lean.Elab.Command</code></li>
+<li id="lean-L3"><code>import TflLean</code></li>
+<li id="lean-L4"><code>import Mathlib.Computability.ContextFreeGrammar</code></li>
+<li id="lean-L5"><code>import Langlib.Classes.ContextFree.Pumping.Pumping</code></li>
+<li id="lean-L6"><code>import Langlib.Classes.ContextFree.Basics.Ogden</code></li>
+<li id="lean-L7"><code> </code></li>
+<li id="lean-L8"><code>inductive Letter</code></li>
+<li id="lean-L9"><code>  | a | b</code></li>
+<li id="lean-L10"><code>  deriving DecidableEq, Repr</code></li>
+<li id="lean-L11"><code> </code></li>
+<li id="lean-L12"><code>def L : Language Letter := {x : List Letter | ∃ p_w1 p_m p_w2 p_w3 : List Letter, x = p_w1 ++ p_m ++ p_w2 ++ p_w3 ∧ (∀ ch ∈ p_m, ch = Letter.b) ∧ (p_m.length = 1) ∧ (p_w1.length = p_w2.length) ∧ (p_w1.length = p_w3.length) ∧ ((p_w2.length) % 2 = 0) ∧ (¬ ([Letter.a, Letter.a] &lt;:+: p_w2)) ∧ (¬ ([Letter.b, Letter.b] &lt;:+: p_w2)) ∧ ((p_w2.length = 0) ∨ ([Letter.a] &lt;+: p_w2))}</code></li>
+<li id="lean-L13"><code> </code></li>
+<li id="lean-L14"><code>theorem tfl_main : ¬ L.IsContextFree := by</code></li>
+<li id="lean-L15"><code>  intro h</code></li>
+<li id="lean-L16"><code>  obtain ⟨p, hp⟩ := h.pumping</code></li>
+<li id="lean-L17"><code>  -- (ab)^q never contains [c,c]; neither does b(ab)^q.</code></li>
+<li id="lean-L18"><code>  have alt : ∀ q : ℕ, ∀ s t : List Letter, ∀ c : Letter,</code></li>
+<li id="lean-L19"><code>      s ++ [c, c] ++ t ≠ (List.replicate q [Letter.a, Letter.b]).flatten ∧</code></li>
+<li id="lean-L20"><code>      s ++ [c, c] ++ t ≠ Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten := by</code></li>
+<li id="lean-L21"><code>    intro q</code></li>
+<li id="lean-L22"><code>    induction q with</code></li>
+<li id="lean-L23"><code>    | zero =&gt;</code></li>
+<li id="lean-L24"><code>      intro s t c</code></li>
+<li id="lean-L25"><code>      constructor</code></li>
+<li id="lean-L26"><code>      · intro hst</code></li>
+<li id="lean-L27"><code>        have h&#x27; := congrArg List.length hst</code></li>
+<li id="lean-L28"><code>        simp only [List.length_append, List.length_cons, List.length_nil, List.replicate_zero, List.flatten_nil] at h&#x27;</code></li>
+<li id="lean-L29"><code>        omega</code></li>
+<li id="lean-L30"><code>      · intro hst</code></li>
+<li id="lean-L31"><code>        have h&#x27; := congrArg List.length hst</code></li>
+<li id="lean-L32"><code>        simp only [List.length_append, List.length_cons, List.length_nil, List.replicate_zero, List.flatten_nil] at h&#x27;</code></li>
+<li id="lean-L33"><code>        omega</code></li>
+<li id="lean-L34"><code>    | succ q ih =&gt;</code></li>
+<li id="lean-L35"><code>      intro s t c</code></li>
+<li id="lean-L36"><code>      have e : (List.replicate (q + 1) [Letter.a, Letter.b]).flatten = Letter.a :: Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten := by</code></li>
+<li id="lean-L37"><code>        rw [List.replicate_succ, List.flatten_cons, List.cons_append, List.cons_append, List.nil_append]</code></li>
+<li id="lean-L38"><code>      rw [e]</code></li>
+<li id="lean-L39"><code>      constructor</code></li>
+<li id="lean-L40"><code>      · intro hst</code></li>
+<li id="lean-L41"><code>        cases s with</code></li>
+<li id="lean-L42"><code>        | nil =&gt;</code></li>
+<li id="lean-L43"><code>          simp only [List.nil_append, List.cons_append] at hst</code></li>
+<li id="lean-L44"><code>          obtain ⟨h1, h2⟩ := List.cons.inj hst</code></li>
+<li id="lean-L45"><code>          obtain ⟨h3, -⟩ := List.cons.inj h2</code></li>
+<li id="lean-L46"><code>          subst h1</code></li>
+<li id="lean-L47"><code>          cases h3</code></li>
+<li id="lean-L48"><code>        | cons x s&#x27; =&gt;</code></li>
+<li id="lean-L49"><code>          simp only [List.cons_append] at hst</code></li>
+<li id="lean-L50"><code>          exact (ih s&#x27; t c).2 (List.cons.inj hst).2</code></li>
+<li id="lean-L51"><code>      · intro hst</code></li>
+<li id="lean-L52"><code>        cases s with</code></li>
+<li id="lean-L53"><code>        | nil =&gt;</code></li>
+<li id="lean-L54"><code>          simp only [List.nil_append, List.cons_append] at hst</code></li>
+<li id="lean-L55"><code>          obtain ⟨h1, h2⟩ := List.cons.inj hst</code></li>
+<li id="lean-L56"><code>          obtain ⟨h3, -⟩ := List.cons.inj h2</code></li>
+<li id="lean-L57"><code>          subst h1</code></li>
+<li id="lean-L58"><code>          cases h3</code></li>
+<li id="lean-L59"><code>        | cons x s&#x27; =&gt;</code></li>
+<li id="lean-L60"><code>          cases s&#x27; with</code></li>
+<li id="lean-L61"><code>          | nil =&gt;</code></li>
+<li id="lean-L62"><code>            simp only [List.nil_append, List.cons_append] at hst</code></li>
+<li id="lean-L63"><code>            obtain ⟨-, h2⟩ := List.cons.inj hst</code></li>
+<li id="lean-L64"><code>            obtain ⟨h3, h4⟩ := List.cons.inj h2</code></li>
+<li id="lean-L65"><code>            obtain ⟨h5, -⟩ := List.cons.inj h4</code></li>
+<li id="lean-L66"><code>            subst h3</code></li>
+<li id="lean-L67"><code>            cases h5</code></li>
+<li id="lean-L68"><code>          | cons y s&#x27;&#x27; =&gt;</code></li>
+<li id="lean-L69"><code>            simp only [List.cons_append] at hst</code></li>
+<li id="lean-L70"><code>            exact (ih s&#x27;&#x27; t c).2 (List.cons.inj (List.cons.inj hst).2).2</code></li>
+<li id="lean-L71"><code>  have hrep : ∀ i j : ℕ, List.replicate (i + j) Letter.a = List.replicate i Letter.a ++ List.replicate j Letter.a := by</code></li>
+<li id="lean-L72"><code>    intro i j</code></li>
+<li id="lean-L73"><code>    induction i with</code></li>
+<li id="lean-L74"><code>    | zero =&gt; simp</code></li>
+<li id="lean-L75"><code>    | succ i ih =&gt; rw [Nat.add_right_comm, List.replicate_succ, List.replicate_succ, ih, List.cons_append]</code></li>
+<li id="lean-L76"><code>  have hlenM : ∀ q : ℕ, (List.replicate q [Letter.a, Letter.b]).flatten.length = 2 * q := by</code></li>
+<li id="lean-L77"><code>    intro q</code></li>
+<li id="lean-L78"><code>    induction q with</code></li>
+<li id="lean-L79"><code>    | zero =&gt; simp</code></li>
+<li id="lean-L80"><code>    | succ q ih =&gt;</code></li>
+<li id="lean-L81"><code>      rw [List.replicate_succ, List.flatten_cons, List.length_append, ih]</code></li>
+<li id="lean-L82"><code>      simp only [List.length_cons, List.length_nil]</code></li>
+<li id="lean-L83"><code>      omega</code></li>
+<li id="lean-L84"><code>  have hstart : ∀ q : ℕ, (List.replicate q [Letter.a, Letter.b]).flatten.length = 0 ∨ [Letter.a] &lt;+: (List.replicate q [Letter.a, Letter.b]).flatten := by</code></li>
+<li id="lean-L85"><code>    intro q</code></li>
+<li id="lean-L86"><code>    cases q with</code></li>
+<li id="lean-L87"><code>    | zero =&gt; left; simp</code></li>
+<li id="lean-L88"><code>    | succ q =&gt;</code></li>
+<li id="lean-L89"><code>      right</code></li>
+<li id="lean-L90"><code>      exact ⟨Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten, by simp [List.replicate_succ]⟩</code></li>
+<li id="lean-L91"><code>  obtain ⟨M, hM⟩ : ∃ M : List Letter, M = (List.replicate p [Letter.a, Letter.b]).flatten := ⟨_, rfl⟩</code></li>
+<li id="lean-L92"><code>  have hMlen : M.length = 2 * p := by rw [hM]; exact hlenM p</code></li>
+<li id="lean-L93"><code>  have hMaa : ¬ [Letter.a, Letter.a] &lt;:+: M := by</code></li>
+<li id="lean-L94"><code>    rintro ⟨s, t, hst⟩</code></li>
+<li id="lean-L95"><code>    rw [hM] at hst</code></li>
+<li id="lean-L96"><code>    exact (alt p s t Letter.a).1 hst</code></li>
+<li id="lean-L97"><code>  have hMbb : ¬ [Letter.b, Letter.b] &lt;:+: M := by</code></li>
+<li id="lean-L98"><code>    rintro ⟨s, t, hst⟩</code></li>
+<li id="lean-L99"><code>    rw [hM] at hst</code></li>
+<li id="lean-L100"><code>    exact (alt p s t Letter.b).1 hst</code></li>
+<li id="lean-L101"><code>  have hMst : M.length = 0 ∨ [Letter.a] &lt;+: M := by rw [hM]; exact hstart p</code></li>
+<li id="lean-L102"><code>  -- Witness W = a^{2p} b (ab)^p a^{2p}.</code></li>
+<li id="lean-L103"><code>  obtain ⟨W, hW⟩ : ∃ W : List Letter, W = List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p) Letter.a := ⟨_, rfl⟩</code></li>
+<li id="lean-L104"><code>  have hWl : W.length = 6 * p + 1 := by</code></li>
+<li id="lean-L105"><code>    rw [hW]</code></li>
+<li id="lean-L106"><code>    simp only [List.length_append, List.length_replicate, List.length_cons, List.length_nil, hMlen]</code></li>
+<li id="lean-L107"><code>    omega</code></li>
+<li id="lean-L108"><code>  have hWL : W ∈ L := by</code></li>
+<li id="lean-L109"><code>    rw [hW]</code></li>
+<li id="lean-L110"><code>    exact ⟨List.replicate (2 * p) Letter.a, [Letter.b], M, List.replicate (2 * p) Letter.a, rfl, by simp, rfl, by rw [List.length_replicate, hMlen], rfl, by rw [hMlen]; omega, hMaa, hMbb, hMst⟩</code></li>
+<li id="lean-L111"><code>  have hWlen : W.length ≥ p := by omega</code></li>
+<li id="lean-L112"><code>  obtain ⟨u, v, x, y, z, hsplit, hvy, hvxy, hpump⟩ := hp W hWL hWlen</code></li>
+<li id="lean-L113"><code>  obtain ⟨w1, m, w2, w3, hw, hm, hml, h12, h13, hev, hnaa, -, -⟩ := hpump 0</code></li>
+<li id="lean-L114"><code>  simp only [nTimes, List.replicate_zero, List.flatten_nil, List.append_nil] at hw</code></li>
+<li id="lean-L115"><code>  have L1 := congrArg List.length hsplit</code></li>
+<li id="lean-L116"><code>  simp only [List.length_append, hWl] at L1 hvy hvxy</code></li>
+<li id="lean-L117"><code>  have L2 := congrArg List.length hw</code></li>
+<li id="lean-L118"><code>  simp only [List.length_append] at L2</code></li>
+<li id="lean-L119"><code>  rcases Nat.lt_or_ge u.length (w1.length + 1) with hlt | hge</code></li>
+<li id="lean-L120"><code>  · -- u is short: the last |w1|+2 letters of u x z are a&#x27;s, so w2 ends with aa.</code></li>
+<li id="lean-L121"><code>    obtain ⟨w2a, w2b, hw2, hw2b⟩ : ∃ w2a w2b : List Letter, w2 = w2a ++ w2b ∧ w2b.length = 2 :=</code></li>
+<li id="lean-L122"><code>      ⟨List.take (w1.length - 2) w2, List.drop (w1.length - 2) w2, by rw [List.take_append_drop], by rw [List.length_drop]; omega⟩</code></li>
+<li id="lean-L123"><code>    obtain ⟨z1, z2, hz, hz2⟩ : ∃ z1 z2 : List Letter, z = z1 ++ z2 ∧ z2.length = w1.length + 2 :=</code></li>
+<li id="lean-L124"><code>      ⟨List.take (z.length - (w1.length + 2)) z, List.drop (z.length - (w1.length + 2)) z, by rw [List.take_append_drop], by rw [List.length_drop]; omega⟩</code></li>
+<li id="lean-L125"><code>    have hN2 : w1.length + 2 ≤ 2 * p := by omega</code></li>
+<li id="lean-L126"><code>    have hA : List.replicate (2 * p) Letter.a = List.replicate (2 * p - (w1.length + 2)) Letter.a ++ List.replicate (w1.length + 2) Letter.a := by</code></li>
+<li id="lean-L127"><code>      rw [← hrep, Nat.sub_add_cancel hN2]</code></li>
+<li id="lean-L128"><code>    rw [hz, hw2] at hw</code></li>
+<li id="lean-L129"><code>    have E1 : (u ++ x ++ z1) ++ z2 = (w1 ++ m ++ w2a) ++ (w2b ++ w3) := by</code></li>
+<li id="lean-L130"><code>      simp only [List.append_assoc] at hw ⊢</code></li>
+<li id="lean-L131"><code>      exact hw</code></li>
+<li id="lean-L132"><code>    have r1 := (List.append_inj&#x27; E1 (by simp only [List.length_append]; omega)).2</code></li>
+<li id="lean-L133"><code>    have E2 : (u ++ v ++ x ++ y ++ z1) ++ z2 = (List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p - (w1.length + 2)) Letter.a) ++ List.replicate (w1.length + 2) Letter.a := by</code></li>
+<li id="lean-L134"><code>      have hWW : u ++ v ++ x ++ y ++ z = List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p) Letter.a := by</code></li>
+<li id="lean-L135"><code>        rw [← hsplit, hW]</code></li>
+<li id="lean-L136"><code>      rw [hz] at hWW</code></li>
+<li id="lean-L137"><code>      simp only [List.append_assoc] at hWW ⊢</code></li>
+<li id="lean-L138"><code>      rw [hWW, ← hA]</code></li>
+<li id="lean-L139"><code>    have r2 := (List.append_inj&#x27; E2 (by rw [hz2, List.length_replicate])).2</code></li>
+<li id="lean-L140"><code>    have h22 : List.replicate (w1.length + 2) Letter.a = List.replicate 2 Letter.a ++ List.replicate w1.length Letter.a := by</code></li>
+<li id="lean-L141"><code>      rw [show w1.length + 2 = 2 + w1.length by omega, hrep 2 w1.length]</code></li>
+<li id="lean-L142"><code>    have r3 : w2b ++ w3 = List.replicate 2 Letter.a ++ List.replicate w1.length Letter.a := r1.symm.trans (r2.trans h22)</code></li>
+<li id="lean-L143"><code>    have r4 := (List.append_inj r3 (by rw [hw2b, List.length_replicate])).1</code></li>
+<li id="lean-L144"><code>    have r5 : w2b = [Letter.a, Letter.a] := r4.trans rfl</code></li>
+<li id="lean-L145"><code>    exact hnaa ⟨w2a, [], by rw [List.append_nil, hw2, r5]⟩</code></li>
+<li id="lean-L146"><code>  · -- u is long: the first |w1|+1 letters of u x z are a&#x27;s, so the middle letter is a.</code></li>
+<li id="lean-L147"><code>    have t1 : List.take (w1.length + 1) W = List.take (w1.length + 1) u := by</code></li>
+<li id="lean-L148"><code>      rw [hsplit]</code></li>
+<li id="lean-L149"><code>      simp only [List.append_assoc]</code></li>
+<li id="lean-L150"><code>      first</code></li>
+<li id="lean-L151"><code>        | exact List.take_append_of_le_length hge</code></li>
+<li id="lean-L152"><code>        | simp [List.take_append, Nat.sub_eq_zero_of_le hge]</code></li>
+<li id="lean-L153"><code>    have t2 : List.take (w1.length + 1) (u ++ x ++ z) = List.take (w1.length + 1) u := by</code></li>
+<li id="lean-L154"><code>      simp only [List.append_assoc]</code></li>
+<li id="lean-L155"><code>      first</code></li>
+<li id="lean-L156"><code>        | exact List.take_append_of_le_length hge</code></li>
+<li id="lean-L157"><code>        | simp [List.take_append, Nat.sub_eq_zero_of_le hge]</code></li>
+<li id="lean-L158"><code>    have t3 : List.take (w1.length + 1) (w1 ++ m ++ w2 ++ w3) = w1 ++ m := by</code></li>
+<li id="lean-L159"><code>      rw [show w1 ++ m ++ w2 ++ w3 = (w1 ++ m) ++ (w2 ++ w3) by simp only [List.append_assoc], show w1.length + 1 = (w1 ++ m).length by simp [hml], List.take_left]</code></li>
+<li id="lean-L160"><code>    have hle2 : w1.length + 1 ≤ (List.replicate (2 * p) Letter.a).length := by</code></li>
+<li id="lean-L161"><code>      rw [List.length_replicate]; omega</code></li>
+<li id="lean-L162"><code>    have hle3 : w1.length + 1 ≤ 2 * p := by omega</code></li>
+<li id="lean-L163"><code>    have t4 : List.take (w1.length + 1) W = List.replicate (w1.length + 1) Letter.a := by</code></li>
+<li id="lean-L164"><code>      rw [hW]</code></li>
+<li id="lean-L165"><code>      simp only [List.append_assoc]</code></li>
+<li id="lean-L166"><code>      first</code></li>
+<li id="lean-L167"><code>        | rw [List.take_append_of_le_length hle2, List.take_replicate, Nat.min_eq_left hle3]</code></li>
+<li id="lean-L168"><code>        | simp [List.take_append, Nat.sub_eq_zero_of_le hle2, List.take_replicate, Nat.min_eq_left hle3]</code></li>
+<li id="lean-L169"><code>    have key : w1 ++ m = List.replicate (w1.length + 1) Letter.a :=</code></li>
+<li id="lean-L170"><code>      t3.symm.trans ((congrArg (List.take (w1.length + 1)) hw.symm).trans (t2.trans (t1.symm.trans t4)))</code></li>
+<li id="lean-L171"><code>    obtain ⟨c, hc⟩ : ∃ c, c ∈ m := by</code></li>
+<li id="lean-L172"><code>      cases m with</code></li>
+<li id="lean-L173"><code>      | nil =&gt; simp at hml</code></li>
+<li id="lean-L174"><code>      | cons c r =&gt; exact ⟨c, by simp⟩</code></li>
+<li id="lean-L175"><code>    have hcb := hm c hc</code></li>
+<li id="lean-L176"><code>    have hmem : c ∈ List.replicate (w1.length + 1) Letter.a := by</code></li>
+<li id="lean-L177"><code>      rw [← key]; simp [hc]</code></li>
+<li id="lean-L178"><code>    have hca := List.eq_of_mem_replicate hmem</code></li>
+<li id="lean-L179"><code>    rw [hca] at hcb</code></li>
+<li id="lean-L180"><code>    cases hcb</code></li>
+<li id="lean-L181"><code> </code></li>
+<li id="lean-L182"><code>open Lean in</code></li>
+<li id="lean-L183"><code>run_cmd do</code></li>
+<li id="lean-L184"><code>  let env ← getEnv</code></li>
+<li id="lean-L185"><code>  let mut newConsts : Std.HashMap Name ConstantInfo := {}</code></li>
+<li id="lean-L186"><code>  for (n, ci) in env.constants.toList do</code></li>
+<li id="lean-L187"><code>    if !env.const2ModIdx.contains n then</code></li>
+<li id="lean-L188"><code>      newConsts := newConsts.insert n ci</code></li>
+<li id="lean-L189"><code>  try</code></li>
+<li id="lean-L190"><code>    let importEnv ← importModules env.imports {} (trustLevel := 0)</code></li>
+<li id="lean-L191"><code>    let _ ← Lean.Environment.replay newConsts importEnv</code></li>
+<li id="lean-L192"><code>    logInfo &quot;TFL_REPLAY_OK&quot;</code></li>
+<li id="lean-L193"><code>  catch e =&gt;</code></li>
+<li id="lean-L194"><code>    logError s!&quot;TFL_REPLAY_FAIL: {(← e.toMessageData.toString)}&quot;</code></li>
+<li id="lean-L195"><code> </code></li>
+<li id="lean-L196"><code>#print axioms tfl_main</code></li></ol>
+</details>
+<p class="fine">SHA-256 исходного proof.lean: <code class="hash">39b73694dcf4637192c08cd8d18c82cf85c06bbe0bec4bd97e61002bc0e09fa8</code>. Пояснения относятся к проверенной версии на 29 сентября 2026 года.</p>
+<p class="fine">Локальные исходные материалы, если они лежат рядом: <a href="result.html">отчёт HTML</a>, <a href="result.md">отчёт Markdown</a>, <a href="proof.lean">Lean-файл</a>, <a href="input.json">условие в JSON</a>. Содержание этого пособия не зависит от открытия этих ссылок.</p>
+</section>
+<footer><p>Разбор готового решения для самостоятельного понимания. Можно читать без сети или сохранить в PDF через печать браузера.</p><button type="button" id="print-guide">Печать / PDF</button><a href="#top">В начало</a></footer>
+
+</main></div><script type="application/json" id="proof-data">"import Lean.Replay\nimport Lean.Elab.Command\nimport TflLean\nimport Mathlib.Computability.ContextFreeGrammar\nimport Langlib.Classes.ContextFree.Pumping.Pumping\nimport Langlib.Classes.ContextFree.Basics.Ogden\n\ninductive Letter\n  | a | b\n  deriving DecidableEq, Repr\n\ndef L : Language Letter := {x : List Letter | ∃ p_w1 p_m p_w2 p_w3 : List Letter, x = p_w1 ++ p_m ++ p_w2 ++ p_w3 ∧ (∀ ch ∈ p_m, ch = Letter.b) ∧ (p_m.length = 1) ∧ (p_w1.length = p_w2.length) ∧ (p_w1.length = p_w3.length) ∧ ((p_w2.length) % 2 = 0) ∧ (¬ ([Letter.a, Letter.a] <:+: p_w2)) ∧ (¬ ([Letter.b, Letter.b] <:+: p_w2)) ∧ ((p_w2.length = 0) ∨ ([Letter.a] <+: p_w2))}\n\ntheorem tfl_main : ¬ L.IsContextFree := by\n  intro h\n  obtain ⟨p, hp⟩ := h.pumping\n  -- (ab)^q never contains [c,c]; neither does b(ab)^q.\n  have alt : ∀ q : ℕ, ∀ s t : List Letter, ∀ c : Letter,\n      s ++ [c, c] ++ t ≠ (List.replicate q [Letter.a, Letter.b]).flatten ∧\n      s ++ [c, c] ++ t ≠ Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten := by\n    intro q\n    induction q with\n    | zero =>\n      intro s t c\n      constructor\n      · intro hst\n        have h' := congrArg List.length hst\n        simp only [List.length_append, List.length_cons, List.length_nil, List.replicate_zero, List.flatten_nil] at h'\n        omega\n      · intro hst\n        have h' := congrArg List.length hst\n        simp only [List.length_append, List.length_cons, List.length_nil, List.replicate_zero, List.flatten_nil] at h'\n        omega\n    | succ q ih =>\n      intro s t c\n      have e : (List.replicate (q + 1) [Letter.a, Letter.b]).flatten = Letter.a :: Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten := by\n        rw [List.replicate_succ, List.flatten_cons, List.cons_append, List.cons_append, List.nil_append]\n      rw [e]\n      constructor\n      · intro hst\n        cases s with\n        | nil =>\n          simp only [List.nil_append, List.cons_append] at hst\n          obtain ⟨h1, h2⟩ := List.cons.inj hst\n          obtain ⟨h3, -⟩ := List.cons.inj h2\n          subst h1\n          cases h3\n        | cons x s' =>\n          simp only [List.cons_append] at hst\n          exact (ih s' t c).2 (List.cons.inj hst).2\n      · intro hst\n        cases s with\n        | nil =>\n          simp only [List.nil_append, List.cons_append] at hst\n          obtain ⟨h1, h2⟩ := List.cons.inj hst\n          obtain ⟨h3, -⟩ := List.cons.inj h2\n          subst h1\n          cases h3\n        | cons x s' =>\n          cases s' with\n          | nil =>\n            simp only [List.nil_append, List.cons_append] at hst\n            obtain ⟨-, h2⟩ := List.cons.inj hst\n            obtain ⟨h3, h4⟩ := List.cons.inj h2\n            obtain ⟨h5, -⟩ := List.cons.inj h4\n            subst h3\n            cases h5\n          | cons y s'' =>\n            simp only [List.cons_append] at hst\n            exact (ih s'' t c).2 (List.cons.inj (List.cons.inj hst).2).2\n  have hrep : ∀ i j : ℕ, List.replicate (i + j) Letter.a = List.replicate i Letter.a ++ List.replicate j Letter.a := by\n    intro i j\n    induction i with\n    | zero => simp\n    | succ i ih => rw [Nat.add_right_comm, List.replicate_succ, List.replicate_succ, ih, List.cons_append]\n  have hlenM : ∀ q : ℕ, (List.replicate q [Letter.a, Letter.b]).flatten.length = 2 * q := by\n    intro q\n    induction q with\n    | zero => simp\n    | succ q ih =>\n      rw [List.replicate_succ, List.flatten_cons, List.length_append, ih]\n      simp only [List.length_cons, List.length_nil]\n      omega\n  have hstart : ∀ q : ℕ, (List.replicate q [Letter.a, Letter.b]).flatten.length = 0 ∨ [Letter.a] <+: (List.replicate q [Letter.a, Letter.b]).flatten := by\n    intro q\n    cases q with\n    | zero => left; simp\n    | succ q =>\n      right\n      exact ⟨Letter.b :: (List.replicate q [Letter.a, Letter.b]).flatten, by simp [List.replicate_succ]⟩\n  obtain ⟨M, hM⟩ : ∃ M : List Letter, M = (List.replicate p [Letter.a, Letter.b]).flatten := ⟨_, rfl⟩\n  have hMlen : M.length = 2 * p := by rw [hM]; exact hlenM p\n  have hMaa : ¬ [Letter.a, Letter.a] <:+: M := by\n    rintro ⟨s, t, hst⟩\n    rw [hM] at hst\n    exact (alt p s t Letter.a).1 hst\n  have hMbb : ¬ [Letter.b, Letter.b] <:+: M := by\n    rintro ⟨s, t, hst⟩\n    rw [hM] at hst\n    exact (alt p s t Letter.b).1 hst\n  have hMst : M.length = 0 ∨ [Letter.a] <+: M := by rw [hM]; exact hstart p\n  -- Witness W = a^{2p} b (ab)^p a^{2p}.\n  obtain ⟨W, hW⟩ : ∃ W : List Letter, W = List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p) Letter.a := ⟨_, rfl⟩\n  have hWl : W.length = 6 * p + 1 := by\n    rw [hW]\n    simp only [List.length_append, List.length_replicate, List.length_cons, List.length_nil, hMlen]\n    omega\n  have hWL : W ∈ L := by\n    rw [hW]\n    exact ⟨List.replicate (2 * p) Letter.a, [Letter.b], M, List.replicate (2 * p) Letter.a, rfl, by simp, rfl, by rw [List.length_replicate, hMlen], rfl, by rw [hMlen]; omega, hMaa, hMbb, hMst⟩\n  have hWlen : W.length ≥ p := by omega\n  obtain ⟨u, v, x, y, z, hsplit, hvy, hvxy, hpump⟩ := hp W hWL hWlen\n  obtain ⟨w1, m, w2, w3, hw, hm, hml, h12, h13, hev, hnaa, -, -⟩ := hpump 0\n  simp only [nTimes, List.replicate_zero, List.flatten_nil, List.append_nil] at hw\n  have L1 := congrArg List.length hsplit\n  simp only [List.length_append, hWl] at L1 hvy hvxy\n  have L2 := congrArg List.length hw\n  simp only [List.length_append] at L2\n  rcases Nat.lt_or_ge u.length (w1.length + 1) with hlt | hge\n  · -- u is short: the last |w1|+2 letters of u x z are a's, so w2 ends with aa.\n    obtain ⟨w2a, w2b, hw2, hw2b⟩ : ∃ w2a w2b : List Letter, w2 = w2a ++ w2b ∧ w2b.length = 2 :=\n      ⟨List.take (w1.length - 2) w2, List.drop (w1.length - 2) w2, by rw [List.take_append_drop], by rw [List.length_drop]; omega⟩\n    obtain ⟨z1, z2, hz, hz2⟩ : ∃ z1 z2 : List Letter, z = z1 ++ z2 ∧ z2.length = w1.length + 2 :=\n      ⟨List.take (z.length - (w1.length + 2)) z, List.drop (z.length - (w1.length + 2)) z, by rw [List.take_append_drop], by rw [List.length_drop]; omega⟩\n    have hN2 : w1.length + 2 ≤ 2 * p := by omega\n    have hA : List.replicate (2 * p) Letter.a = List.replicate (2 * p - (w1.length + 2)) Letter.a ++ List.replicate (w1.length + 2) Letter.a := by\n      rw [← hrep, Nat.sub_add_cancel hN2]\n    rw [hz, hw2] at hw\n    have E1 : (u ++ x ++ z1) ++ z2 = (w1 ++ m ++ w2a) ++ (w2b ++ w3) := by\n      simp only [List.append_assoc] at hw ⊢\n      exact hw\n    have r1 := (List.append_inj' E1 (by simp only [List.length_append]; omega)).2\n    have E2 : (u ++ v ++ x ++ y ++ z1) ++ z2 = (List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p - (w1.length + 2)) Letter.a) ++ List.replicate (w1.length + 2) Letter.a := by\n      have hWW : u ++ v ++ x ++ y ++ z = List.replicate (2 * p) Letter.a ++ [Letter.b] ++ M ++ List.replicate (2 * p) Letter.a := by\n        rw [← hsplit, hW]\n      rw [hz] at hWW\n      simp only [List.append_assoc] at hWW ⊢\n      rw [hWW, ← hA]\n    have r2 := (List.append_inj' E2 (by rw [hz2, List.length_replicate])).2\n    have h22 : List.replicate (w1.length + 2) Letter.a = List.replicate 2 Letter.a ++ List.replicate w1.length Letter.a := by\n      rw [show w1.length + 2 = 2 + w1.length by omega, hrep 2 w1.length]\n    have r3 : w2b ++ w3 = List.replicate 2 Letter.a ++ List.replicate w1.length Letter.a := r1.symm.trans (r2.trans h22)\n    have r4 := (List.append_inj r3 (by rw [hw2b, List.length_replicate])).1\n    have r5 : w2b = [Letter.a, Letter.a] := r4.trans rfl\n    exact hnaa ⟨w2a, [], by rw [List.append_nil, hw2, r5]⟩\n  · -- u is long: the first |w1|+1 letters of u x z are a's, so the middle letter is a.\n    have t1 : List.take (w1.length + 1) W = List.take (w1.length + 1) u := by\n      rw [hsplit]\n      simp only [List.append_assoc]\n      first\n        | exact List.take_append_of_le_length hge\n        | simp [List.take_append, Nat.sub_eq_zero_of_le hge]\n    have t2 : List.take (w1.length + 1) (u ++ x ++ z) = List.take (w1.length + 1) u := by\n      simp only [List.append_assoc]\n      first\n        | exact List.take_append_of_le_length hge\n        | simp [List.take_append, Nat.sub_eq_zero_of_le hge]\n    have t3 : List.take (w1.length + 1) (w1 ++ m ++ w2 ++ w3) = w1 ++ m := by\n      rw [show w1 ++ m ++ w2 ++ w3 = (w1 ++ m) ++ (w2 ++ w3) by simp only [List.append_assoc], show w1.length + 1 = (w1 ++ m).length by simp [hml], List.take_left]\n    have hle2 : w1.length + 1 ≤ (List.replicate (2 * p) Letter.a).length := by\n      rw [List.length_replicate]; omega\n    have hle3 : w1.length + 1 ≤ 2 * p := by omega\n    have t4 : List.take (w1.length + 1) W = List.replicate (w1.length + 1) Letter.a := by\n      rw [hW]\n      simp only [List.append_assoc]\n      first\n        | rw [List.take_append_of_le_length hle2, List.take_replicate, Nat.min_eq_left hle3]\n        | simp [List.take_append, Nat.sub_eq_zero_of_le hle2, List.take_replicate, Nat.min_eq_left hle3]\n    have key : w1 ++ m = List.replicate (w1.length + 1) Letter.a :=\n      t3.symm.trans ((congrArg (List.take (w1.length + 1)) hw.symm).trans (t2.trans (t1.symm.trans t4)))\n    obtain ⟨c, hc⟩ : ∃ c, c ∈ m := by\n      cases m with\n      | nil => simp at hml\n      | cons c r => exact ⟨c, by simp⟩\n    have hcb := hm c hc\n    have hmem : c ∈ List.replicate (w1.length + 1) Letter.a := by\n      rw [← key]; simp [hc]\n    have hca := List.eq_of_mem_replicate hmem\n    rw [hca] at hcb\n    cases hcb\n\nopen Lean in\nrun_cmd do\n  let env ← getEnv\n  let mut newConsts : Std.HashMap Name ConstantInfo := {}\n  for (n, ci) in env.constants.toList do\n    if !env.const2ModIdx.contains n then\n      newConsts := newConsts.insert n ci\n  try\n    let importEnv ← importModules env.imports {} (trustLevel := 0)\n    let _ ← Lean.Environment.replay newConsts importEnv\n    logInfo \"TFL_REPLAY_OK\"\n  catch e =>\n    logError s!\"TFL_REPLAY_FAIL: {(← e.toMessageData.toString)}\"\n\n#print axioms tfl_main\n"</script>
+<script>'use strict';
+const $ = id => document.getElementById(id);
+const partClasses = ['part-a','part-b','part-c','part-d'];
+function partBlock(label, word, klass) {
+  const node = document.createElement('div'); node.className = 'part ' + klass;
+  const title=document.createElement('span'); title.textContent=label;
+  const value=document.createElement('strong'); value.textContent=word || 'ε';
+  const length=document.createElement('small'); length.textContent='Длина: ' + word.length;
+  node.append(title,value,length); return node;
+}
+function renderConstructor() {
+  const k=Number($('construct-k').value), n=2*k;
+  $('construct-value').value=String(k);
+  const words=['a'.repeat(n),'b','ab'.repeat(k),'a'.repeat(n)];
+  $('constructor-word').replaceChildren(...words.map((w,i)=>partBlock(['w₁','b','w₂','w₃'][i],w,partClasses[i])));
+  $('constructor-explain').textContent=k===0?'k = 0, n = 0. Три части пусты, но отдельный b остаётся: слово имеет длину 1.':`k = ${k}, n = ${n}. Длина: ${n} + 1 + ${n} + ${n} = ${6*k+1}. Последняя буква w₂ имеет индекс ${2*n} и равна b.`;
+}
+function membership(t) {
+  if(!/^[ab]*$/.test(t)) return {ok:false,reason:'alphabet'};
+  if((t.length-1)%6!==0) return {ok:false,reason:'length'};
+  const k=(t.length-1)/6, n=2*k;
+  return {ok:t[n]==='b' && t.slice(n+1,2*n+1)==='ab'.repeat(k),reason:t[n]!=='b'?'separator':t.slice(n+1,2*n+1)!=='ab'.repeat(k)?'middle':'ok',n,k};
+}
+function renderMembership() {
+  const t=$('member-word').value.replace(/\s+/g,''), result=membership(t), root=$('member-result');
+  root.replaceChildren();
+  const summary=document.createElement('p');summary.className='lab-result '+(result.ok?'good':'bad');
+  if(result.reason==='alphabet') summary.textContent='Разрешены только a и b. Можно добавлять пробелы для удобства чтения.';
+  else if(result.reason==='length') summary.textContent=`Слово ${t.length===0?'пустое и ':''}имеет длину ${t.length}. Эта длина не равна 6k+1 ни для какого целого k ≥ 0, поэтому слово не принадлежит L.`;
+  else {
+    const {n,k}=result;
+    summary.textContent=result.ok?`Принадлежит L. Длина ${t.length} = 6·${k}+1; все три части имеют длину ${n}.`:`Не принадлежит L. Длина ${t.length} допускает только n = ${n}, но ${result.reason==='separator'?`на позиции ${n} стоит ${t[n]}, а нужен b`:`w₂ должно равняться ${'ab'.repeat(k)||'ε'}, а здесь ${t.slice(n+1,2*n+1)||'ε'}`}.`;
+    const parts=document.createElement('div');parts.className='result-parts';
+    const words=[t.slice(0,n),t[n],t.slice(n+1,2*n+1),t.slice(2*n+1)];
+    parts.append(...words.map((w,i)=>partBlock(['w₁','b?','w₂','w₃'][i],w,partClasses[i])));
+    root.append(summary,parts);return;
+  }
+  root.append(summary);
+}
+function wordClass(index,p) {return index<2*p?'part-a':index===2*p?'part-b':index<=4*p?'part-c':'part-d';}
+function analyzePump(p,start,lv,lw,lx) {
+  if(![p,start,lv,lw,lx].every(Number.isInteger) || p<1 || p>18 || start<0 || Math.min(lv,lw,lx)<0) return {valid:false,error:'Укажи целые неотрицательные длины и p от 1 до 18.'};
+  const W='a'.repeat(2*p)+'b'+'ab'.repeat(p)+'a'.repeat(2*p), end=start+lv+lw+lx,d=lv+lx;
+  if(d===0) return {valid:false,error:'Хотя бы одна из v и x должна быть непустой: |vx| ≥ 1.'};
+  if(lv+lw+lx>p) return {valid:false,error:`Окно имеет длину ${lv+lw+lx}, но лемма разрешает не больше p = ${p}.`};
+  if(end>W.length) return {valid:false,error:`Окно выходит за конец слова длины ${W.length}. Уменьши начало или длины частей.`};
+  const before=Array.from(W,(ch,i)=>({ch,original:i,deleted:(i>=start && i<start+lv)||(i>=start+lv+lw && i<end)}));
+  const after=before.filter(x=>!x.deleted),t=after.map(x=>x.ch).join('');
+  const base={valid:true,p,start,lv,lw,lx,d,end,W,before,after,t};
+  if(d%6!==0) return {...base,caseNo:1,target:null,sourceTarget:null};
+  const e=d/6,n=2*(p-e),first=lv>0?start:start+lv+lw;
+  const caseNo=first>n?2:3,target=caseNo===2?n:2*n;
+  return {...base,e,n,first,caseNo,target,sourceTarget:after[target].original};
+}
+function renderTape(root,items,p,target,isBefore,start,end) {
+  root.replaceChildren(...items.map((item,i)=>{
+    const cell=document.createElement('span');cell.className='cell '+wordClass(item.original,p);
+    if(isBefore && item.deleted)cell.classList.add('deleted');
+    if(isBefore && i>=start && i<end)cell.classList.add('in-window');
+    if(i===target)cell.classList.add('target');
+    cell.title=`Индекс ${i}; исходный индекс ${item.original}; буква ${item.ch}${isBefore && item.deleted?'; удаляется':''}`;
+    const index=document.createElement('span');index.className='idx';index.textContent=String(i);
+    const letter=document.createElement('span');letter.className='letter';letter.textContent=item.ch;
+    cell.append(index,letter);return cell;
+  }));
+}
+function renderPump() {
+  const values=['pump-p','pump-start','pump-v','pump-w','pump-x'].map(id=>$(id).value===''?NaN:Number($(id).value));
+  const r=analyzePump(...values),status=$('pump-valid'),out=$('pump-explain');
+  status.className='lab-result '+(r.valid?'good':'bad');
+  if(!r.valid){status.textContent=r.error;$('tape-before').replaceChildren();$('tape-after').replaceChildren();out.replaceChildren();return;}
+  const {p,start,lv,lw,lx,end,d,caseNo}=r;
+  status.textContent=`Допустимое разбиение: |u| = ${start}, |v| = ${lv}, |w| = ${lw}, |x| = ${lx}, |y| = ${r.W.length-end}. Окно ${lv+lw+lx} ≤ ${p}, удаляем d = ${d} ≥ 1.`;
+  renderTape($('tape-before'),r.before,p,r.sourceTarget,true,start,end);
+  renderTape($('tape-after'),r.after,p,r.target,false,start,end);
+  if(caseNo===1){out.innerHTML=`<p class="proof-case">Случай 1. Не подходит длина</p><p>Было ${r.W.length}, удалили ${d}, осталось ${r.t.length}. Остаток от деления новой длины на 6 равен ${r.t.length%6}, а нужен 1. Никакое другое разбиение на части это не исправит.</p>`;}
+  else if(caseNo===2){out.innerHTML=`<p class="proof-case">Случай 2. В месте обязательного b осталось a</p><p>d = ${d} = 6·${r.e}, поэтому n′ = 2(${p}−${r.e}) = ${r.n}. Первая удаляемая позиция ${r.first} строго правее ${r.n}. Следовательно, индекс ${r.n} не затронут: z₀[${r.n}] = z[${r.sourceTarget}] = <strong>a</strong>. Для принадлежности L там обязана стоять <strong>b</strong>.</p>${lv===0&&start<=r.n?`<p class="note">Здесь v пусто. Окно начинается на ${start}, не правее позиции ${r.n}, но его первые ${lw} символов относятся к сохраняемой w. Удаление начинается только на ${r.first}. Это и есть контрпример к неточной колонке исходной таблицы.</p>`:''}`;}
+  else{out.innerHTML=`<p class="proof-case">Случай 3. В конце нового w₂ оказалось a</p><p>d = ${d} = 6·${r.e}; n′ = ${r.n}. Первая удаляемая позиция ${r.first} ≤ ${r.n}. Всё окно заканчивается на индексе ${end-1}; все удаления находятся раньше исходной позиции 4p+2e = ${r.sourceTarget}.</p><p>Эта буква сдвигается на ${d} позиций влево и становится z₀[${r.target}]. Это индекс 2n′, где должен оканчиваться блок (ab)<sup>${p-r.e}</sup>. Но из правого блока пришла <strong>a</strong>, хотя конец непустого (ab)* — это <strong>b</strong>.</p>`;}
+  if(membership(r.t).ok) throw new Error('Unexpected pumping counterexample');
+}
+const presets={length:[3,2,1,0,0],right:[6,11,3,0,3],left:[6,10,3,0,3],empty:[12,18,0,5,6]};
+function setPreset(name){['pump-p','pump-start','pump-v','pump-w','pump-x'].forEach((id,i)=>$(id).value=presets[name][i]);renderPump();}
+$('construct-k').addEventListener('input',renderConstructor);
+$('member-check').addEventListener('click',renderMembership);
+$('member-word').addEventListener('keydown',e=>{if(e.key==='Enter')renderMembership();});
+document.querySelectorAll('[data-word]').forEach(b=>b.addEventListener('click',()=>{$('member-word').value=b.dataset.word;renderMembership();}));
+document.querySelectorAll('[data-preset]').forEach(b=>b.addEventListener('click',()=>setPreset(b.dataset.preset)));
+['pump-p','pump-start','pump-v','pump-w','pump-x'].forEach(id=>$(id).addEventListener('input',renderPump));
+$('copy-proof').addEventListener('click',async()=>{const text=JSON.parse($('proof-data').textContent);try{if(navigator.clipboard && window.isSecureContext){await navigator.clipboard.writeText(text);}else{const el=document.createElement('textarea');el.value=text;el.style.position='fixed';el.style.opacity='0';document.body.append(el);el.select();const copied=document.execCommand('copy');el.remove();if(!copied)throw new Error('copy');}$('copy-status').textContent='Lean-код скопирован.';}catch{$('copy-status').textContent='Автокопирование недоступно. Можно выделить код ниже и скопировать вручную.';}});
+$('print-guide').addEventListener('click',()=>window.print());
+function revealLine(){if(location.hash.startsWith('#lean-L')){$('source-details').open=true;const target=document.getElementById(location.hash.slice(1));if(target)requestAnimationFrame(()=>target.scrollIntoView({block:'center'}));}}
+document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#lean-L"]');if(a)$('source-details').open=true;});
+window.addEventListener('hashchange',revealLine);
+function readingPosition(){const height=document.documentElement.scrollHeight-innerHeight;$('reading-progress').style.width=(height>0?100*scrollY/height:0)+'%';}
+window.addEventListener('scroll',readingPosition,{passive:true});
+if('IntersectionObserver' in window){const obs=new IntersectionObserver(entries=>{for(const en of entries){if(en.isIntersecting){document.querySelectorAll('.sidebar a').forEach(a=>a.classList.toggle('active',a.hash==='#'+en.target.id));}}},{rootMargin:'-10% 0px -65% 0px'});document.querySelectorAll('main section').forEach(s=>obs.observe(s));}
+let printDetails=[];
+window.addEventListener('beforeprint',()=>{printDetails=Array.from(document.querySelectorAll('details')).filter(d=>!d.open);printDetails.forEach(d=>d.open=true);});
+window.addEventListener('afterprint',()=>{printDetails.forEach(d=>d.open=false);printDetails=[];});
+renderConstructor();renderMembership();renderPump();readingPosition();revealLine();
+window.ticket50={membership,analyzePump,setPreset};
+</script></body></html>

@@ -148,7 +148,7 @@ def _anbn_pumping_instances() -> dict:
     return instances
 
 
-def test_dcfl_pumping_semantic_check_refuted_when_membership_holds_but_both_pumps_survive():
+def test_dcfl_pumping_surviving_finite_i_remains_unresolved():
     # word_w = a^n b^n, word_w_prime = a^{n+1} b^{n+1}: both instantiate to
     # words that ARE in L = {a^n b^n} at n = p+1 for p in {2, 3} — membership
     # alone would look fine — but a^n b^n really IS DCFL, so a genuine
@@ -156,15 +156,15 @@ def test_dcfl_pumping_semantic_check_refuted_when_membership_holds_but_both_pump
     # with one 'b' from the tail of x synchronously into y and z keeps both
     # words balanced at i = 0, 2 AND 3): this concrete "non_dcfl via Yu's
     # lemma" proof is simply WRONG for this pair, and the brute-force
-    # condition (1)/(2) search (VERDICT_POLICY.md §4) must catch it, not
-    # just rubber-stamp membership.
+    # condition (1)/(2) search can only leave it unresolved. The checker
+    # cannot infer survival at ALL i from survival at 0,2,3.
     proof = _pumping_proof("aⁿbⁿ", "aⁿ⁺¹bⁿ⁺¹", _anbn_pumping_instances())
     agent_results = {"dcfl_pumping": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, ANBN_TASK_IR)
     entry = result["dcfl_pumping"]
-    assert entry["verification_status"] == "refuted"
-    assert entry["trust"] == "refuted"
-    assert entry["issues"], "refuted result must carry the concrete counterexample"
+    assert entry["verification_status"] == "well_formed"
+    assert entry["trust"] == "well_formed"
+    assert entry["trust"] != "bounded_pass"
 
 
 def _anbn_union_anb2n_oracle(word: str) -> bool:
@@ -269,12 +269,11 @@ def _bypass_dead_class_check(monkeypatch):
     (root docstring: "only the step-2 PLUMBING ... is under test, not the
     truth of any theorem about this toy language") -- ANBN_TASK_IR's REAL
     dead class is actually infinite (e.g. 'ba' never continues into
-    a^n b^n), which the mandatory oracle-based dead_class_status check
-    (VERDICT_POLICY.md §4) would otherwise (correctly) refute regardless of
-    the pair-separation outcome under test here. That check has its own
+    a^n b^n), but bounded continuation search leaves it unresolved and
+    caps trust regardless of the pair-separation outcome. That check has its own
     dedicated tests below; bypass it here so it doesn't shadow the
     pair-separation behavior these tests target."""
-    monkeypatch.setattr(ov, "_check_dead_class_finite", lambda *a, **k: (None, None, []))
+    monkeypatch.setattr(ov, "_check_dead_class_finite", lambda *a, **k: ("bounded_pass", None, []))
 
 
 def test_shallit_nerode_semantic_check_bounded_pass(monkeypatch):
@@ -348,25 +347,21 @@ def test_shallit_nerode_semantic_check_skipped_for_parametric_suffix(monkeypatch
     assert result["shallit"]["verification_status"] == "well_formed"
 
 
-def test_shallit_nerode_semantic_check_refuted_when_dead_class_finite_is_false(monkeypatch):
+def test_shallit_unknown_dead_class_caps_successful_pair_at_well_formed(monkeypatch):
     # The proof CLAIMS dead_class_status "empty", but for a^n b^n the dead
     # class is actually infinite ('b', 'ba' and every word outside a*b* can
-    # never be continued into L) -- the mandatory, exhaustive dead-class
-    # search (VERDICT_POLICY.md §4) must catch this and refute the whole
-    # nerode_classes proof, even though the separating pair it also supplies
-    # is perfectly real. Unlike the plumbing tests above, this one does NOT
-    # bypass the dead-class check -- it is the dedicated test for it.
+    # never be continued into L). Bounded continuation search cannot prove
+    # that fact. A valid separating pair does not discharge the unresolved
+    # dead-class premise, so the whole claim stays well_formed.
     proof = _nerode_proof("b")  # dead_class_status: "empty" (FALSE for a^n b^n)
     proof["representative_pairs"] = [{"u": "ab", "v": "aab"}]
     agent_results = {"shallit": {"status": "success", "verdict": "non_dcfl", "proof_sketch": proof}}
     result = verify_agent_results(agent_results, ANBN_TASK_IR)
     entry = result["shallit"]
-    assert entry["verification_status"] == "refuted"
-    assert entry["trust"] == "refuted"
+    assert entry["verification_status"] == "well_formed"
+    assert entry["trust"] == "well_formed"
     assert "dead_class_status" in entry["issues"][0]
-    # the shortest dead word the exhaustive enumeration hits first (a bare
-    # 'b' can never gain a matching 'a' before it) -- not necessarily 'ba'.
-    assert "'b'" in entry["issues"][0]
+    assert "does not prove" in entry["issues"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -520,13 +515,13 @@ def test_dcfl_pumping_exam03_style_two_branch_language_stays_well_formed(monkeyp
     assert entry["trust"] == "well_formed"
 
 
-def test_dcfl_pumping_exam03_style_two_branch_language_refuted_for_wrong_pair(monkeypatch):
+def test_dcfl_pumping_exam03_surviving_split_stays_unresolved(monkeypatch):
     # Both words are still genuinely in L (branch b^n with m=0 vs m=1), but
     # this particular pair is a BAD choice for the pumping argument: a
     # decomposition survives pumping at i=0,2,3 (the extra 'b' in
     # word_w_prime lines up with a pumpable window in the shared a/b
-    # prefix), so this concrete proof is wrong even though the underlying
-    # theorem (L not DCFL) is true.
+    # prefix). The finite checker cannot infer survival at ALL i, so it
+    # leaves the general argument unresolved rather than refuting it.
     monkeypatch.setattr(
         ov, "build_membership_oracle_from_ir",
         lambda ir, max_word_len=60: _in_exam03_language,
@@ -543,8 +538,8 @@ def test_dcfl_pumping_exam03_style_two_branch_language_refuted_for_wrong_pair(mo
     task_ir = {"input_format": "set_builder", "alphabet": ["a", "b", "c"], "language_spec": {}}
     result = verify_agent_results(agent_results, task_ir)
     entry = result["dcfl_pumping"]
-    assert entry["verification_status"] == "refuted"
-    assert entry["issues"]
+    assert entry["verification_status"] == "well_formed"
+    assert entry["trust"] == "well_formed"
 
 
 def _in_exam02_style_language(word: str) -> bool:

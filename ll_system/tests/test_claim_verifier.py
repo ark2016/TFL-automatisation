@@ -33,6 +33,52 @@ GRAMMAR_LL1 = {
     ],
 }
 
+
+def test_pruned_generator_does_not_refute_equivalent_grammars():
+    candidate = {
+        "nonterminals": ["S", "A"], "terminals": ["a"], "start": "S",
+        "rules": [{"lhs": "S", "rhs": ["A"] * 30}, {"lhs": "A", "rhs": []}],
+    }
+    target = {
+        "kind": "grammar", "nonterminals": ["S"], "terminals": ["a"], "start": "S",
+        "rules": [{"lhs": "S", "rhs": []}],
+    }
+    trust, details = _task_language_equivalence_trust(
+        candidate, {"language_spec": target}, max_len=1,
+    )
+    assert trust == "bounded_pass"
+
+
+def test_word_oracle_checks_missing_candidates_by_exact_membership(monkeypatch):
+    candidate = {
+        "nonterminals": ["S", "A"], "terminals": ["a"], "start": "S",
+        "rules": [
+            {"lhs": "S", "rhs": ["A"] * 30}, {"lhs": "S", "rhs": ["a"]},
+            {"lhs": "A", "rhs": []},
+        ],
+    }
+    monkeypatch.setattr(cv, "_try_word_oracle", lambda ir: lambda word: word in {"", "a"})
+    trust, details = _task_language_equivalence_trust(
+        candidate, {"language_spec": {"kind": "predicate", "alphabet": ["a"]}}, max_len=1,
+    )
+    assert trust == "bounded_pass"
+
+
+@pytest.mark.parametrize("unknown_word", ["a", ""])
+def test_unknown_oracle_membership_prevents_equivalence_pass(monkeypatch, unknown_word):
+    candidate = {
+        "nonterminals": ["S"], "terminals": ["a"], "start": "S",
+        "rules": [{"lhs": "S", "rhs": ["a"]}],
+    }
+    def oracle(word):
+        return None if word == unknown_word else word == "a"
+    monkeypatch.setattr(cv, "_try_word_oracle", lambda ir: oracle)
+    trust, details = _task_language_equivalence_trust(
+        candidate, {"language_spec": {"kind": "predicate", "alphabet": ["a"]}}, max_len=1,
+    )
+    assert trust is None
+
+
 IR_SIMPLE = {
     "task_type": "ll_check_grammar",
     "source_text": "test",
@@ -40,6 +86,34 @@ IR_SIMPLE = {
     "question": "is_ll_k",
     "k": None,
 }
+
+
+def test_unknown_oracle_does_not_refute_branch_templates(monkeypatch):
+    monkeypatch.setattr(cv, "_try_word_oracle", lambda ir: lambda word: None)
+    trust, details = cv._verify_branch_words_by_oracle(
+        {"word_1": "a^n b^n", "word_2": "a^n c^n"}, {},
+    )
+    assert trust is None
+    assert all(item["membership"] == "unknown" for item in details["checked"])
+
+
+def test_unknown_prefix_pair_membership_is_not_refuted(monkeypatch):
+    monkeypatch.setattr(cv, "_try_word_oracle", lambda ir: lambda word: None)
+    trust, _ = cv._semantic_check_prefix_classes(
+        {"distinguishing_suffix": "b", "representative_pairs": [{"u": "a", "v": "b"}]},
+        {"language_spec": {"kind": "set_builder", "alphabet": ["a", "b"]}},
+    )
+    assert trust is None
+
+
+def test_empty_suffix_can_distinguish_prefix_pair(monkeypatch):
+    monkeypatch.setattr(cv, "_try_word_oracle", lambda ir: lambda word: word == "a")
+    monkeypatch.setattr(cv, "_check_dead_class_finite_ll", lambda ir: (True, []))
+    trust, _ = cv._semantic_check_prefix_classes(
+        {"distinguishing_suffix": "", "representative_pairs": [{"u": "a", "v": "b"}]},
+        {"language_spec": {"kind": "set_builder", "alphabet": ["a", "b"]}},
+    )
+    assert trust == "bounded_pass"
 
 # Valid LL grammar claim
 AGENT_LL_CLAIM = {

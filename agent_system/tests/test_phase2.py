@@ -77,8 +77,8 @@ class TestHypothesisModule(unittest.TestCase):
         result = analyze_hypothesis(ir)
         self.assertEqual(result["hypothesis"], "regular")
 
-    def test_grammar_nested(self):
-        """Grammar S -> aSb | eps -> hypothesis='non_regular'."""
+    def test_grammar_nesting_alone_leaves_unknown_hypothesis(self):
+        """Nesting is a hint requiring a separate universal proof."""
         ir = {
             "task_type": "classify",
             "source_text": "S -> aSb | eps",
@@ -94,10 +94,29 @@ class TestHypothesisModule(unittest.TestCase):
             },
         }
         result = analyze_hypothesis(ir)
-        self.assertEqual(result["hypothesis"], "non_regular")
+        self.assertEqual(result["hypothesis"], "unknown")
+        self.assertIn("dfa_builder", result["suggested_agents"])
+        self.assertIn("pumping", result["suggested_agents"])
 
-    def test_whole_word_palindrome_uu_rev(self):
-        """IR with w = u·rev(u) (even palindromes) -> hypothesis='non_regular'."""
+    def test_nested_regular_grammar_does_not_assert_infinite_memory(self):
+        ir = {"language_spec": {
+            "kind": "grammar", "terminals": ["a", "b"], "nonterminals": ["S"], "start": "S",
+            "rules": [{"lhs": "S", "rhs": rhs} for rhs in (["a", "S", "b"], ["a", "S"], ["S", "b"], [])],
+        }}
+        result = analyze_hypothesis(ir)
+        self.assertEqual(result["hypothesis"], "unknown")
+        self.assertEqual(result["atoms"][0]["memory_type"], "unknown")
+
+    def test_trivial_backreference_is_an_uncertain_hint(self):
+        result = analyze_hypothesis({"language_spec": {
+            "kind": "regex", "pattern": r"(a)\1*", "has_backreferences": True,
+        }})
+        self.assertEqual(result["hypothesis"], "unknown")
+        self.assertIn("re_builder", result["suggested_agents"])
+        self.assertIn("nerode", result["suggested_agents"])
+
+    def test_reversal_decomposition_requires_a_separate_language_proof(self):
+        """A reversal syntax hint does not prove a language verdict."""
         ir = {
             "task_type": "classify",
             "source_text": "w = u u^R",
@@ -113,7 +132,28 @@ class TestHypothesisModule(unittest.TestCase):
             },
         }
         result = analyze_hypothesis(ir)
-        self.assertEqual(result["hypothesis"], "non_regular")
+        self.assertEqual(result["hypothesis"], "unknown")
+
+    def test_even_palindromic_edge_does_not_reduce_to_equal_edge_symbols(self):
+        # abba = v rev(v), v=ab; its edge pairs are ab and ba.
+        for pattern in (["v", "rev(v)", "u"], ["u", "v", "rev(v)"]):
+            result = analyze_hypothesis({"language_spec": {
+                "kind": "predicate", "alphabet": ["a", "b"], "predicate": {
+                    "parts": ["u", "v"], "concat_pattern": pattern, "constraints": [],
+                },
+            }})
+            self.assertEqual(result["hypothesis"], "unknown")
+            self.assertEqual(result["atoms"][0]["memory_type"], "unknown")
+
+    def test_internal_reversal_pair_is_not_a_palindromic_edge(self):
+        # baaab has an internal aa = v rev(v), but no even palindromic edge.
+        result = analyze_hypothesis({"language_spec": {
+            "kind": "predicate", "alphabet": ["a", "b"], "predicate": {
+                "parts": ["u", "v", "z"], "concat_pattern": ["u", "v", "rev(v)", "z"], "constraints": [],
+            },
+        }})
+        self.assertEqual(result["hypothesis"], "unknown")
+        self.assertNotIn("prefix/suffix", result["atoms"][0]["description"])
 
     def test_bounded_palindrome_u_eq_1(self):
         """IR with w = u·rev(u), |u|=1 → finite language {aa, bb} → regular."""

@@ -1,0 +1,454 @@
+{
+  "scope": {
+    "branch": "audit/theory-contracts-2026-09-30",
+    "included": [
+      "agent_system (REG)",
+      "cfl_system (CFL)",
+      "dcfl_system (DCFL)",
+      "ll_system (LL)",
+      "docs/THEORY.md"
+    ],
+    "excluded": [
+      "pumping_lemma/ (legacy)",
+      "reverse_morfism/ (legacy)"
+    ],
+    "method": "Inventory of mathematical claims and hard rules with source locations; no correctness verdicts. Line numbers refer to current checkout."
+  },
+  "thematic_groups": [
+    {
+      "name": "REG",
+      "claim_inventory": [
+        {
+          "title": "Regularity definitions and finite-state characterization; finite/right-linear/left-linear grammar claims",
+          "claim_kind": [
+            "definition",
+            "theorem",
+            "heuristic shortcut"
+          ],
+          "paths": [
+            "agent_system/prompts/classifier.md:15-28",
+            "agent_system/prompts/grammar_analyzer.md:1-190",
+            "agent_system/lib/hypothesis_module.py:286-357",
+            "agent_system/lib/grammar_preprocessor.py:300-330"
+          ]
+        },
+        {
+          "title": "Hard rules: backreferences, nested grammar recursion, all-atoms-finite",
+          "claim_kind": [
+            "heuristic shortcut / hard rule"
+          ],
+          "paths": [
+            "agent_system/prompts/classifier.md:15-21",
+            "agent_system/lib/hypothesis_module.py:286-357"
+          ]
+        },
+        {
+          "title": "Regular pumping lemma, quantifiers and worked examples",
+          "claim_kind": [
+            "definition/theorem",
+            "worked example"
+          ],
+          "paths": [
+            "agent_system/prompts/pumping_agent.md:6-27",
+            "agent_system/prompts/pumping_agent.md:56-72",
+            "agent_system/prompts/grammar_analyzer.md:90-159",
+            "agent_system/lib/claim_verifier.py:337-450"
+          ]
+        },
+        {
+          "title": "Myhill-Nerode distinguishability, finite-index proof route and bounded checking limits",
+          "claim_kind": [
+            "theorem",
+            "worked example",
+            "heuristic shortcut"
+          ],
+          "paths": [
+            "agent_system/prompts/nerode_agent.md:1-220",
+            "agent_system/prompts/classifier.md:19-28",
+            "agent_system/lib/claim_verifier.py:457-552"
+          ]
+        },
+        {
+          "title": "Closure reductions, DFA/regex constructions and closure hard rules",
+          "claim_kind": [
+            "closure rule",
+            "worked example",
+            "heuristic shortcut"
+          ],
+          "paths": [
+            "agent_system/prompts/closure_agent.md:1-220",
+            "agent_system/prompts/re_builder.md:1-200",
+            "agent_system/lib/dfa_builder.py:1-40",
+            "agent_system/lib/claim_verifier.py:559-585"
+          ]
+        }
+      ],
+      "named_method_coverage": {
+        "Myhill-Nerode": "present",
+        "pumping": "present",
+        "grammar regularity": "present",
+        "Arden": "not found in active REG prompts/lib or docs/THEORY.md; local course note filename exists: ../iu9-tfl-practice/Теория/Лемма Ардена.md"
+      },
+      "classifier_hard_rules": [
+        "Backreferences => non_regular with exceptions noted for trivial cases",
+        "nested recursion S→aSb => non_regular",
+        "all atoms finite => regular",
+        "paths: agent_system/prompts/classifier.md:15-21"
+      ],
+      "implementation_inventory_flags_for_review": [
+        "grammar_analyzer contains a worked pumping argument and an intersection computation: agent_system/prompts/grammar_analyzer.md:90-190",
+        "finite-pumping and finite-Nerode checks are bounded semantic checks: agent_system/lib/claim_verifier.py:337-552"
+      ]
+    },
+    {
+      "name": "CFL",
+      "claim_inventory": [
+        {
+          "title": "CFL pumping quantifiers and Ogden marked-position lemma",
+          "claim_kind": [
+            "definition/theorem",
+            "worked example"
+          ],
+          "paths": [
+            "docs/THEORY.md:158-181",
+            "cfl_system/prompts/cfl_pumping.md:1-240",
+            "cfl_system/prompts/cfl_ogden.md:1-220",
+            "cfl_system/lib/claim_verifier.py:1-260"
+          ]
+        },
+        {
+          "title": "CFL closure reductions and CFL closure table",
+          "claim_kind": [
+            "closure rules",
+            "worked examples"
+          ],
+          "paths": [
+            "docs/THEORY.md:183-216",
+            "cfl_system/prompts/cfl_closure_reduction.md:1-280",
+            "cfl_system/prompts/cfl_reasoning.md:177-239",
+            "cfl_system/lib/claim_verifier.py:1-260"
+          ]
+        },
+        {
+          "title": "Parikh image and semilinearity; bounded-language stratification",
+          "claim_kind": [
+            "theorem",
+            "heuristic shortcut / sampled analysis"
+          ],
+          "paths": [
+            "cfl_system/prompts/cfl_parikh.md:1-220",
+            "cfl_system/lib/parikh.py:101-120",
+            "cfl_system/lib/parikh.py:226-267",
+            "cfl_system/lib/parikh.py:460-511",
+            "cfl_system/lib/stratification.py:1-240",
+            "cfl_system/CLAUDE.md:35-36"
+          ]
+        },
+        {
+          "title": "Interchange lemma and Sokolowski reference",
+          "claim_kind": [
+            "theorem",
+            "worked method / heuristic"
+          ],
+          "paths": [
+            "docs/THEORY.md:524-546",
+            "cfl_system/prompts/cfl_interchange.md:1-240",
+            "cfl_system/prompts/cfl_retry_planner.md:119-140"
+          ]
+        },
+        {
+          "title": "Grammar/PDA constructive criteria; ambiguity and morphism routes",
+          "claim_kind": [
+            "definition/theorem",
+            "worked examples",
+            "heuristics"
+          ],
+          "paths": [
+            "cfl_system/prompts/cfl_cfg_builder.md:1-220",
+            "cfl_system/prompts/cfl_pda_builder.md:1-220",
+            "cfl_system/prompts/cfl_morphism.md:1-220",
+            "cfl_system/prompts/cfl_classifier.md:1-42",
+            "cfl_system/prompts/cfl_classifier.md:178-203"
+          ]
+        },
+        {
+          "title": "Classifier hard rules for regular vs nonregular filters, crossed dependencies and mirrors",
+          "claim_kind": [
+            "heuristic shortcut / hard rule"
+          ],
+          "paths": [
+            "cfl_system/prompts/cfl_classifier.md:18-40",
+            "cfl_system/prompts/cfl_classifier.md:178-203"
+          ]
+        }
+      ],
+      "named_method_coverage": {
+        "Parikh": "present",
+        "stratified bounded languages": "present",
+        "pumping": "present",
+        "Ogden": "present",
+        "interchange": "present",
+        "ambiguity": "present in cfl agents and dcfl inherent ambiguity agent",
+        "Arden": "not a CFL method in active sources"
+      },
+      "classifier_hard_rules": [
+        "regex/single-counter thresholds or modular filters/linear-combination filters/Boolean combinations are called regular",
+        "two-counter equality/inequality is called nonregular and uncertain",
+        "crossed dependencies => non-CFL signal",
+        "mirror construction => CFL signal",
+        "paths: cfl_system/prompts/cfl_classifier.md:18-40, 178-203"
+      ]
+    },
+    {
+      "name": "DCFL",
+      "claim_inventory": [
+        {
+          "title": "Two-word DCFL pumping lemma",
+          "claim_kind": [
+            "theorem",
+            "worked examples"
+          ],
+          "paths": [
+            "docs/THEORY.md:35-83",
+            "dcfl_system/prompts/dcfl_pumping.md:89-137",
+            "dcfl_system/prompts/dcfl_pumping.md:164-349"
+          ]
+        },
+        {
+          "title": "Shallit/Myhill-Nerode class-count theorem and dead-class condition",
+          "claim_kind": [
+            "theorem",
+            "definition/application condition",
+            "worked examples"
+          ],
+          "paths": [
+            "docs/THEORY.md:85-118",
+            "dcfl_system/prompts/shallit.md:58-134",
+            "dcfl_system/lib/oracle_verifier.py:1-260"
+          ]
+        },
+        {
+          "title": "Prefix-continuation construction, regular intersection and left quotient reductions",
+          "claim_kind": [
+            "closure rules",
+            "worked examples"
+          ],
+          "paths": [
+            "docs/THEORY.md:120-149",
+            "dcfl_system/prompts/shallit.md:136-241",
+            "dcfl_system/prompts/closure_reduction.md:1-260",
+            "dcfl_system/lib/closure_table.py:1-240"
+          ]
+        },
+        {
+          "title": "DCFL closure / nonclosure table",
+          "claim_kind": [
+            "closure rules"
+          ],
+          "paths": [
+            "docs/THEORY.md:143-149",
+            "dcfl_system/prompts/classifier.md:30-45",
+            "dcfl_system/lib/closure_table.py:1-240"
+          ]
+        },
+        {
+          "title": "Inherent ambiguity implies non-DCFL; language vs grammar distinction",
+          "claim_kind": [
+            "theorem",
+            "worked examples",
+            "heuristics"
+          ],
+          "paths": [
+            "docs/THEORY.md:150-156",
+            "dcfl_system/prompts/inh_ambiguity.md:5-146",
+            "dcfl_system/CLAUDE.md:52-55"
+          ]
+        },
+        {
+          "title": "Constructive stack phase/separator method and DPDA determinism rules",
+          "claim_kind": [
+            "construction rules",
+            "worked examples",
+            "heuristics"
+          ],
+          "paths": [
+            "dcfl_system/prompts/stack_strategy.md:1-146",
+            "dcfl_system/prompts/stack_strategy.md:256-307",
+            "dcfl_system/lib/dpda.py:1-280"
+          ]
+        }
+      ],
+      "named_method_coverage": {
+        "Myhill-Nerode/Shallit": "present",
+        "DCFL pumping": "present",
+        "interchange": "not listed as DCFL method",
+        "ambiguity": "present",
+        "DCFL quotient/continuation": "present (right continuation, regular intersection, left quotient by a word); other quotient variants are listed in THEORY closure table"
+      },
+      "classifier_hard_rules": [
+        "closure table and method descriptions in dcfl_system/prompts/classifier.md:30-58",
+        "classifier is advisory and specialists execute regardless: dcfl_system/prompts/classifier.md:4-6"
+      ]
+    },
+    {
+      "name": "LL(k)",
+      "claim_inventory": [
+        {
+          "title": "LL(k) vs strong LL(k) definitions and full LL(k)-table criterion vs global FOLLOW shortcut",
+          "claim_kind": [
+            "definitions/theorem",
+            "algorithmic criterion"
+          ],
+          "paths": [
+            "docs/THEORY.md:218-259",
+            "ll_system/lib/first_follow.py:273-340",
+            "ll_system/lib/ll_table_builder.py:1-260",
+            "ll_system/CLAUDE.md:53-58"
+          ]
+        },
+        {
+          "title": "LL language class inclusions/strictness and closure facts",
+          "claim_kind": [
+            "theorem",
+            "closure rules"
+          ],
+          "paths": [
+            "docs/THEORY.md:261-267",
+            "ll_system/prompts/ll_classifier.md:257-264"
+          ]
+        },
+        {
+          "title": "No-LL(k)-for-all-k routes: non-DCFL, essential ambiguity, substitution/branch-point, bounded-flexibility",
+          "claim_kind": [
+            "theorems/lemmas",
+            "worked examples",
+            "heuristics"
+          ],
+          "paths": [
+            "docs/THEORY.md:269-317",
+            "docs/THEORY.md:567-589",
+            "ll_system/prompts/ll_substitution_agent.md:22-206",
+            "ll_system/prompts/ll_prefix_classes_agent.md:1-223",
+            "ll_system/prompts/ll_ambiguity_detector.md:1-220"
+          ]
+        },
+        {
+          "title": "Classifier hard rules and examples: regular language, shared-prefix branches, marked mirrors, left recursion, b* marker trap",
+          "claim_kind": [
+            "heuristic shortcut / hard rule",
+            "worked examples"
+          ],
+          "paths": [
+            "ll_system/prompts/ll_classifier.md:24-40",
+            "ll_system/prompts/ll_classifier.md:105-257"
+          ]
+        },
+        {
+          "title": "FIRST_k/FOLLOW_k, local follow fixed point, table conflicts and parser",
+          "claim_kind": [
+            "algorithmic definitions/criteria",
+            "bounded-computation caveat"
+          ],
+          "paths": [
+            "ll_system/lib/first_follow.py:1-340",
+            "ll_system/lib/ll_table_builder.py:1-260",
+            "ll_system/lib/ll_parser.py:1-240",
+            "ll_system/lib/claim_verifier.py:680-845"
+          ]
+        }
+      ],
+      "named_method_coverage": {
+        "LL(k) definition/test": "present",
+        "strong LL(k) distinction": "present",
+        "FIRST/FOLLOW": "present",
+        "Myhill-Nerode as direct LL characterization": "explicitly disallowed; indirect Shallit/DCFL route present",
+        "ambiguity": "present",
+        "substitution": "present"
+      },
+      "classifier_hard_rules": [
+        "hard rule section begins ll_system/prompts/ll_classifier.md:24; regular => LL(1) at 28-29; further hard rules and examples at 105-257",
+        "classifier advisory-only: ll_system/prompts/ll_classifier.md:5"
+      ]
+    }
+  ],
+  "named_method_presence_matrix": {
+    "Parikh": "CFL present: cfl_system/prompts/cfl_parikh.md; docs/THEORY.md supplemental notes and implementation in cfl_system/lib/parikh.py",
+    "stratified bounded languages": "CFL present: cfl_system/lib/stratification.py; cfl_system/CLAUDE.md:35-36",
+    "Arden": "not present in active pipelines or docs/THEORY.md; local theory filename ../iu9-tfl-practice/Теория/Лемма Ардена.md",
+    "Myhill-Nerode": "REG, DCFL and indirect LL routes present",
+    "grammar regularity": "REG present (right/left-linear and nested recursion hints)",
+    "pumping": "REG, CFL and DCFL present",
+    "Ogden": "CFL present",
+    "interchange": "CFL present",
+    "ambiguity": "CFL/DCFL/LL present",
+    "DCFL quotient/continuation": "DCFL present",
+    "LL(k)": "LL present"
+  },
+  "docs_theory_structure": [
+    "§1 DCFL: 1.1-1.5 (lines 35-156)",
+    "§2 CFL pumping/Ogden/examples (158-216)",
+    "§3 LL(k) (218-317; later additions 567-596)",
+    "§4/II audit history and pipeline-specific worked cases (318-606)",
+    "§2.4 interchange and Sokolowski notes (524-546)"
+  ],
+  "classifier_rule_locations": {
+    "REG": "agent_system/prompts/classifier.md:15-28",
+    "CFL": "cfl_system/prompts/cfl_classifier.md:18-40, 178-203",
+    "DCFL": "dcfl_system/prompts/classifier.md:30-67",
+    "LL": "ll_system/prompts/ll_classifier.md:24-40, 226-264"
+  },
+  "audit_flags_for_root_followup": [
+    {
+      "area": "REG classifier",
+      "location": "agent_system/prompts/classifier.md:19-21; related hypothesis code agent_system/lib/hypothesis_module.py:286-357",
+      "inventory_note": "hard rules assert backreferences and nested recursion entail nonregularity; list these as high-priority claims to examine"
+    },
+    {
+      "area": "REG grammar analyzer",
+      "location": "agent_system/prompts/grammar_analyzer.md:90-190",
+      "inventory_note": "worked regularity proof includes pumping and intersection argument; inspect theorem preconditions and example language mapping"
+    },
+    {
+      "area": "REG verifier",
+      "location": "agent_system/lib/claim_verifier.py:337-450, 457-552",
+      "inventory_note": "finite p / finite i and finite representative checks are bounded semantics; inspect whether trust wording preserves that limitation"
+    },
+    {
+      "area": "CFL classifier",
+      "location": "cfl_system/prompts/cfl_classifier.md:22-29",
+      "inventory_note": "hard rule labels thresholds on linear combinations regular, including signed expressions; inspect claimed filter class"
+    }
+  ],
+  "local_reference_inventory": {
+    "downloads_pdf_filenames_matching_tfl_theory_automata_terms": [
+      "Formalization of context-free language theory.pdf",
+      "Formalization of context-free language theory (1).pdf",
+      "Formalization of context-free language theory (2).pdf",
+      "Formalization of the pumping lemma for context-free languages.pdf",
+      "Formalization of the pumping lemma for context-free languages (1).pdf",
+      "Pumping lemmas for linear and nonlinear context-free languages.pdf",
+      "Swapping Lemmas for Regular and Context-Free Languages.pdf",
+      "TFL_exam_2025_1.pdf",
+      "TFL_exam_2025_2.pdf",
+      "TFL_exam_2025_3.pdf",
+      "TFL_exam_2025_4.pdf",
+      "TFL_exam_2025_5.pdf",
+      "TFL_exam_2025_6.pdf"
+    ],
+    "adjacent_course_theory_note_filenames": [
+      "../iu9-tfl-practice/Теория/Лемма Ардена.md",
+      "../iu9-tfl-practice/Теория/Лемма о накачке для КС-языков.md",
+      "../iu9-tfl-practice/Теория/Теорема Майхилла-Нероуда.md",
+      "../iu9-tfl-practice/Теория/Регулярный язык.md",
+      "../iu9-tfl-practice/Теория/КС-грамматика.md",
+      "../iu9-tfl-practice/Теория/КС-язык.md"
+    ],
+    "reference_limitation": "Only filenames were inventoried for Downloads PDFs; contents were not opened. Adjacent theory note names were identified; only targeted grep hits in the adjacent repository were read."
+  },
+  "counts": {
+    "thematic_groups": 4,
+    "claim_inventory_entries": 22,
+    "classifier_pipelines": 4,
+    "legacy_dirs_excluded": 2
+  }
+}

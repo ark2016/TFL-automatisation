@@ -100,20 +100,33 @@ def test_proved_models_and_gate(tmp_path, spec, check):
 def test_flip_then_forced_rerun_restores_the_baseline(tmp_path, spec, check):
     run_dir = make_run_dir(tmp_path)
     before = load(run_dir)
+    before["proof_text"] = "OLD_PROOF_CLAIMS_DCFL"
+    before["proof_sketch"] = {"argument": "OLD_SKETCH_CLAIMS_DCFL"}
+    (run_dir / "input_result.json").write_text(json.dumps(before), encoding="utf-8")
     check(tc("proved"))
     fr.run_formalization(run_dir, spec, client=FakeAnthropic([body_turn("exact h")]), direction="non_dcfl")
     flipped = load(run_dir)
     assert flipped["verdict"] == "non_dcfl" and flipped["primary_evidence"] == "lean_formalizer"
     assert "overruled" in flipped["reasoning_summary"]
+    assert flipped["proof_method"] == "lean_formalizer" and flipped["proof_sketch"] is None
+    assert "exact h" in flipped["proof_text"]
+    for fmt in ("md", "html"):
+        rendered = (run_dir / f"input_result.{fmt}").read_text(encoding="utf-8")
+        assert "OLD_PROOF_CLAIMS_DCFL" not in rendered
+        assert "OLD_SKETCH_CLAIMS_DCFL" not in rendered
+        assert "Lean-verified non_dcfl" in rendered and "exact h" in rendered
 
     again = fr.run_formalization(run_dir, spec, client=FakeAnthropic([]))
     assert again["skipped"] is True
+    assert load(run_dir) == flipped
 
     fr.run_formalization(run_dir, spec, client=FakeAnthropic([body_turn("exact g")]),
                          direction="dcfl", force=True)
     after = load(run_dir)
     assert after["verdict"] == "dcfl" and after["primary_evidence"] == before["primary_evidence"]
     assert after["reasoning_summary"] == before["reasoning_summary"]
+    for field in ("proof_method", "proof_sketch", "proof_text"):
+        assert after[field] == before[field]
     assert len([b for b in after["verdict_gate"]["basis"] if b.get("basis") == "lean_proof"]) == 1
     assert not any("'non_dcfl'" in n for n in after["verdict_gate"]["downgrades"])
 
@@ -127,6 +140,26 @@ def test_truncation_then_body_only_attempt(tmp_path, spec, check):
     summary = fr.run_formalization(run_dir, spec, client=client)
     assert summary["status"] == "proved" and len(client.stream_calls) == 2
     assert "Output ONLY the proof body" in json.loads(client.stream_calls[1]["messages"][0]["content"])["instruction"]
+
+
+def test_legacy_baseline_gains_original_proof_fields(spec):
+    result = {
+        "verdict": "dcfl", "confidence": 0.85, "primary_evidence": "stack_strategy",
+        "proof_method": "stack_strategy", "proof_text": "OLD_PROOF_CLAIMS_DCFL",
+        "proof_sketch": {"argument": "OLD_SKETCH_CLAIMS_DCFL"},
+        "reasoning_summary": "old summary", "verdict_gate": {},
+    }
+    original_proof = {key: result[key] for key in ("proof_method", "proof_text", "proof_sketch")}
+    legacy_paths = tuple(key for key in spec.baseline_paths if key not in original_proof)
+    block = {"status": "proved", "direction": "non_dcfl", "proof_body": "exact h",
+             "baseline": fr.snapshot_baseline(result, legacy_paths)}
+
+    assert dcfl_formalize.apply_gate(result, block)
+    assert result["proof_method"] == "lean_formalizer"
+    fr.restore_baseline(result, block["baseline"])
+
+    assert result["verdict"] == "dcfl"
+    assert {key: result[key] for key in original_proof} == original_proof
 
 
 def test_cli_estimate(tmp_path, spec, capsys):

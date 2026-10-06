@@ -50,6 +50,12 @@ if the retry budget (`retry_count`/`max_retries`) is exhausted.
 
 **Decision:** `"done"`, verdict `"ll"`, k = `first_follow_result.k`.
 
+Call k minimal only when `first_follow_result.minimum_proven == true`.
+An explicit check at k proves LL(k), not minimality. A minimum search stops
+at the first budget-limited (`is_ll_k == null`) k: smaller unresolved k cannot
+be skipped to claim a later witness is minimal. An unknown oracle answer is
+inconclusive, never a negative LL(k) result.
+
 **Primary evidence:** `"first_follow_oracle"`.
 
 This is the strongest possible evidence: the FIRST/FOLLOW table has no conflicts for the given k.

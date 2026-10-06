@@ -1131,16 +1131,21 @@ def build_formalize_estimate_command(project: str, run_dir: Path, settings: dict
     return cmd
 
 
+def _append_log_locked(run_id: str, line: str) -> None:
+    """Append to memory and disk while the caller holds _runs_lock."""
+    run = _runs.get(run_id)
+    if run is not None:
+        run["lines"].append(line)
+        try:
+            with open(Path(run["run_dir"]) / "run.log", "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
+
+
 def _append_log(run_id: str, line: str) -> None:
     with _runs_lock:
-        run = _runs.get(run_id)
-        if run is not None:
-            run["lines"].append(line)
-            try:
-                with open(Path(run["run_dir"]) / "run.log", "a", encoding="utf-8") as fh:
-                    fh.write(line + "\n")
-            except OSError:
-                pass
+        _append_log_locked(run_id, line)
 
 
 def _spawn_and_wait(run_id: str, cmd: list[str], env_overrides: dict[str, str]):
@@ -1219,7 +1224,6 @@ def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
     cmd = build_command(project, ir_path, run_dir, live, verbose)
     env = _settings_env(settings, project)
     chain_formalize = False
-    skip_note: str | None = None
 
     def cancelled_while_queued() -> None:
         with _runs_lock:
@@ -1279,8 +1283,9 @@ def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
                     chain_formalize = live
                     if chain_formalize:
                         _mark_formalizing_locked(run, keep_elapsed=True)
-                    skip_note = None if live else (
-                        "in-run formalization skipped: a mock run makes no live API calls")
+                    else:
+                        _append_log_locked(
+                            run_id, "in-run formalization skipped: a mock run makes no live API calls")
             else:
                 run["status"] = "error"
                 tail = "\n".join(stderr_tail[-10:])
@@ -1297,8 +1302,6 @@ def _run_pipeline_worker(run_id: str, project: str, ir_path: Path,
         # flicker for pollers); the worker queues for its own slot.
         _append_log(run_id, "--- formalize (in-run setting) ---")
         _formalize_worker(run_id, project, run_dir, settings, False)
-    elif skip_note:
-        _append_log(run_id, skip_note)
 
 
 def _mark_formalizing_locked(run: dict, keep_elapsed: bool = False) -> None:

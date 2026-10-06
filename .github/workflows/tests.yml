@@ -44,7 +44,7 @@ jobs:
         continue-on-error: true
         run: ruff check .
 
-      - name: Run pytest suites for all four pipelines + TFL Lab server
+      - name: Run non-slow pytest suites
         env:
           # A real key is never needed — tests use mocks only, and the root
           # conftest.py also strips this var and blocks live anthropic.*
@@ -52,16 +52,11 @@ jobs:
           ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
         run: |
           python -m pytest \
-            agent_system/tests \
-            cfl_system/tests \
-            dcfl_system/tests \
-            ll_system/tests \
-            ui_server/tests \
-            tests \
             -q --color=yes -m "not slow" \
             -n auto --dist loadfile \
             --cov=agent_system --cov=cfl_system --cov=dcfl_system \
-            --cov=ll_system --cov=ui_server --cov-report=term-missing
+            --cov=ll_system --cov=ui_server --cov=tfl_eval \
+            --cov-report=term-missing
 
   pytest-slow:
     name: pytest (slow, marked)
@@ -93,12 +88,6 @@ jobs:
           ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
         run: |
           python -m pytest \
-            agent_system/tests \
-            cfl_system/tests \
-            dcfl_system/tests \
-            ll_system/tests \
-            ui_server/tests \
-            tests \
             -q --color=yes -m "slow" \
             -n auto --dist loadfile
 
@@ -123,12 +112,27 @@ jobs:
       - name: Install wheel and smoke-import every pipeline
         run: |
           pip install dist/*.whl
-          python -c "
-          import agent_system.orchestrator
-          import cfl_system.orchestrator
-          import dcfl_system.orchestrator
-          import ll_system.orchestrator
-          import ui_server.server
-          import tfl_eval.cli
-          print('smoke import OK')
-          "
+          cd "$RUNNER_TEMP"
+          python - <<'PY'
+          import importlib
+          import os
+          from pathlib import Path
+
+          checkout = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          modules = (
+              "agent_system.orchestrator",
+              "cfl_system.orchestrator",
+              "dcfl_system.orchestrator",
+              "ll_system.orchestrator",
+              "ui_server.server",
+              "tfl_eval.cli",
+          )
+          for name in modules:
+              module = importlib.import_module(name)
+              origin = Path(module.__file__).resolve()
+              assert not origin.is_relative_to(checkout), (
+                  f"{name} imported from checkout: {origin}"
+              )
+              print(f"{name}: {origin}")
+          print("wheel smoke import OK")
+          PY

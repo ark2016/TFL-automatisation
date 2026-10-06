@@ -1,0 +1,687 @@
+{
+  "date": "2026-09-30",
+  "scope": "DCFL THEORY sections 1.1–1.5 and II1.6–1.10 then prompts/code",
+  "phase_order": "theory statements and sources first, integration after root authorization",
+  "paid_api_calls": 0,
+  "network": "Web research only; raw local PDF downloads blocked by sandbox WinError10013; source passages read through web extraction. No .env read.",
+  "sources": {
+    "Sh": {
+      "url": "https://liacs.leidenuniv.nl/~hoogeboomhj/second/secondcourse.pdf",
+      "type": "secondary course slides following Shallit, not original monograph",
+      "read": "PDF pp.122,128–130,132–134: closure table; normalization/complement; Thm4.7.4 proof sketch; prefix observation; PDF113 Thm4.4.1 statement and sparse sketch also read",
+      "not_read": "Original Shallit monograph full proof"
+    },
+    "Ya": {
+      "url": "https://arxiv.org/pdf/2112.09383v3",
+      "type": "original Yamakami article restating/proving Yu lemma",
+      "read": "PDF p7 Lemma3.2 statement, pp15–18 proof section located; precise statement actually read",
+      "not_read": "Full proof dependencies and Yu 1989 original"
+    },
+    "NS": {
+      "url": "https://homes.cs.aau.dk/~srba/files/NS:MFCS:07.pdf",
+      "type": "author full version",
+      "read": "PDF pp3–4 Def1–2; p6 Thm4; Appendix A pp12–13 determinization proof and state-stack-pair formulas; Thm1",
+      "not_read": "All unrelated hierarchy proofs"
+    },
+    "Knuth": {
+      "url": "https://harrymoreno.com/assets/greatPapersInCompSci/2.5_-_On_the_translation_of_languages_from_left_to_right-Donald_E._Knuth.pdf",
+      "type": "original 1965 article scan",
+      "read": "printed p611 LR unambiguity; pp630–636 deterministic/LR(1) construction, equivalence and endmarker LR(0); p629 quoted regular quotient result",
+      "not_read": "Every intermediate parsing construction in Sections I–III"
+    },
+    "GG": {
+      "url": "https://doi.org/10.1016/S0019-9958(66)80019-0",
+      "type": "original unavailable",
+      "read": "Bibliographic metadata only; original Elsevier content inaccessible",
+      "not_read": "Full text, theorem numbering, MIN/MAX/GSM proof hypotheses"
+    },
+    "Course": {
+      "url": null,
+      "path": "../iu9-tfl-practice/Практика/экзамен/2025_22.md",
+      "read": "Entire example and both pumping alternatives",
+      "type": "local course notes, not authority"
+    },
+    "Yu": {
+      "type": "original not read",
+      "read": "No original text read; DOI not independently established in this audit and must not be used as verified citation",
+      "not_read": "Original whole article"
+    }
+  },
+  "assertions": [
+    {
+      "id": "DCFL-001",
+      "section": "§1 convention",
+      "statement": "DCFL uses final-state full-input DPDA acceptance, epsilon moves allowed.",
+      "hypotheses": "Finite alphabets; no hidden input marker.",
+      "status": "corrected",
+      "evidence": {
+        "local_proof": "Empty-stack deterministic acceptance without endmarker is prefix-free because a successful empty-stack computation has no transition on further input. Final-state DCFL need not be prefix-free (e.g. {a,aa})."
+      },
+      "issue": "Original section lacked acceptance convention.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-002",
+      "section": "§1.1",
+      "statement": "Two-word Yu pumping alternatives as stated are necessary.",
+      "hypotheses": "L DCFL; exists p; forall xy,xz∈L with |x|>p; either paired factors within x (window≤p) or nonempty factor in last p symbols synchronized separately with suffixes.",
+      "status": "source_checked",
+      "evidence": {
+        "source": "Ya",
+        "page": 7,
+        "theorem": "Lemma 3.2"
+      },
+      "issue": "The same-first-symbol and nonempty suffix restrictions are stronger witness preconditions, harmless but not required by Ya.",
+      "mapping": [
+        "prompts/dcfl_pumping.md",
+        "lib/oracle_verifier.py"
+      ]
+    },
+    {
+      "id": "DCFL-003",
+      "section": "§1.1",
+      "statement": "Bound 2^(6 n^6) refers to ideal-shape n-state machine.",
+      "hypotheses": "The exact Ya normal form.",
+      "status": "source_checked",
+      "evidence": {
+        "source": "Ya",
+        "page": 7,
+        "theorem": "Lemma 3.2"
+      },
+      "issue": "Do not apply bound to arbitrary presentation.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-004",
+      "section": "§1.1",
+      "statement": "Old one-factor/tail-only alternative (1) is false.",
+      "hypotheses": "L={a^n b^n c^m}; choose n>p, x=a^n b^n,y=c,z=cc.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Any nonempty suffix-window factor is b-only and cannot be balanced by c-only suffix factors; correct paired alternative chooses a and b across boundary."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-005",
+      "section": "§1.1",
+      "statement": "{a^n b^n}∪{a^n b^(2n)} is non-DCFL.",
+      "hypotheses": "n≥1; choose witness n>p+1.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Mixed pumping factors break a*b*. Pure a/b factor lengths s,t≤p cannot switch either word to other branch at exponent2 (because p<n); first demands s=t, second 2s=t. Tail alternative pumps b into first word by 1..p+1<n."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-006",
+      "section": "§1.1",
+      "statement": "The displayed course witnesses for S do NOT refute Yu.",
+      "hypotheses": "S={a^i b^j c^k:i≤j or j=k;i,j,k≥1}; n≥2,p≥1.",
+      "status": "corrected",
+      "evidence": {
+        "source": "Course",
+        "local_counterexample": "x2=a,y2=b,z2=epsilon. For every t≥0, first pumped counts (n-1+t,n-1+t,n+1); second (n-1+t,n+1,n+1). Both in S."
+      },
+      "issue": "Original THEORY falsely called course application correct.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-007",
+      "section": "§1.1",
+      "statement": "S nevertheless is non-DCFL.",
+      "hypotheses": "Same S; MIN uses proper prefix.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "MIN(S)∩a+b+c²c*={a^i b^j c^j:i>j≥2}. At pumping word a^(p+1)b^p c^p, window≤p cannot affect both a,c. Nonordered factors fail at exponent2. Pure factors: B≠C breaks equality; B=C>0 implies A=0 and exponent2 breaks i>j; B=C=0 implies A>0 and exponent0 breaks i>j."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-008",
+      "section": "§1.2",
+      "statement": "A DCFL has an infinite Nerode class.",
+      "hypotheses": "Finite nonempty alphabet essential.",
+      "status": "source_checked",
+      "evidence": {
+        "source": "Sh",
+        "page": 132,
+        "theorem": "4.7.4; proof sketch"
+      },
+      "issue": "Empty alphabet counterexample L={epsilon}: only singleton class.",
+      "mapping": [
+        "lib/oracle_verifier.py::_verify_shallit",
+        "tests/test_theory_audit_regressions.py"
+      ]
+    },
+    {
+      "id": "DCFL-009",
+      "section": "§1.2",
+      "statement": "Minimal-stack proof yields infinite residual class.",
+      "hypotheses": "DPDA normalized to read all words; include endpoint acceptance flag in finite control.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "For each x choose continuation achieving global minimum stack height among reachable continuation configurations. Bottom tail cannot be inspected afterwards; residual behavior determined by finite control and top. Chosen words unbounded in length; pigeonhole yields infinite class."
+      },
+      "issue": "For epsilon acceptance, endpoint flag must be part of state.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-010",
+      "section": "§1.2",
+      "statement": "All Nerode classes finite implies non-DCFL; one infinite distinguishable family is insufficient.",
+      "hypotheses": "Finite nonempty alphabet.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Contrapositive. For L={a^n b^n}, family a^n is pairwise distinguished by b^n despite L DCFL."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-011",
+      "section": "§1.2",
+      "statement": "Binary PAL and even PAL have singleton Nerode classes.",
+      "hypotheses": "Binary alphabet; u≠v, N=2(|u|+|v|).",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "w=b a^N b reverse(u). uw is even palindrome. In vw unique longest a-run a^N must be fixed under any palindrome reflection, forcing v=u. N>lengths and N even."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-012",
+      "section": "§1.2",
+      "statement": "Dead class is empty or infinite; bounded missing continuation is unknown.",
+      "hypotheses": "Finite nonempty alphabet; D={x:no extension accepted}.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "D nonempty implies x Sigma* subset D. Language {a^n:n≥20} has no dead words despite epsilon having no completion length≤6."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-013",
+      "section": "§1.3",
+      "statement": "Marked continuation L_$ is DCFL.",
+      "hypotheses": "Fresh marker; x,y may be epsilon; exactly one marker.",
+      "status": "corrected",
+      "evidence": {
+        "local_proof": "Normalize epsilon behavior; flag acceptance at current Sigma boundary. Check but preserve flag on marker, reset only on real input, enforce marker count in finite state."
+      },
+      "issue": "Reset at marker fails for L={a}, word a$; epsilon suffix is allowed.",
+      "mapping": [
+        "prompts/shallit.md"
+      ]
+    },
+    {
+      "id": "DCFL-014",
+      "section": "§1.3",
+      "statement": "haspref(L) is DCFL.",
+      "hypotheses": "Proper nonempty extension; epsilon may be accepted by L.",
+      "status": "corrected",
+      "evidence": {
+        "local_proof": "Maintain boundary acceptance F and old accepted-prefix bit P. Before consuming next Sigma letter update P |= F; accept F and P."
+      },
+      "issue": "Raising prefix flag at current acceptance without further consumed letter is unsound.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-015",
+      "section": "§1.3",
+      "statement": "Marked slice of {anbn}∪{anb2n} is {anbn$bn}, non-CFL.",
+      "hypotheses": "n≥1; regular filter a*b*$b+.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Positive extension can go only from n b's to 2n b's; ordinary CFL pumping cannot affect all three counters in length-p window. If marker pumped, marker count fails."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-016",
+      "section": "§1.3",
+      "statement": "haspref({anbn}∪{an b^m c^n})={an b^m c^n:m≥n}, non-CFL.",
+      "hypotheses": "n,m≥1.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Only accepted proper prefix is anbn in the second branch. Pump a^p b^p c^p: changing unequal a,c breaks equality; equal positive a,c impossible in window≤p; b-only pump down breaks m≥n."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-017",
+      "section": "§1.4",
+      "statement": "Complement preserves DCFL.",
+      "hypotheses": "Fixed ambient alphabet; normalized input-total machine, epsilon acceptance remembered.",
+      "status": "source_checked",
+      "evidence": {
+        "source": "Sh",
+        "pages": [
+          128,
+          129,
+          130
+        ],
+        "theorem": "Lemma4.7.1, Thm4.7.2"
+      },
+      "issue": "Naive flipping raw final states is invalid.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-018",
+      "section": "§1.4",
+      "statement": "Intersection with regular preserves DCFL.",
+      "hypotheses": "DFA over same alphabet; epsilon moves leave DFA state.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Product finite controls with one shared DPDA stack and conjunction final condition."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-019",
+      "section": "§1.4",
+      "statement": "Inverse homomorphism, including erasing images, preserves DCFL.",
+      "hypotheses": "Finite alphabets; h total morphism.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Finite buffer holds h(a); simulate underlying normalized DPDA deterministically. Preserve acceptance across erasing input letter; store acceptance only at true input boundaries."
+      },
+      "issue": "Both constructive and contrapositive proof directions are valid.",
+      "mapping": [
+        "lib/closure_table.py",
+        "prompts/closure_reduction.md"
+      ]
+    },
+    {
+      "id": "DCFL-020",
+      "section": "§1.4",
+      "statement": "Right quotient by regular preserves DCFL.",
+      "hypotheses": "L/R={x:exists y∈R,xy∈L}.",
+      "status": "source_checked",
+      "evidence": {
+        "source": "Knuth",
+        "printed_page": 629,
+        "theorem": "Explicit Ginsburg/Greibach regular quotient result quoted in LR→DPDA proof",
+        "local_proof_outline": "Finite pop summaries make accepted-continuation configurations regular; stack annotations maintain that test."
+      },
+      "issue": "GG original proof not read. Statement corroborated in primary Knuth source, not every saturation proof detail.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-021",
+      "section": "§1.4",
+      "statement": "MIN preserves DCFL.",
+      "hypotheses": "Proper-prefix minimum; if epsilon∈L then MIN(L)={epsilon}.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Same F,P machine as haspref, final predicate F and not P."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-022",
+      "section": "§1.4",
+      "statement": "MAX preserves DCFL.",
+      "hypotheses": "No proper accepted extension; includes x∈L condition.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof_outline": "On the same DPDA stack, maintain regular configuration test for reachability of an accepting configuration after a nonempty continuation, plus current acceptance bit. Accept current acceptance and negation of continuation test.",
+        "local_proof": "Finite Pop(p,A,q) and Acc(p,A) tables yield an NFA reading configuration stack top-down: successive original-cell pops, then acceptance before next pop, with protected bottom. Any successful path decomposes this way; concatenated witnesses reconstruct a path. Annotate suffix-stack transition relations, updating on push and restoring on pop. Product control with DFA for Sigma+ tests a proper continuation. MAX final predicate is current acceptance AND absence of this continuation, all on the same stack."
+      },
+      "issue": "Original GG proof not read; supplied self-contained finite-table proof of regular predecessor predicate. No use of general DCFL difference.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-023",
+      "section": "§1.4",
+      "statement": "Inverse deterministic sequential GSM mapping preserves DCFL.",
+      "hypotheses": "Single-valued sequential device, finite states and finite output blocks; erasing allowed.",
+      "status": "corrected",
+      "evidence": {
+        "local_proof": "Finite-state/buffer composition with normalized DPDA. A missing transition rejects; finite-output tails handled at final boundary."
+      },
+      "issue": "Unqualified GSM can be read as nondeterministic relation; that extension is false (choose outputs 0w or1w and tagged DCFL union).",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-024",
+      "section": "§1.4",
+      "statement": "Left quotient by fixed word preserves DCFL; by regular language in general does not.",
+      "hypotheses": "w fixed vs R regular distinguished.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Fixed-word DPDA starts after that prefix (fixed finite initial stack). For H=0{anbn}∪1{anb2n}, {0,1}^-1 H is non-DCFL."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-025",
+      "section": "§1.4",
+      "statement": "DCFL not closed under DCFL intersection or union.",
+      "hypotheses": "Over suitable alphabets, not claim for every alphabet.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Intersection of {anbn c^m} and {a^m b^n c^n} is non-CFL anbncn. Union nonclosure follows via complement and De Morgan."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-026",
+      "section": "§1.4",
+      "statement": "DCFL not closed under concatenation, including regular left factor.",
+      "hypotheses": "n≥1; H={anbn}∪c{anb2n}, R={epsilon,c}.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "H DCFL by first c. c^-1(RH∩c a+b+)={anbn}∪{anb2n}, non-DCFL."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-027",
+      "section": "§1.4",
+      "statement": "DCFL not closed under Kleene star.",
+      "hypotheses": "H={anbn}∪c{anb2n}∪{c}, n≥1.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "H DCFL; H*∩c a+b+=c({anbn}∪{anb2n}); fixed-word quotient contradiction."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-028",
+      "section": "§1.4",
+      "statement": "DCFL not closed under reversal.",
+      "hypotheses": "L1 words having an a in first half; L2=L1^R.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "L1 DPDA compares leading b count to suffix length after first a; L2 non-DCFL by finite Nerode classes in §1.7."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-029",
+      "section": "§1.4",
+      "statement": "DCFL not closed under (even epsilon-free) homomorphism.",
+      "hypotheses": "Tagged H=0{anbn}∪1{anb2n}.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Map both tags to # and preserve a,b. Image #({anbn}∪{anb2n}) cannot be DCFL by fixed-word quotient."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-030",
+      "section": "§1.5",
+      "statement": "DCFL unambiguous; ambiguous presentation proves nothing about language.",
+      "hypotheses": "LR(k) grammar vs LR(k) language distinguished.",
+      "status": "source_checked",
+      "evidence": {
+        "source": "Knuth",
+        "printed_pages": [
+          611,
+          630,
+          635
+        ],
+        "theorem": "LR grammar unambiguous; every deterministic language has LR(1) grammar"
+      },
+      "issue": "Classic inherently ambiguous union example's original ambiguity proof not independently reconstructed; see DCFL-031.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-031",
+      "section": "§1.5",
+      "statement": "{ai bj ck:i=j or j=k} is inherently ambiguous.",
+      "hypotheses": "Exponent convention (nonnegative or positive) should be explicit.",
+      "status": "unresolved",
+      "evidence": {
+        "source": "Sh",
+        "page": 113,
+        "theorem": "4.4.1 statement and sparse Ogden-based hint actually read"
+      },
+      "issue": "Statement confirmed in course slides, but full original inherent-ambiguity proof not independently checked; retaining unresolved proof-audit status.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-032",
+      "section": "§1.6",
+      "statement": "Exam01 half-language X=(a+b)*ab(ab|aa)*.",
+      "hypotheses": "Original w∈(aa*b)*a, v∈b(ab|aa)*.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "wv concatenation exactly X by substitution of aa*=a+."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-033",
+      "section": "§1.6",
+      "statement": "Current Yu proof for exam01 has a universal case gap.",
+      "hypotheses": "All possible factor pairs; finite checks cannot cover them.",
+      "status": "corrected",
+      "evidence": {
+        "local_gap": "Assertion 'only mirrored alternating pairs preserve W1' lacked exhaustive justification; also pumping may create new aa occurrences."
+      },
+      "issue": "Removed success mock/solved example; did not infer verdict false.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-034",
+      "section": "§1.6",
+      "statement": "Exam01 is non-DCFL via exact marked continuation.",
+      "hypotheses": "Positive exponent regular slice R as in new THEORY §1.6.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Prefix acceptance forces r=s. Erased-mark word has exactly three aa occurrences; palindrome fixes middle and matches outer, giving r=u,s=t. Converse halves are in X. Thus all four exponents equal. Inverse h with A→ab,B/C/D→ba,E→aa,F→$baa,G→baa plus regular A+EB+FC+GD+ isolates four equal counters; erase separators and D to get anbncn."
+      },
+      "issue": "",
+      "mapping": [
+        "prompts/shallit.md",
+        "examples/mock/dcfl_exam_01_shallit.json",
+        "examples/mock/dcfl_exam_01_reasoning.json",
+        "lib/pattern_db.py"
+      ]
+    },
+    {
+      "id": "DCFL-035",
+      "section": "§1.7",
+      "statement": "Exam02 equals {b^p a v a b^q:|v|≥p+q}.",
+      "hypotheses": "p,q≥0, v binary, two distinct chosen a occurrences.",
+      "status": "corrected",
+      "evidence": {
+        "local_proof": "First/last a optimize inequalities. A split inside v exists iff lengths allocated to each side are at least p,q; equivalent to |v|≥p+q."
+      },
+      "issue": "Replaced finite-enumeration-only justification.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-036",
+      "section": "§1.7",
+      "statement": "L2 non-DCFL; hence exam02 non-DCFL.",
+      "hypotheses": "L2={v a b^q:|v|≥q}; binary alphabet.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "All words extend by a; words lengths m<n distinguished by a b^(m+1). Classes contain words of only one length and finite. L∩aΣ*=a L2; fixed-word quotient preserves DCFL."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-037",
+      "section": "§1.8",
+      "statement": "Exam03 is unambiguous but non-DCFL.",
+      "hypotheses": "n≥1,m,l≥0.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Branches distinguished by presence of c before final a; both have unique block counts and unambiguous grammars. Yu x=an b^(n-1),y=b cn a,z=ba,n>p+1: any a-pump breaks first n/c equality (mixed factor breaks order); b-only pair pumped down breaks second b≥n. Tail b-factor and z2⊆ba pumped down likewise breaks second branch."
+      },
+      "issue": "Added missing m,l domains.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-038",
+      "section": "§1.9",
+      "statement": "Every DCFL has LR(1) grammar; L$ has LR(0).",
+      "hypotheses": "Fresh endmarker appended; full-input final-state convention.",
+      "status": "source_checked",
+      "evidence": {
+        "source": "Knuth",
+        "printed_pages": [
+          630,
+          635,
+          636
+        ],
+        "theorem": "Deterministic→LR(1); concluding equivalence and LR(0) endmarker corollary"
+      },
+      "issue": "Do not substitute SLR(1) without separate source.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-039",
+      "section": "§1.10",
+      "statement": "aSSb grammar language is tree closure with leaves ba and anbn.",
+      "hypotheses": "n≥1; least language closed x,y→axyb.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "A→aAb|a gives a^(k+1)b^k. Substitution Ab gives anbn. Induction on S derivation gives tree characterization and converse."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-040",
+      "section": "§1.10",
+      "statement": "Given grammar ambiguous, nonprefixfree, hence not LR(k), yet language may be DCFL.",
+      "hypotheses": "Language-vs-grammar distinction.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Two displayed decompositions of aabaabbabb; ab and abaabb are in L. LR grammars unambiguous by Knuth p611."
+      },
+      "issue": "",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-041",
+      "section": "§1.10",
+      "statement": "Profile NPDA accepts exactly aSSb grammar.",
+      "hypotheses": "Cells retain parent phase; BA pop/restore atomic two-letter path; final-state D only.",
+      "status": "proved_locally",
+      "evidence": {
+        "local_proof": "Induct on consumed prefix preserving partial tree frontier. Node phases count children; leaf-a phase enforces a-block then b-block; each pop restores recorded parent phase. BA temporary node removal stores/restores all annotation, completes exactly one ba child. Initial choice matches three grammar alternatives; root closes iff complete derivation."
+      },
+      "issue": "",
+      "mapping": [
+        "tools/grammar_aSSb_dpda.py::_npda_step"
+      ]
+    },
+    {
+      "id": "DCFL-042",
+      "section": "§1.10",
+      "statement": "NPDA admits complete normalized real-time height-deterministic completion.",
+      "hypotheses": "All live paths +1 on a,-1 on b except isolated root-ba path; missing moves go to nonaccepting sink with same word-height evolution.",
+      "status": "proved_locally",
+      "evidence": {
+        "source": "NS",
+        "pages": [
+          3,
+          4
+        ],
+        "theorem": "Def1–2",
+        "local_proof": "Dead transitions can follow reflected count profile at bottom; root-ba branch is isolated and its a is internal. Other branches for same prefix share height. Final D may die while another parse continues, so completion must preserve generic profile."
+      },
+      "issue": "Height alone without real-time insufficient: NS Thm1 hCFL=CFL.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-043",
+      "section": "§1.10",
+      "statement": "Normalized real-time height-deterministic PDA determinizable.",
+      "hypotheses": "n counts state/top-symbol pairs; general height deterministic PDA not enough.",
+      "status": "source_checked",
+      "evidence": {
+        "source": "NS",
+        "pages": [
+          6,
+          12,
+          13
+        ],
+        "theorem": "Thm4 and Appendix A proof"
+      },
+      "issue": "Actually inspected paired state-stack summaries and push/pop composition, not only abstract.",
+      "mapping": []
+    },
+    {
+      "id": "DCFL-044",
+      "section": "§1.10",
+      "statement": "Exported 345-state certificate is evidence beyond mathematical existence only up to tested bounds unless implementation equivalence proved.",
+      "hypotheses": "Builder uses state+top predecessor keys and bisimulation quotient.",
+      "status": "unresolved",
+      "evidence": {
+        "static_read": "tools/grammar_aSSb_dpda.py NPDA front half inspected; theorem summary bridge reviewed",
+        "historical": "355 raw/345 quotient/5835 transitions and exhaustive ≤18 / positive ≤30 reported by repository"
+      },
+      "issue": "This audit has not yet rerun entire historical enumeration or proved Python determinizer/quotient correspondence. Keep historical counts labeled and bounded_pass cap; mathematical language classification follows independent NS construction.",
+      "mapping": []
+    }
+  ],
+  "material_findings": [
+    "Invalid course Yu witness refutation repaired using MIN; language verdict remains non-DCFL.",
+    "Marker-reset proof fails when suffix is epsilon; proper-prefix flag needs one additional consumed symbol.",
+    "Exam01 previous Yu proof gap replaced with exact universal marked-continuation proof; mocks/primary agent updated.",
+    "Closure metadata inverse homomorphism and regular intersection support both proof directions.",
+    "Finite nonempty alphabet added to Shallit contract and explicit empty alphabet rejected."
+  ],
+  "unresolved": [
+    "Yu1989 and GG1966 original full texts unavailable.",
+    "Shallit original monograph proof not read; authoritative course slide sketch plus local completion used.",
+    "Classical inherent ambiguity example original full proof not independently checked here.",
+    "Full Python determinizer/quotient equivalence and historical longest enumeration not established by this audit."
+  ],
+  "tests": {
+    "status": "passed",
+    "command": ".venv/Scripts/python -m pytest dcfl_system/tests -q -m \"not slow\" -p no:cacheprovider --basetemp=.tfl_lab_runs/theory_audit/dcfl_pytest_final --junitxml=.tfl_lab_runs/theory_audit/dcfl_tests.xml",
+    "passed": 821,
+    "skipped": 23,
+    "deselected": 2,
+    "failed": 0,
+    "errors": 0,
+    "seconds": 134.26,
+    "junit": ".tfl_lab_runs/theory_audit/dcfl_tests.xml",
+    "initial_attempt": "800 passed, 23 skipped, 20 inaccessible system temp fixture errors, one typo in new regression assertion; typo corrected and workspace basetemp used on complete rerun.",
+    "new_regressions": "Empty-alphabet Nerode misuse; explicit course Yu alternative; exam01 marked slice exponents 1..4. Finite checks supplement, never replace universal proofs."
+  },
+  "changed_files": [
+    "docs/THEORY.md (DCFL owned sections only)",
+    "docs/EVAL_SET.md (dcfl-12 method only)",
+    "dcfl_system/CLAUDE.md",
+    "dcfl_system/tz_dcfl_agent_system.md",
+    "dcfl_system/prompts/closure_reduction.md",
+    "dcfl_system/prompts/dcfl_pumping.md",
+    "dcfl_system/prompts/shallit.md",
+    "dcfl_system/prompts/stack_strategy.md",
+    "dcfl_system/lib/closure_table.py",
+    "dcfl_system/lib/oracle_verifier.py",
+    "dcfl_system/lib/pattern_db.py",
+    "dcfl_system/examples/mock/dcfl_exam_01_dcfl_pumping.json",
+    "dcfl_system/examples/mock/dcfl_exam_01_shallit.json",
+    "dcfl_system/examples/mock/dcfl_exam_01_reasoning.json",
+    "dcfl_system/tests/test_closure_table.py",
+    "dcfl_system/tests/test_orchestrator.py",
+    "dcfl_system/tests/test_theory_audit_regressions.py"
+  ]
+}

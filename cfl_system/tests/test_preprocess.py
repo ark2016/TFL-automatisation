@@ -90,8 +90,8 @@ class TestFilterAnalysis:
     def test_count_comparison_not_regular(self):
         ir = _grammar_filter_ir({
             "op": "eq",
-            "left": {"kind": "count_symbol", "symbol": "a"},
-            "right": {"kind": "count_symbol", "symbol": "b"},
+            "left": {"kind": "count_symbol", "symbol": "a", "in_var": "w"},
+            "right": {"kind": "count_symbol", "symbol": "b", "in_var": "w"},
         })
         result = preprocess_language(ir)
         fa = result["filter_analysis"]
@@ -157,16 +157,16 @@ class TestFilterAnalysis:
                 },
                 {
                     "op": "eq",
-                    "left": {"kind": "count_symbol", "symbol": "a"},
-                    "right": {"kind": "count_symbol", "symbol": "b"},
+                    "left": {"kind": "count_symbol", "symbol": "a", "in_var": "w"},
+                    "right": {"kind": "count_symbol", "symbol": "b", "in_var": "w"},
                 },
             ],
         })
         result = preprocess_language(ir)
         fa = result["filter_analysis"]
         assert fa is not None
-        assert fa["filter_is_regular"] is False
-        assert fa["intersection_strategy"] == "manual"
+        assert fa["filter_is_regular"] is None
+        assert fa["intersection_strategy"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +187,8 @@ class TestQuickVerdict:
     def test_no_verdict_for_non_regular_filter(self):
         ir = _grammar_filter_ir({
             "op": "eq",
-            "left": {"kind": "count_symbol", "symbol": "a"},
-            "right": {"kind": "count_symbol", "symbol": "b"},
+            "left": {"kind": "count_symbol", "symbol": "a", "in_var": "w"},
+            "right": {"kind": "count_symbol", "symbol": "b", "in_var": "w"},
         })
         result = preprocess_language(ir)
         # No quick verdict -- filter is non-regular, doesn't mean non-CFL

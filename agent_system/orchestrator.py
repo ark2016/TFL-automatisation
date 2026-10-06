@@ -649,6 +649,7 @@ def _result_verdict(result: dict) -> str | None:
     r_ev = reasoning.get("evidence", reasoning) if isinstance(reasoning, dict) else {}
     return (r_ev.get("verdict")
             or reasoning.get("verdict")
+            or result.get("verdict")
             or (evidence.get("hypothesis", {}) or {}).get("hypothesis"))
 
 

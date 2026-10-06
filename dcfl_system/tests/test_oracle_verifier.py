@@ -175,14 +175,14 @@ def test_pump_outcome_closed_when_i0_fails():
     assert ov._pump_outcome(oracle, pump) == "closed"
 
 
-def test_pump_outcome_refuted_when_all_of_0_2_3_survive():
+def test_pump_outcome_inconclusive_when_only_finite_exponents_survive():
     def pump(i):
         return "always-in-L", "always-in-L-too"
 
     def oracle(word):
         return True
 
-    assert ov._pump_outcome(oracle, pump) == "refuted"
+    assert ov._pump_outcome(oracle, pump) == "inconclusive"
 
 
 def test_pump_outcome_inconclusive_when_oracle_never_decides():
@@ -195,20 +195,19 @@ def test_pump_outcome_inconclusive_when_oracle_never_decides():
     assert ov._pump_outcome(oracle, pump) == "inconclusive"
 
 
-def test_check_condition1_refutes_a_trivially_universal_language():
-    # oracle accepts every word -> any decomposition survives pumping at
-    # i=0,2,3 -> condition (1) must report "refuted" immediately.
+def test_check_condition1_does_not_infer_all_exponents_from_finite_survival():
+    # The checker sees finitely many oracle calls, not a proof of universality.
     universal_oracle = lambda word: True
     status, msg = ov._check_condition1("aaaa", "b", "c", p=2, oracle=universal_oracle)
-    assert status == "refuted"
-    assert msg is not None and "condition (1)" in msg
+    assert status == "limit"
+    assert msg is None
 
 
-def test_check_condition2_refutes_a_trivially_universal_language():
+def test_check_condition2_does_not_infer_all_exponents_from_finite_survival():
     universal_oracle = lambda word: True
     status, msg = ov._check_condition2("aaaa", "b", "c", p=2, oracle=universal_oracle)
-    assert status == "refuted"
-    assert msg is not None and "condition (2)" in msg
+    assert status == "limit"
+    assert msg is None
 
 
 def test_check_condition1_no_evidence_when_x_shorter_than_window():
@@ -309,16 +308,8 @@ def test_validate_word_instance_entry_rejects_mismatched_first_letters():
     assert ov._validate_word_instance_entry(entry, 2) is None
 
 
-def test_verify_dcfl_pumping_exam04_grammar_never_reaches_well_formed_or_bounded_pass():
-    # task_grammar_aSSb (dcfl_exam_04, THEORY.md §1.10) IS DCFL -- for
-    # SEVERAL different genuine member-word pairs (one a literal prefix of
-    # the other, per `_xyz_from_common_prefix`'s own backoff-by-one
-    # convention, reused here as x_length for BOTH p=2 and p=3), the
-    # mandatory word_instances + semantic check must never let the proof
-    # sit at `well_formed` (structurally tidy but unverified) OR at
-    # `bounded_pass` (a genuine but INCORRECT "non_dcfl" claim about an
-    # actually-DCFL language) -- only `refuted` or `not_verified` are
-    # acceptable outcomes.
+def test_verify_dcfl_pumping_exam04_grammar_never_reaches_bounded_pass():
+    # A finite experiment may leave a false argument well_formed, but cannot promote it.
     member_pairs = [
         ("ab", "abaabb"),
         ("aabb", "aabbab"),
@@ -353,7 +344,7 @@ def test_verify_dcfl_pumping_exam04_grammar_never_reaches_well_formed_or_bounded
         }
         result = verify_agent_results(agent_results, GRAMMAR_ASSB_TASK_IR)
         entry = result["dcfl_pumping"]
-        assert entry["verification_status"] in ("refuted", "not_verified"), (
+        assert entry["trust"] in ("refuted", "not_verified", "well_formed"), (
             w, w_prime, entry["verification_status"]
         )
 
@@ -486,15 +477,11 @@ def test_check_dead_class_finite_skips_claims_other_than_empty():
         assert ov._check_dead_class_finite(GRAMMAR_ASSB_TASK_IR, claimed) == (None, None, [])
 
 
-def test_check_dead_class_finite_empty_contradicted_for_exam04_grammar():
-    # task_grammar_aSSb (dcfl_exam_04): S -> aSSb | ba | Ab, A -> aAb | a.
-    # The only production starting with 'b' is the complete "ba", so any
-    # word starting "bb..." can never be a prefix of a word in L -- D is
-    # NOT empty.
+def test_check_dead_class_finite_search_does_not_certify_deadness():
+    # bb is actually dead here, but this bounded membership search cannot certify it.
     outcome, evidence, issues = ov._check_dead_class_finite(GRAMMAR_ASSB_TASK_IR, "empty")
-    assert outcome == "empty_contradicted"
-    assert evidence == ["bb"]
-    assert "empty" in issues[0] and "'bb'" in issues[0]
+    assert outcome is None and evidence is None
+    assert "does not prove" in issues[0]
 
 
 def test_normalize_dead_class_status_maps_legacy_finite_onto_empty():
@@ -510,18 +497,13 @@ def test_normalize_dead_class_status_maps_legacy_finite_onto_empty():
     assert ov._normalize_dead_class_status("bogus") == "bogus"
 
 
-def test_check_dead_class_finite_finite_contradicted_for_exam04_grammar_after_normalization():
-    # D is closed under right-extension (x dead => xy dead for all y), so a
-    # nonempty D is always infinite -- the legacy "finite" claim, normalized
-    # onto "empty" by the caller before reaching this function, is
-    # contradicted by the same witness ('bb', the shortest dead word -- no
-    # word in the grammar starts with two 'b's) as "empty" itself.
+def test_check_dead_class_legacy_claim_has_same_search_limits():
+    # Normalizing a legacy claim does not make bounded search complete.
     outcome, evidence, issues = ov._check_dead_class_finite(
         GRAMMAR_ASSB_TASK_IR, ov._normalize_dead_class_status("finite"),
     )
-    assert outcome == "empty_contradicted"
-    assert evidence == ["bb"]
-    assert "empty" in issues[0] and "bb" in issues[0]
+    assert outcome is None and evidence is None
+    assert "does not prove" in issues[0]
 
 
 WWR_TASK_IR = {
@@ -549,7 +531,7 @@ def test_check_dead_class_finite_empty_not_falsely_contradicted_for_wwr():
     # len(w), not stay fixed, or a correct 'empty' proof gets wrongly
     # refuted.
     outcome, evidence, issues = ov._check_dead_class_finite(WWR_TASK_IR, "empty")
-    assert (outcome, evidence, issues) == (None, None, [])
+    assert (outcome, evidence, issues) == ("bounded_pass", None, [])
 
 
 def test_verify_shallit_wwr_empty_claim_is_not_refuted_end_to_end():
@@ -598,10 +580,8 @@ def test_verify_shallit_legacy_finite_value_accepted_with_backward_compat_note()
     assert "finite" in issues and "empty" in issues and "обратная совместимость" in issues
 
 
-def test_verify_shallit_exam04_dead_class_status_finite_is_refuted():
-    # VERDICT_POLICY.md §4: a "finite" claim contradicted by dead words at
-    # every length 2..8 -> refuted, via verify_agent_results end-to-end
-    # (not just the low-level _check_dead_class_finite unit above).
+def test_verify_shallit_bounded_dead_search_does_not_refute():
+    # The finite search may diagnose a missing continuation, not refute the claim.
     proof_sketch = {
         "kind": "shallit",
         "technique": "nerode_classes",
@@ -615,9 +595,9 @@ def test_verify_shallit_exam04_dead_class_status_finite_is_refuted():
     }
     result = verify_agent_results(agent_results, GRAMMAR_ASSB_TASK_IR)
     entry = result["shallit"]
-    assert entry["verification_status"] == "refuted"
-    assert entry["trust"] == "refuted"
-    assert "dead_class_status" in entry["issues"][0]
+    assert entry["verification_status"] == "well_formed"
+    assert entry["trust"] == "well_formed"
+    assert any("unresolved" in issue for issue in entry["issues"])
 
 
 def test_verify_shallit_exam04_dead_class_status_infinite_with_success_is_refuted():

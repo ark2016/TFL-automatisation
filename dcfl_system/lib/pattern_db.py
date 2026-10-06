@@ -110,11 +110,11 @@ PATTERN_DB: list[dict[str, Any]] = [
         # THEORY.md §1.6 (dcfl_exam_01): restricting w,v to these regex
         # domains does NOT turn "aa" into a genuine separator (it still
         # occurs inside w's a⁺b-blocks and inside v's ab|aa pairs) — proven
-        # non-DCFL via the two-word pumping lemma (лемма Ю).
+        # non-DCFL via the exact marked-continuation reduction.
         "pattern": "regex_constrained_palindrome",
         "description": "palindrome with regex-constrained variable, candidate separator occurs inside the variables' own domains",
         "verdict": "non_dcfl",
-        "method": "dcfl_pumping",
+        "method": "shallit",
         "example": "{wvaav^Rw^R | w∈(aa*b)*a, v∈b(ab|aa)*}",
     },
     # 12

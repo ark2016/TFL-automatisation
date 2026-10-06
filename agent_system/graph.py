@@ -389,9 +389,8 @@ def _verify_closure_claim(
 ) -> dict | None:
     """Verify closure agent's intersection claim via oracle.
 
-    If the closure agent claims L intersection R is non-regular, we compute
-    L intersection R empirically and check whether its Nerode index is
-    actually infinite.
+    Sample L intersection R to estimate its Nerode classes. Finite-depth
+    stabilization or growth is diagnostic only; neither decides its index.
     """
     clo_ev = closure_output.get("evidence", closure_output)
     if closure_output.get("status") == "failure":
@@ -412,11 +411,11 @@ def _verify_closure_claim(
         r_dfa = build_dfa_from_regex(regex)
 
         # Build memoized oracle for L ∩ R to avoid redundant CYK parses
-        _oracle_cache: dict[str, bool] = {}
+        _oracle_cache: dict[str, bool | None] = {}
 
-        def intersection_oracle(word: str) -> bool:
+        def intersection_oracle(word: str) -> bool | None:
             if word not in _oracle_cache:
-                _oracle_cache[word] = oracle(word) and run_dfa(r_dfa, word)
+                _oracle_cache[word] = oracle(word) if run_dfa(r_dfa, word) else False
             return _oracle_cache[word]
 
         # Adaptive depth based on alphabet size to prevent timeout:
@@ -431,67 +430,19 @@ def _verify_closure_claim(
         idx = est.get("estimated_index")
         conf = est.get("confidence", 0)
 
-        if idx != "infinite" and conf >= 0.8:
-            log_msg(
-                state,
-                f"  CLOSURE CLAIM WRONG: L ∩ {regex} has finite index "
-                f"{idx} (confidence {conf}) — intersection is regular!",
-            )
-
-            # Any word the ORACLE (not a hardcoded a^n b^n literal count —
-            # this must generalize to the IR's actual language/alphabet,
-            # TODO.md §2) places in L ∩ R is a valid witness that the
-            # intersection is inhabited and (per the index estimate above)
-            # regular, contradicting the closure agent's non-regular claim.
-            from .lib.word_generator import generate_exhaustive
-            counterexamples = []
-            for w in generate_exhaustive(alphabet, max_len=8):
-                if intersection_oracle(w):
-                    counterexamples.append(w)
-                    if len(counterexamples) >= 3:
-                        break
-
-            return {
-                "status": "disproved",
-                "claim": f"L ∩ {regex} is non-regular",
-                "actual": f"L ∩ {regex} has finite Nerode index {idx}",
-                "counterexamples": counterexamples,
-                "message": (
-                    f"Closure agent's claim is WRONG. "
-                    f"L ∩ {regex} appears regular (index={idx}). "
-                    f"Words in L ∩ {regex} with count_a ≠ count_b: "
-                    f"{counterexamples}"
-                ),
-            }
-        elif idx == "infinite" and conf >= 0.8:
-            log_msg(
-                state,
-                f"  closure claim verified: L ∩ {regex} is non-regular "
-                f"(index=infinite, confidence {conf})",
-            )
-            return {
-                "status": "verified",
-                "claim": f"L ∩ {regex} is non-regular",
-                "confidence": conf,
-            }
-        elif idx == "infinite":
-            # Low confidence — not enough evidence to confirm
-            log_msg(
-                state,
-                f"  closure claim plausible but unconfirmed "
-                f"(index=infinite, confidence {conf} < 0.8)",
-            )
-            return {
-                "status": "plausible",
-                "claim": f"L ∩ {regex} is non-regular",
-                "confidence": conf,
-            }
-        else:
-            log_msg(
-                state,
-                f"  closure claim inconclusive (index={idx}, confidence {conf})",
-            )
-            return None
+        log_msg(
+            state,
+            f"  closure sample diagnostic (index estimate={idx}, depth={depth}, confidence={conf}); "
+            "finite samples do not decide regularity",
+        )
+        return {
+            "status": "plausible",
+            "claim": f"L ∩ {regex} is non-regular",
+            "estimated_index": idx,
+            "confidence": conf,
+            "max_depth": depth,
+            "scope": "finite-depth index estimate only; neither proves nor refutes regularity",
+        }
 
     except Exception as exc:
         log_msg(state, f"  closure verification failed: {exc}")
@@ -1744,6 +1695,7 @@ def assemble_result_node(state: PipelineState) -> dict:
     downgrades: list[str] = []
     basis: list[dict[str, str]] = []
     contradiction = False
+    selected_verdict = None
 
     def _cap(trust: str) -> float:
         return CONFIDENCE_CAPS.get(trust, CONFIDENCE_CAPS["not_verified"])
@@ -1960,6 +1912,7 @@ def assemble_result_node(state: PipelineState) -> dict:
             # "failure 0.0" for a verdict that the destructive side proves.
             status = "success"
             confidence = _bounded(reasoning_confidence, _cap(destructive_trust))
+            selected_verdict = "non_regular"
             if constructive_trust == "refuted":
                 downgrades.append(
                     "constructive artifact refuted by oracle_test, but a "
@@ -2026,6 +1979,8 @@ def assemble_result_node(state: PipelineState) -> dict:
     )
     # Also top-level, per VERDICT_POLICY.md §5 (new field, additive only).
     result["verdict_gate"] = verdict_gate
+    if selected_verdict is not None:
+        result["verdict"] = selected_verdict
 
     return {"result": result}
 

@@ -27,14 +27,14 @@ CLOSURE_TABLE: list[dict[str, Any]] = [
         "symbol": "h⁻¹",
         "closed": True,
         "implication_if_closed": "if L' is DCFL and L = h⁻¹(L'), then L is DCFL",
-        "proof_direction": "constructive",
+        "proof_direction": "both",
     },
     {
         "operation": "reg_intersection",
         "symbol": "∩ REG",
         "closed": True,
         "implication_if_closed": "if L' is DCFL and R is regular, then L' ∩ R is DCFL",
-        "proof_direction": "constructive",
+        "proof_direction": "both",
         "note": "Not from Table 1 (where ∩ means DCFL ∩ DCFL, which is NOT closed). "
                 "Follows from DPDA × DFA product construction preserving determinism.",
     },

@@ -17,29 +17,41 @@ Answer these questions first in your reasoning field, then make your classificat
 
 ## Hard Rules (apply BEFORE any LLM reasoning)
 
+Source contracts: [THEORY_REFERENCE.md](../../docs/THEORY_REFERENCE.md#filters).
+Finite samples and structural resemblance are advisory; they never replace the premises below.
+
 These rules override your own analysis. Check them first:
 
 1. **Grammar + regular filter:** The following filter kinds are regular: (a) regex filters; (b) a
    threshold or modular condition on a **single** counter (|a| ≥ k, |a| ≡ r (mod m)); (c) a
-   threshold or modular condition on a **linear combination of counters** (e.g. |w|_a − |w|_b ≡ 0
-   (mod 3), or 2|a| + |b| ≥ k) — this is still regular because a DFA can track the linear
-   combination mod its period / up to the threshold with finite state, no stack needed; (d) any
+   modular condition on an integer linear combination of counters with fixed positive modulus
+   (e.g. |w|_a − |w|_b ≡ 0 (mod 3)), or a fixed threshold on a sum with **nonnegative**
+   coefficients (e.g. 2|a|+|b| ≥ k). Residues and nonnegative saturated sums are finite-state.
+   A threshold with mixed signs is NOT covered: {w : |w|_a−|w|_b≥0} is nonregular;
+   later b symbols can undo any proposed saturation. (d) any
    **Boolean combination** (AND/OR/NOT) of filters of kinds (a)-(c), since regular languages are
    closed under Boolean operations. For any of these, if `kind == "grammar_filter"`, the filter
    defines a regular language and CFL ∩ REG = CFL -> verdict `"cfl"`, confidence `0.85`.
-   An **equality or inequality between two unbounded counters** (|a| = |b|, |a| ≤ |b|, |a| ≠ |b|,
-   etc.) is NOT regular — it is itself a non-regular CFL filter. CFL ∩ CFL is NOT closed under
+   An equality or inequality between **two distinct independently unbounded letter counts**
+   (|a| = |b|, |a| ≤ |b|, |a| ≠ |b| over {a,b}*) is nonregular. Check degeneracies:
+   |a|=|a| is universal, |a|<|a| is empty, and a letter absent from the alphabet has count zero.
+   Nonregular components do not force their Boolean combination to be nonregular:
+   F OR NOT F is universal and F AND NOT F is empty. CFL ∩ CFL is NOT closed under
    intersection in general, so `L(G) ∩ F` may fail to be context-free (concrete counterexample:
    `task_grammar_filter_49`, see Example 2 below — grammar with counting-filter |a|=|b| gives a
    language whose "stratum by nesting depth" reduction is Ogden-provably non-CFL). Do NOT
    auto-classify this as `"cfl"`. -> verdict `"uncertain"`, confidence ≤ `0.5`, and note in
    `reasoning` that destructive agents (closure_reduction / interchange / pumping) must decide.
 
-2. **Crossed dependencies:** If the language requires matching two independent pairs across each other (e.g., w₁...w₂...w₁...w₂ with w₁, w₂ from overlapping alphabets), this is a strong signal of non-CFL. -> verdict `"non_cfl"`, confidence `0.75`.
+2. **Crossed dependencies:** This is a search hint, not a hard negative rule. Restrictions,
+   unary alphabets, and alternative decompositions can make the language CFL or regular.
+   Use `"uncertain"` unless a complete reduction or universal proof establishes non-CFL.
 
-3. **Simple palindrome/mirror:** If the language is purely {ww^R | w in Sigma*} or similar mirror construction without additional constraints -> verdict `"cfl"`, confidence `0.9`.
+3. **Simple palindrome/mirror:** The exact language {ww^R | w in Sigma*} is CFL via
+   S→aSa for each a∈Sigma and S→ε. Additional copying or constraints need their own proof.
 
-4. **Bounded language with stratification:** If `preprocess.bounded_analysis` provides a definitive result -> use that result directly.
+4. **Bounded language with stratification:** A proof needs an exact exponent set and a
+   stratified semilinear representation. Sampled vectors and guessed periods are inconclusive.
 
 If none of the hard rules apply, use your expert judgment.
 
@@ -107,7 +119,12 @@ Return **only** valid JSON. No markdown fences, no extra text.
       "kind": "repeated_subword",
       "parts": ["w1", "w2", "w3"],
       "concat_pattern": ["w1", "w2", "w1", "w3"],
-      "alphabets": {"w1": ["a", "b"], "w2": ["b", "c"], "w3": ["a", "c"]}
+      "alphabets": {"w1": ["a", "b"], "w2": ["b", "c"], "w3": ["a", "c"]},
+      "constraints": [
+        {"op": "gt", "left": {"kind": "length", "of_var": "w1"}, "right": {"kind": "constant", "value": 0}},
+        {"op": "gt", "left": {"kind": "length", "of_var": "w2"}, "right": {"kind": "constant", "value": 0}},
+        {"op": "gt", "left": {"kind": "length", "of_var": "w3"}, "right": {"kind": "constant", "value": 0}}
+      ]
     }
   },
   "hypothesis": {
@@ -123,7 +140,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
 {
   "verdict": "non_cfl",
   "confidence": 0.80,
-  "reasoning": "The language requires two identical copies of w1 at non-adjacent positions (positions 1 and 3 in the concatenation pattern). A pushdown automaton can match one pair of positions via its stack, but matching w1 at positions 1 and 3 while w2 intervenes requires remembering the entire w1, which needs a stack, but then verifying the second copy requires reading the stack — leaving no stack capacity for other operations. This copying pattern is characteristic of non-CFL languages like {ww}. Intersecting with a suitable regular language should reduce this to a form amenable to Bar-Hillel pumping."
+  "reasoning": "For these exact alphabets and nonempty parts, intersect with R=a+b+aca+b+ac. The two inclusions proved in docs/THEORY.md §2 give L∩R={a^n b^m ac a^n b^m ac:n,m≥1}; pumping a^p b^p ac a^p b^p ac down breaks a marker or one of the separated equal counts. Since CFLs are closed under regular intersection, this establishes non-CFL. The copying shape alone would not establish this conclusion."
 }
 ```
 
@@ -181,14 +198,16 @@ Return **only** valid JSON. No markdown fences, no extra text.
 - Repeated subword with intervening material: w₁...w₂...w₁ (copying dependency)
 - Crossed dependencies: w₁...w₂...w₁...w₂
 - Triple counting: constraints like |a| = |b| = |c| in non-grammar context
-- Language of form {ww | w in Sigma*} or containing it as sublanguage
+- Exact {ww | w in Sigma*} over an alphabet with at least two letters; merely containing
+  this language as a subset says nothing (Sigma* also contains it).
 
 ### Strong CFL signals:
-- Palindrome constructions: {ww^R}, {vww^Rv}
+- Exact even-palindrome language {ww^R}; an extra unreversed copy such as v...v
+  introduces a separate dependency and is not covered by this construction.
 - Nested bracket structures: balanced parentheses variants
 - Grammar + regex filter, or grammar + threshold/modular condition on a single counter (CFL ∩ REG = CFL)
 - Single counting constraint: {a^n b^n}, {a^n b^(2n)}
-- Bounded language passing stratification test
+- Bounded language with a proved exact stratified semilinear exponent representation
 
 ### Uncertain (use "uncertain"):
 - Grammar + non-regular filter, including equality/inequality between two symbol counters (|a|=|b|, |a|≠|b|)

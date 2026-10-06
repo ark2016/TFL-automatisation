@@ -13,13 +13,16 @@ Use the Interchange lemma when:
 
 ## When NOT to use this agent
 
-The Interchange lemma needs a dense set of words (typically exponentially many of the same length) sitting
-inside a highly rigid combinatorial template (e.g. square-free words, or an alphabet with ≥ 4-6 symbols giving
-enough "room" for the rigidity argument). Exam-style languages over {a,b,c} almost never have this structure —
-for those, prefer the pumping lemma or Ogden's lemma, and if neither closes the proof, return `"inconclusive"`
-honestly rather than forcing an Interchange argument that does not actually go through.
+The worked technique below uses many words of the same length inside a rigid combinatorial template.
+Neither an exponential number of words nor a large alphabet is a hypothesis of the lemma. Prefer pumping
+or Ogden when they give a shorter proof. If you cannot prove an upper bound on the interchangeable family
+that contradicts the lemma's lower bound, return `"inconclusive"`; alphabet size alone is not a reason to reject it.
 
 ## The Interchange Lemma
+
+Source and exact scope: [THEORY_REFERENCE.md#cfl](../../docs/THEORY_REFERENCE.md#cfl)
+and docs/THEORY.md §2.4. The cardinality estimate below is required; exponential growth
+and a large alphabet are not hypotheses of the lemma.
 
 **Лемма 4.5.1 [Sh] (Ogden–Ross–Winklmann, 1985).** Для всякого КС-языка L существует c > 0 такое, что для всех
 n ≥ m ≥ 2 и всякого R ⊆ L ∩ Σⁿ найдётся Z = {z₁,…,z_k} ⊆ R с k ≥ |R| / (c(n+1)²) и разложениями zᵢ = wᵢxᵢyᵢ:
@@ -34,13 +37,17 @@ n ≥ m ≥ 2 и всякого R ⊆ L ∩ Σⁿ найдётся Z = {z₁,…
    экспоненциально по размеру (полиномиальный знаменатель c(n+1)² не может «съесть» экспоненциальный рост).
 3. Показать, что взаимозаменяемость условия (d) (wᵢxⱼyᵢ ∈ L для всех i,j) на самом деле вынуждает xᵢ = xⱼ для
    любых zᵢ, zⱼ ∈ Z (из-за жёсткости шаблона — только один средний блок согласован с данными w, y).
-4. Отсюда |Z| ограничено числом различных возможных значений x-блока — величиной существенно меньшей,
-   чем нижняя оценка из шага 2 (например 2^{n/8} < 2^{n/4}/(c(n+1)²)). Противоречие ⇒ L не КС.
+4. При фиксированном общем x-блоке оценить число возможных контекстов wᵢ,yᵢ, а значит число слов в Z.
+   Само равенство xᵢ=xⱼ ещё не ограничивает |Z|: контексты могут различаться. Нужна строгая верхняя оценка,
+   меньшая нижней оценки шага 2 (например 2^{n/8} < 2^{n/4}/(c(n+1)²)). Противоречие ⇒ L не КС.
+
+Экспоненциальное R и большой алфавит не являются условиями леммы: это только удобная схема примера.
+Другой корректный подсчёт также допустим; важно сравнение границ для |Z|.
 
 **Важно:** пункт 3 — самый содержательный и самый частый источник ошибок; без строгого обоснования, почему
 взаимозаменяемость форсирует xᵢ = xⱼ, доказательство несостоятельно (см. Example 3 ниже и "Common pitfalls":
 подсчёт числа слов одной длины сам по себе, без доказательства жёсткости шаблона, ничего не доказывает —
-лемма и так гарантирует k ≥ 1 при полиномиальном |R|).
+при |R|=O(n²) нижняя оценка может не гарантировать даже двух различных взаимозаменяемых слов).
 
 ## Input Format
 
@@ -79,12 +86,12 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "verdict": "non_cfl | null",
   "evidence": {
     "method": "interchange_lemma",
-    "chosen_words": "description of the set R subseteq L cap Sigma^n of words (must be exponential in n, per lemma 4.5.1's density requirement — a polynomial |R| such as n^2 gives k >= 1 for free and proves nothing)",
+    "chosen_words": "description of R subseteq L cap Sigma^n, with proved cardinality",
     "word_length": "n (or expression)",
-    "num_words": "|R| = 2^{Theta(n)} (or expression) — exponential in n, NOT polynomial",
+    "num_words": "|R| as an expression sufficient for the final strict inequality",
     "interchange_analysis": "Russian text: the parameters n >= m >= 2, the guaranteed k >= |R| / (c(n+1)^2), and why any z_i, z_j in the resulting Z = {w_i x_i y_i} force x_i = x_j (the rigidity argument)",
     "interchange_result": "Russian text: what w_i x_j y_i (condition (d) of lemma 4.5.1) looks like for i != j",
-    "contradiction": "Russian text: the resulting bound on |Z| (number of distinct possible x-values) contradicts the guaranteed k from lemma 4.5.1",
+    "contradiction": "Russian text: upper bound on the number of entire words/contexts in Z contradicts the guaranteed k",
     "conclusion": "Russian text: final conclusion"
   },
   "confidence": 0.0,
@@ -97,10 +104,10 @@ Return **only** valid JSON. No markdown fences, no extra text.
 ```json
 {
   "method": "<interchange_lemma>",
-  "chosen_words": "<description of R subseteq L cap Sigma^n, |R| exponential in n>",
+  "chosen_words": "<description of R subseteq L cap Sigma^n>",
   "word_length": "<n>",
-  "num_words": "<|R|, exponential in n — e.g. 2^{Theta(n)}, never a bare polynomial like n^2>",
-  "interchange_analysis": "<Russian: parameters n, m of lemma 4.5.1; why the guaranteed k >= |R|/(c(n+1)^2) is exponential; why condition (d) forces x_i = x_j for the rigid template>",
+  "num_words": "<proved |R|>",
+  "interchange_analysis": "<Russian: parameters n, m; lower bound |R|/(c(n+1)^2); structural consequences of all allowed interchanges>",
   "interchange_result": "<Russian: what w_i x_j y_i (i != j) looks like under condition (d)>",
   "contradiction": "<Russian: why the resulting bound on |Z| is smaller than the guaranteed k>",
   "conclusion": "<Russian: by Interchange lemma 4.5.1 [Sh], L is not CFL>"
@@ -124,7 +131,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "method": "interchange_lemma",
     "chosen_words": "Not applicable: L has exactly one word of each length 3n",
     "word_length": "3n",
-    "num_words": "1 (not exponential — the density condition of Lemma 4.5.1 cannot be met)",
+    "num_words": "1 (a singleton satisfies the conclusion, so it gives no contradiction)",
     "interchange_analysis": "Не применимо: для взаимозаменяемости нужно множество R с несколькими словами одной длины, а в {aⁿbⁿcⁿ} на каждую длину приходится ровно одно слово.",
     "interchange_result": "Не применимо",
     "contradiction": "Не найдено",
@@ -148,19 +155,22 @@ Aₙ = {3r3r ∐ s | s ∈ {4,5}^{n/2}}, где ∐ — идеальное пе�
 
 Применяем лемму 4.5.1 к R = Bₙ с m = n/2: получаем Z ⊆ Bₙ, |Z| ≥ 2^{n/4} / (c(n+1)²) > 2^{n/8} при
 достаточно больших n, с разложениями zᵢ = wᵢxᵢyᵢ, n/4 < |xᵢ| ≤ n/2, позиции блоков wᵢ/xᵢ/yᵢ одинаковы
-для всех i. Так как wᵢxⱼyᵢ ∈ Bₙ для всех i,j, а в квадрате s′s′ буквы {4,5} внутри x определяются
+для всех i. Берём n кратным 8. Замена блока на тех же позициях сохраняет фиксированные
+буквы нечётных позиций и алфавит чётных, поэтому результат лежит в Aₙ; по лемме он также
+лежит в L₆, следовательно в Bₙ. В квадрате s′s′ буквы {4,5} внутри x определяются
 буквами вне x (условие быть квадратом жёстко фиксирует значение недостающей части), все xᵢ совпадают
-между собой; при этом в x лежит более n/8 позиций из {4,5}, и они зафиксированы для всего Z — свободных
-позиций остаётся меньше n/8, значит |Z| ≤ 2^{n/8}. Это противоречит |Z| > 2^{n/8}, полученному из леммы. ∎
+между собой; при этом в x лежит не менее n/8 позиций из {4,5}. При |x|≤n/2 это
+различные координаты первой половины s′s′ по модулю n/4. Они зафиксированы для всего Z;
+свободных координат остаётся не более n/8, значит |Z|≤2^{n/8} — противоречие. ∎
 
 Значит L₆ ∉ CFL. Обсуждение ошибочной версии с конкатенацией (вместо идеального перемешивания) удалено
 из этого промпта — не воспроизводить её.
 
 **If this agent is asked to actually close a proof for L₆ (or any similarly "dense + rigid" language)
-in a JSON response:** reuse the derivation above verbatim (word family Aₙ/Bₙ, |Bₙ| = 2^{n/4}, the
+in a JSON response:** reuse the checked mathematical construction above (word family Aₙ/Bₙ, |Bₙ| = 2^{n/4}, the
 2^{n/8} bound) rather than inventing new numbers, cap `confidence` at `0.8`, and note in `evidence` that
 the proof reproduces [Sh, Thm 4.5.4]. For any OTHER "dense + rigid" language, this agent may only claim
-`"success"` if it can derive the word family, the density count, and the x-value bound by an explicit,
+`"success"` if it can derive the word family, the density count, and the bound on whole words in Z by an explicit,
 checkable combinatorial argument (in the `evidence` fields) — not by citing a theorem and filling in
 placeholder numbers. Absent that derivation, return `"inconclusive"` with `evidence.contradiction: "Не
 найдено"`, exactly as in Example 3 below.
@@ -220,11 +230,10 @@ For this language, pumping and closure_reduction are more natural. The Interchan
 - Do NOT confuse the Interchange lemma with the pumping lemma — they have different structures.
 - Do NOT forget that the interchange constant c is chosen by the adversary.
 - Do NOT overcomplicate — if pumping or Ogden's lemma works, prefer that; this agent is a last resort.
-- Do NOT skip the density condition: k ≥ |R| / (c(n+1)²) means R itself must be exponentially large in n for
-  the guaranteed |Z| to be exponential — a merely polynomial-size R (e.g. Ω(n²) words, pigeonhole-style) proves
-  nothing, since the lemma already gives k ≥ 1 for free at that size.
-- Do NOT reach for this agent on exam-style languages over {a,b,c}: prefer pumping/Ogden there and return
-  `"inconclusive"` honestly if they don't close the proof, rather than forcing an Interchange argument.
+- Compare a proved upper bound on |Z| with |R|/(c(n+1)²). A polynomial family may suffice;
+  its cardinality alone does not. The adversary chooses c, so n must be selected accordingly.
+- Prefer a shorter pumping/Ogden proof when available; return `"inconclusive"` if no complete
+  interchange contradiction is established, regardless of alphabet size.
 
 ## Constraints — what NOT to do
 
@@ -259,7 +268,7 @@ If `retry_params` is provided:
 ```
 
 Actions on retry:
-1. Choose a denser word set R (exponential in n) embedded in a more rigid template.
+1. Choose a word set R and template for which the required counting contradiction can be proved.
 2. Re-verify that interchangeability under condition (d) actually forces equal middle blocks.
 3. Re-analyze all interchange possibilities.
 4. If this still fails, return "failure" or "inconclusive" honestly and suggest pumping/Ogden instead.

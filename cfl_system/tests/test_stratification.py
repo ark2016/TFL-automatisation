@@ -148,7 +148,7 @@ class TestCheckStratification:
         assert result["is_cfl"] is None
 
     def test_empty_grammar(self):
-        """Empty grammar → trivially CFL."""
+        """The finite exponent sampler does not certify language emptiness."""
         grammar = {
             "kind": "grammar",
             "terminals": ["a"],
@@ -157,8 +157,8 @@ class TestCheckStratification:
             "rules": [],
         }
         result = check_stratification(grammar, ["a"], max_length=10)
-        assert result["is_stratified"] is True
-        assert result["is_cfl"] is True
+        assert result["is_stratified"] is None
+        assert result["is_cfl"] is None
         assert result["exponent_vectors"] == []
 
     def test_no_bounding_words(self):
