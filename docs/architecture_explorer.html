@@ -106,7 +106,7 @@ function renderPipeline() {
   $('pipeline-summary').innerHTML = `<p>${esc(p.summary)}</p>`;
   $('branch-note').innerHTML = `<strong>Развилки и ограничения</strong><ul>${p.branches.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>`;
   const inv=DATA.inventory.pipelines[currentSystem];
-  $('exact-graph').innerHTML = `<p><code>${esc(inv.graph_file)}</code> · ${inv.graph.nodes.length} зарегистрированных узлов</p>` + [['nodes','Узлы'],['edges','Переходы'],['conditional','Условные переходы']].map(([key,label])=>`<h3>${label}</h3><div class="table-wrap"><table><thead><tr><th>Строка</th><th>Аргументы регистрации</th></tr></thead><tbody>${inv.graph[key].map(r=>`<tr><td>${r.line}</td><td><code>${esc(r.args.join(' → '))}</code></td></tr>`).join('')}</tbody></table></div>`).join('');
+  $('exact-graph').innerHTML = `<p><code>${esc(inv.graph_file)}</code> · ${inv.graph.nodes.length} зарегистрированных узлов</p>` + [['nodes','Узлы'],['edges','Переходы'],['conditional','Условные переходы']].map(([key,label])=>`<h3>${label}</h3><div class="table-wrap"><table><thead><tr><th>Строка</th><th>Аргументы регистрации</th></tr></thead><tbody>${inv.graph[key].map(r=>`<tr><td>${esc(r.line)}</td><td><code>${esc(r.args.join(' → '))}</code></td></tr>`).join('')}</tbody></table></div>`).join('');
   currentStep=0;renderStage();
 }
 document.querySelectorAll('[data-pipeline]').forEach(b=>b.addEventListener('click',()=>{currentSystem=b.dataset.pipeline;renderPipeline();}));
@@ -129,7 +129,7 @@ const scenarios={
   lean:['verified','verified','Доказано зафиксированное формальное утверждение','При status=proved и допустимых аксиомах Lean-путь допускает verified с потолком 0.98. Нужно отдельно удостовериться, что IR и определение языка соответствуют исходной задаче. В REG состояние escalate обходит этот gate.'],
   failure:['not_verified','unknown','Неудача поиска не устанавливает противоположное свойство','Если построить CFG не получилось и других доводов нет, это повод повторить поиск либо завершить его неопределённостью. Из неудачи агента не следует, что CFG не существует.']
 };
-function renderEvidence(){const s=scenarios[$('evidence-scenario').value];$('evidence-result').innerHTML=`<span class="trust ${s[1]}">${s[0]}</span><h3>${s[2]}</h3><p>${s[3]}</p>`;}
+function renderEvidence(){const s=scenarios[$('evidence-scenario').value];$('evidence-result').innerHTML=`<span class="trust ${esc(s[1])}">${esc(s[0])}</span><h3>${esc(s[2])}</h3><p>${esc(s[3])}</p>`;}
 $('evidence-scenario').addEventListener('change',renderEvidence);
 function renderParallel(){
   const runs=Number($('runs-limit').value),calls=Number($('calls-limit').value);
@@ -143,16 +143,16 @@ function renderFindings(){
   const filter=$('finding-filter').value;
   const list=DATA.findings.filter(f=>filter==='all'||f.severity===filter);
   $('finding-count').textContent=`${list.length} из ${DATA.findings.length}`;
-  $('findings').innerHTML=list.map(f=>`<article class="finding" id="${f.id}"><span class="severity ${f.severity}">${f.id} · ${severityLabels[f.severity]}</span><h3>${esc(f.title)}</h3><p><strong>Условие.</strong> ${esc(f.trigger)}</p><p><strong>Наблюдение.</strong> ${esc(f.observed)}</p><p>${esc(f.why)}</p><p class="fix"><strong>Исправление.</strong> ${esc(f.fix)}</p><p class="boundary">${esc(f.boundary)}</p><div class="refs">${refs(f.refs)}</div>${f.repro?`<details><summary>Воспроизведение / точные наблюдения</summary><pre><code>${esc(f.repro)}</code></pre></details>`:''}</article>`).join('');
+  $('findings').innerHTML=list.map(f=>`<article class="finding" id="${esc(f.id)}"><span class="severity ${esc(f.severity)}">${esc(f.id)} · ${esc(severityLabels[f.severity])}</span><h3>${esc(f.title)}</h3><p><strong>Условие.</strong> ${esc(f.trigger)}</p><p><strong>Наблюдение.</strong> ${esc(f.observed)}</p><p>${esc(f.why)}</p><p class="fix"><strong>Исправление.</strong> ${esc(f.fix)}</p><p class="boundary">${esc(f.boundary)}</p><div class="refs">${refs(f.refs)}</div>${f.repro?`<details><summary>Воспроизведение / точные наблюдения</summary><pre><code>${esc(f.repro)}</code></pre></details>`:''}</article>`).join('');
 }
 $('finding-filter').addEventListener('change',renderFindings);
 
 $('inventory-table').innerHTML=`<div class="table-wrap"><table><thead><tr><th>Система</th><th>Python-файлов приложения</th><th>Файлов тестов</th><th>Промптов</th><th>Узлов графа</th><th>Ролей MODELS</th></tr></thead><tbody>${Object.entries(DATA.inventory.pipelines).map(([k,p])=>`<tr><td>${k.toUpperCase()}</td><td>${p.app_python_files}</td><td>${p.test_files}</td><td>${p.prompt_files}</td><td>${p.graph.nodes.length}</td><td>${Object.keys(p.config.MODELS.value).length}</td></tr>`).join('')}</tbody></table></div><p class="caption">Статическая инвентаризация каталогов четырёх конвейеров; UI и eval в эти числа не включены. Файлы тестов — не число тестовых случаев. Число узлов графа отличается от числа сгруппированных этапов схемы.</p>`;
 $('additional-tests').innerHTML='<p>Параллельные целевые проверки: REG/shared — <strong>61 passed</strong>; CFL/DCFL — <strong>115 passed, 17 skipped</strong>; LL/UI — <strong>184 passed, 2 failed</strong>. Эти прогоны не складываются в число уникальных тестов.</p><p>Два сбоя LL/UI относятся к остановке Windows-процессов: <code>taskkill</code> получил <code>Access denied</code> даже для собственного дочернего процесса в sandbox. Поэтому эта часть проверки ограничена средой; дефект продукта по ней не установлен. Пропуски включают проверки, зависящие от Docker/Lean. Полный тестовый набор и полный live-eval не запускались.</p>';
-$('source-index').innerHTML=DATA.sources.map(s=>`<details id="${s.id}"><summary>${esc(s.ref)}</summary><pre><code>${esc(s.text)}</code></pre></details>`).join('');
-function revealSource(){const id=decodeURIComponent(location.hash.slice(1));const el=$(id);if(el?.tagName==='DETAILS')el.open=true;}
+$('source-index').innerHTML=DATA.sources.map(s=>`<details id="${esc(s.id)}"><summary>${esc(s.ref)}</summary><pre><code>${esc(s.text)}</code></pre></details>`).join('');
+function revealSource(){const id=decodeURIComponent(location.hash.slice(1));const el=document.getElementById(id);if(el?.tagName==='DETAILS')el.open=true;}
 window.addEventListener('hashchange',revealSource);
-document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#src-"]');if(a){const d=$(a.getAttribute('href').slice(1));if(d)d.open=true;}});
+document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#src-"]');if(a){const d=document.getElementById(a.getAttribute('href').slice(1));if(d)d.open=true;}});
 
 let printDetails=[],printFilter=null;
 window.addEventListener('beforeprint',()=>{
