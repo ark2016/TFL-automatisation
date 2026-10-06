@@ -506,7 +506,7 @@ class TestPipelineWiring:
         assert gate["contradiction"] is False and gate["confidence_cap"] == 0.98
         # the mock proof (not an LLM statement) is what was composed and checked
         mock_body = json.loads((MOCK_DIR / "dcfl_anbncm_lean_formalizer.json").read_text(encoding="utf-8"))
-        assert res["formalization"]["proof_body"] == mock_body["evidence"]["proof_body"]
+        assert res["formalization"]["proof_body"] == mock_body["proof_body"]
         assert check.call_count == 1
 
     @pytest.mark.parametrize("status", ["has_sorry", "error", "timeout", "unavailable"])
@@ -583,12 +583,12 @@ class TestConfigAndArtifacts:
 
     def test_mock_outputs(self):
         anbncm = json.loads((MOCK_DIR / "dcfl_anbncm_lean_formalizer.json").read_text(encoding="utf-8"))
-        body = anbncm["evidence"]["proof_body"]
+        body = anbncm["proof_body"]
         assert scan_proof_body(body) == [] and "sorry" not in re.sub(r"--.*", "", body)
-        assert set(anbncm["evidence"]) == {"proof_body", "lemmas_used", "notes"}    # no formulation
+        assert set(anbncm) == {"proof_body", "lemmas_used", "notes"}    # no formulation
         for task in ("dcfl_exam_01", "dcfl_exam_02", "dcfl_exam_03", "dcfl_exam_04"):
             m = json.loads((MOCK_DIR / f"{task}_lean_formalizer.json").read_text(encoding="utf-8"))
-            assert m["evidence"]["proof_body"] == "" and m["evidence"]["notes"]
+            assert m["proof_body"] == "" and m["notes"]
 
     def test_lean_file_is_written_without_bom(self):
         for p in [PROMPT_PATH, *MOCK_DIR.glob("*_lean_formalizer.json")]:

@@ -17,3 +17,9 @@ ui_server/settings.json
 # Run artifacts from all agent pipelines — regenerable, not source
 **/examples/output/
 **/examples/live_outputs/
+
+# Local working notes and assistant instructions — kept on disk, not tracked
+TODO.md
+CLAUDE.md
+**/CLAUDE.md
+docs/NIGHT_REPORT_*.md

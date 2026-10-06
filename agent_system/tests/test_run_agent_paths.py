@@ -1,5 +1,5 @@
 """``LLMRunner.run_agent`` (agent_system/lib/llm_client.py) on every call
-path, using the shared ``FakeAnthropic`` test double (TODO.md §5 M):
+path, using the shared ``FakeAnthropic`` test double:
 
   - a thinking block emitted before the text block is read past, not
     mistaken for the answer;

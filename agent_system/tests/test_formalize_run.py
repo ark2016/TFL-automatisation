@@ -116,6 +116,9 @@ def test_model_override_env_forces_both_and_clamps_haiku(spec, monkeypatch):
     assert s.first_model == s.retry_model == "claude-haiku-4-5"
     assert s.max_tokens_for("claude-haiku-4-5") == 64000
     assert s.max_tokens_for(OPUS) == 128000
+    assert s.max_tokens_for("claude-haiku-4-5-20251001") == 64000      # dated id: prefix match
+    assert s.max_tokens_for("some-unknown-model") == 128000            # unknown: unchanged
+    assert not hasattr(fr, "MODEL_MAX_OUTPUT")
 
 
 # ---------------------------------------------------------------------------
@@ -789,3 +792,42 @@ def test_render_failure_midway_leaves_the_previous_file_intact(tmp_path, spec, c
     assert not list(run_dir.glob("*.tmp"))
     other = "html" if fmt == "md" else "md"
     assert "Lean" in (run_dir / f"input_result.{other}").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("patch", [{"verdict": "failure"}, {"status": "failure"}])
+def test_failed_result_is_refused_without_api_call(tmp_path, spec, patch, monkeypatch):
+    run_dir = make_run_dir(tmp_path)
+    result = load_result(run_dir)
+    result.update(patch)
+    (run_dir / "input_result.json").write_text(json.dumps(result), encoding="utf-8")
+    client = FakeAnthropic([])
+    with pytest.raises(ValueError, match="nothing to formalize"):
+        fr.run_formalization(run_dir, spec, client=client)
+    monkeypatch.setattr(fr, "make_live_client", lambda: client)
+    assert fr.cli_main(spec, [str(run_dir), "--live"]) == 1
+    assert client.stream_calls == []
+
+
+def test_contradiction_style_result_is_still_formalized_from_the_reasoning_verdict(
+        tmp_path, spec, check):
+    """Unresolved contradiction: top-level verdict null, reasoning verdict set.
+    That is the very case the Lean gate settles, so it must not be refused;
+    a mock source runs it with no live call."""
+    run_dir = make_run_dir(tmp_path)
+    result = load_result(run_dir)
+    result["verdict"] = None
+    result.setdefault("evidence", {}).setdefault("reasoning", {})["verdict"] = "non_regular"
+    (run_dir / "input_result.json").write_text(json.dumps(result), encoding="utf-8")
+    ir = json.loads((run_dir / "input.json").read_text(encoding="utf-8"))
+    assert reg_formalize.pick_direction(result, ir) == ("non_regular", "verdict")
+
+    mock_dir = tmp_path / "mock"
+    mock_dir.mkdir()
+    (mock_dir / f"{spec.agent}_output.json").write_text(
+        json.dumps({"proof_body": "intro h; exact h", "lemmas_used": [], "notes": ""}),
+        encoding="utf-8")
+    check(tc("proved"))
+    source = fr.MockSource(mock_dir, "input", (spec.agent, spec.retry_agent))
+    summary = fr.run_formalization(run_dir, spec, source=source)
+    assert summary["direction"] == "non_regular"
+    assert summary["status"] != "not_formalizable"

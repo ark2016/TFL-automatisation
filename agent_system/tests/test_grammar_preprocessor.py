@@ -1,6 +1,5 @@
 """Tests for agent_system/lib/grammar_preprocessor.py — the pure-fn,
-zero-token-cost grammar analysis that runs before the LLM specialists
-(TODO.md §5)."""
+zero-token-cost grammar analysis that runs before the LLM specialists."""
 
 from __future__ import annotations
 

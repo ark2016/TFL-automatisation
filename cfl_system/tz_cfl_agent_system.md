@@ -333,7 +333,7 @@ assemble_result_node      assemble_early_failure
 ```
 **Модель:** Sonnet 5.5 (effort=medium).
 **Роль:** Чисто рекомендательная. Dispatch не зависит от verdict; `advisory_only` убран из контракта —
-никто его не читал (`TODO.md` §6), а advisory-статус и так закреплён отдельным полем `classifier_hint`
+никто его не читал, а advisory-статус и так закреплён отдельным полем `classifier_hint`
 в результате пайплайна.
 
 ### 4.4. Language Preprocess Node (pure fn)
@@ -734,7 +734,7 @@ n ≥ m ≥ 2 и всякого R ⊆ L ∩ Σⁿ найдётся Z = {z₁,…
 `TFL_FORMALIZATION=1|true|yes|on` (`config.FORMALIZATION_ENABLED`); явный аргумент `formalize` приоритетнее
 переменной. По умолчанию шаг выключен: нет ключа `formalization` в состоянии, `result["formalization"] = null`.
 Само включение бюджет API не тратит; в `--live` шаг стоит до `MAX_FORMALIZE_ITERATIONS` вызовов Opus, поэтому только
-по явному запросу (корневой `CLAUDE.md`, «Models and LLM calls»). Проверка типов — локально в Docker (образ `tfl-lean4`).
+по явному запросу (правило проекта о live-прогонах: только по явному запросу с согласованным бюджетом). Проверка типов — локально в Docker (образ `tfl-lean4`).
 
 **Формулировка генерируется кодом.** `cfl_system.lib.lean_ir.render_statement(ir, direction)` строит алфавит,
 язык и теорему; `direction` — `cfl` (`L.IsContextFree`) или `non_cfl` (`¬ L.IsContextFree`, с импортами langlib
@@ -880,7 +880,6 @@ few-shot в промпте). Для направления `cfl` (нужно п�
 
 ```
 cfl_system/
-├── CLAUDE.md                           # Контекст для Claude Code
 ├── tz_cfl_agent_system.md              # Это ТЗ
 ├── lib/
 │   ├── __init__.py

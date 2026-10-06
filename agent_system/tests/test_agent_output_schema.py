@@ -1,4 +1,4 @@
-"""Contract test for agent_system/lib/agent_output_schema.py (TODO.md §3 M).
+"""Contract test for agent_system/lib/agent_output_schema.py.
 
 `REQUIRED_KEYS` there is meant to be the *exhaustive* top-level key set of
 each agent's own prompt contract -- a closed output_config.format schema
@@ -106,8 +106,7 @@ def test_field_schema_keys_match_required_keys_exactly(agent_name):
 
 def test_every_field_schema_property_is_a_concrete_type():
     """No empty ``{}`` subschema anywhere, and every object closes with
-    ``additionalProperties: False`` at every nesting level (TODO.md §3 M's
-    actual bug -- see ``agent_system.lib.testing.schema_checks`` for the
+    ``additionalProperties: False`` at every nesting level (the actual bug -- see ``agent_system.lib.testing.schema_checks`` for the
     exact API error messages this guards against)."""
     assert_field_schemas_are_valid(_FIELD_SCHEMAS)
 

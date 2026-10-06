@@ -159,3 +159,40 @@ def test_suffix_search_exhaustion_is_unknown_not_deadness():
     assert all("unknown" in issue and "NO continuation" not in issue for issue in issues)
     assert trust == "well_formed"
     assert details["dead_class_finite_check"] == "unknown"
+
+
+def test_dead_class_global_budget_stops_the_search_as_unknown():
+    calls = []
+
+    def oracle(word):
+        calls.append(word)
+        return False                      # never a witness: each prefix would burn its full budget
+
+    ir = {"language_spec": {"kind": "set_builder", "alphabet": ["a", "b"]}}
+    with patch("ll_system.lib.claim_verifier._try_word_oracle", return_value=oracle):
+        dead_ok, issues = _check_dead_class_finite_ll(ir, total_node_budget=50)
+    assert dead_ok is None
+    assert len(calls) <= 50
+    assert any("global search budget exhausted" in issue for issue in issues)
+
+
+def test_dead_class_global_wall_clock_budget_uses_the_injected_clock():
+    ticks = iter(range(0, 10_000))
+    oracle_calls = []
+
+    def oracle(word):
+        oracle_calls.append(word)
+        return False
+
+    ir = {"language_spec": {"kind": "set_builder", "alphabet": ["a", "b"]}}
+    with patch("ll_system.lib.claim_verifier._try_word_oracle", return_value=oracle):
+        dead_ok, issues = _check_dead_class_finite_ll(
+            ir, total_node_budget=10**9, total_seconds=5.0, clock=lambda: next(ticks))
+    assert dead_ok is None and len(oracle_calls) <= 6
+    assert any("global search budget exhausted" in issue for issue in issues)
+
+
+def test_dead_class_global_budget_does_not_disturb_quick_witnesses():
+    ir = {"language_spec": {"kind": "set_builder", "alphabet": ["a"]}}
+    with patch("ll_system.lib.claim_verifier._try_word_oracle", return_value=lambda w: True):
+        assert _check_dead_class_finite_ll(ir) == (True, [])
