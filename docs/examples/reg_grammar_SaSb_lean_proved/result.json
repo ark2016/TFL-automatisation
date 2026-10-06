@@ -1,0 +1,1066 @@
+{
+  "module": "orchestrator",
+  "status": "success",
+  "evidence": {
+    "hypothesis": {
+      "atoms": [
+        {
+          "description": "grammar with nested recursion (e.g. S->aSb)",
+          "memory_type": "infinite",
+          "reason": "nested recursion generates non-regular patterns"
+        }
+      ],
+      "hypothesis": "non_regular",
+      "confidence": 0.85,
+      "suggested_agents": [
+        "pumping",
+        "nerode",
+        "closure"
+      ]
+    },
+    "classifier": {
+      "module": "classifier",
+      "status": "success",
+      "verdict": "non_regular",
+      "confidence": 0.8,
+      "reasoning": "Step-back: (1) Memory: the grammar has self-embedding rules (S -> SaSb, A -> bSb) that appear to require matching nested structure, i.e. unbounded stack-like memory. (2) Structure: S -> SaSb has S on both sides of the terminal a, and A -> bSb wraps S between b's, so this is nested recursion rather than a right-linear pattern. (3) Similar language: it resembles balanced-bracket languages like {a^n b^n}, with a as an opening and b as a closing symbol (S -> SaSb is like a Dyck-style rule). Hard rule nested_recursion applies because of the SaSb self-embedding, so the verdict is non_regular. Caveat: the base cases bb, aa and ε, together with the bSb wrapper, mean the language could differ from a pure Dyck language, so pumping and Nerode proofs should be checked carefully.",
+      "dispatch": {
+        "dfa_builder": false,
+        "re_builder": false,
+        "pumping": true,
+        "nerode": true,
+        "closure": true,
+        "grammar_analyzer": true
+      },
+      "hard_rule_applied": "nested_recursion"
+    },
+    "grammar_facts": {
+      "is_right_linear": false,
+      "is_left_linear": false,
+      "is_linear": false,
+      "has_nested_recursion": true,
+      "generated_words": [
+        "",
+        "aa",
+        "ab",
+        "bb",
+        "aaab",
+        "aabb",
+        "abab",
+        "abbb",
+        "baab",
+        "babb",
+        "bbab",
+        "bbbb",
+        "aaaaab",
+        "aaaabb",
+        "aaabab",
+        "aaabbb",
+        "aababb",
+        "aabbab",
+        "aabbbb",
+        "abaaab",
+        "abaabb",
+        "ababab",
+        "ababbb",
+        "abbabb",
+        "abbbab",
+        "abbbbb",
+        "baaabb",
+        "baabab",
+        "baabbb",
+        "bababb",
+        "babbab",
+        "babbbb",
+        "bbaaab",
+        "bbaabb",
+        "bbabab",
+        "bbabbb",
+        "bbbabb",
+        "bbbbab",
+        "bbbbbb",
+        "aaaaaabb",
+        "aaaaabab",
+        "aaaaabbb",
+        "aaaababb",
+        "aaaabbab",
+        "aaaabbbb",
+        "aaabaaab",
+        "aaabaabb",
+        "aaababab",
+        "aaababbb",
+        "aaabbabb",
+        "aaabbbab",
+        "aaabbbbb",
+        "aabaaabb",
+        "aabaabbb",
+        "aabababb",
+        "aababbab",
+        "aababbbb",
+        "aabbaaab",
+        "aabbaabb",
+        "aabbabab",
+        "aabbabbb",
+        "aabbbabb",
+        "aabbbbab",
+        "aabbbbbb",
+        "abaaaabb",
+        "abaaabab",
+        "abaaabbb",
+        "abaababb",
+        "abaabbab",
+        "abaabbbb",
+        "ababaaab",
+        "ababaabb",
+        "abababbb",
+        "ababbabb",
+        "ababbbab",
+        "ababbbbb",
+        "abbaaabb",
+        "abbaabbb",
+        "abbababb",
+        "abbabbab",
+        "abbabbbb",
+        "abbbaaab",
+        "abbbaabb",
+        "abbbabab",
+        "abbbabbb",
+        "abbbbabb",
+        "abbbbbab",
+        "abbbbbbb",
+        "baaaaabb",
+        "baaaabbb",
+        "baaababb",
+        "baaabbab",
+        "baaabbbb",
+        "baabaaab",
+        "baabaabb",
+        "baababab",
+        "baababbb",
+        "baabbabb",
+        "baabbbab",
+        "baabbbbb"
+      ],
+      "total_generated": 471,
+      "derivations": [
+        {
+          "word": "ε",
+          "length": 0,
+          "num_derivations": 1,
+          "derivation": "S → ε  [S→ε]"
+        },
+        {
+          "word": "aa",
+          "length": 2,
+          "num_derivations": 1,
+          "derivation": "S → A  [S→A] → a a  [A→a a]"
+        },
+        {
+          "word": "ab",
+          "length": 2,
+          "num_derivations": 1,
+          "derivation": "S → S a S b  [S→S a S b] → a S b  [S→ε] → a b  [S→ε]"
+        },
+        {
+          "word": "bb",
+          "length": 2,
+          "num_derivations": 2,
+          "derivation": "S → A  [S→A] → b b  [A→b b]",
+          "alternative_derivations": [
+            "S → A  [S→A] → b S b  [A→b S b] → b b  [S→ε]"
+          ]
+        },
+        {
+          "word": "aaab",
+          "length": 4,
+          "num_derivations": 2,
+          "derivation": "S → S a S b  [S→S a S b] → a S b  [S→ε] → a A b  [S→A] → a a a b  [A→a a]",
+          "alternative_derivations": [
+            "S → S a S b  [S→S a S b] → A a S b  [S→A] → a a a S b  [A→a a] → a a a b  [S→ε]"
+          ]
+        },
+        {
+          "word": "aabb",
+          "length": 4,
+          "num_derivations": 1,
+          "derivation": "S → S a S b  [S→S a S b] → a S b  [S→ε] → a S a S b b  [S→S a S b] → a a S b b  [S→ε] → a a b b  [S→ε]"
+        },
+        {
+          "word": "abab",
+          "length": 4,
+          "num_derivations": 1,
+          "derivation": "S → S a S b  [S→S a S b] → S a S b a S b  [S→S a S b] → a S b a S b  [S→ε] → a b a S b  [S→ε] → a b a b  [S→ε]"
+        },
+        {
+          "word": "abbb",
+          "length": 4,
+          "num_derivations": 2,
+          "derivation": "S → S a S b  [S→S a S b] → a S b  [S→ε] → a A b  [S→A] → a b b b  [A→b b]",
+          "alternative_derivations": [
+            "S → S a S b  [S→S a S b] → a S b  [S→ε] → a A b  [S→A] → a b S b b  [A→b S b] → a b b b  [S→ε]"
+          ]
+        },
+        {
+          "word": "baab",
+          "length": 4,
+          "num_derivations": 1,
+          "derivation": "S → A  [S→A] → b S b  [A→b S b] → b A b  [S→A] → b a a b  [A→a a]"
+        },
+        {
+          "word": "babb",
+          "length": 4,
+          "num_derivations": 1,
+          "derivation": "S → A  [S→A] → b S b  [A→b S b] → b S a S b b  [S→S a S b] → b a S b b  [S→ε] → b a b b  [S→ε]"
+        },
+        {
+          "word": "bbab",
+          "length": 4,
+          "num_derivations": 2,
+          "derivation": "S → S a S b  [S→S a S b] → A a S b  [S→A] → b b a S b  [A→b b] → b b a b  [S→ε]",
+          "alternative_derivations": [
+            "S → S a S b  [S→S a S b] → A a S b  [S→A] → b S b a S b  [A→b S b] → b b a S b  [S→ε] → b b a b  [S→ε]"
+          ]
+        },
+        {
+          "word": "bbbb",
+          "length": 4,
+          "num_derivations": 2,
+          "derivation": "S → A  [S→A] → b S b  [A→b S b] → b A b  [S→A] → b b b b  [A→b b]",
+          "alternative_derivations": [
+            "S → A  [S→A] → b S b  [A→b S b] → b A b  [S→A] → b b S b b  [A→b S b] → b b b b  [S→ε]"
+          ]
+        },
+        {
+          "word": "aaaaab",
+          "length": 6,
+          "num_derivations": 1,
+          "derivation": "S → S a S b  [S→S a S b] → A a S b  [S→A] → a a a S b  [A→a a] → a a a A b  [S→A] → a a a a a b  [A→a a]"
+        },
+        {
+          "word": "aaaabb",
+          "length": 6,
+          "num_derivations": 3,
+          "derivation": "S → S a S b  [S→S a S b] → a S b  [S→ε] → a S a S b b  [S→S a S b] → a a S b b  [S→ε] → a a A b b  [S→A] → a a a a b b  [A→a a]",
+          "alternative_derivations": [
+            "S → S a S b  [S→S a S b] → a S b  [S→ε] → a S a S b b  [S→S a S b] → a A a S b b  [S→A] → a a a a S b b  [A→a a] → a a a a b b  [S→ε]",
+            "S → S a S b  [S→S a S b] → A a S b  [S→A] → a a a S b  [A→a a] → a a a S a S b b  [S→S a S b] → a a a a S b b  [S→ε] → a a a a b b  [S→ε]"
+          ]
+        },
+        {
+          "word": "aaabab",
+          "length": 6,
+          "num_derivations": 2,
+          "derivation": "S → S a S b  [S→S a S b] → S a S b a S b  [S→S a S b] → a S b a S b  [S→ε] → a A b a S b  [S→A] → a a a b a S b  [A→a a] → a a a b a b  [S→ε]",
+          "alternative_derivations": [
+            "S → S a S b  [S→S a S b] → S a S b a S b  [S→S a S b] → A a S b a S b  [S→A] → a a a S b a S b  [A→a a] → a a a b a S b  [S→ε] → a a a b a b  [S→ε]"
+          ]
+        },
+        {
+          "word": "aaabbb",
+          "length": 6,
+          "num_derivations": 2,
+          "derivation": "S → S a S b  [S→S a S b] → A a S b  [S→A] → a a a S b  [A→a a] → a a a A b  [S→A] → a a a b b b  [A→b b]",
+          "alternative_derivations": [
+            "S → S a S b  [S→S a S b] → A a S b  [S→A] → a a a S b  [A→a a] → a a a A b  [S→A] → a a a b S b b  [A→b S b] → a a a b b b  [S→ε]"
+          ]
+        },
+        {
+          "word": "aabbbb",
+          "length": 6,
+          "num_derivations": 1,
+          "derivation": "S → S a S b  [S→S a S b] → a S b  [S→ε] → a S a S b b  [S→S a S b] → a a S b b  [S→ε] → a a A b b  [S→A] → a a b b b b  [A→b b]"
+        },
+        {
+          "word": "abaaab",
+          "length": 6,
+          "num_derivations": 1,
+          "derivation": "S → S a S b  [S→S a S b] → S a S b a S b  [S→S a S b] → a S b a S b  [S→ε] → a b a S b  [S→ε] → a b a A b  [S→A] → a b a a a b  [A→a a]"
+        },
+        {
+          "word": "abaabb",
+          "length": 6,
+          "num_derivations": 1,
+          "derivation": "S → S a S b  [S→S a S b] → a S b  [S→ε] → a A b  [S→A] → a b S b b  [A→b S b] → a b A b b  [S→A] → a b a a b b  [A→a a]"
+        },
+        {
+          "word": "ababbb",
+          "length": 6,
+          "num_derivations": 1,
+          "derivation": "S → S a S b  [S→S a S b] → S a S b a S b  [S→S a S b] → a S b a S b  [S→ε] → a b a S b  [S→ε] → a b a A b  [S→A] → a b a b b b  [A→b b]"
+        }
+      ],
+      "convertible_to_dfa": false,
+      "dfa": null,
+      "intersections": {
+        "a*b*": {
+          "words": [
+            "",
+            "aa",
+            "ab",
+            "bb",
+            "aaab",
+            "aabb",
+            "abbb",
+            "bbbb",
+            "aaaaab",
+            "aaaabb",
+            "aaabbb",
+            "aabbbb",
+            "abbbbb",
+            "bbbbbb",
+            "aaaaaabb",
+            "aaaaabbb",
+            "aaaabbbb",
+            "aaabbbbb",
+            "aabbbbbb",
+            "abbbbbbb",
+            "bbbbbbbb"
+          ],
+          "total": 21,
+          "estimated_index": "infinite",
+          "confidence": 0.85,
+          "is_regular": false,
+          "pattern": "m ≡ k (mod 2)"
+        },
+        "a+b+": {
+          "words": [
+            "ab",
+            "aaab",
+            "aabb",
+            "abbb",
+            "aaaaab",
+            "aaaabb",
+            "aaabbb",
+            "aabbbb",
+            "abbbbb",
+            "aaaaaabb",
+            "aaaaabbb",
+            "aaaabbbb",
+            "aaabbbbb",
+            "aabbbbbb",
+            "abbbbbbb"
+          ],
+          "total": 15,
+          "estimated_index": "infinite",
+          "confidence": 0.85,
+          "is_regular": false,
+          "pattern": "m ≡ k (mod 2)"
+        },
+        "(ab)*": {
+          "words": [
+            "",
+            "ab",
+            "abab",
+            "ababab"
+          ],
+          "total": 4,
+          "estimated_index": "infinite",
+          "confidence": 0.85,
+          "is_regular": false
+        },
+        "b*a*b*": {
+          "words": [
+            "",
+            "aa",
+            "ab",
+            "bb",
+            "aaab",
+            "aabb",
+            "abbb",
+            "baab",
+            "babb",
+            "bbab",
+            "bbbb",
+            "aaaaab",
+            "aaaabb",
+            "aaabbb",
+            "aabbbb",
+            "abbbbb",
+            "baaabb",
+            "baabbb",
+            "babbbb",
+            "bbaaab",
+            "bbaabb",
+            "bbabbb",
+            "bbbabb",
+            "bbbbab",
+            "bbbbbb",
+            "aaaaaabb",
+            "aaaaabbb",
+            "aaaabbbb",
+            "aaabbbbb",
+            "aabbbbbb"
+          ],
+          "total": 49,
+          "estimated_index": "infinite",
+          "confidence": 0.85,
+          "is_regular": false
+        }
+      },
+      "summary": "Grammar has nested recursion (e.g. S→aSb). Language MAY be non-regular, but nested recursion alone doesn't prove it (other rules may compensate).\nGenerated 471 words up to length 10.\n\nSample derivations (20 words):\n  ε: S → ε  [S→ε]\n  aa: S → A  [S→A] → a a  [A→a a]\n  ab: S → S a S b  [S→S a S b] → a S b  [S→ε] → a b  [S→ε]\n  bb [2 paths]: S → A  [S→A] → b b  [A→b b]\n  aaab [2 paths]: S → S a S b  [S→S a S b] → a S b  [S→ε] → a A b  [S→A] → a a a b  [A→a a]\n  aabb: S → S a S b  [S→S a S b] → a S b  [S→ε] → a S a S b b  [S→S a S b] → a a S b b  [S→ε] → a a b b  [S→ε]\n  abab: S → S a S b  [S→S a S b] → S a S b a S b  [S→S a S b] → a S b a S b  [S→ε] → a b a S b  [S→ε] → a b a b  [S→ε]\n  abbb [2 paths]: S → S a S b  [S→S a S b] → a S b  [S→ε] → a A b  [S→A] → a b b b  [A→b b]\n  baab: S → A  [S→A] → b S b  [A→b S b] → b A b  [S→A] → b a a b  [A→a a]\n  babb: S → A  [S→A] → b S b  [A→b S b] → b S a S b b  [S→S a S b] → b a S b b  [S→ε] → b a b b  [S→ε]\nL ∩ a*b* appears NON-REGULAR (index=infinite). This CAN be used for closure proof. Sample words: ['', 'aa', 'ab', 'bb', 'aaab'].\nL ∩ a+b+ appears NON-REGULAR (index=infinite). This CAN be used for closure proof. Sample words: ['ab', 'aaab', 'aabb', 'abbb', 'aaaaab'].\nL ∩ (ab)* appears NON-REGULAR (index=infinite). This CAN be used for closure proof. Sample words: ['', 'ab', 'abab', 'ababab'].\nL ∩ b*a*b* appears NON-REGULAR (index=infinite). This CAN be used for closure proof. Sample words: ['', 'aa', 'ab', 'bb', 'aaab']."
+    },
+    "pumping": {
+      "module": "pumping_agent",
+      "status": "success",
+      "proof": {
+        "word_choice": {
+          "word": "a^(3n+2) b^n",
+          "word_parameterized": true,
+          "parameter": "n",
+          "membership_argument": "Индукция по k ≥ 1 показывает, что a^(3k+2) b^k ∈ L. База k=1: a^5 b = aa·a·aa·b выводится так: S → SaSb, левое S → A → aa, правое S → A → aa. Шаг: пусть a^(3(k-1)+2) b^(k-1) ∈ L. Тогда a^(3k+2) b^k = aa · a · a^(3(k-1)+2) b^(k-1) · b. Применяем S → SaSb, левое S → A → aa, правое S выводит a^(3(k-1)+2) b^(k-1) по предположению индукции. Длины сходятся: 2+1+(3k-1)+1 = 3k+2 букв a (с учётом b) — всё согласовано. Значит w = a^(3n+2) b^n ∈ L при любом n ≥ 1."
+        },
+        "length_argument": "|a^(3n+2) b^n| = 4n+2 ≥ n при всех n ≥ 1.",
+        "cut_analysis": {
+          "method": "positional",
+          "argument": "Сначала докажем две вспомогательные леммы. Лемма 1: L ∩ a* = {ε, aa}. Действительно, всякое непустое слово, выведенное через S → SaSb, оканчивается на b. Через S → A получаются только bb, aa и слова вида bSb, начинающиеся с b. Поэтому единственное непустое слово из L без букв b — это aa. Лемма 2: если a^m b^k ∈ L и k ≥ 1, то m ≤ 3k+2. Доказываем индукцией по k, разбирая первый шаг вывода. (1) S → ε или S → A → aa: тогда k = 0, что противоречит условию k ≥ 1. (2) S → A → bb или S → A → bSb: слово начинается с b, значит m = 0 ≤ 3k+2. (3) S → SaSb: тогда u = s1·a·s2·b, где s1, s2 ∈ L. Буква a, стоящая после s1, лежит в блоке a^m, поэтому s1 = a^p, p < m. По лемме 1 p ∈ {0, 2}. Отсюда s2 = a^(m-1-p) b^(k-1). Если k = 1, то s2 ∈ a*, и по лемме 1 m-1-p ≤ 2, откуда m ≤ 3+p ≤ 5 = 3·1+2. Если k ≥ 2, то по предположению индукции m-1-p ≤ 3(k-1)+2, откуда m ≤ 3k+p ≤ 3k+2. Лемма доказана. Теперь сама накачка: пусть w = xyz, |xy| ≤ n, |y| ≥ 1. Так как первые 3n+2 ≥ n символов w — буквы a, префикс xy целиком лежит в блоке из a. Значит y = a^j, где 1 ≤ j ≤ n.",
+          "cases": [
+            {
+              "case": "y = a^j, 1 ≤ j ≤ n (единственно возможный случай, так как |xy| ≤ n < 3n+2)",
+              "pumped_word": "xy^2 z = a^(3n+2+j) b^n",
+              "pump_value": 2,
+              "contradiction": "Здесь число b равно k = n ≥ 1, а число a равно m = 3n+2+j > 3n+2 = 3k+2. По лемме 2 любое слово a^m b^k ∈ L с k ≥ 1 удовлетворяет m ≤ 3k+2. Следовательно, a^(3n+2+j) b^n ∉ L."
+            }
+          ]
+        },
+        "pump_value": 2,
+        "conclusion": "Для любой длины накачки n выбрано слово w = a^(3n+2) b^n ∈ L, |w| ≥ n. При любом разбиении w = xyz с |xy| ≤ n и |y| ≥ 1 слово xy^2 z не принадлежит L. По лемме о накачке язык грамматики S → SaSb | ε | A, A → bb | aa | bSb не является регулярным. Замечание: L ∩ a*b* совпадает с {a^m b^k : k ≥ 1, m+k чётно, m ≤ 3k+2} ∪ {ε, aa}, а не с условием m ≡ k (mod 2), предложенным препроцессором. Так, a^7 b ∉ L, хотя 7 ≡ 1 (mod 2)."
+      },
+      "confidence": 0.9,
+      "errors": null
+    },
+    "nerode": {
+      "module": "nerode_agent",
+      "status": "success",
+      "proof": {
+        "word_sequence": {
+          "family": "a^{3i+2}",
+          "parameter": "i",
+          "domain": "i ≥ 0",
+          "examples": [
+            "aa",
+            "aaaaa",
+            "aaaaaaaa",
+            "aaaaaaaaaaa"
+          ]
+        },
+        "distinguishing_contexts": [
+          {
+            "pair": [
+              "a^{3i+2}",
+              "a^{3j+2}"
+            ],
+            "context": "b^i",
+            "which_in": "w_i",
+            "in_language": "a^{3i+2} b^i ∈ L: по индукции S ⇒ S a S b ⇒* aa·a·(a^{3(i-1)+2} b^{i-1})·b = a^{3i+2} b^i; база i=0: S ⇒ A ⇒ aa",
+            "not_in_language": "a^{3j+2} b^i ∉ L, так как |w|_a = 3j+2 > 3i+2 = 3|w|_b + 2, что нарушает инвариант |w|_a ≤ 3|w|_b + 2, выполненный для всех слов из L",
+            "condition": "i < j (без ограничения общности)"
+          }
+        ],
+        "argument": "1) Инвариант. Индукцией по выводу докажем, что для любого терминального слова w, выводимого из S или из A, выполнено |w|_a ≤ 3|w|_b + 2. Правило S → ε: 0 ≤ 2. A → aa: 2 ≤ 2. A → bb: 0 ≤ 8. A → bSb: если для u выполнено |u|_a ≤ 3|u|_b + 2, то для bub имеем |u|_a ≤ 3(|u|_b + 2) + 2. S → A: наследуется. S → S a S b: если u, v удовлетворяют инварианту, то |uavb|_a = |u|_a + |v|_a + 1 ≤ 3|u|_b + 2 + 3|v|_b + 2 + 1 = 3(|u|_b + |v|_b + 1) + 2 = 3|uavb|_b + 2. Значит, каждое слово из L удовлетворяет |w|_a ≤ 3|w|_b + 2. 2) Принадлежность. Индукцией по i покажем, что a^{3i+2} b^i ∈ L. База: S ⇒ A ⇒ aa. Шаг: S ⇒ S a S b, где первое S ⇒ A ⇒ aa, а второе S ⇒* a^{3(i-1)+2} b^{i-1} (по предположению индукции); получаем aa·a·a^{3i-1} b^{i-1}·b = a^{3i+2} b^i. 3) Различимость. Пусть i < j. Контекст z = b^i: слово a^{3i+2} b^i ∈ L по п. 2, а слово a^{3j+2} b^i содержит 3j+2 > 3i+2 = 3·i + 2 букв a при i буквах b, поэтому по п. 1 не принадлежит L. Следовательно, a^{3i+2} и a^{3j+2} не эквивалентны по Нероуду. Бесконечное множество {a^{3i+2} | i ≥ 0} попарно различимо, значит, отношение ≡_L имеет бесконечный индекс.",
+        "conclusion": "По теореме Майхилла-Нероуда отношение эквивалентности Нероуда для L имеет бесконечный индекс, поэтому язык L не является регулярным (не распознаётся никаким конечным автоматом)."
+      },
+      "confidence": 0.95,
+      "errors": null
+    },
+    "closure": {
+      "module": "closure_agent",
+      "status": "success",
+      "method": "inverse_homomorphism",
+      "details": {
+        "step_0_structure": {
+          "description": "Структура грамматики. Каждое применение правила S → SaSb разворачивает самый левый S. Поэтому L = L(S) = ({ε} ∪ L(A)) · (a L b)*, где L(A) = {aa, bb} ∪ b·L·b.",
+          "claim_even": "Все слова L имеют чётную длину (индукция по выводу: правила добавляют по 2 терминала)."
+        },
+        "step_1_intersection_with_a*b*": {
+          "regular_language": {
+            "regex": "a*b*",
+            "justification": "Задан регулярным выражением, значит регулярен."
+          },
+          "lemma_L_cap_b*": "L ∩ b* = (bb)*. В слове без a блоки (aSb) отсутствуют, поэтому слово равно ε или принадлежит A ∩ b*. При этом A ∩ b* = {bb} ∪ b(L ∩ b*)b.",
+          "recursion": "Пусть T = L ∩ a*b*. Тогда T = {ε, aa} ∪ {b^{2n} | n ≥ 1} ∪ {a, aaa} · T · b. Обоснование: в слове из a*b* нет подслова ba, поэтому блоков (aSb) не больше одного. Префикс X стоит перед буквой a, значит X ∈ {ε, aa}. Если блоков нет, слово принадлежит {ε} ∪ (L(A) ∩ a*b*) = {ε, aa} ∪ (bb)⁺.",
+          "closed_form": "T = { a^m b^k | m ≡ k (mod 2), 0 ≤ m ≤ 3k + 2 }",
+          "closed_form_proof": "Индукция по k. При k = 0: T ∩ a* = {ε, aa}, что совпадает с условием «m чётно, m ≤ 2». При k ≥ 1 слово a^m b^k лежит в T тогда и только тогда, когда выполнено одно из условий: (m = 0 и k чётно), или a^{m-1}b^{k-1} ∈ T, или (m ≥ 3 и a^{m-3}b^{k-1} ∈ T). По предположению индукции второе условие даёт m ≡ k и 1 ≤ m ≤ 3k, третье даёт m ≡ k и 3 ≤ m ≤ 3k + 2. Объединение всех случаев: m ≡ k (mod 2) и 0 ≤ m ≤ 3k + 2.",
+          "sanity_check": "Согласуется с данными препроцессора. aaaaab (m=5, k=1: 5 ≤ 5) ∈ L. aaaaaaab (m=7, k=1: 7 > 5) ∉ L, и его действительно нет среди слов длины 8. aaaa ∉ L. Шаблон препроцессора «m ≡ k (mod 2)» неполон: есть ещё ограничение m ≤ 3k + 2."
+        },
+        "homomorphism": {
+          "domain_alphabet": [
+            "x",
+            "y"
+          ],
+          "codomain_alphabet": [
+            "a",
+            "b"
+          ],
+          "mapping": {
+            "x": "aaaaaa",
+            "y": "bb"
+          }
+        },
+        "preimage": {
+          "language": "g⁻¹(L) ∩ x*y* = { x^i y^j | i ≤ j }",
+          "derivation": "Для w = x^i y^j имеем g(w) = a^{6i} b^{2j} ∈ a*b*. Поэтому g(w) ∈ L ⇔ g(w) ∈ T ⇔ 6i ≡ 2j (mod 2) (выполнено всегда) и 6i ≤ 2j + 2. Последнее условие переписывается как i ≤ j + 1/3, то есть i ≤ j для целых i, j.",
+          "is_regular": false,
+          "proof_method": "Лемма о накачке. Пусть p — длина накачки. Возьмём z = x^p y^p. При любом разбиении z = uvw с |uv| ≤ p и |v| ≥ 1 имеем v = x^t, t ≥ 1. Тогда u v² w = x^{p+t} y^p, и p + t > p, поэтому это слово не принадлежит языку. Противоречие, язык нерегулярен (стандартный пример)."
+        }
+      },
+      "conclusion": "Предположим, что L регулярен. Класс регулярных языков замкнут относительно обратного гомоморфизма и пересечения, а язык x*y* регулярен. Для гомоморфизма g(x) = a⁶, g(y) = b² язык g⁻¹(L) ∩ x*y* тогда тоже был бы регулярным. Выше показано: L ∩ a*b* = {a^m b^k | m ≡ k (mod 2), m ≤ 3k + 2}, откуда g⁻¹(L) ∩ x*y* = {x^i y^j | i ≤ j}. Этот язык нерегулярен по лемме о накачке (слово x^p y^p). Противоречие. Следовательно, язык грамматики S → SaSb | ε | A, A → bb | aa | bSb не является регулярным. Замечание: уже L ∩ a*b* нерегулярен из-за линейного ограничения m ≤ 3k + 2 (число a ограничено числом b). Одна только чётность длины такого эффекта не дала бы.",
+      "confidence": 0.93,
+      "errors": null
+    },
+    "grammar_analyzer": {
+      "module": "grammar_analyzer",
+      "status": "success",
+      "is_regular": false,
+      "analysis": {
+        "is_left_linear": false,
+        "is_right_linear": false,
+        "recursion_type": "nested",
+        "recursion_details": "Правило S → SaSb содержит два вхождения нетерминала S и терминалы a, b между ними. Это самовложение: каждое a, порождённое этим правилом, имеет парное b справа. Правило A → bSb (через S → A) тоже даёт самовложение: S окружается символами b. Грамматика не является ни право-, ни леволинейной. Выведены два инварианта (проверяются индукцией по выводу). (1) |w|_a ≡ |w|_b (mod 2): каждое правило добавляет либо по одному a и b, либо два одинаковых символа. (2) |w|_a ≤ 3|w|_b + 2. База: ε даёт 0 ≤ 2, aa даёт 2 ≤ 2, bb даёт 0 ≤ 6. Шаг для w = uavb: |w|_a = |u|_a + |v|_a + 1 ≤ 3(|u|_b + |v|_b) + 5 = 3|w|_b + 2. Шаг для w = bvb: |w|_a = |v|_a ≤ 3|v|_b + 2 < 3|w|_b + 2. Кроме того, a^(3k+2) b^k ∈ L для всех k ≥ 0. База: aa ∈ L. Шаг: S → SaSb, где левое S ⇒ A ⇒ aa, а правое S ⇒* a^(3k+2) b^k; получаем aa·a·a^(3k+2) b^k·b = a^(3k+5) b^(k+1). Значит, язык требует неограниченного «счёта» a относительно b, и число a не может превышать утроенное число b плюс 2.",
+        "generated_words": [
+          "",
+          "aa",
+          "ab",
+          "bb",
+          "aaab",
+          "aabb",
+          "abab",
+          "abbb",
+          "baab",
+          "babb",
+          "bbab",
+          "bbbb",
+          "aaaaab",
+          "aaaabb",
+          "aaabab",
+          "aaabbb",
+          "aababb",
+          "aabbab",
+          "aabbbb",
+          "abaaab",
+          "abaabb",
+          "ababab",
+          "ababbb",
+          "abbabb",
+          "abbbab",
+          "abbbbb",
+          "baaabb",
+          "baabab",
+          "baabbb",
+          "bababb",
+          "babbab",
+          "babbbb",
+          "bbaaab",
+          "bbaabb",
+          "bbabab",
+          "bbabbb",
+          "bbbabb",
+          "bbbbab",
+          "bbbbbb"
+        ]
+      },
+      "evidence": {
+        "type": "pumping",
+        "regex": "не существует (язык нерегулярен)"
+      },
+      "confidence": 0.95,
+      "errors": null
+    },
+    "claim_verification": {
+      "total_claims": 2,
+      "verified": 2,
+      "disproved": 0,
+      "errors": [],
+      "disproved_claims": [],
+      "verified_claims": [
+        {
+          "word": "aaaa",
+          "claimed_in_L": false,
+          "context": "aaaa ∉",
+          "agent": "closure",
+          "oracle_says": false,
+          "correct": true
+        },
+        {
+          "word": "aa",
+          "claimed_in_L": true,
+          "context": "aa ∈",
+          "agent": "grammar_analyzer",
+          "oracle_says": true,
+          "correct": true
+        }
+      ],
+      "trust": "well_formed"
+    },
+    "pumping_verification": {
+      "trust": "not_verified",
+      "reason": "not a successful non_regular pumping proof"
+    },
+    "nerode_verification": {
+      "trust": "well_formed",
+      "reason": "could not instantiate pair/context"
+    },
+    "proof_checker": {
+      "module": "proof_checker",
+      "status": "success",
+      "evidence": {
+        "checks": [
+          {
+            "agent": "pumping",
+            "claim": "a^(3n+2) b^n ∈ L for all n ≥ 1 (induction via S → SaSb with left S ⇒ aa)",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "pumping",
+            "claim": "Letter-count bookkeeping in the membership induction step",
+            "verdict": "minor issue",
+            "severity": "info",
+            "error": "The sum '2+1+(3k-1)+1 = 3k+2 букв a' mixes a-counts and b-counts. The a-count is 2+1+(3k-1) = 3k+2, and the final +1 is the extra b. The derivation itself is correct."
+          },
+          {
+            "agent": "pumping",
+            "claim": "Lemma 1: L ∩ a* = {ε, aa}",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "pumping",
+            "claim": "Lemma 2: a^m b^k ∈ L with k ≥ 1 implies m ≤ 3k+2",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "pumping",
+            "claim": "Only case y = a^j; pumping i=2 gives a^(3n+2+j) b^n ∉ L",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "pumping",
+            "claim": "L ∩ a*b* = {a^m b^k : k≥1, m+k even, m ≤ 3k+2} ∪ {ε, aa}; a^7 b ∉ L",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "nerode",
+            "claim": "Invariant |w|_a ≤ 3|w|_b + 2 holds for all w ∈ L",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "nerode",
+            "claim": "a^{3i+2} are pairwise distinguishable by context b^i (i<j)",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "closure",
+            "claim": "L = ({ε} ∪ L(A))·(a L b)* and T = L ∩ a*b* = {a^m b^k | m ≡ k (mod 2), 0 ≤ m ≤ 3k+2}",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "closure",
+            "claim": "g⁻¹(L) ∩ x*y* = {x^i y^j | i ≤ j} for g(x)=a⁶, g(y)=b²",
+            "verdict": "WRONG",
+            "severity": "critical",
+            "error": "The condition 6i ≤ 2j+2 is equivalent to 3i ≤ j+1, not to i ≤ j (it was mis-simplified to 'i ≤ j + 1/3'). Counterexample: x^1 y^1 maps to a⁶b², but 6 > 3·2+2 = 8? No: 6 ≤ 8 holds. Take x^2 y^2 instead: it maps to a¹²b², and 12 > 8, so a¹²b² ∉ L even though i ≤ j. Likewise x^1 y^1 needs 3 ≤ 2, which fails, so xy ∉ g⁻¹(L). The correct preimage is {x^i y^j | 3i ≤ j+1}."
+          },
+          {
+            "agent": "closure",
+            "claim": "Pumping proof with z = x^p y^p shows g⁻¹(L) ∩ x*y* is non-regular",
+            "verdict": "WRONG",
+            "severity": "critical",
+            "error": "This rests on the false preimage. Under the correct condition 3i ≤ j+1, the word x^p y^p is not in the language for p ≥ 1, so it cannot be the pumping witness. The language {x^i y^j | 3i ≤ j+1} is still non-regular (e.g. witness x^p y^(3p-1), pump up), so the final verdict survives. The proof as written, however, is invalid."
+          },
+          {
+            "agent": "closure",
+            "claim": "Sanity check: a⁷b 'is indeed absent among words of length 8'",
+            "verdict": "unsupported",
+            "severity": "info",
+            "error": "The generated-word list only reaches length 6. The fact itself is true by the invariant, but the cited evidence does not exist."
+          },
+          {
+            "agent": "grammar_analyzer",
+            "claim": "Invariants |w|_a ≡ |w|_b (mod 2) and |w|_a ≤ 3|w|_b + 2; a^(3k+2)b^k ∈ L",
+            "verdict": "correct",
+            "severity": null,
+            "error": null
+          },
+          {
+            "agent": "grammar_analyzer",
+            "claim": "Base case 'bb gives 0 ≤ 6'",
+            "verdict": "minor issue",
+            "severity": "info",
+            "error": "The bound for bb is 3·2+2 = 8. The inequality still holds, so this is only an arithmetic slip."
+          }
+        ],
+        "overall_valid": false,
+        "critical_errors": [
+          "Closure proof: the preimage g⁻¹(L) ∩ x*y* is computed wrongly. 6i ≤ 2j+2 means 3i ≤ j+1, not i ≤ j. The pumping witness x^p y^p is therefore not even in the true preimage, and the closure proof is invalid as written, although the non-regularity conclusion is true."
+        ],
+        "suggestions": [
+          "Fix the closure proof: state g⁻¹(L) ∩ x*y* = {x^i y^j | 3i ≤ j+1} and pump the witness x^p y^(3p-1). Alternatively, choose g(x)=a³, g(y)=b so that the preimage becomes {x^i y^j | i ≤ j + 2/3}, i.e. i ≤ j, and the i ≤ j argument then works.",
+          "Alternatively, drop the homomorphism step entirely: T = L ∩ a*b* is already non-regular via the Nerode family a^(3i+2) with contexts b^i.",
+          "The pumping and Nerode proofs are valid and independently establish that L is not regular. Tidy up the a/b count arithmetic in the pumping membership argument."
+        ]
+      },
+      "confidence": 0.8,
+      "errors": []
+    },
+    "reasoning": {
+      "module": "reasoning_agent",
+      "status": "success",
+      "verdict": "non_regular",
+      "confidence": 0.97,
+      "best_proof": "nerode",
+      "consolidated_proof": "Язык L грамматики S → SaSb | ε | A, A → bb | aa | bSb не является регулярным.\n\n1) Инвариант. Индукцией по выводу докажем, что для любого слова w, выводимого из S или A, выполнено |w|_a ≤ 3|w|_b + 2.\n- S → ε: 0 ≤ 2.\n- A → aa: 2 ≤ 2.\n- A → bb: 0 ≤ 8.\n- A → bSb: если |u|_a ≤ 3|u|_b + 2, то |bub|_a = |u|_a ≤ 3(|u|_b + 2) + 2.\n- S → A: инвариант наследуется.\n- S → SaSb: |uavb|_a = |u|_a + |v|_a + 1 ≤ 3|u|_b + 2 + 3|v|_b + 2 + 1 = 3(|u|_b + |v|_b + 1) + 2 = 3|uavb|_b + 2.\n\n2) Принадлежность. Индукцией по i покажем, что a^{3i+2} b^i ∈ L для всех i ≥ 0.\n- База: S ⇒ A ⇒ aa.\n- Шаг: S ⇒ SaSb. Левое S ⇒ A ⇒ aa, правое S ⇒* a^{3(i-1)+2} b^{i-1} по предположению индукции. Получаем aa·a·a^{3i-1} b^{i-1}·b = a^{3i+2} b^i.\n\n3) Различимость (теорема Майхилла-Нероуда). Рассмотрим семейство слов a^{3i+2}, i ≥ 0. Пусть i < j, возьмём контекст z = b^i.\n- a^{3i+2} b^i ∈ L по п. 2.\n- a^{3j+2} b^i ∉ L: в нём 3j+2 > 3i+2 букв a при i буквах b, что нарушает инвариант п. 1.\nЗначит, слова a^{3i+2} попарно неэквивалентны по Нероуду. Отношение ≡_L имеет бесконечный индекс, и по теореме Майхилла-Нероуда L не распознаётся никаким конечным автоматом.\n\n4) Независимое подтверждение леммой о накачке. Пусть n — длина накачки, w = a^{3n+2} b^n ∈ L, |w| ≥ n. При любом разбиении w = xyz с |xy| ≤ n, |y| ≥ 1 имеем y = a^j, 1 ≤ j ≤ n. Тогда xy²z = a^{3n+2+j} b^n. Здесь число a больше 3n+2, что нарушает инвариант, поэтому xy²z ∉ L. Противоречие с леммой о накачке.\n\n5) Подтверждение через замкнутость. L ∩ a*b* = {a^m b^k | m ≡ k (mod 2), m ≤ 3k+2}. Для гомоморфизма g(x) = a⁶, g(y) = b² имеем g(x^i y^j) = a^{6i} b^{2j}. Условие 6i ≤ 3·2j + 2 равносильно i ≤ j, чётность выполнена всегда. Поэтому g⁻¹(L) ∩ x*y* = {x^i y^j | i ≤ j}. Этот язык нерегулярен (накачка слова x^p y^p). Регулярные языки замкнуты относительно обратного гомоморфизма и пересечения с регулярным языком, поэтому L не может быть регулярным.",
+      "oracle_validation": "not_applicable (ДКА не строился: вердикт — нерегулярен)",
+      "issues_found": [
+        "Агент замыкания: опечатка в выкладке «6i ≤ 2j+2». Верно 6i ≤ 3·(2j)+2 = 6j+2, так как g(y^j) = b^{2j}. Итог {x^i y^j | i ≤ j} при этом верен, и доказательство накачкой слова x^p y^p корректно.",
+        "Критическая ошибка proof_checker по доказательству замыкания ложна. Проверяющий подставил k = 2 вместо k = 2j: x²y² ↦ a¹²b⁴, а не a¹²b². Проверка 12 ≤ 14 выполняется. Вердикт «WRONG» отклонён.",
+        "Альтернатива proof_checker (g(x) = a³, g(y) = b) некорректна. Прообраз x^i y^j переходит в a^{3i}b^j, и нужно ещё условие чётности 3i ≡ j (mod 2), поэтому прообраз не равен {i ≤ j}.",
+        "Агент накачки: в индукции шага подсчёта смешаны счётчики a и b («2+1+(3k-1)+1»). Сам вывод верен, это косметическая ошибка.",
+        "Анализатор грамматики: арифметическая описка «bb даёт 0 ≤ 6» вместо 0 ≤ 8. На вывод не влияет.",
+        "Агент замыкания ссылается на отсутствие a⁷b среди слов длины 8, но список сгенерированных слов доходит только до длины 6. Сам факт верен по инварианту."
+      ],
+      "action": "proceed_to_formalizer",
+      "retry_context": null,
+      "hints_for_human": [
+        "Установлено: L ∩ a*b* = {aᵐbᵏ | m ≡ k (mod 2), 0 ≤ m ≤ 3k+2}. Это НЕ {aⁿbⁿ}: например, bb, aa, aaaaab ∈ L.",
+        "Инвариант 1: |w|_a ≡ |w|_b (mod 2) для всех w ∈ L; все слова L имеют чётную длину.",
+        "Инвариант 2: |w|_a ≤ 3|w|_b + 2. Именно он даёт нерегулярность: число a ограничено линейной функцией от числа b.",
+        "Ключевое семейство: a^{3i+2} b^i ∈ L — максимальное количество a при i буквах b. Оно получается правилом S → SaSb с левым S ⇒ aa.",
+        "Контрпример к наивной гипотезе «m ≡ k (mod 2)»: a⁷b ∉ L, хотя 7 и 1 одной чётности.",
+        "Предупреждение: гомоморфизм g(x) = a³, g(y) = b не подходит — прообраз зависит ещё и от чётности. Используйте g(x) = a⁶, g(y) = b² (прообраз {x^i y^j | i ≤ j}) или обходитесь без гомоморфизма.",
+        "Рекомендация для экзамена: самое короткое строгое доказательство — через теорему Майхилла-Нероуда. Нужны три шага: инвариант |w|_a ≤ 3|w|_b + 2, принадлежность a^{3i+2}b^i ∈ L и различение a^{3i+2}, a^{3j+2} контекстом b^i."
+      ],
+      "errors": null
+    },
+    "verdict_gate": {
+      "basis": [
+        {
+          "agent": "pumping",
+          "trust": "not_verified"
+        },
+        {
+          "agent": "nerode",
+          "trust": "well_formed"
+        },
+        {
+          "agent": "closure",
+          "trust": "well_formed"
+        },
+        {
+          "agent": "formalizer",
+          "trust": "verified",
+          "basis": "lean_proof"
+        }
+      ],
+      "contradiction": false,
+      "downgrades": [],
+      "confidence_cap": 0.98
+    },
+    "formalization": {
+      "status": "proved",
+      "direction": "non_regular",
+      "direction_source": "verdict",
+      "mode": "separate",
+      "models": {
+        "first": "claude-opus-5-5",
+        "retry": "claude-sonnet-5-5"
+      },
+      "settings": {
+        "retries": 2,
+        "max_tokens": 128000
+      },
+      "started_at": "2026-09-29T13:31:32+00:00",
+      "statement": {
+        "imports": [
+          "import TflLean",
+          "import Mathlib.Computability.ContextFreeGrammar"
+        ],
+        "alphabet_decl": "inductive Letter\n  | a | b\n  deriving DecidableEq, Repr",
+        "language_decl": "inductive NT\n  | S | A\n  deriving DecidableEq, Repr\n\ndef g : ContextFreeGrammar Letter :=\n  { NT := NT, initial := NT.S, rules := {⟨NT.S, [Symbol.nonterminal NT.S, Symbol.terminal Letter.a, Symbol.nonterminal NT.S, Symbol.terminal Letter.b]⟩, ⟨NT.S, []⟩, ⟨NT.S, [Symbol.nonterminal NT.A]⟩, ⟨NT.A, [Symbol.terminal Letter.b, Symbol.terminal Letter.b]⟩, ⟨NT.A, [Symbol.terminal Letter.a, Symbol.terminal Letter.a]⟩, ⟨NT.A, [Symbol.terminal Letter.b, Symbol.nonterminal NT.S, Symbol.terminal Letter.b]⟩} }\n\ndef L : Language Letter := g.language",
+        "theorem_decl": "theorem tfl_main : ¬ L.IsRegular",
+        "name": "tfl_main"
+      },
+      "proof_body": "letI : DecidableEq g.NT := inferInstanceAs (DecidableEq NT)\n  have hnt : ∀ x : NT, x = NT.S ∨ x = NT.A := by\n    intro x\n    cases x <;> simp\n  have hout : ∀ r ∈ g.rules, r.output.count (Symbol.terminal Letter.a : Symbol Letter g.NT) + 2 * (r.output.count (Symbol.nonterminal NT.S : Symbol Letter g.NT) + r.output.count (Symbol.nonterminal NT.A : Symbol Letter g.NT)) ≤ 3 * r.output.count (Symbol.terminal Letter.b : Symbol Letter g.NT) + 2 := by\n    first | decide | (intro r hr; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_singleton.1 hr with rfl; decide)\n  have inv : ∀ u v : List (Symbol Letter g.NT), g.Derives u v → u.count (Symbol.terminal Letter.a : Symbol Letter g.NT) + 2 * (u.count (Symbol.nonterminal NT.S : Symbol Letter g.NT) + u.count (Symbol.nonterminal NT.A : Symbol Letter g.NT)) ≤ 3 * u.count (Symbol.terminal Letter.b : Symbol Letter g.NT) + 2 → v.count (Symbol.terminal Letter.a : Symbol Letter g.NT) + 2 * (v.count (Symbol.nonterminal NT.S : Symbol Letter g.NT) + v.count (Symbol.nonterminal NT.A : Symbol Letter g.NT)) ≤ 3 * v.count (Symbol.terminal Letter.b : Symbol Letter g.NT) + 2 := by\n    intro u v h hu\n    induction h with\n    | refl => exact hu\n    | tail _ hp ih =>\n      obtain ⟨⟨ri, ro⟩, hr, hrw⟩ := hp\n      have ho := hout _ hr\n      rw [ContextFreeRule.rewrites_iff] at hrw\n      obtain ⟨p, q, rfl, rfl⟩ := hrw\n      rcases hnt ri with rfl | rfl <;> simp [List.count_append, List.count_cons, List.count_nil] at ih ho ⊢ <;> omega\n  have step : ∀ (p q : List (Symbol Letter g.NT)) (n : g.NT) (o : List (Symbol Letter g.NT)), (⟨n, o⟩ : ContextFreeRule Letter g.NT) ∈ g.rules → g.Derives (p ++ [Symbol.nonterminal n] ++ q) (p ++ o ++ q) := by\n    intro p q n o hr\n    refine Relation.ReflTransGen.single ?_\n    unfold ContextFreeGrammar.Produces\n    refine ⟨⟨n, o⟩, hr, ?_⟩\n    rw [ContextFreeRule.rewrites_iff]\n    exact ⟨p, q, rfl, rfl⟩\n  have ctx : ∀ (p q u v : List (Symbol Letter g.NT)), g.Derives u v → g.Derives (p ++ u ++ q) (p ++ v ++ q) := by\n    intro p q u v h\n    induction h with\n    | refl => exact Relation.ReflTransGen.refl\n    | tail _ hbc ih =>\n      obtain ⟨r, hr, hrw⟩ := hbc\n      rw [ContextFreeRule.rewrites_iff] at hrw\n      obtain ⟨p', q', rfl, rfl⟩ := hrw\n      refine Relation.ReflTransGen.tail ih ?_\n      unfold ContextFreeGrammar.Produces\n      refine ⟨r, hr, ?_⟩\n      rw [ContextFreeRule.rewrites_iff]\n      exact ⟨p ++ p', q' ++ q, by simp, by simp⟩\n  have hbase : g.Derives [Symbol.nonterminal NT.S] [Symbol.terminal Letter.a, Symbol.terminal Letter.a] := by\n    have h1 := step [] [] NT.S [Symbol.nonterminal NT.A] (by first | decide | exact Finset.mem_insert_of_mem (Finset.mem_insert_of_mem (Finset.mem_insert_self _ _)))\n    have h2 := step [] [] NT.A [Symbol.terminal Letter.a, Symbol.terminal Letter.a] (by first | decide | exact Finset.mem_insert_of_mem (Finset.mem_insert_of_mem (Finset.mem_insert_of_mem (Finset.mem_insert_of_mem (Finset.mem_insert_self _ _)))))\n    simp only [List.nil_append, List.append_nil] at h1 h2\n    exact Relation.ReflTransGen.trans h1 h2\n  have hsnoc : ∀ (n : ℕ) (x : Letter), List.replicate (n + 1) x = List.replicate n x ++ [x] := by\n    intro n x\n    induction n with\n    | zero => rfl\n    | succ n ih =>\n      show x :: List.replicate (n + 1) x = x :: (List.replicate n x ++ [x])\n      rw [ih]\n  have hmem : ∀ i : ℕ, g.Derives [Symbol.nonterminal NT.S] (List.map Symbol.terminal (List.replicate (3 * i + 2) Letter.a ++ List.replicate i Letter.b)) := by\n    intro i\n    induction i with\n    | zero => first | exact hbase | simpa using hbase\n    | succ i ih =>\n      have h1 := step [] [] NT.S [Symbol.nonterminal NT.S, Symbol.terminal Letter.a, Symbol.nonterminal NT.S, Symbol.terminal Letter.b] (by first | decide | exact Finset.mem_insert_self _ _)\n      have h2 := ctx [] [Symbol.terminal Letter.a, Symbol.nonterminal NT.S, Symbol.terminal Letter.b] _ _ hbase\n      have h3 := ctx [Symbol.terminal Letter.a, Symbol.terminal Letter.a, Symbol.terminal Letter.a] [Symbol.terminal Letter.b] _ _ ih\n      simp only [List.nil_append, List.append_nil, List.cons_append, List.singleton_append] at h1 h2\n      have ea : List.replicate (3 * (i + 1) + 2) Letter.a = [Letter.a, Letter.a, Letter.a] ++ List.replicate (3 * i + 2) Letter.a := by\n        rw [show 3 * (i + 1) + 2 = (3 * i + 2) + 3 by omega]\n        all_goals first | rfl | simp [List.replicate_succ]\n      have e : (List.map Symbol.terminal (List.replicate (3 * (i + 1) + 2) Letter.a ++ List.replicate (i + 1) Letter.b) : List (Symbol Letter g.NT)) = [Symbol.terminal Letter.a, Symbol.terminal Letter.a, Symbol.terminal Letter.a] ++ List.map Symbol.terminal (List.replicate (3 * i + 2) Letter.a ++ List.replicate i Letter.b) ++ [Symbol.terminal Letter.b] := by\n        rw [ea, hsnoc i Letter.b]\n        all_goals simp\n      show g.Derives [Symbol.nonterminal NT.S] (List.map Symbol.terminal (List.replicate (3 * (i + 1) + 2) Letter.a ++ List.replicate (i + 1) Letter.b))\n      rw [e]\n      simp only [List.singleton_append, List.cons_append, List.nil_append] at h3 ⊢\n      exact Relation.ReflTransGen.trans h1 (Relation.ReflTransGen.trans h2 h3)\n  rintro ⟨σ, _, M, hM⟩\n  have key : ∀ m n : ℕ, m < n → M.eval (List.replicate (3 * m + 2) Letter.a) = M.eval (List.replicate (3 * n + 2) Letter.a) → False := by\n    intro m n hmn he\n    have hacc : List.replicate (3 * m + 2) Letter.a ++ List.replicate m Letter.b ∈ M.accepts := by\n      rw [hM]\n      exact hmem m\n    have hacc' : List.replicate (3 * n + 2) Letter.a ++ List.replicate m Letter.b ∈ M.accepts := by\n      rw [DFA.mem_accepts] at hacc ⊢\n      simp only [DFA.eval, DFA.evalFrom_of_append] at hacc he ⊢\n      rw [← he]\n      exact hacc\n    rw [hM] at hacc'\n    have hd : g.Derives [Symbol.nonterminal g.initial] (List.map Symbol.terminal (List.replicate (3 * n + 2) Letter.a ++ List.replicate m Letter.b)) := hacc'\n    have hc := inv _ _ hd (by first | decide | simp [g, List.count_cons, List.count_nil])\n    simp [List.count_append, List.count_replicate, List.map_append, List.map_replicate] at hc\n    omega\n  obtain ⟨i, j, hij, heq⟩ := Fintype.exists_ne_map_eq_of_card_lt\n    (fun k : Fin (Fintype.card σ + 1) => M.eval (List.replicate (3 * (k : ℕ) + 2) Letter.a)) (by simp)\n  have hij' : (i : ℕ) ≠ (j : ℕ) := fun h => hij (Fin.ext h)\n  rcases Nat.lt_or_gt_of_ne hij' with h | h\n  · exact key i j h heq\n  · exact key j i h heq.symm",
+      "lean_code": "import Lean.Replay\nimport Lean.Elab.Command\nimport TflLean\nimport Mathlib.Computability.ContextFreeGrammar\n\ninductive Letter\n  | a | b\n  deriving DecidableEq, Repr\n\ninductive NT\n  | S | A\n  deriving DecidableEq, Repr\n\ndef g : ContextFreeGrammar Letter :=\n  { NT := NT, initial := NT.S, rules := {⟨NT.S, [Symbol.nonterminal NT.S, Symbol.terminal Letter.a, Symbol.nonterminal NT.S, Symbol.terminal Letter.b]⟩, ⟨NT.S, []⟩, ⟨NT.S, [Symbol.nonterminal NT.A]⟩, ⟨NT.A, [Symbol.terminal Letter.b, Symbol.terminal Letter.b]⟩, ⟨NT.A, [Symbol.terminal Letter.a, Symbol.terminal Letter.a]⟩, ⟨NT.A, [Symbol.terminal Letter.b, Symbol.nonterminal NT.S, Symbol.terminal Letter.b]⟩} }\n\ndef L : Language Letter := g.language\n\ntheorem tfl_main : ¬ L.IsRegular := by\n  letI : DecidableEq g.NT := inferInstanceAs (DecidableEq NT)\n  have hnt : ∀ x : NT, x = NT.S ∨ x = NT.A := by\n    intro x\n    cases x <;> simp\n  have hout : ∀ r ∈ g.rules, r.output.count (Symbol.terminal Letter.a : Symbol Letter g.NT) + 2 * (r.output.count (Symbol.nonterminal NT.S : Symbol Letter g.NT) + r.output.count (Symbol.nonterminal NT.A : Symbol Letter g.NT)) ≤ 3 * r.output.count (Symbol.terminal Letter.b : Symbol Letter g.NT) + 2 := by\n    first | decide | (intro r hr; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_insert.1 hr with rfl | hr; decide; rcases Finset.mem_singleton.1 hr with rfl; decide)\n  have inv : ∀ u v : List (Symbol Letter g.NT), g.Derives u v → u.count (Symbol.terminal Letter.a : Symbol Letter g.NT) + 2 * (u.count (Symbol.nonterminal NT.S : Symbol Letter g.NT) + u.count (Symbol.nonterminal NT.A : Symbol Letter g.NT)) ≤ 3 * u.count (Symbol.terminal Letter.b : Symbol Letter g.NT) + 2 → v.count (Symbol.terminal Letter.a : Symbol Letter g.NT) + 2 * (v.count (Symbol.nonterminal NT.S : Symbol Letter g.NT) + v.count (Symbol.nonterminal NT.A : Symbol Letter g.NT)) ≤ 3 * v.count (Symbol.terminal Letter.b : Symbol Letter g.NT) + 2 := by\n    intro u v h hu\n    induction h with\n    | refl => exact hu\n    | tail _ hp ih =>\n      obtain ⟨⟨ri, ro⟩, hr, hrw⟩ := hp\n      have ho := hout _ hr\n      rw [ContextFreeRule.rewrites_iff] at hrw\n      obtain ⟨p, q, rfl, rfl⟩ := hrw\n      rcases hnt ri with rfl | rfl <;> simp [List.count_append, List.count_cons, List.count_nil] at ih ho ⊢ <;> omega\n  have step : ∀ (p q : List (Symbol Letter g.NT)) (n : g.NT) (o : List (Symbol Letter g.NT)), (⟨n, o⟩ : ContextFreeRule Letter g.NT) ∈ g.rules → g.Derives (p ++ [Symbol.nonterminal n] ++ q) (p ++ o ++ q) := by\n    intro p q n o hr\n    refine Relation.ReflTransGen.single ?_\n    unfold ContextFreeGrammar.Produces\n    refine ⟨⟨n, o⟩, hr, ?_⟩\n    rw [ContextFreeRule.rewrites_iff]\n    exact ⟨p, q, rfl, rfl⟩\n  have ctx : ∀ (p q u v : List (Symbol Letter g.NT)), g.Derives u v → g.Derives (p ++ u ++ q) (p ++ v ++ q) := by\n    intro p q u v h\n    induction h with\n    | refl => exact Relation.ReflTransGen.refl\n    | tail _ hbc ih =>\n      obtain ⟨r, hr, hrw⟩ := hbc\n      rw [ContextFreeRule.rewrites_iff] at hrw\n      obtain ⟨p', q', rfl, rfl⟩ := hrw\n      refine Relation.ReflTransGen.tail ih ?_\n      unfold ContextFreeGrammar.Produces\n      refine ⟨r, hr, ?_⟩\n      rw [ContextFreeRule.rewrites_iff]\n      exact ⟨p ++ p', q' ++ q, by simp, by simp⟩\n  have hbase : g.Derives [Symbol.nonterminal NT.S] [Symbol.terminal Letter.a, Symbol.terminal Letter.a] := by\n    have h1 := step [] [] NT.S [Symbol.nonterminal NT.A] (by first | decide | exact Finset.mem_insert_of_mem (Finset.mem_insert_of_mem (Finset.mem_insert_self _ _)))\n    have h2 := step [] [] NT.A [Symbol.terminal Letter.a, Symbol.terminal Letter.a] (by first | decide | exact Finset.mem_insert_of_mem (Finset.mem_insert_of_mem (Finset.mem_insert_of_mem (Finset.mem_insert_of_mem (Finset.mem_insert_self _ _)))))\n    simp only [List.nil_append, List.append_nil] at h1 h2\n    exact Relation.ReflTransGen.trans h1 h2\n  have hsnoc : ∀ (n : ℕ) (x : Letter), List.replicate (n + 1) x = List.replicate n x ++ [x] := by\n    intro n x\n    induction n with\n    | zero => rfl\n    | succ n ih =>\n      show x :: List.replicate (n + 1) x = x :: (List.replicate n x ++ [x])\n      rw [ih]\n  have hmem : ∀ i : ℕ, g.Derives [Symbol.nonterminal NT.S] (List.map Symbol.terminal (List.replicate (3 * i + 2) Letter.a ++ List.replicate i Letter.b)) := by\n    intro i\n    induction i with\n    | zero => first | exact hbase | simpa using hbase\n    | succ i ih =>\n      have h1 := step [] [] NT.S [Symbol.nonterminal NT.S, Symbol.terminal Letter.a, Symbol.nonterminal NT.S, Symbol.terminal Letter.b] (by first | decide | exact Finset.mem_insert_self _ _)\n      have h2 := ctx [] [Symbol.terminal Letter.a, Symbol.nonterminal NT.S, Symbol.terminal Letter.b] _ _ hbase\n      have h3 := ctx [Symbol.terminal Letter.a, Symbol.terminal Letter.a, Symbol.terminal Letter.a] [Symbol.terminal Letter.b] _ _ ih\n      simp only [List.nil_append, List.append_nil, List.cons_append, List.singleton_append] at h1 h2\n      have ea : List.replicate (3 * (i + 1) + 2) Letter.a = [Letter.a, Letter.a, Letter.a] ++ List.replicate (3 * i + 2) Letter.a := by\n        rw [show 3 * (i + 1) + 2 = (3 * i + 2) + 3 by omega]\n        all_goals first | rfl | simp [List.replicate_succ]\n      have e : (List.map Symbol.terminal (List.replicate (3 * (i + 1) + 2) Letter.a ++ List.replicate (i + 1) Letter.b) : List (Symbol Letter g.NT)) = [Symbol.terminal Letter.a, Symbol.terminal Letter.a, Symbol.terminal Letter.a] ++ List.map Symbol.terminal (List.replicate (3 * i + 2) Letter.a ++ List.replicate i Letter.b) ++ [Symbol.terminal Letter.b] := by\n        rw [ea, hsnoc i Letter.b]\n        all_goals simp\n      show g.Derives [Symbol.nonterminal NT.S] (List.map Symbol.terminal (List.replicate (3 * (i + 1) + 2) Letter.a ++ List.replicate (i + 1) Letter.b))\n      rw [e]\n      simp only [List.singleton_append, List.cons_append, List.nil_append] at h3 ⊢\n      exact Relation.ReflTransGen.trans h1 (Relation.ReflTransGen.trans h2 h3)\n  rintro ⟨σ, _, M, hM⟩\n  have key : ∀ m n : ℕ, m < n → M.eval (List.replicate (3 * m + 2) Letter.a) = M.eval (List.replicate (3 * n + 2) Letter.a) → False := by\n    intro m n hmn he\n    have hacc : List.replicate (3 * m + 2) Letter.a ++ List.replicate m Letter.b ∈ M.accepts := by\n      rw [hM]\n      exact hmem m\n    have hacc' : List.replicate (3 * n + 2) Letter.a ++ List.replicate m Letter.b ∈ M.accepts := by\n      rw [DFA.mem_accepts] at hacc ⊢\n      simp only [DFA.eval, DFA.evalFrom_of_append] at hacc he ⊢\n      rw [← he]\n      exact hacc\n    rw [hM] at hacc'\n    have hd : g.Derives [Symbol.nonterminal g.initial] (List.map Symbol.terminal (List.replicate (3 * n + 2) Letter.a ++ List.replicate m Letter.b)) := hacc'\n    have hc := inv _ _ hd (by first | decide | simp [g, List.count_cons, List.count_nil])\n    simp [List.count_append, List.count_replicate, List.map_append, List.map_replicate] at hc\n    omega\n  obtain ⟨i, j, hij, heq⟩ := Fintype.exists_ne_map_eq_of_card_lt\n    (fun k : Fin (Fintype.card σ + 1) => M.eval (List.replicate (3 * (k : ℕ) + 2) Letter.a)) (by simp)\n  have hij' : (i : ℕ) ≠ (j : ℕ) := fun h => hij (Fin.ext h)\n  rcases Nat.lt_or_gt_of_ne hij' with h | h\n  · exact key i j h heq\n  · exact key j i h heq.symm\n\nopen Lean in\nrun_cmd do\n  let env ← getEnv\n  let mut newConsts : Std.HashMap Name ConstantInfo := {}\n  for (n, ci) in env.constants.toList do\n    if !env.const2ModIdx.contains n then\n      newConsts := newConsts.insert n ci\n  try\n    let importEnv ← importModules env.imports {} (trustLevel := 0)\n    let _ ← Lean.Environment.replay newConsts importEnv\n    logInfo \"TFL_REPLAY_OK\"\n  catch e =>\n    logError s!\"TFL_REPLAY_FAIL: {(← e.toMessageData.toString)}\"\n\n#print axioms tfl_main\n",
+      "attempts": [
+        {
+          "attempt": 1,
+          "role": "first",
+          "model": "claude-opus-5-5",
+          "stop_reason": "end_turn",
+          "input_tokens": 10853,
+          "output_tokens": 103185,
+          "cost_usd": 2.107112,
+          "notes": "Strategy: sentential-form invariant #a + 2(#S + #A) <= 3#b + 2 (rule outputs themselves satisfy it, checked by `decide` over g.rules; the rewritten nonterminal contributes 2), preserved by every Produces step, so terminal words satisfy #a <= 3#b + 2. Membership a^(3i+2) b^i in L is built by induction (S => SaSb, left S =>* aa, right S by IH) using self-proved helpers `step` (one rule application in context) and `ctx` (derivations are closed under context), both via ContextFreeRule.rewrites_iff. Non-regularity via pigeonhole on DFA states after a^(3k+2): for m<n with equal states, a^(3n+2) b^m would be accepted, contradicting the invariant. All counting is done at type Symbol Letter g.NT with a local `letI : DecidableEq g.NT` to avoid g.NT vs NT mismatches under simp's reducible matching; rule membership is shown by `decide` with explicit Finset.mem_insert fallbacks. Assumes Mathlib's ContextFreeGrammar API (Produces as def `∃ r ∈ g.rules, r.Rewrites u v`, Derives = ReflTransGen, language = Derives from [nonterminal initial]).",
+          "status": "proved",
+          "errors": []
+        }
+      ],
+      "errors": [],
+      "axioms": [
+        "propext",
+        "Classical.choice",
+        "Quot.sound"
+      ],
+      "elapsed": 55.45,
+      "finished_at": "2026-09-29T13:47:43+00:00",
+      "baseline": {
+        "status": "success",
+        "confidence": 0.55,
+        "verdict": "non_regular",
+        "verdict_gate": {
+          "basis": [
+            {
+              "agent": "pumping",
+              "trust": "not_verified"
+            },
+            {
+              "agent": "nerode",
+              "trust": "well_formed"
+            },
+            {
+              "agent": "closure",
+              "trust": "well_formed"
+            }
+          ],
+          "contradiction": false,
+          "downgrades": [],
+          "confidence_cap": 0.55
+        },
+        "evidence.verdict_gate": {
+          "basis": [
+            {
+              "agent": "pumping",
+              "trust": "not_verified"
+            },
+            {
+              "agent": "nerode",
+              "trust": "well_formed"
+            },
+            {
+              "agent": "closure",
+              "trust": "well_formed"
+            }
+          ],
+          "contradiction": false,
+          "downgrades": [],
+          "confidence_cap": 0.55
+        },
+        "evidence.reasoning": {
+          "module": "reasoning_agent",
+          "status": "success",
+          "verdict": "non_regular",
+          "confidence": 0.97,
+          "best_proof": "nerode",
+          "consolidated_proof": "Язык L грамматики S → SaSb | ε | A, A → bb | aa | bSb не является регулярным.\n\n1) Инвариант. Индукцией по выводу докажем, что для любого слова w, выводимого из S или A, выполнено |w|_a ≤ 3|w|_b + 2.\n- S → ε: 0 ≤ 2.\n- A → aa: 2 ≤ 2.\n- A → bb: 0 ≤ 8.\n- A → bSb: если |u|_a ≤ 3|u|_b + 2, то |bub|_a = |u|_a ≤ 3(|u|_b + 2) + 2.\n- S → A: инвариант наследуется.\n- S → SaSb: |uavb|_a = |u|_a + |v|_a + 1 ≤ 3|u|_b + 2 + 3|v|_b + 2 + 1 = 3(|u|_b + |v|_b + 1) + 2 = 3|uavb|_b + 2.\n\n2) Принадлежность. Индукцией по i покажем, что a^{3i+2} b^i ∈ L для всех i ≥ 0.\n- База: S ⇒ A ⇒ aa.\n- Шаг: S ⇒ SaSb. Левое S ⇒ A ⇒ aa, правое S ⇒* a^{3(i-1)+2} b^{i-1} по предположению индукции. Получаем aa·a·a^{3i-1} b^{i-1}·b = a^{3i+2} b^i.\n\n3) Различимость (теорема Майхилла-Нероуда). Рассмотрим семейство слов a^{3i+2}, i ≥ 0. Пусть i < j, возьмём контекст z = b^i.\n- a^{3i+2} b^i ∈ L по п. 2.\n- a^{3j+2} b^i ∉ L: в нём 3j+2 > 3i+2 букв a при i буквах b, что нарушает инвариант п. 1.\nЗначит, слова a^{3i+2} попарно неэквивалентны по Нероуду. Отношение ≡_L имеет бесконечный индекс, и по теореме Майхилла-Нероуда L не распознаётся никаким конечным автоматом.\n\n4) Независимое подтверждение леммой о накачке. Пусть n — длина накачки, w = a^{3n+2} b^n ∈ L, |w| ≥ n. При любом разбиении w = xyz с |xy| ≤ n, |y| ≥ 1 имеем y = a^j, 1 ≤ j ≤ n. Тогда xy²z = a^{3n+2+j} b^n. Здесь число a больше 3n+2, что нарушает инвариант, поэтому xy²z ∉ L. Противоречие с леммой о накачке.\n\n5) Подтверждение через замкнутость. L ∩ a*b* = {a^m b^k | m ≡ k (mod 2), m ≤ 3k+2}. Для гомоморфизма g(x) = a⁶, g(y) = b² имеем g(x^i y^j) = a^{6i} b^{2j}. Условие 6i ≤ 3·2j + 2 равносильно i ≤ j, чётность выполнена всегда. Поэтому g⁻¹(L) ∩ x*y* = {x^i y^j | i ≤ j}. Этот язык нерегулярен (накачка слова x^p y^p). Регулярные языки замкнуты относительно обратного гомоморфизма и пересечения с регулярным языком, поэтому L не может быть регулярным.",
+          "oracle_validation": "not_applicable (ДКА не строился: вердикт — нерегулярен)",
+          "issues_found": [
+            "Агент замыкания: опечатка в выкладке «6i ≤ 2j+2». Верно 6i ≤ 3·(2j)+2 = 6j+2, так как g(y^j) = b^{2j}. Итог {x^i y^j | i ≤ j} при этом верен, и доказательство накачкой слова x^p y^p корректно.",
+            "Критическая ошибка proof_checker по доказательству замыкания ложна. Проверяющий подставил k = 2 вместо k = 2j: x²y² ↦ a¹²b⁴, а не a¹²b². Проверка 12 ≤ 14 выполняется. Вердикт «WRONG» отклонён.",
+            "Альтернатива proof_checker (g(x) = a³, g(y) = b) некорректна. Прообраз x^i y^j переходит в a^{3i}b^j, и нужно ещё условие чётности 3i ≡ j (mod 2), поэтому прообраз не равен {i ≤ j}.",
+            "Агент накачки: в индукции шага подсчёта смешаны счётчики a и b («2+1+(3k-1)+1»). Сам вывод верен, это косметическая ошибка.",
+            "Анализатор грамматики: арифметическая описка «bb даёт 0 ≤ 6» вместо 0 ≤ 8. На вывод не влияет.",
+            "Агент замыкания ссылается на отсутствие a⁷b среди слов длины 8, но список сгенерированных слов доходит только до длины 6. Сам факт верен по инварианту."
+          ],
+          "action": "proceed_to_formalizer",
+          "retry_context": null,
+          "hints_for_human": [
+            "Установлено: L ∩ a*b* = {aᵐbᵏ | m ≡ k (mod 2), 0 ≤ m ≤ 3k+2}. Это НЕ {aⁿbⁿ}: например, bb, aa, aaaaab ∈ L.",
+            "Инвариант 1: |w|_a ≡ |w|_b (mod 2) для всех w ∈ L; все слова L имеют чётную длину.",
+            "Инвариант 2: |w|_a ≤ 3|w|_b + 2. Именно он даёт нерегулярность: число a ограничено линейной функцией от числа b.",
+            "Ключевое семейство: a^{3i+2} b^i ∈ L — максимальное количество a при i буквах b. Оно получается правилом S → SaSb с левым S ⇒ aa.",
+            "Контрпример к наивной гипотезе «m ≡ k (mod 2)»: a⁷b ∉ L, хотя 7 и 1 одной чётности.",
+            "Предупреждение: гомоморфизм g(x) = a³, g(y) = b не подходит — прообраз зависит ещё и от чётности. Используйте g(x) = a⁶, g(y) = b² (прообраз {x^i y^j | i ≤ j}) или обходитесь без гомоморфизма.",
+            "Рекомендация для экзамена: самое короткое строгое доказательство — через теорему Майхилла-Нероуда. Нужны три шага: инвариант |w|_a ≤ 3|w|_b + 2, принадлежность a^{3i+2}b^i ∈ L и различение a^{3i+2}, a^{3j+2} контекстом b^i."
+          ],
+          "errors": null
+        },
+        "evidence.needs_human_review": {
+          "__absent__": true
+        }
+      },
+      "usage": {
+        "calls": 1,
+        "input_tokens": 10853,
+        "output_tokens": 103185,
+        "estimated_cost_usd": 2.107112
+      }
+    }
+  },
+  "confidence": 0.98,
+  "errors": [],
+  "verdict_gate": {
+    "basis": [
+      {
+        "agent": "pumping",
+        "trust": "not_verified"
+      },
+      {
+        "agent": "nerode",
+        "trust": "well_formed"
+      },
+      {
+        "agent": "closure",
+        "trust": "well_formed"
+      },
+      {
+        "agent": "formalizer",
+        "trust": "verified",
+        "basis": "lean_proof"
+      }
+    ],
+    "contradiction": false,
+    "downgrades": [],
+    "confidence_cap": 0.98
+  },
+  "usage": {
+    "by_model": {
+      "claude-sonnet-5-5": {
+        "calls": 1,
+        "input_tokens": 3189,
+        "output_tokens": 415,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "estimated_cost_usd": 0.010528
+      },
+      "claude-opus-5-5": {
+        "calls": 6,
+        "input_tokens": 62470,
+        "output_tokens": 31588,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "estimated_cost_usd": 0.88164
+      }
+    },
+    "total_tokens": 97662,
+    "estimated_cost_usd": 0.892168,
+    "calls": 7,
+    "input_tokens": 65659,
+    "output_tokens": 32003,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0,
+    "per_agent": {
+      "classifier": {
+        "calls": 1,
+        "total_tokens": 3604,
+        "estimated_cost_usd": 0.010528,
+        "by_model": {
+          "claude-sonnet-5-5": {
+            "calls": 1,
+            "input_tokens": 3189,
+            "output_tokens": 415,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "estimated_cost_usd": 0.010528
+          }
+        }
+      },
+      "grammar_analyzer": {
+        "calls": 1,
+        "total_tokens": 12895,
+        "estimated_cost_usd": 0.094988,
+        "by_model": {
+          "claude-opus-5-5": {
+            "calls": 1,
+            "input_tokens": 10182,
+            "output_tokens": 2713,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "estimated_cost_usd": 0.094988
+          }
+        }
+      },
+      "nerode": {
+        "calls": 1,
+        "total_tokens": 14311,
+        "estimated_cost_usd": 0.122108,
+        "by_model": {
+          "claude-opus-5-5": {
+            "calls": 1,
+            "input_tokens": 10257,
+            "output_tokens": 4054,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "estimated_cost_usd": 0.12210800000000002
+          }
+        }
+      },
+      "closure": {
+        "calls": 1,
+        "total_tokens": 17997,
+        "estimated_cost_usd": 0.208964,
+        "by_model": {
+          "claude-opus-5-5": {
+            "calls": 1,
+            "input_tokens": 9436,
+            "output_tokens": 8561,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "estimated_cost_usd": 0.20896399999999998
+          }
+        }
+      },
+      "pumping": {
+        "calls": 1,
+        "total_tokens": 18375,
+        "estimated_cost_usd": 0.198828,
+        "by_model": {
+          "claude-opus-5-5": {
+            "calls": 1,
+            "input_tokens": 10542,
+            "output_tokens": 7833,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "estimated_cost_usd": 0.198828
+          }
+        }
+      },
+      "proof_checker": {
+        "calls": 1,
+        "total_tokens": 13423,
+        "estimated_cost_usd": 0.132876,
+        "by_model": {
+          "claude-opus-5-5": {
+            "calls": 1,
+            "input_tokens": 8474,
+            "output_tokens": 4949,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "estimated_cost_usd": 0.13287600000000002
+          }
+        }
+      },
+      "reasoning": {
+        "calls": 1,
+        "total_tokens": 17057,
+        "estimated_cost_usd": 0.123876,
+        "by_model": {
+          "claude-opus-5-5": {
+            "calls": 1,
+            "input_tokens": 13579,
+            "output_tokens": 3478,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "estimated_cost_usd": 0.12387600000000001
+          }
+        }
+      }
+    },
+    "structured_output_calls": 6,
+    "extraction_fallback_calls": 1
+  },
+  "verdict": "non_regular"
+}
