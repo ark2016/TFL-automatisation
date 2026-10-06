@@ -79,12 +79,13 @@ def test_unknown_oracle_membership_prevents_equivalence_pass(monkeypatch, unknow
     assert trust is None
 
 
+# A task for which no word oracle can be built (natural-language spec): step 2
+# must leave these claims at well_formed. Explicit-grammar tasks (Formats 2/3)
+# have an oracle -- see test_word_oracle_grammar.py.
 IR_SIMPLE = {
-    "task_type": "ll_check_grammar",
+    "task_type": "ll_check_language",
     "source_text": "test",
-    "grammar": GRAMMAR_LL1,
-    "question": "is_ll_k",
-    "k": None,
+    "language_spec": {"kind": "natural", "description": "test language"},
 }
 
 

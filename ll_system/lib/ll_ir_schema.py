@@ -227,11 +227,39 @@ def _validate_base_grammar_kind(spec: dict, path: str) -> None:
 # Top-level LL language_spec validation
 # ---------------------------------------------------------------------------
 
+def _check_no_reserved_symbols(symbols: Any, where: str) -> None:
+    """Reject '$' (end-of-input marker) and 'ε' (empty word) among `symbols`."""
+    if not isinstance(symbols, list):
+        return
+    used = {s for s in symbols if isinstance(s, str)} & RESERVED_SYMBOLS
+    _ll_check(
+        not used,
+        f"{where}: symbols {sorted(used)} are reserved (end-of-input marker "
+        "'$' and epsilon 'ε') and cannot be part of the alphabet",
+    )
+
+
+def _check_spec_alphabets(spec: dict, path: str) -> None:
+    """Reserved-symbol check for every alphabet-like field of a language_spec:
+    the language alphabet, variable domain alphabets and enum values."""
+    _check_no_reserved_symbols(spec.get("alphabet"), f"{path}.alphabet")
+    variables = spec.get("variables")
+    if isinstance(variables, list):
+        for i, var in enumerate(variables):
+            domain = var.get("domain") if isinstance(var, dict) else None
+            if isinstance(domain, dict):
+                for key in ("alphabet", "values"):
+                    _check_no_reserved_symbols(
+                        domain.get(key), f"{path}.variables[{i}].domain.{key}",
+                    )
+
+
 def _validate_ll_language_spec(spec: Any, path: str) -> None:
     """Validate an LL language_spec (includes LL-specific kinds)."""
     _ll_check(isinstance(spec, dict), f"{path}: language_spec must be an object")
     kind = spec.get("kind")
     _ll_check(kind in _LL_LANG_KINDS, f"{path}: unknown kind '{kind}'")
+    _check_spec_alphabets(spec, path)
 
     if kind == "set_builder":
         _validate_set_builder(spec, path)

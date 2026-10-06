@@ -1,4 +1,8 @@
-"""Word-membership oracle for ll_system `set_builder` (Format 1) language specs.
+"""Word-membership oracle for ll_system IRs: `set_builder` (Format 1) specs and
+explicit grammars (Format 2/3, via CYK -- see `oracle_from_ll_ir`).
+
+The rest of this docstring describes the `set_builder` part.
+
 
 `cfl_system.lib.cfl_oracle.cfl_oracle_from_ir` has no `set_builder` kind (that
 notation is specific to ll_system's Format 1 IR — CFL specs use
@@ -478,15 +482,82 @@ def _build_oracle(compiled: _CompiledSpec) -> Callable[[str], bool]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def oracle_from_ll_ir(ir: dict) -> Callable[[str], bool] | None:
-    """Build a membership oracle (word -> bool) from an ll_system IR.
+def task_grammar_from_ir(ir: dict) -> dict | None:
+    """The explicit grammar given by the task, if any.
 
-    Returns None when `ir["language_spec"]["kind"] != "set_builder"`, or the
-    spec's `template`/`constraints` use a shape this module doesn't
-    understand — never raises for a malformed-but-well-typed IR.
+    Format 2 (`ll_check_grammar_lang`): `language_spec` of kind "grammar".
+    Format 3 (`ll_check_grammar`): the top-level `grammar`.
+    Returns the raw (un-normalized) grammar dict, or None.
     """
     if not isinstance(ir, dict):
         return None
+    spec = ir.get("language_spec")
+    if isinstance(spec, dict) and spec.get("kind") == "grammar":
+        return spec
+    if ir.get("task_type") == "ll_check_grammar":
+        g = ir.get("grammar")
+        if isinstance(g, dict):
+            return g
+    return None
+
+
+def _grammar_oracle(grammar: dict) -> Callable[[str], bool] | None:
+    """Exact CYK membership oracle for an explicit grammar.
+
+    Reuses the CNF/CYK machinery of cfl_system (via `grammar_transforms`'
+    `_grammar_membership`, which also maps the "ε" rhs spelling to []).
+    Returns None -- "no oracle", never "not in L" -- when the grammar is not
+    a character-level grammar over declared symbols that the CYK code can
+    interpret (multi-character or reserved terminals, conversion failure).
+    """
+    try:
+        from ll_system.lib.grammar_transforms import _grammar_membership
+        from ll_system.lib.utils import RESERVED_SYMBOLS
+
+        terminals = grammar.get("terminals")
+        nonterminals = grammar.get("nonterminals")
+        if not isinstance(terminals, list) or not isinstance(nonterminals, list):
+            return None
+        if any(not isinstance(t, str) or len(t) != 1 for t in terminals):
+            return None
+        if (set(terminals) | set(nonterminals)) & RESERVED_SYMBOLS:
+            return None
+        accepts = _grammar_membership(grammar)
+    except Exception:
+        return None
+
+    def oracle(word: str) -> bool | None:
+        if not isinstance(word, str):
+            return None
+        if any(ch not in terminals for ch in word):
+            return False  # a symbol outside the grammar's alphabet is never generated
+        try:
+            return bool(accepts(word))
+        except Exception:
+            return None  # unknown, not "not in L"
+
+    return oracle
+
+
+def oracle_from_ll_ir(ir: dict) -> Callable[[str], bool] | None:
+    """Build a membership oracle (word -> bool) from an ll_system IR.
+
+    - Format 1 (`language_spec.kind == "set_builder"`): the template matcher
+      of this module.
+    - Format 2/3 (explicit grammar: `language_spec.kind == "grammar"` or the
+      top-level `grammar` of an `ll_check_grammar` task): CYK over the CNF of
+      that grammar.
+
+    Returns None when neither applies, or the spec uses a shape this module
+    doesn't understand -- never raises for a malformed-but-well-typed IR.
+    The oracle itself may answer None for a word (unknown); callers must not
+    read that as "not in L" (docs/VERDICT_POLICY.md section 4).
+    """
+    if not isinstance(ir, dict):
+        return None
+    grammar = task_grammar_from_ir(ir)
+    if grammar is not None:
+        return _grammar_oracle(grammar)
     spec = ir.get("language_spec")
     if not isinstance(spec, dict):
         return None
@@ -588,6 +659,27 @@ def _generate(
         return
 
 
+def _generate_grammar_words(grammar: dict, max_len: int) -> list[str]:
+    """Words of length <= max_len derived from an explicit grammar.
+
+    Best-effort (bounded sentential-form BFS: the result may omit words) and
+    filtered through the exact CYK oracle, so every returned word is in L.
+    Returns [] when no oracle can be built.
+    """
+    oracle = _grammar_oracle(grammar)
+    if oracle is None:
+        return []
+    try:
+        from ll_system.lib.grammar_transforms import _generate_words
+        candidates = _generate_words(grammar, max_len)
+    except Exception:
+        return []
+    return sorted(
+        (w for w in candidates if len(w) <= max_len and oracle(w) is True),
+        key=lambda w: (len(w), w),
+    )
+
+
 def generate_words(ir: dict, max_len: int) -> list[str]:
     """Enumerate words of length <= max_len generated by a `set_builder` IR.
 
@@ -602,6 +694,9 @@ def generate_words(ir: dict, max_len: int) -> list[str]:
     """
     if not isinstance(ir, dict) or not isinstance(max_len, int) or max_len < 0:
         return []
+    grammar = task_grammar_from_ir(ir)
+    if grammar is not None:
+        return _generate_grammar_words(grammar, max_len)
     spec = ir.get("language_spec")
     if not isinstance(spec, dict):
         return []
