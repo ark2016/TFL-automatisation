@@ -49,6 +49,10 @@ REQUIRED_KEYS: dict[str, frozenset[str]] = {
         "action", "verdict", "confidence", "primary_evidence", "summary",
         "retry_plan", "hints_for_human", "errors",
     }),
+    # R-Lean's proof-body agent (prompts/dcfl_lean_formalizer.md): flat
+    # object, no "agent" key (unlike cfl's) -- matches the prompt's own
+    # "## Output format" block exactly.
+    "lean_formalizer": frozenset({"proof_body", "lemmas_used", "notes"}),
 }
 
 # input_parser's output shape depends on the task IR it produces -- no
@@ -232,6 +236,11 @@ _FIELD_SCHEMAS: dict[str, dict[str, dict]] = {
         })),
         "hints_for_human": schema_string_array(),
         "errors": schema_string_array(),
+    },
+    "lean_formalizer": {
+        "proof_body": schema_string(),
+        "lemmas_used": schema_string_array(),
+        "notes": schema_string(),
     },
 }
 

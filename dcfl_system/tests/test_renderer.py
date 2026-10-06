@@ -258,3 +258,42 @@ def test_panel_dcfl_pumping_shows_word_instances():
     panel = _panel_dcfl_pumping(output)
     assert "Конкретные инстансы" in panel
     assert "aaaabbbb" in panel
+
+
+# ---------------------------------------------------------------------------
+# result["formalization"] (Lean block)
+# ---------------------------------------------------------------------------
+
+LEAN_BLOCK = {
+    "status": "proved", "direction": "dcfl", "elapsed": 12.3,
+    "statement": {"imports": "import Mathlib", "alphabet_decl": "inductive Letter | a | b",
+                  "language_decl": "def L : Language Letter := ∅",
+                  "theorem_decl": "theorem tfl_main : is_DCF L", "name": "tfl_main"},
+    "proof_body": "exact FANCY_PROOF_BODY", "axioms": ["propext", "Quot.sound"],
+    "attempts": [{"attempt": 1, "status": "error", "errors": ["boom"]},
+                 {"attempt": 2, "status": "proved", "errors": []}],
+    "errors": [],
+}
+
+
+def test_markdown_shows_lean_block(sample_result):
+    md = render_markdown({**sample_result, "formalization": LEAN_BLOCK})
+    assert "Формализация (Lean 4)" in md
+    assert "Статус: proved" in md and "Направление: dcfl" in md and "Попыток: 2" in md
+    assert "theorem tfl_main : is_DCF L" in md
+    assert "exact FANCY_PROOF_BODY" in md
+    assert "`propext`" in md and "`Quot.sound`" in md
+
+
+def test_html_shows_lean_block_escaped(sample_result):
+    fm = {**LEAN_BLOCK, "proof_body": "exact <b>x</b>"}
+    html = render_html({**sample_result, "formalization": fm})
+    assert "Формализация (Lean 4)" in html
+    assert "exact &lt;b&gt;x&lt;/b&gt;" in html
+    assert "exact <b>x</b>" not in html
+
+
+@pytest.mark.parametrize("fm", [None, {}])
+def test_no_lean_block_when_absent(sample_result, fm):
+    assert "Формализация (Lean 4)" not in render_markdown({**sample_result, "formalization": fm})
+    assert "Формализация (Lean 4)" not in render_html({**sample_result, "formalization": fm})

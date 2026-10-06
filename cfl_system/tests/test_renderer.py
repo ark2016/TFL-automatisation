@@ -249,3 +249,35 @@ class TestRenderToFile:
         render_to_file(CFL_RESULT, path, fmt="html")
         content = open(path, encoding="utf-8").read()
         assert "<!DOCTYPE html>" in content
+
+
+# ---------------------------------------------------------------------------
+# result["formalization"] (Lean block)
+# ---------------------------------------------------------------------------
+
+LEAN_BLOCK = {
+    "status": "proved", "direction": "non_cfl", "elapsed": 5.0,
+    "statement": {"imports": "import Mathlib", "alphabet_decl": "", "language_decl": "def L := 0",
+                  "theorem_decl": "theorem tfl_main : ¬ L.IsContextFree", "name": "tfl_main"},
+    "proof_body": "exact FANCY_PROOF_BODY", "axioms": ["propext"],
+    "attempts": [{"attempt": 1, "status": "proved", "errors": []}], "errors": [],
+}
+
+
+def test_markdown_shows_lean_block():
+    md = render_markdown({**FULL_RESULT, "formalization": LEAN_BLOCK})
+    assert "Формализация (Lean 4)" in md
+    assert "Статус: proved" in md and "Направление: non_cfl" in md and "Попыток: 1" in md
+    assert "theorem tfl_main : ¬ L.IsContextFree" in md
+    assert "exact FANCY_PROOF_BODY" in md and "`propext`" in md
+
+
+def test_html_shows_lean_block_escaped():
+    html = render_html({**FULL_RESULT, "formalization": {**LEAN_BLOCK, "proof_body": "exact <b>x</b>"}})
+    assert "Формализация (Lean 4)" in html
+    assert "exact &lt;b&gt;x&lt;/b&gt;" in html
+
+
+def test_no_lean_block_when_absent():
+    assert "Формализация (Lean 4)" not in render_markdown(FULL_RESULT)
+    assert "Формализация (Lean 4)" not in render_html(FULL_RESULT)

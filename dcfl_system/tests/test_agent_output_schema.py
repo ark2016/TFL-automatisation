@@ -74,3 +74,13 @@ def test_schema_for_builds_a_closed_top_level_schema():
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(REQUIRED_KEYS["classifier"])
     assert set(schema["properties"]) == set(REQUIRED_KEYS["classifier"])
+
+
+def test_lean_formalizer_schema_matches_its_flat_contract():
+    schema = schema_for("lean_formalizer")
+    assert schema is not None
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == {"proof_body", "lemmas_used", "notes"}
+    assert set(schema["required"]) == set(schema["properties"])
+    assert schema["properties"]["proof_body"]["type"] == "string"
+    assert schema["properties"]["lemmas_used"]["type"] == "array"

@@ -70,6 +70,7 @@ def _loads_pseudo_union_schema(block: str) -> object:
 @pytest.mark.parametrize("agent_name,filename", [
     ("classifier", "classifier.md"),
     ("reasoning", "reasoning_agent.md"),
+    ("lean_formalizer", "dcfl_lean_formalizer.md"),
 ])
 def test_agent_output_schema_matches_prompt_output_format_exactly(agent_name, filename):
     """classifier/reasoning have a closed output_config.format schema too
