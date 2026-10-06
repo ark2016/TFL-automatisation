@@ -466,14 +466,17 @@ def _match(
     return False  # pragma: no cover — exhaustive Part union above
 
 
-def _build_oracle(compiled: _CompiledSpec) -> Callable[[str], bool]:
-    def oracle(word: str) -> bool:
+def _build_oracle(compiled: _CompiledSpec) -> Callable[[str], bool | None]:
+    """Three-valued oracle: True / False, or None = unknown (non-string input
+    or exhausted step budget; docs/VERDICT_POLICY.md section 4: None is never
+    "not in L")."""
+    def oracle(word: str) -> bool | None:
         if not isinstance(word, str):
-            return False
+            return None
         try:
             return _match(word, 0, compiled.parts, 0, {}, {}, compiled.constraints, [0])
         except _StepBudgetExceeded:
-            return False
+            return None
 
     return oracle
 
@@ -539,7 +542,7 @@ def _grammar_oracle(grammar: dict) -> Callable[[str], bool] | None:
     return oracle
 
 
-def oracle_from_ll_ir(ir: dict) -> Callable[[str], bool] | None:
+def oracle_from_ll_ir(ir: dict) -> Callable[[str], bool | None] | None:
     """Build a membership oracle (word -> bool) from an ll_system IR.
 
     - Format 1 (`language_spec.kind == "set_builder"`): the template matcher
@@ -714,7 +717,7 @@ def generate_words(ir: dict, max_len: int) -> list[str]:
             words.add(word)
     except _StepBudgetExceeded:
         pass
-    return sorted((w for w in words if oracle(w)), key=lambda w: (len(w), w))
+    return sorted((w for w in words if oracle(w) is True), key=lambda w: (len(w), w))
 
 
 if __name__ == "__main__":  # pragma: no cover — manual smoke test

@@ -75,23 +75,32 @@ class TestClosureVerification(unittest.TestCase):
     def test_exhausted_budget_returns_unknown_and_stops_querying(self):
         calls = []
 
+        # Deterministic fake clock (no wall-clock dependence): every oracle
+        # query "takes" 0.02s, so the 0.05s budget is exhausted after a few.
+        now = [1000.0]
+
+        class _FakeTime:
+            @staticmethod
+            def monotonic():
+                return now[0]
+
         def slow_oracle(word):
             calls.append(word)
-            time.sleep(0.02)
+            now[0] += 0.02
             return True
 
-        before = threading.active_count()
-        result = _estimate_index_with_timeout(
-            slow_oracle, ["a", "b"], max_depth=8, timeout=0.05,
-        )
+        before = set(threading.enumerate())
+        with patch("agent_system.graph._time", _FakeTime):
+            result = _estimate_index_with_timeout(
+                slow_oracle, ["a", "b"], max_depth=8, timeout=0.05,
+            )
 
         self.assertEqual(result["estimated_index"], "unknown")
         self.assertEqual(result["confidence"], 0)
-        # Synchronous: no helper thread left behind, and the search stopped.
-        self.assertEqual(threading.active_count(), before)
-        n = len(calls)
-        time.sleep(0.1)
-        self.assertEqual(len(calls), n)
+        # Synchronous: no helper thread of ours left behind, and the search stopped.
+        self.assertFalse(set(threading.enumerate()) - before)
+        self.assertGreaterEqual(len(calls), 3)  # did query until the budget ran out
+        self.assertLess(len(calls), 10)         # ...and then stopped
 
     def test_closure_check_is_cached_per_claim(self):
         from agent_system.graph import verify_closure_node

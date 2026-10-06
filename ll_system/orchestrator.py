@@ -29,7 +29,11 @@ from typing import Any, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 
-from ll_system.config import MAX_CALLS_PER_AGENT
+from ll_system.config import (
+    JSON_REPAIR_MAX_TOKENS,
+    JSON_REPAIR_TIMEOUT_S,
+    MAX_CALLS_PER_AGENT,
+)
 from ll_system.lib.ll_ir_schema import validate_ll_ir
 from ll_system.lib.preprocess import compute_preprocess_hints
 from ll_system.lib.ll_table_builder import check_ll_k, find_min_ll_k
@@ -324,12 +328,16 @@ class LiveRunner:
         t0 = _time.monotonic()
         request_kwargs = self._build_request_kwargs(
             model=self._json_repair_model,
-            max_tokens=min(len(raw_text) // 2 + 2000, 8000),
+            max_tokens=min(len(raw_text) // 2 + 2000, JSON_REPAIR_MAX_TOKENS),
             temperature=0.0, system_prompt=system, user_msg=user_msg,
         )
         try:
             with get_concurrency_semaphore():
-                response = self.client.messages.create(**request_kwargs)
+                # explicit timeout: lets the SDK accept a non-streaming call
+                # with a large max_tokens (see config.JSON_REPAIR_MAX_TOKENS)
+                response = self.client.messages.create(
+                    **request_kwargs, timeout=JSON_REPAIR_TIMEOUT_S,
+                )
         except Exception as exc:
             logger.warning("[%s] JSON repair (Haiku) failed: %s", agent_name, exc)
             return None
