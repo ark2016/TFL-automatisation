@@ -163,7 +163,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "complement_language": "Sigma* \\ L = {w | count_a(w) != count_b(w)}",
   "complement_is_regular": false,
   "complement_proof_method": "Apply pumping lemma to the complement.",
-  "note": "Actually the complement of {count_a = count_b} is also non-regular, so this confirms L is non-regular."
+  "note": "The complement of {count_a = count_b} is also non-regular, so this confirms L is non-regular."
 }
 ```
 

@@ -1,5 +1,4 @@
-"""Unit tests for ``UsageTracker`` (agent_system/lib/llm_client.py, TODO.md
-§3): per-model / per-agent aggregation, structured-output vs fallback call
+"""Unit tests for ``UsageTracker`` (agent_system/lib/llm_client.py): per-model / per-agent aggregation, structured-output vs fallback call
 counts, and cost estimation -- exercised directly (no API/FakeAnthropic
 needed) since :meth:`UsageTracker.record` takes plain values."""
 

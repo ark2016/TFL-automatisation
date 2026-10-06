@@ -1,4 +1,4 @@
-"""``MODEL_PRICING`` / ``estimate_cost_usd`` (TODO.md §3 M item 2).
+"""``MODEL_PRICING`` / ``estimate_cost_usd``.
 
 Pricing (USD per 1M tokens, 2026-06-24 snapshot -- update by hand when
 prices change): claude-haiku-4-5 1.00 / 5.00, claude-sonnet-5-5 (and legacy claude-sonnet-5) 2.00 / 10.00,

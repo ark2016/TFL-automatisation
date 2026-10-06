@@ -1,10 +1,9 @@
-"""Tests for `_extract_json` in agent_system/lib/llm_client.py (TODO.md §3,
-§5): raw JSON, fenced JSON (including nested braces), and JSON embedded in
+"""Tests for `_extract_json` in agent_system/lib/llm_client.py: raw JSON, fenced JSON (including nested braces), and JSON embedded in
 prose that itself contains brace characters -- both mathematical
 set-builder notation (``{aⁿbⁿ | n≥0}``) and a bare ``{}`` literal.
 
 `llm_client.py` is owned by a parallel change in this branch (structured
-outputs / TODO.md §3) and is out of scope here -- these tests document its
+outputs) and is out of scope here -- these tests document its
 *current* behavior rather than modify it. A ``{...}``/``{}`` literal
 appearing in prose BEFORE a fenced ```json block, or inside a JSON string
 value, is already handled correctly (the fenced-block regex only looks
@@ -55,7 +54,7 @@ class TestRawAndFencedJson(unittest.TestCase):
 class TestJsonEmbeddedInProseWithBraces(unittest.TestCase):
     """Set-builder notation like ``{aⁿbⁿ | n≥0}`` and a bare ``{}`` (e.g. for
     the empty language/word) use literal ``{``/``}`` inside ordinary prose
-    (TODO.md §3's own examples) -- they must not derail the scan away from
+    (examples from the audit backlog) -- they must not derail the scan away from
     the real JSON object."""
 
     def test_set_builder_notation_before_fenced_json(self):
@@ -87,7 +86,7 @@ class TestJsonEmbeddedInProseWithBraces(unittest.TestCase):
 
     @pytest.mark.xfail(
         reason=(
-            "Known limitation (TODO.md §3, owned by a parallel llm_client.py "
+            "Known limitation (owned by a parallel llm_client.py "
             "change): a brace pair in prose BEFORE an unfenced (no ```json) "
             "JSON object is included in the first-'{'-to-last-'}' substring "
             "the fallback strategy parses, so the whole thing fails to parse "
@@ -106,7 +105,7 @@ class TestJsonEmbeddedInProseWithBraces(unittest.TestCase):
 
     @pytest.mark.xfail(
         reason=(
-            "Known limitation (TODO.md §3, owned by a parallel llm_client.py "
+            "Known limitation (owned by a parallel llm_client.py "
             "change): same first-'{'-to-last-'}' issue as the set-builder "
             "case above, for a bare '{}' before an unfenced JSON object."
         ),

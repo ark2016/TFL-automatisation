@@ -1,4 +1,4 @@
-"""Structured outputs (output_config.format) + fallback (TODO.md §3 M).
+"""Structured outputs (output_config.format) + fallback.
 
 Exercises ``AnthropicClient`` directly with ``FakeAnthropic`` -- this is the
 one place every pipeline's LiveRunner/LLMRunner funnels through, so a test
@@ -46,7 +46,7 @@ def _client() -> AnthropicClient:
 
 @pytest.fixture(autouse=True)
 def _clear_schema_rejection_memory():
-    """`_schema_rejected_models` is process-global (TODO.md §3 M: remembered
+    """`_schema_rejected_models` is process-global (remembered
     across calls on purpose) -- reset it around every test so one test's
     rejection can't leak into another's assertions."""
     llm_client._schema_rejected_models.clear()
@@ -258,7 +258,7 @@ def test_no_schema_requested_verbose_flag_is_plain_so_no():
 
 def test_schema_rejection_verbose_flag_names_the_reason():
     """A schema that gets rejected this call -- the verbose flag must say
-    *why* it fell back (TODO.md §3 M: distinguish "never had a schema"
+    *why* it fell back (distinguish "never had a schema"
     from "requested but the API rejected it"), not just ``so=no``."""
     fake = FakeAnthropic([
         raises_turn(fatal_error(400, "output_config.format is not supported for this model")),

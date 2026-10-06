@@ -62,7 +62,7 @@ def test_request_params(runner):
 
 
 def test_request_params_with_output_schema(runner):
-    """output_schema (TODO.md §3 M) adds output_config.format on both
+    """output_schema adds output_config.format on both
     adaptive and legacy models, without disturbing the rest of the kwargs."""
     schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
@@ -93,7 +93,7 @@ def test_json_read_past_thinking_block(runner):
 
     assert out["evidence"]["verdict"] == "regular"
     kwargs = runner._client.messages.stream.call_args.kwargs
-    # Structured outputs (TODO.md §3 M): classifier has a closed contract,
+    # Structured outputs: classifier has a closed contract,
     # so every call also carries output_config.format alongside effort.
     assert kwargs["output_config"]["effort"] == EFFORT["classifier"]
     assert kwargs["output_config"]["format"]["type"] == "json_schema"
@@ -102,7 +102,7 @@ def test_json_read_past_thinking_block(runner):
 
 def test_refusal_returns_agent_error_with_one_call(runner):
     """A safety-classifier decline (stop_reason=refusal) becomes an
-    agent_error dict, not a silent None (TODO.md §2) -- and run_agent must
+    agent_error dict, not a silent None -- and run_agent must
     not issue a second "please output valid JSON" call, since a refusal is
     not a parsing problem."""
     message = SimpleNamespace(
@@ -121,9 +121,9 @@ def test_refusal_returns_agent_error_with_one_call(runner):
 
 def test_api_error_returns_agent_error_after_retries_exhausted(runner, monkeypatch):
     """A transient API error (network, overloaded, ...) is retried by the
-    shared client's backoff loop (TODO.md §3) and, once that budget is
+    shared client's backoff loop and, once that budget is
     exhausted, becomes an agent_error dict recorded in state["errors"] by
-    graph.py -- instead of None disappearing silently (TODO.md §2) -- and
+    graph.py -- instead of None disappearing silently -- and
     is not retried with a JSON-only instruction, since the problem isn't
     the JSON."""
     monkeypatch.setattr(llm_client.time, "sleep", lambda _seconds: None)
@@ -148,7 +148,7 @@ def test_api_error_returns_agent_error_after_retries_exhausted(runner, monkeypat
 def test_fatal_api_errors_propagate_without_retry(runner, exc_cls, status):
     """A dead key / no access / unknown model can't be fixed by retrying or
     JSON-repairing -- run_agent must let it propagate so the pipeline fails
-    fast instead of silently degrading (TODO.md §2)."""
+    fast instead of silently degrading."""
     runner._client = MagicMock()
     runner._client.messages.stream.side_effect = _api_error(exc_cls, status)
 
@@ -160,7 +160,7 @@ def test_fatal_api_errors_propagate_without_retry(runner, exc_cls, status):
 
 def test_student_notes_appear_only_once(runner):
     """student_notes must not be duplicated in both the system prompt and
-    the user JSON (TODO.md §3) -- kept only in the system prompt's labelled
+    the user JSON -- kept only in the system prompt's labelled
     section, stripped from the serialized input_data."""
     message = SimpleNamespace(
         stop_reason="end_turn",

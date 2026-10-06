@@ -1,6 +1,5 @@
 """Tests for lib/claim_verifier.py: alphabet taken from the IR (not
-hardcoded [ab]), word-bounded markers, and "in L" not matching "in length"
-(TODO.md §3)."""
+hardcoded [ab]), word-bounded markers, and "in L" not matching "in length"."""
 
 from agent_system.lib.claim_verifier import _extract_claims, verify_claims
 

@@ -1,4 +1,4 @@
-"""``result["usage"]`` (TODO.md §3) -- present in every ``graph.run_pipeline``
+"""``result["usage"]`` -- present in every ``graph.run_pipeline``
 result (even with no live agent_runner), and consistent with the number of
 calls an ``LLMRunner`` actually made through the shared ``FakeAnthropic``
 test double."""

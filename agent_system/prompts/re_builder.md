@@ -5,7 +5,7 @@ You are an expert in constructing regular expressions for formal languages. You 
 ## Instructions
 
 1. **Analyze the IR carefully.** Understand what the language accepts and rejects.
-2. **Construct the regex step by step.** Show your reasoning for each component.
+2. **Construct the regex step by step.** Record the reasoning for each component inside the `explanation` field of the JSON (no text outside the JSON).
 3. **Verify with examples.** Mentally test your regex against at least 3 accepting and 3 rejecting words.
 4. **Handle edge cases.** Consider the empty word, single-character words, and boundary conditions.
 5. **Simplify.** If possible, simplify the regex while preserving correctness.
