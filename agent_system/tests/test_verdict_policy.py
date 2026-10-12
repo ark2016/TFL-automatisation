@@ -970,7 +970,7 @@ class TestR3PrimeCrossCheckReg(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Cost ceiling (TODO.md backlog round C2): config.MAX_CALLS_PER_AGENT — the
+# Cost ceiling (backlog round C2): config.MAX_CALLS_PER_AGENT — the
 # orchestrator must never call the same specialist more than this many times
 # for one task. Precedent: live cfl-12 eval run, cfg_builder alone was
 # called 6 times across retries (130 706 output tokens, $0.80).

@@ -71,6 +71,7 @@
 .run-item .ri-dot.formalizing { background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
 .run-item .ri-dot.completed { background: var(--ok); }
 .run-item .ri-dot.error { background: var(--danger); }
+.run-item .ri-dot.failed { background: transparent; border: 2px solid var(--danger); box-sizing: border-box; }
 .run-item .ri-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run-item .ri-cost { text-align: right; color: var(--text-muted); }
 .run-item .ri-sub { grid-column: 2 / span 2; font-size: 10px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -116,6 +117,7 @@
 .pill.running, .pill.queued, .pill.formalizing { color: var(--warn); border-color: var(--warn); }
 .pill.completed { color: var(--ok); border-color: var(--ok); }
 .pill.error { color: var(--danger); border-color: var(--danger-dim); }
+.pill.failed { color: var(--danger); border-color: var(--danger); border-style: dashed; font-weight: 600; }
 .pill.cancelled { color: var(--text-muted); }
 .rh-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; }
 .btn-sm { padding: 3px 10px; font-size: 11px; }

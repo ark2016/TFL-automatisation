@@ -21,8 +21,6 @@ python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system
 
 All suites must stay green (currently: **1383 passed, 3 skipped** — the skips need Docker with the Lean 4 image). A bare `pytest` from the repo root now collects the same suites (`[tool.pytest.ini_options] testpaths` in `pyproject.toml`) and the root `conftest.py` blocks any real Anthropic API call for the whole session as a safety net — but the legacy `pumping_lemma/tests`, which call the real API, are intentionally left out of `testpaths`, so run it against them explicitly (and expect a real bill) only if you mean to.
 
-Open work and known issues are listed in [`TODO.md`](TODO.md) — a good place to pick a first PR.
-
 ## Scope of a good PR
 
 - **Bug fixes** — reproduce with a new test, then fix.

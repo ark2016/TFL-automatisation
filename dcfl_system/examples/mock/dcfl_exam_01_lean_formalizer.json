@@ -1,8 +1,5 @@
 {
-  "status": "success",
-  "evidence": {
-    "proof_body": "",
-    "lemmas_used": [],
-    "notes": "Mock give-up: non_dcfl language: the image has no non-DCFL base fact (no is_CF_of_is_DCF), so no honest Lean proof route exists."
-  }
+  "proof_body": "",
+  "lemmas_used": [],
+  "notes": "Mock give-up: non_dcfl language: the image has no non-DCFL base fact (no is_CF_of_is_DCF), so no honest Lean proof route exists."
 }

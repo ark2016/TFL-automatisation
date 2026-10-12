@@ -20,9 +20,7 @@ from __future__ import annotations
 import json
 import operator
 import os
-import queue
 import sys
-import threading
 import time as _time
 from pathlib import Path
 from typing import Any, Annotated, TypedDict
@@ -324,6 +322,10 @@ def _make_result(
     }
 
 
+class _SearchBudgetExceeded(Exception):
+    """Raised from inside the budgeted oracle when the time budget is spent."""
+
+
 def _estimate_index_with_timeout(
     oracle: Any,
     alphabet: list[str],
@@ -331,54 +333,54 @@ def _estimate_index_with_timeout(
     timeout: float = 120,
     state: PipelineState | None = None,
 ) -> dict:
-    """Run estimate_index in a fresh daemon thread with a hard timeout.
+    """Run estimate_index synchronously under a bounded oracle-time budget.
 
-    A plain daemon thread per call, NOT a shared `ThreadPoolExecutor`
-    (TODO.md §2): a non-daemon pool's worker threads are joined by Python at
-    interpreter exit, so a computation that is still running when `timeout`
-    elapses keeps the whole process alive until it finishes -- for a
-    long-running server (TFL Lab) that can mean forever. A bounded pool also
-    lets one runaway computation fill the queue and starve later, unrelated
-    calls, which then time out after waiting the full `timeout` without ever
-    starting. A daemon thread sidesteps both: it is simply abandoned (never
-    joined) if it outlives `timeout`, and every call gets its own thread
-    instead of competing for a fixed-size pool.
+    No helper thread: the oracle is wrapped so that, once *timeout* seconds
+    have elapsed since the call started, the next oracle query raises
+    ``_SearchBudgetExceeded``, which unwinds the search and is turned into
+    the fallback result below. This avoids the abandoned-thread pattern (a
+    thread that outlives its timeout keeps burning CPU and holding the
+    oracle's cache). The budget is checked between oracle queries, so a
+    single very slow oracle call can still overrun it by that call's
+    duration.
 
     Returns the result dict on success, or a fallback dict with
-    confidence=0 on timeout. Any exception raised by the computation itself
-    propagates to the caller once ``timeout`` has not yet elapsed.
+    confidence=0 when the budget is exhausted. Any other exception raised by
+    the computation itself propagates to the caller.
     """
     from .lib.congruence import estimate_index
 
     if state:
-        log_msg(state, f"  estimate_index(depth={max_depth}, timeout={timeout}s)...")
+        log_msg(state, f"  estimate_index(depth={max_depth}, budget={timeout}s)...")
 
-    result_queue: queue.Queue = queue.Queue(maxsize=1)
+    deadline = _time.monotonic() + timeout
 
-    def _worker() -> None:
-        try:
-            result_queue.put(("ok", estimate_index(oracle, alphabet, max_depth)))
-        except BaseException as exc:  # noqa: BLE001 -- re-raised in the caller's thread
-            result_queue.put(("error", exc))
+    def budgeted_oracle(word: str) -> Any:
+        if _time.monotonic() > deadline:
+            raise _SearchBudgetExceeded()
+        return oracle(word)
 
-    thread = threading.Thread(target=_worker, name="tfl-estimate-index", daemon=True)
-    thread.start()
-    thread.join(timeout)
-
-    if thread.is_alive():
+    try:
+        return estimate_index(budgeted_oracle, alphabet, max_depth)
+    except _SearchBudgetExceeded:
         if state:
-            log_msg(state, f"  estimate_index TIMED OUT after {timeout}s")
+            log_msg(state, f"  estimate_index budget of {timeout}s exhausted")
         return {
             "estimated_index": "unknown",
             "confidence": 0,
             "growth_pattern": [],
-            "reason": f"Timed out after {timeout}s",
+            "reason": f"Search budget of {timeout}s exhausted",
         }
 
-    status, payload = result_queue.get()
-    if status == "error":
-        raise payload
-    return payload
+
+def _closure_regex(closure_output: dict) -> str | None:
+    """The regex of the regular language R in a closure agent's claim."""
+    if not isinstance(closure_output, dict) or closure_output.get("status") == "failure":
+        return None
+    clo_ev = closure_output.get("evidence", closure_output)
+    details = (clo_ev.get("details") or {}) if isinstance(clo_ev, dict) else {}
+    reg = details.get("regular_language") or {}
+    return reg.get("regex") or None
 
 
 def _verify_closure_claim(
@@ -723,6 +725,13 @@ def verify_closure_node(state: PipelineState) -> dict:
 
     if is_retry_round and not dispatch.get("closure") and already_verified is not None:
         return {}
+
+    # Per-claim cache: a re-dispatched closure agent that repeats the same
+    # intersection claim does not need the same oracle sweep again.
+    if already_verified and "closure" in evidence:
+        regex = _closure_regex(evidence["closure"])
+        if regex and already_verified.get("claim") == f"L ∩ {regex} is non-regular":
+            return {}
 
     if oracle_ok and "closure" in evidence:
         closure_check = _verify_closure_claim(

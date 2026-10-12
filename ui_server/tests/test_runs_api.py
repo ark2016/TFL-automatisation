@@ -829,7 +829,35 @@ def test_projects_listing_flags_formalize_support(port):
 def test_process_identity_of_self_and_dead():
     ident = srv.process_identity(os.getpid())
     assert ident and ident["image"] and abs(ident["created"] - time.time()) < 10 ** 9
-    assert srv.process_identity(_dead_pid()) is None
+    # A short-lived child: record its identity while it is alive, then let it
+    # exit. Its pid may be recycled by an unrelated process under parallel load,
+    # so "dead" is asserted by identity (creation time), not by the pid being free.
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        child_ident = None
+        for _ in range(100):
+            child_ident = srv.process_identity(child.pid)
+            if child_ident:
+                break
+            time.sleep(0.05)
+        assert child_ident and child_ident["image"]
+        assert srv._pid_matches(child.pid, child_ident)
+    finally:
+        child.kill()
+        child.wait()
+        # On Windows the Popen handle keeps the exited process object (and its
+        # creation time) queryable; release it so the pid is truly free.
+        handle = getattr(child, "_handle", None)
+        if handle is not None and hasattr(handle, "Close"):
+            handle.Close()
+    # The recorded process must no longer count as "our live process": either
+    # the pid is dead (even if some inherited handle keeps the exited process
+    # object queryable) or it was recycled by another process, whose creation
+    # time differs. PID reuse therefore cannot make this flaky.
+    assert not (srv._pid_alive(child.pid) and srv._pid_matches(child.pid, child_ident))
+    after = srv.process_identity(child.pid)
+    if after is not None and srv._pid_alive(child.pid):
+        assert abs(after["created"] - child_ident["created"]) > srv._IDENTITY_TOLERANCE_S
     assert srv._pid_matches(os.getpid(), ident)
     assert srv._pid_matches(os.getpid(), None)          # legacy record: liveness only
     assert not srv._pid_matches(os.getpid(), {"created": ident["created"] - 3600, "image": ident["image"]})
@@ -909,3 +937,54 @@ def test_formalize_of_a_live_run_has_no_mock_warning(port, monkeypatch):
     assert status == 200 and d["source_mode"] == "live" and "warning" not in d
     wait_status(run_id, {"completed"})
     assert read_record(run_id)["source_mode"] == "live"
+
+
+FAILED_PIPELINE_STUB = PIPELINE_STUB.replace('{"verdict": "regular", "confidence": 0.9}',
+                                             '{"verdict": "failure", "confidence": 0.0}')
+NO_VERDICT_PIPELINE_STUB = PIPELINE_STUB.replace('{"verdict": "regular", "confidence": 0.9}',
+                                                 '{"confidence": 0.0}')
+
+
+def test_verdict_failure_result_sets_result_status_and_blocks_formalize(monkeypatch):
+    """cfl/dcfl report failure as verdict "failure": treated as a failed result."""
+    stub_pipeline(monkeypatch, FAILED_PIPELINE_STUB)
+    run_id = start_run("cfl_system")
+    data = wait_status(run_id, {"completed"})
+    assert srv.api_log(run_id)["status"] == "completed"
+    assert srv._runs[run_id]["result_status"] == "failure"
+    with pytest.raises(ValueError, match="failure"):
+        srv.api_formalize(run_id, {"confirm_spend": True})
+
+
+@pytest.mark.parametrize("stub", [FAILED_PIPELINE_STUB, NO_VERDICT_PIPELINE_STUB])
+def test_in_run_chain_skips_failed_or_verdictless_result(monkeypatch, stub):
+    stub_formalize(monkeypatch)
+    srv.api_put_settings({"formalize_in_run": True})
+    stub_pipeline(monkeypatch, stub)
+    run_id = srv.api_run({"project": "cfl_system", "ir": {"task": "x"}, "live": True})["run_id"]
+    data = wait_status(run_id, {"completed"})
+    assert FORMALIZE_CALLS == []
+    assert "--- formalize (in-run setting) ---" not in data["lines"]
+
+
+def test_formalize_estimate_refuses_what_formalize_refuses(port, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("no estimate subprocess for a blocked run")
+    monkeypatch.setattr(srv, "build_formalize_estimate_command", boom)
+    stub_pipeline(monkeypatch, FAILED_PIPELINE_STUB)
+    run_id = start_run("cfl_system")
+    wait_status(run_id, {"completed"})
+    status, d = http_req(port, "GET", f"/api/runs/{run_id}/formalize/estimate")
+    assert status == 200 and d["formalizable"] is False and "failure" in d["reason"]
+    assert d["expected_usd"] is None and d["max_usd"] is None
+
+
+def test_in_run_skip_by_guard_is_logged(monkeypatch):
+    stub_formalize(monkeypatch)
+    srv.api_put_settings({"formalize_in_run": True})
+    stub_pipeline(monkeypatch, NO_VERDICT_PIPELINE_STUB)
+    run_id = srv.api_run({"project": "cfl_system", "ir": {"task": "x"}, "live": True})["run_id"]
+    data = wait_status(run_id, {"completed"})
+    assert FORMALIZE_CALLS == []
+    assert any(line.startswith("in-run formalization skipped:") and "no verdict" in line
+               for line in data["lines"])

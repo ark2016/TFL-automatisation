@@ -152,26 +152,6 @@ def _extract_text(agent_output: dict) -> str:
     return "\n".join(parts)
 
 
-# Patterns for membership claims
-_WORD_PATTERN = re.compile(
-    r"""
-    (?:^|[\s(,])                    # boundary
-    ([ab]{2,12})                    # concrete word (2-12 chars of a/b)
-    \s*
-    (?:
-        (?:∈|\\in|IN\s+L|in\s+L|belongs\s+to\s+L|∈\s*L|принадлежит)  # positive
-        |
-        (?:∉|\\notin|NOT\s+IN\s+L|not\s+in\s+L|∉\s*L|не\s+принадлежит|не\s+порождается)  # negative
-    )
-    """,
-    re.VERBOSE | re.IGNORECASE | re.MULTILINE,
-)
-
-_POSITIVE_MARKERS = {"∈", "\\in", "in l", "in L", "belongs", "принадлежит", "∈ l", "∈ L"}
-_NEGATIVE_MARKERS = {"∉", "\\notin", "not in", "NOT IN", "∉ l", "∉ L",
-                      "не принадлежит", "не порождается"}
-
-
 def _extract_claims(text: str, alphabet: list[str]) -> list[dict]:
     """Extract concrete word membership claims from text.
 
@@ -190,7 +170,7 @@ def _extract_claims(text: str, alphabet: list[str]) -> list[dict]:
 
     # Pattern 1: concrete words like "aabb ∈ L" or "aaaabb не порождается"
     for match in re.finditer(
-        rf'["\']?({word_group})["\']?\s*'
+        rf'(?<!\w)["\']?({word_group})["\']?\s*'
         r'(∈|∉|\\in|\\notin|'
         r'\bNOT\s+IN\s+L\b|\bnot\s+in\s+L\b|\bIN\s+L\b|\bin\s+L\b|'
         r'\bне\s+порождается\b|\bне\s+принадлежит\b|\bпринадлежит\b|'
@@ -218,7 +198,7 @@ def _extract_claims(text: str, alphabet: list[str]) -> list[dict]:
 
     # Pattern 2: "слово a⁴b² = aaaabb НЕ порождается"
     for match in re.finditer(
-        rf'(?:слово|word)\s+[^=]*?=\s*({word_group})\s+'
+        rf'(?:слово|word)\s+[^=]*?=\s*(?<!\w)({word_group})(?!\w)\s+'
         r'(НЕ\s+порождается|не\s+порождается|порождается|'
         r'NOT\s+in\s+L\b|in\s+L\b)',
         text,

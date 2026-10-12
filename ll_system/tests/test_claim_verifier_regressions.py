@@ -13,15 +13,12 @@ from ll_system.lib.claim_verifier import (
     verify_ll_claim,
 )
 
+# No word oracle can be built for a natural-language spec, so step 2 leaves
+# claims at well_formed (explicit-grammar tasks: test_word_oracle_grammar.py).
 IR_SIMPLE = {
-    "task_type": "ll_check_grammar",
+    "task_type": "ll_check_language",
     "source_text": "test",
-    "grammar": {
-        "nonterminals": ["S"],
-        "terminals": ["a"],
-        "start": "S",
-        "rules": [{"lhs": "S", "rhs": ["a"]}],
-    },
+    "language_spec": {"kind": "natural", "description": "test language"},
 }
 
 BASE_BRANCH_WORDS = {

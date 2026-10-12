@@ -25,10 +25,14 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 PREFIX_CLASSES_MD = PROMPTS_DIR / "ll_prefix_classes_agent.md"
 SUBSTITUTION_MD = PROMPTS_DIR / "ll_substitution_agent.md"
 CLAUDE_MD = Path(__file__).resolve().parent.parent / "CLAUDE.md"
+# Local working notes, not tracked in git: checked only where the file exists.
+needs_local_notes = pytest.mark.skipif(not CLAUDE_MD.exists(), reason="local notes file is not tracked")
 TZ_MD = Path(__file__).resolve().parent.parent / "tz_ll_agent_system.md"
 
 JSON_BLOCK_RE = re.compile(r"```json\n(.*?)\n```", re.S)
@@ -52,11 +56,13 @@ def _json_blocks(path: Path) -> list[dict]:
 # (a) CLAUDE.md — no "LL ∩ REG = LL"
 # ---------------------------------------------------------------------------
 
+@needs_local_notes
 def test_claude_md_does_not_claim_ll_cap_reg_equals_ll():
     text = CLAUDE_MD.read_text(encoding="utf-8")
     assert "LL ∩ REG = LL" not in text
 
 
+@needs_local_notes
 def test_claude_md_mentions_not_closed_under_union_and_reg_intersection():
     text = CLAUDE_MD.read_text(encoding="utf-8")
     assert "closed under" in text.lower()
@@ -64,6 +70,7 @@ def test_claude_md_mentions_not_closed_under_union_and_reg_intersection():
     assert "∪" in text
 
 
+@needs_local_notes
 def test_claude_md_references_theory_doc():
     text = CLAUDE_MD.read_text(encoding="utf-8")
     assert "docs/THEORY.md" in text

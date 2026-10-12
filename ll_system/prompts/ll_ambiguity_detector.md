@@ -75,7 +75,7 @@ about a non-context-free L.
 
 ## Uncertainty Acknowledgment
 
-Essential ambiguity is generally HARD to prove. Many languages are not LL but also not essentially ambiguous (e.g., {aⁿbⁿ} ∪ {aⁿcⁿ} is NOT essentially ambiguous — it has an unambiguous grammar: `S → A | B, A → aAb | ab, B → aBc | ac`... but wait, FIRST(A) ∩ FIRST(B) = {a}, so this grammar is NOT LL(1), but it IS unambiguous).
+Essential ambiguity is generally HARD to prove. Many languages are not LL but also not essentially ambiguous (e.g., {aⁿbⁿ} ∪ {aⁿcⁿ} is NOT essentially ambiguous — it has an unambiguous grammar: `S → A | B, A → aAb | ab, B → aBc | ac`; FIRST(A) ∩ FIRST(B) = {a}, so this grammar is NOT LL(1), but it IS unambiguous).
 
 **Important:** Not being LL does not require essential ambiguity. Most not-LL languages are NOT essentially ambiguous — they just don't have an LL grammar. Essential ambiguity is a STRONGER condition.
 

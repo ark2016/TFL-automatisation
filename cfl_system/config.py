@@ -111,9 +111,19 @@ REFUSAL_FALLBACK = True
 #     does not refuse large budgets.
 MAX_TOKENS = 64000
 
-# Kept as an escape hatch for per-agent tuning, but intentionally empty:
-# every agent uses MAX_TOKENS unless a specific reason to lower it emerges.
-MAX_TOKENS_PER_AGENT: dict[str, int] = {}
+# Per-agent overrides. Every agent uses MAX_TOKENS unless listed here.
+# cfg_builder: live cfl-12 hit the 64000 ceiling mid-JSON (truncated output);
+# 128000 is the API maximum for Opus 5.5. Safe with LiveRunner (always streams);
+# you still pay only for real output tokens.
+MAX_TOKENS_PER_AGENT: dict[str, int] = {"cfg_builder": 128000}
+
+# Haiku JSON-repair call: output ceiling. A repair re-emits the whole object,
+# so a truncated 64K-token answer cannot be repaired within 8000 tokens.
+# Haiku 4.5 allows 64K output; 32000 leaves headroom. The call is
+# non-streaming, so it passes an explicit timeout (JSON_REPAIR_TIMEOUT_S) --
+# without one the SDK refuses non-streaming max_tokens > ~21333.
+JSON_REPAIR_MAX_TOKENS = 32000
+JSON_REPAIR_TIMEOUT_S = 600.0
 
 LLM_JSON_RETRIES = 2          # retry if LLM returns non-JSON
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

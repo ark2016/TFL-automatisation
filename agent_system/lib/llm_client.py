@@ -906,6 +906,21 @@ def format_structured_output_flag(result: "CallResult") -> str:
     return " so=no"
 
 
+# Hard per-model output limits (prefix match, so dated variants are covered).
+# Models not listed are not clamped.
+MODEL_MAX_OUTPUT_TOKENS: dict[str, int] = {
+    "claude-haiku-4-5": 64000,
+}
+
+
+def clamp_max_tokens(model: str, requested: int) -> int:
+    """Clamp ``requested`` to the model's known output cap (unknown: unchanged)."""
+    for prefix, cap in MODEL_MAX_OUTPUT_TOKENS.items():
+        if model.startswith(prefix):
+            return min(requested, cap)
+    return requested
+
+
 class AnthropicClient:
     """Shared call machinery for every pipeline's LiveRunner/LLMRunner.
 
@@ -961,7 +976,7 @@ class AnthropicClient:
         """
         kwargs: dict[str, Any] = {
             "model": model,
-            "max_tokens": max_tokens,
+            "max_tokens": clamp_max_tokens(model, max_tokens),
             "system": system,
             "messages": [{"role": "user", "content": user}],
         }
@@ -1329,9 +1344,17 @@ class LLMRunner:
         # which doubles its apparent weight and blurs which copy the agent
         # should treat as authoritative.
         student_notes = ""
-        if isinstance(input_data, dict) and input_data.get("student_notes"):
-            student_notes = input_data["student_notes"]
-            input_data = {k: v for k, v in input_data.items() if k != "student_notes"}
+        if isinstance(input_data, dict):
+            student_notes = input_data.get("student_notes") or ""
+            nested_ir = input_data.get("ir")
+            if isinstance(nested_ir, dict) and "student_notes" in nested_ir:
+                # The IR itself carries the notes too (ir_schema.py); strip
+                # that copy as well so the text is not repeated in the JSON.
+                student_notes = student_notes or nested_ir.get("student_notes") or ""
+                nested_ir = {k: v for k, v in nested_ir.items() if k != "student_notes"}
+                input_data = {**input_data, "ir": nested_ir}
+            if "student_notes" in input_data:
+                input_data = {k: v for k, v in input_data.items() if k != "student_notes"}
 
         if isinstance(input_data, (dict, list)):
             user_msg = json.dumps(input_data, indent=2, ensure_ascii=False)

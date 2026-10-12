@@ -199,6 +199,31 @@ async function pickExample(name) {
 // (completed, error, cancelled, or a status of an older run) is final.
 const ACTIVE = new Set(['queued', 'running', 'formalizing']);
 const isActive = (st) => ACTIVE.has(st);
+// The process status stays "completed" when the subprocess produced a result;
+// the pipeline's own outcome is result_status. A result with status "failure"
+// (e.g. invalid task_type) is shown as FAILED, not as a completed run.
+const isFailedResult = (r) => !!r && r.status === 'completed' && r.result_status === 'failure';
+const shownStatus = (r) => (isFailedResult(r) ? 'failed' : ((r && r.status) || ''));
+const resultErrorText = (r) => (r && Array.isArray(r.result_errors) ? r.result_errors.join('; ') : '');
+// Why Formalize cannot apply to this run (null = it can).
+function formalizeBlockReason(r) {
+  if (isFailedResult(r) || (r && r.status === 'completed' && r.verdict === 'failure')) return 'the pipeline reported a failure for this run, there is nothing to formalize'
+    + (resultErrorText(r) ? ` (${resultErrorText(r)})` : '');
+  if (r && r.status === 'completed' && !r.verdict) return 'the run has no verdict, there is nothing to formalize';
+  return null;
+}
+// Client-side hint: does the IR's task_type belong to the selected pipeline?
+function taskTypeProblem(ir, projectId) {
+  const proj = state.projects.find(x => x.id === projectId);
+  const allowed = proj && Array.isArray(proj.task_types) ? proj.task_types : null;
+  if (!allowed || !ir || typeof ir !== 'object' || !('task_type' in ir)) return null;
+  if (allowed.includes(ir.task_type)) return null;
+  const owners = state.projects.filter(x => x.id !== projectId && Array.isArray(x.task_types)
+    && x.task_types.includes(ir.task_type)).map(x => x.label);
+  return `task_type "${ir.task_type}" is not valid for the ${proj.label} pipeline`
+    + (owners.length ? ` — it belongs to ${owners.join('/')}, switch the tab` : '')
+    + `; expected one of: ${allowed.join(', ')}`;
+}
 let dispatching = false;   // POST /api/run in flight
 
 function el(tag, cls, text) {
@@ -300,6 +325,11 @@ async function runPipeline(live) {
     setStatus('error', `invalid JSON: ${e.message}`);
     return;
   }
+  const ttProblem = taskTypeProblem(ir, state.project);
+  if (ttProblem) {
+    setStatus('error', ttProblem);
+    return;
+  }
   dispatching = true;
   syncRunButtons();
   const label = live ? 'live run' : 'mock run';
@@ -384,7 +414,8 @@ function startPolling(pickTab) {
 }
 
 const RUN_KEYS = ['status', 'project', 'verdict', 'confidence', 'live', 'source_mode', 'error', 'elapsed',
-  'formalize_error', 'started', 'finished', 'result_html_url', 'result_json_url', 'result_md_url'];
+  'formalize_error', 'started', 'finished', 'result_html_url', 'result_json_url', 'result_md_url',
+  'result_status', 'result_errors'];
 
 async function pollOnce(gen, pickTab) {
   const id = state.runId;
@@ -469,6 +500,8 @@ function updateStatusLine() {
     setStatus('error', `run ${r.run_id} errored` + (r.error ? ` — ${r.error}` : '') + cost);
   } else if (r.status === 'cancelled') {
     setStatus('error', `run ${r.run_id} cancelled${cost}`);
+  } else if (isFailedResult(r)) {
+    setStatus('error', `run ${r.run_id} FAILED` + (resultErrorText(r) ? ` — ${resultErrorText(r)}` : '') + cost);
   } else if (r.status === 'completed') {
     setStatus('success', `done · ${runElapsedText(r) || '—'} · verdict: ${r.verdict || '—'}${cost}`);
   } else {
@@ -497,8 +530,9 @@ function renderRunHead() {
   const r = state.run;
   if (!r) { runHead.classList.remove('show'); return; }
   runHead.classList.add('show');
-  rhStatus.textContent = r.status || '—';
-  rhStatus.className = 'pill ' + (r.status || '');
+  rhStatus.textContent = shownStatus(r) || '—';
+  rhStatus.className = 'pill ' + shownStatus(r);
+  rhStatus.title = isFailedResult(r) ? resultErrorText(r) : '';
   rhId.textContent = r.run_id || '—';
   rhProject.textContent = projectLabel(r.project);
   rhVerdict.textContent = (r.verdict || r.liveVerdict)
@@ -526,14 +560,15 @@ function updateFormalizeButton() {
   const formalizing = !!r && r.status === 'formalizing';
   const proj = r ? state.projects.find(x => x.id === r.project) : null;
   const supported = !proj || proj.formalize !== false;   // e.g. LL has no Lean step
-  const can = !!r && r.status === 'completed' && !dispatching && supported;
+  const blocked = formalizeBlockReason(r);
+  const can = !!r && r.status === 'completed' && !dispatching && supported && !blocked;
   const had = state.events.some(e => e.event === 'formalization');
   const proved = had && formalizationProved();
   btnFormalize.textContent = formalizing ? 'Formalizing…'
     : (proved ? 'Re-run (proved)' : (had ? 'Formalize again' : 'Formalize'));
   btnFormalize.disabled = !(can && confirmSpend.checked);
   btnFormalize.title = !supported ? 'formalization is not available for this project'
-    : (proved ? 'already machine-checked: a re-run costs money and the proof is kept unless the new attempt proves it too'
+    : (blocked ? blocked : proved ? 'already machine-checked: a re-run costs money and the proof is kept unless the new attempt proves it too'
       : 'Lean formalization of the finished result; needs the API-spend confirmation');
   estFormalize.style.display = can || formalizing ? '' : 'none';
   // A mock-mode result: formalization always makes paid (live) calls.
@@ -543,7 +578,7 @@ function updateFormalizeButton() {
 
 async function requestFormalize() {
   const r = state.run;
-  if (!r || r.status !== 'completed' || !confirmSpend.checked) return;
+  if (!r || r.status !== 'completed' || formalizeBlockReason(r) || !confirmSpend.checked) return;
   const force = formalizationProved();
   if (force && !window.confirm(
       'This result is already formalized and machine-checked.\n\n' +
@@ -856,6 +891,10 @@ function renderProgress() {
   });
   const errTexts = errors.slice();
   if (r.status === 'error' && r.error && !errTexts.length) errTexts.push(String(r.error));
+  if (isFailedResult(r) && !errTexts.length) {
+    (Array.isArray(r.result_errors) && r.result_errors.length ? r.result_errors : ['the pipeline reported a failure'])
+      .forEach(t => errTexts.push(String(t)));
+  }
   if (r.formalize_error) errTexts.push('formalization: ' + r.formalize_error);
   errTexts.forEach(t => progressRoot.appendChild(el('div', 'pr-error', t)));
   progressRoot.scrollTop = keepScroll;
@@ -943,13 +982,13 @@ function renderRuns() {
     const id = r.run_id || r.id;
     const item = el('div', 'run-item' + (id === state.runId ? ' active' : ''));
     item.dataset.id = id;
-    item.appendChild(el('span', 'ri-dot ' + (r.status || '')));
+    item.appendChild(el('span', 'ri-dot ' + shownStatus(r)));
     item.appendChild(el('span', 'ri-title', `${projectLabel(r.project)} · ${id}`));
     const cost = firstNum(r.estimated_cost_usd, r.cost_usd, r.usage && r.usage.estimated_cost_usd);
     item.appendChild(el('span', 'ri-cost', cost === null ? '' : fmtUsd(cost)));
-    const sub = [r.status, r.verdict, fmtWhen(toMs(r.started ?? r.created))].filter(Boolean).join(' · ');
+    const sub = [shownStatus(r), r.verdict, fmtWhen(toMs(r.started ?? r.created))].filter(Boolean).join(' · ');
     item.appendChild(el('span', 'ri-sub', sub));
-    item.title = sub;
+    item.title = isFailedResult(r) && resultErrorText(r) ? `${sub}\n${resultErrorText(r)}` : sub;
     item.addEventListener('click', () => openRun(id, {status: r.status, project: r.project, live: r.live}));
     runList.appendChild(item);
   });

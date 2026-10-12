@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import re
+import time
 from typing import Any
 
 # Defensive import — may not be available in test environment
@@ -91,6 +92,16 @@ def _try_word_oracle(ir: dict):
     (docs/VERDICT_POLICY.md §4). Best-effort: the structural checks never
     depend on either succeeding.
     """
+    # Explicit grammar (Format 2 `language_spec.kind == "grammar"`, Format 3
+    # top-level `grammar`): CYK bridge in word_oracle (normalizes the "ε" rhs
+    # spelling, refuses multi-character terminals). Its answers are exact.
+    try:
+        from ll_system.lib.word_oracle import oracle_from_ll_ir, task_grammar_from_ir
+        if task_grammar_from_ir(ir) is not None:
+            return oracle_from_ll_ir(ir)
+    except ImportError:
+        pass
+
     try:
         from cfl_system.lib.cfl_oracle import cfl_oracle_from_ir
     except ImportError:
@@ -125,6 +136,34 @@ def _looks_concrete(word: Any) -> bool:
 # claims — validate_grammar_symbols against the task alphabet, and sample
 # equivalence of the candidate grammar's language against the task language.
 # ---------------------------------------------------------------------------
+
+def _task_grammar_spec(ir: dict) -> dict | None:
+    """Explicit grammar given by the task (Format 2 spec of kind "grammar",
+    or Format 3 top-level `grammar`), else None."""
+    spec = ir.get("language_spec")
+    if isinstance(spec, dict) and spec.get("kind") == "grammar":
+        return spec
+    if ir.get("task_type") == "ll_check_grammar" and isinstance(ir.get("grammar"), dict):
+        return ir["grammar"]
+    return None
+
+
+def _task_alphabet_list(ir: dict) -> list[str] | None:
+    """Task alphabet as a sorted list (single-character symbols only), for
+    step-2 prefix checks on set_builder / explicit-grammar tasks."""
+    spec = ir.get("language_spec")
+    if isinstance(spec, dict) and spec.get("kind") == "set_builder":
+        alphabet = spec.get("alphabet")
+        if isinstance(alphabet, list) and alphabet:
+            return list(alphabet)
+        return None
+    grammar = _task_grammar_spec(ir)
+    if grammar is not None and isinstance(grammar.get("terminals"), list):
+        terminals = grammar["terminals"]
+        if terminals and all(isinstance(t, str) and len(t) == 1 for t in terminals):
+            return sorted(terminals)
+    return None
+
 
 def _task_grammar_terminals(ir: dict) -> set[str] | None:
     """Best-effort task alphabet — terminals the candidate grammar must stay
@@ -174,8 +213,8 @@ def _task_language_equivalence_trust(grammar: dict, ir: dict, max_len: int = 8) 
     if not _HAS_GRAMMAR_TRANSFORMS or not isinstance(grammar, dict):
         return None, {}
 
-    spec = ir.get("language_spec")
-    if isinstance(spec, dict) and spec.get("kind") == "grammar":
+    spec = _task_grammar_spec(ir)
+    if spec is not None:
         try:
             equal, mismatches = is_grammar_equivalent_sample(grammar, spec, max_len=max_len)
         except Exception:
@@ -492,9 +531,34 @@ class _SearchBudgetExceededLL(Exception):
     never as evidence either way."""
 
 
+class _GlobalSearchBudget:
+    """Node / wall-clock budget shared by all `_continuable_ll` searches of one
+    check. Once spent, `exhausted` stays True and every further node raises
+    `_SearchBudgetExceededLL`, so the premise is unknown (None), never definite."""
+
+    def __init__(self, max_nodes: int, max_seconds: float | None, clock=time.monotonic) -> None:
+        self.nodes_left = max_nodes
+        self.clock = clock
+        self.deadline = None if max_seconds is None else clock() + max_seconds
+        self.exhausted = False
+
+    def spend(self) -> None:
+        if not self.exhausted:
+            self.nodes_left -= 1
+            if self.nodes_left < 0 or (self.deadline is not None and self.clock() > self.deadline):
+                self.exhausted = True
+        if self.exhausted:
+            raise _SearchBudgetExceededLL()
+
+
+_DEAD_CLASS_TOTAL_NODES = 100_000
+_DEAD_CLASS_TOTAL_SECONDS = 20.0
+
+
 def _continuable_ll(
     oracle, word: str, alphabet: list[str],
     max_extra: int = 6, node_budget: int = 20_000,
+    global_budget: "_GlobalSearchBudget | None" = None,
 ) -> bool | None:
     """Whether some extension of `word` (up to `max_extra` more symbols) is
     in L, decided by an EXHAUSTIVE depth-first search over that bound (mirrors
@@ -510,6 +574,8 @@ def _continuable_ll(
     budget = [node_budget]
 
     def dfs(w: str, depth: int) -> bool:
+        if global_budget is not None:
+            global_budget.spend()
         budget[0] -= 1
         if budget[0] <= 0:
             raise _SearchBudgetExceededLL()
@@ -542,18 +608,18 @@ def _all_words_ll(alphabet: list[str], max_len: int) -> list[str]:
     return words
 
 
-def _check_dead_class_finite_ll(ir: dict) -> tuple[bool | None, list[str]]:
+def _check_dead_class_finite_ll(
+    ir: dict, *, total_node_budget: int = _DEAD_CLASS_TOTAL_NODES,
+    total_seconds: float | None = _DEAD_CLASS_TOTAL_SECONDS, clock=time.monotonic,
+) -> tuple[bool | None, list[str]]:
     """Find continuations for sampled prefixes, without certifying deadness.
 
     True is bounded supporting evidence: every sampled prefix had a witness.
     Missing a witness within the finite search returns None, never False:
     it neither proves a prefix dead nor the dead class infinite.
     """
-    spec = ir.get("language_spec")
-    if not isinstance(spec, dict) or spec.get("kind") != "set_builder":
-        return None, []
-    alphabet = spec.get("alphabet")
-    if not isinstance(alphabet, list) or not alphabet:
+    alphabet = _task_alphabet_list(ir)
+    if not alphabet:
         return None, []
     oracle = _try_word_oracle(ir)
     if oracle is None:
@@ -563,8 +629,15 @@ def _check_dead_class_finite_ll(ir: dict) -> tuple[bool | None, list[str]]:
         return None, []
     issues: list[str] = []
     checked = 0
+    gb = _GlobalSearchBudget(total_node_budget, total_seconds, clock)
     for w in short_words[:200]:
-        cont = _continuable_ll(oracle, w, alphabet)
+        if gb.exhausted:
+            issues.append(
+                "dead_class_finite check: global search budget exhausted; "
+                "remaining prefixes unchecked, continuability remains unknown"
+            )
+            break
+        cont = _continuable_ll(oracle, w, alphabet, global_budget=gb)
         if cont is not True:
             issues.append(
                 f"dead_class_finite check: no continuation witness for {w!r} "
@@ -582,18 +655,15 @@ def _check_dead_class_finite_ll(ir: dict) -> tuple[bool | None, list[str]]:
 def _semantic_check_prefix_classes(proof_sketch: dict, ir: dict) -> tuple[str | None, dict]:
     """Returns (trust, details); trust in {"bounded_pass", "refuted", None}.
 
-    None means insufficient data (no oracle, non-literal suffix, or IR isn't
-    set_builder) — caller keeps well_formed.
+    None means insufficient data (no oracle, non-literal suffix, or the task
+    is neither set_builder nor an explicit grammar) — caller keeps well_formed.
     """
     distinguishing_suffix = proof_sketch.get("distinguishing_suffix")
     if not isinstance(distinguishing_suffix, str):
         return None, {}
 
-    spec = ir.get("language_spec")
-    if not isinstance(spec, dict) or spec.get("kind") != "set_builder":
-        return None, {}
-    alphabet = spec.get("alphabet")
-    if not isinstance(alphabet, list) or not alphabet:
+    alphabet = _task_alphabet_list(ir)
+    if not alphabet:
         return None, {}
     alphabet_set = set(alphabet)
     if any(ch not in alphabet_set for ch in distinguishing_suffix):
@@ -1308,7 +1378,7 @@ def verify_prefix_classes_claim(proof_sketch: dict, ir: dict) -> dict:
 
     # Step 2 (docs/VERDICT_POLICY.md §4 "ll / prefix_classes. Как shallit
     # nerode_classes"): instantiate distinguishing_suffix against class
-    # representatives via the task's word oracle (set_builder only).
+    # representatives via the task's word oracle (set_builder or explicit grammar, Formats 1-3).
     if trust == "well_formed":
         sem_status, sem_details = _semantic_check_prefix_classes(proof_sketch, ir)
         if sem_details:

@@ -1099,7 +1099,7 @@ class RetryPlan:
 `result["formalization"] = null`), без раннера (ни mock, ни live) тоже no-op. Само включение бюджет API не тратит: агент
 `lean_formalizer` (Opus 5.5, `prompts/dcfl_lean_formalizer.md`) вызывается только через раннер — в mock-режиме из
 `examples/mock/<task_id>_lean_formalizer.json`, в `--live` до `MAX_FORMALIZE_ITERATIONS` (3) раз, поэтому live — только по явному
-запросу (корневой `CLAUDE.md`, «Models and LLM calls»). Проверка типов — локально в Docker (образ `tfl-lean4`); в `--live` без
+запросу (правило проекта о live-прогонах: только по явному запросу с согласованным бюджетом). Проверка типов — локально в Docker (образ `tfl-lean4`); в `--live` без
 Docker/образа шаг сразу даёт `unavailable`, агент не вызывается.
 
 **Формулировка генерируется кодом.** `lib/lean_ir.render_statement(ir, direction)` (обёртка над `agent_system.lib.lean_ir`)
@@ -1183,7 +1183,6 @@ class DCFLSolutionOutput:
 
 ```
 dcfl_system/
-├── CLAUDE.md                       # Контекст для Claude Code
 ├── tz_dcfl_agent_system.md         # Данное ТЗ
 │
 ├── lib/                            # Pure functions (без LLM)

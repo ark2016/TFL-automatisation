@@ -1,5 +1,5 @@
 """Tests for the stateful retry/invert/Level-1 flow in agent_system/graph.py
-(TODO.md §2, §5; tz_tfl_agent_system.md §5.2).
+(tz_tfl_agent_system.md §5.2).
 
 Covers:
   1. A retried specialist receives its OWN previous output (`previous_output`
@@ -264,7 +264,7 @@ class TestRetryCarriesPreviousOutput(unittest.TestCase):
 
     def test_build_specialist_input_truncates_an_oversized_previous_output(self):
         """A previous artifact large enough on its own to risk a 400
-        "prompt is too long" (TODO.md §2/§3) must be bounded, not embedded
+        "prompt is too long" must be bounded, not embedded
         verbatim -- but the retried agent should still see a compact
         summary plus a real (truncated) excerpt, not nothing."""
         huge_proof = "x" * 20_000

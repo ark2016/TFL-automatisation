@@ -164,7 +164,7 @@ If the language appears regular and you cannot find a pumping contradiction, **d
   "status": "failure",
   "proof": null,
   "confidence": 0.0,
-  "errors": ["Unable to construct pumping lemma proof. The language may be regular: [specific reason, e.g., 'all attempted word choices can be pumped without leaving the language']"]
+  "errors": ["Не удалось построить доказательство по лемме о накачке. Язык, возможно, регулярен: [конкретная причина, например, 'все испробованные слова можно накачивать, не выходя из языка']"]
 }
 ```
 

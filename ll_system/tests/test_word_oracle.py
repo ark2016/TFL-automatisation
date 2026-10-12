@@ -265,7 +265,7 @@ class TestUnsupported:
 
     def test_oracle_rejects_non_string_input(self):
         oracle = oracle_from_ll_ir(IR_WCWREV)
-        assert oracle(123) is False  # type: ignore[arg-type]
+        assert oracle(123) is None  # type: ignore[arg-type]  # unknown, not "not in L"
 
 
 # ---------------------------------------------------------------------------
@@ -419,3 +419,50 @@ class TestClaimVerifierPrefixClassesStep2:
         assert result["trust"] == "well_formed"
         assert "dead_class_finite_issues" in result["details"]["distinguishing_suffix_check"]
         assert result["details"]["distinguishing_suffix_check"]["dead_class_finite_check"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# docs/VERDICT_POLICY.md section 4: an unknown answer is None, never False
+# ---------------------------------------------------------------------------
+
+def test_set_builder_oracle_budget_exhaustion_is_unknown_not_false(monkeypatch):
+    import ll_system.lib.word_oracle as wo
+
+    oracle = oracle_from_ll_ir(IR_ANBN_UNION_ANCN)
+    assert oracle("aabb") is True
+    monkeypatch.setattr(wo, "_MAX_STEPS", 3)
+    assert oracle("aaaabbbb") is None  # budget exhausted: unknown, not "not in L"
+
+
+def test_set_builder_oracle_non_string_is_unknown():
+    oracle = oracle_from_ll_ir(IR_ANBN_UNION_ANCN)
+    assert oracle(None) is None
+    assert oracle(123) is None
+    assert oracle(["a"]) is None
+
+
+def test_set_builder_oracle_definite_answers_unchanged():
+    oracle = oracle_from_ll_ir(IR_ANBN_UNION_ANCN)
+    assert oracle("aabb") is True
+    assert oracle("aabc") is False
+
+
+def test_generate_words_excludes_unknown_words(monkeypatch):
+    import ll_system.lib.word_oracle as wo
+
+    real = oracle_from_ll_ir(IR_ANBN_UNION_ANCN)
+    assert "ab" in generate_words(IR_ANBN_UNION_ANCN, 4)
+    monkeypatch.setattr(wo, "_build_oracle", lambda compiled: (lambda w: None))
+    assert generate_words(IR_ANBN_UNION_ANCN, 4) == []
+    assert real("ab") is True
+
+
+def test_claim_verifier_treats_unknown_set_builder_oracle_as_unknown(monkeypatch):
+    """An exhausted-budget (None) oracle must not refute branch words."""
+    from ll_system.lib import claim_verifier as cv
+
+    monkeypatch.setattr(cv, "_try_word_oracle", lambda ir: lambda w: None)
+    trust, _details = cv._verify_branch_words_by_oracle(
+        {"word_1": "ab", "word_2": "aabb"}, IR_ANBN_UNION_ANCN,
+    )
+    assert trust is None

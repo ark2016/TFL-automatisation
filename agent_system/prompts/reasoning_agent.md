@@ -92,7 +92,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "confidence": 0.98,
   "best_proof": "pumping",
   "consolidated_proof": "Язык L = {w | count_a(w) = count_b(w)} не регулярен. Доказательство по лемме о накачке: выбираем w = a^n b^n. Для любого разложения w = xyz с |xy| ≤ n имеем y = a^k (k ≥ 1). Накачка с i=2 даёт a^(n+k) b^n, где count_a ≠ count_b — противоречие. Это подтверждается аргументом Майхилла–Нероуда: слова a^0, a^1, a^2, ... попарно различимы (контекст b^i отделяет a^i от a^j).",
-  "oracle_validation": "not_applicable (no DFA built)",
+  "oracle_validation": "not_applicable (ДКА не строился)",
   "issues_found": [],
   "action": "proceed_to_formalizer",
   "retry_context": null,
@@ -142,8 +142,8 @@ Include any of these that apply:
   "confidence": 0.6,
   "best_proof": "dfa_builder",
   "consolidated_proof": "ДКА был построен, но оракульная проверка нашла контрпример.",
-  "oracle_validation": "FAIL: word 'aabba' — oracle says true, DFA says false.",
-  "issues_found": ["DFA rejects word 'aabba' which should be in L."],
+  "oracle_validation": "FAIL: слово 'aabba' — оракул говорит true, ДКА говорит false.",
+  "issues_found": ["ДКА отвергает слово 'aabba', которое должно принадлежать L."],
   "action": "retry_enriched",
   "retry_context": {
     "target_agents": ["dfa_builder", "re_builder"],
@@ -152,7 +152,7 @@ Include any of these that apply:
       "expected": true,
       "got": false
     },
-    "message": "Your DFA incorrectly rejects 'aabba'. This word is in L. Please revise."
+    "message": "Ваш ДКА ошибочно отвергает 'aabba'. Это слово принадлежит L. Пожалуйста, исправьте автомат."
   },
   "errors": null
 }
@@ -169,7 +169,7 @@ Include any of these that apply:
   "best_proof": null,
   "consolidated_proof": "Агент накачки не справился (не удалось подобрать подходящее слово для накачки). Агент Нероуда построил доказательство с низкой уверенностью. Агент замыкания не справился.",
   "oracle_validation": "not_applicable",
-  "issues_found": ["No high-confidence proof available after 3 retries."],
+  "issues_found": ["После 3 повторных попыток доказательство с высокой уверенностью не получено."],
   "action": "escalate",
   "retry_context": null,
   "hints_for_human": [
@@ -180,6 +180,6 @@ Include any of these that apply:
     "Наблюдение: все три агента (накачка, Нероуд, замыкание) не смогли доказать нерегулярность — возможно, язык регулярен, но требует сложного ДКА",
     "Рекомендация: попробовать построить ДКА, отслеживающий последние N символов для обнаружения палиндромного суффикса"
   ],
-  "errors": ["Max retries exceeded. Human review recommended."]
+  "errors": ["Превышено число повторных попыток. Рекомендуется проверка человеком."]
 }
 ```

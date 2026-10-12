@@ -1058,6 +1058,11 @@ RUN lake --version && lean --version
 6. `prompts/input_parser.md` — промпт для парсера
 7. `orchestrator.py` — минимальный pipeline (parse → classify → build → test)
 
+> Статус (отложено): шаг parse (агент `input_parser`) сконфигурирован в `config.py`
+> и описан в `prompts/input_parser.md`, но в текущем пайплайне не вызывается:
+> orchestrator принимает готовый IR JSON. Вход свободным текстом (`--text`, как в
+> `ll_system/orchestrator.py`) — возможное расширение, пока не реализован.
+
 ### Phase 2: Specialist agents
 8. `prompts/` — все промпты для специалистов
 9. `lib/hypothesis_module.py` — анализ предикатов

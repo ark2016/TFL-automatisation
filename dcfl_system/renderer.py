@@ -20,6 +20,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from cfl_system.lib.cfl_renderer import render_lean_block_html, render_lean_block_md
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -542,6 +544,11 @@ def render_markdown(result: dict) -> str:
             sections.append(f"*Время выполнения: {timing:.2f}s*")
         if retries:
             sections.append(f"*Повторных попыток: {retries}*")
+
+    lean_md = render_lean_block_md(result.get("formalization"))
+    if lean_md:
+        sections.append("")
+        sections.extend(lean_md)
 
     usage_line = _usage_summary_line(result)
     if usage_line:
@@ -1107,6 +1114,10 @@ def render_html(result: dict) -> str:
         "{left:'\\\\(',right:'\\\\)',display:false}"
         '],throwOnError:false});"></script>'
     )
+
+    lean_html = render_lean_block_html(result.get("formalization"))
+    if lean_html:
+        parts.append(lean_html)
 
     usage_line = _usage_summary_line(result)
     if usage_line:
