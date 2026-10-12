@@ -59,3 +59,59 @@ def test_shared_fatal_http_error_is_not_retried(monkeypatch):
                                        system="offline", user="offline")
 
     assert exc.value.status_code == 401 and len(requests) == 1
+
+
+GRAMMAR_BODY = {"type": "error", "error": {
+    "type": "overloaded_error",
+    "message": "Grammar compilation is temporarily unavailable. Please try again."}}
+SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"],
+          "additionalProperties": False}
+
+
+def _sdk_with(respond):
+    http_client = httpx.Client(transport=httpx.MockTransport(respond))
+    return SDKAnthropic(api_key="offline-not-a-secret", http_client=http_client, max_retries=0)
+
+
+def test_grammar_compilation_outage_has_clear_bounded_error(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(503, json=GRAMMAR_BODY)
+
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", lambda *a: None)
+    with _sdk_with(respond) as sdk:
+        with pytest.raises(RetryableAPIError) as exc:
+            AnthropicClient(max_retries=3).call(
+                sdk, model="claude-haiku-4-5", max_tokens=10, system="s", user="u",
+                output_schema=SCHEMA)
+    assert len(requests) == 3  # bounded, no schema-less fallback
+    msg = str(exc.value)
+    assert "grammar compilation" in msg and "Anthropic side" in msg and "not a local/Docker" in msg
+    assert exc.value.status_code == 503
+    assert exc.value.original is not None
+
+
+def test_other_overloaded_messages_keep_generic_error(monkeypatch):
+    def respond(request):
+        return httpx.Response(529, json={"type": "error", "error": {
+            "type": "overloaded_error", "message": "Overloaded"}})
+
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", lambda *a: None)
+    with _sdk_with(respond) as sdk:
+        with pytest.raises(RetryableAPIError) as exc:
+            AnthropicClient(max_retries=2).call(
+                sdk, model="claude-haiku-4-5", max_tokens=10, system="s", user="u")
+    assert "Overloaded" in str(exc.value) and "grammar" not in str(exc.value).lower()
+
+
+def test_agent_error_carries_grammar_outage_message(monkeypatch):
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", lambda *a: None)
+    runner = llm_client.LLMRunner(api_key="sk-ant-test-not-used")
+    with _sdk_with(lambda request: httpx.Response(503, json=GRAMMAR_BODY)) as sdk:
+        runner._client = sdk
+        out = runner.run_agent("classifier", {"language": "a*"})
+    assert out["status"] == "agent_error"
+    assert "grammar compilation is temporarily unavailable" in out["errors"][0]
+    assert "retry the run later" in out["errors"][0]

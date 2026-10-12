@@ -208,3 +208,22 @@ def test_cyrillic_path_in_log_is_not_mojibake(monkeypatch):
     assert any("бакалавриат" in line for line in data["lines"]), data["lines"]
     log = (srv.RUNS_DIR / data["run_id"] / "run.log").read_bytes().decode("utf-8")
     assert "бакалавриат" in log
+
+
+GRAMMAR_OUTAGE_STUB = r"""
+import json, os, sys
+d = sys.argv[1]
+msg = ("classifier: Anthropic API: structured-output grammar compilation is temporarily "
+       "unavailable on the Anthropic side (HTTP 503, overloaded_error). This is not a "
+       "local/Docker problem; retry the run later.")
+json.dump({"status": "failure", "errors": [msg]}, open(os.path.join(d, "input_result.json"), "w"))
+sys.exit(1)
+"""
+
+
+def test_grammar_outage_error_reaches_run_status(monkeypatch):
+    stub(monkeypatch, GRAMMAR_OUTAGE_STUB)
+    data = run_to_end("agent_system", {"task_type": "classify"})
+    assert data["result_status"] == "failure"
+    assert "grammar compilation" in data["result_errors"][0]
+    assert "not a local/Docker problem" in data["result_errors"][0]

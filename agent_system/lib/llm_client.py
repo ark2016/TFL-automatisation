@@ -494,6 +494,23 @@ _FATAL_EXCEPTION_TYPES = (
 )
 
 
+GRAMMAR_COMPILATION_OUTAGE_MESSAGE = (
+    "Anthropic API: structured-output grammar compilation is temporarily "
+    "unavailable on the Anthropic side (HTTP 503, overloaded_error). This is "
+    "not a local/Docker problem; retry the run later."
+)
+
+
+def _is_grammar_compilation_outage(exc: Exception, status_code: int | None) -> bool:
+    """The Anthropic-side 503 ``overloaded_error`` "Grammar compilation is
+    temporarily unavailable" returned for requests carrying a structured-output
+    schema (``output_config.format``)."""
+    if status_code not in (503, 529):
+        return False
+    text = str(exc).lower()
+    return "grammar compilation" in text and "overloaded" in text
+
+
 def _classify_api_exception(exc: Exception) -> FatalAPIError | RetryableAPIError:
     """Classify an exception raised while calling the Anthropic API.
 
@@ -506,6 +523,9 @@ def _classify_api_exception(exc: Exception) -> FatalAPIError | RetryableAPIError
     status_code = getattr(exc, "status_code", None)
     if isinstance(exc, _FATAL_EXCEPTION_TYPES):
         return FatalAPIError(str(exc), status_code=status_code, original=exc)
+    if _is_grammar_compilation_outage(exc, status_code):
+        return RetryableAPIError(GRAMMAR_COMPILATION_OUTAGE_MESSAGE,
+                                 status_code=status_code, original=exc)
     return RetryableAPIError(str(exc), status_code=status_code, original=exc)
 
 
