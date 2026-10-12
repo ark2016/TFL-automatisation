@@ -1,12 +1,56 @@
 """Preprocessing for LL analysis: regularity check, pattern detection."""
 from __future__ import annotations
 
+import re
+from re import _parser as regex_parser
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Regularity detection
 # ---------------------------------------------------------------------------
+
+def _is_supported_regular_regex(spec: dict) -> bool:
+    """Recognize regular syntax, independently of the parser agent's flag.
+
+    Use the same Python regex dialect as the membership oracle. The DFA
+    builder's smaller parser treats backreferences as escaped literals, so
+    parsing with it alone cannot certify a regex supplied in the input IR.
+    Unknown regex opcodes fail closed if Python's internal parser changes.
+    """
+    pattern = spec.get("pattern")
+    if spec.get("has_backreferences") is not False or not isinstance(pattern, str):
+        return False
+    try:
+        re.compile(pattern)
+        pending = [regex_parser.parse(pattern)]
+    except (re.error, OverflowError, RecursionError):
+        return False
+
+    while pending:
+        for opcode, argument in pending.pop():
+            operation = str(opcode)
+            if operation in {"LITERAL", "NOT_LITERAL", "ANY", "AT", "CATEGORY"}:
+                continue
+            if operation == "IN":
+                if any(str(op) not in {"LITERAL", "RANGE", "NEGATE", "CATEGORY"}
+                       for op, _ in argument):
+                    return False
+            elif operation == "SUBPATTERN":
+                pending.append(argument[-1])
+            elif operation == "BRANCH":
+                pending.extend(argument[1])
+            elif operation in {"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"}:
+                pending.append(argument[2])
+            elif operation in {"ASSERT", "ASSERT_NOT"}:
+                pending.append(argument[1])
+            elif operation == "ATOMIC_GROUP":
+                pending.append(argument)
+            else:
+                # In particular, GROUPREF and GROUPREF_EXISTS are not
+                # certificates of regularity, even with a false IR flag.
+                return False
+    return True
+
 
 def check_regularity_hints(ir: dict) -> dict:
     """Check if the language appears to be regular based on structural analysis.
@@ -26,7 +70,7 @@ def check_regularity_hints(ir: dict) -> dict:
        language → is_regular=True (finite languages are regular). TODO §1:
        this check used to fire only for Format 3, so Format 2's given
        grammar was never tested for finiteness.
-    2. language_spec kind is "regex" → is_regular=True
+    2. language_spec is a supported regex without backreferences → is_regular=True
     3. Set-builder with no constraints or trivially empty constraints → check
     4. Set-builder where all variables are bounded → may be finite/regular
 
@@ -63,6 +107,13 @@ def check_regularity_hints(ir: dict) -> dict:
     if isinstance(language_spec, dict):
         kind = language_spec.get("kind")
         if kind == "regex":
+            if not _is_supported_regular_regex(language_spec):
+                return {
+                    "is_regular": False,
+                    "confidence": 0.5,
+                    "reason": "Regex regularity is not established: backreferences or unsupported syntax",
+                    "method": None,
+                }
             return {
                 "is_regular": True,
                 "confidence": 1.0,

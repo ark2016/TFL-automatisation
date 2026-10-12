@@ -395,15 +395,14 @@ def test_gate_matches_assemble_result_node(spec, with_contradiction):
     assert plain["evidence"]["reasoning"]["verdict"] == expected["evidence"]["reasoning"]["verdict"]
 
 
-def test_proof_without_reasoning_verdict_leaves_verdict_as_the_graph_does(tmp_path, spec, check):
-    """No reasoning verdict: assemble_result_node does not flip anything, so
-    neither does the separate entry (one shared gate, lib/reg_lean_gate.py)."""
+def test_proof_without_reasoning_verdict_replaces_stale_hypothesis(tmp_path, spec, check):
+    """The public verdict follows the proof even without a reasoning verdict."""
     run_dir = make_run_dir(tmp_path)
     check(tc("proved"))
     run(run_dir, spec, [body_turn("exact h")], direction="regular")
     after = load_result(run_dir)
     assert (after["status"], after["confidence"]) == ("success", 0.98)
-    assert after["verdict"] == "non_regular"
+    assert after["verdict"] == "regular"
     assert after["verdict_gate"]["downgrades"] == [] or not any(
         "overrides" in n for n in after["verdict_gate"]["downgrades"])
 

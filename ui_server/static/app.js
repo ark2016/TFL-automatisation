@@ -435,7 +435,7 @@ async function pollOnce(gen, pickTab) {
   for (const src of [log, detail && detail.run, detail]) {
     if (!src || typeof src !== 'object') continue;
     for (const k of RUN_KEYS) {
-      if (src[k] !== undefined && src[k] !== null) run[k] = src[k];
+      if (src[k] !== undefined && (src[k] !== null || k === 'verdict' || k === 'confidence')) run[k] = src[k];
     }
   }
   if (detail) {
@@ -458,7 +458,7 @@ async function pollOnce(gen, pickTab) {
     }
     // The gate's verdict shows in the header as soon as its event arrives.
     for (const e of evs) {
-      if (e.event === 'verdict' && e.payload && e.payload.verdict) run.liveVerdict = e.payload.verdict;
+      if (e.event === 'verdict' && e.payload && e.payload.verdict !== undefined) run.liveVerdict = e.payload.verdict;
     }
   }
   state.run = run;
@@ -535,8 +535,9 @@ function renderRunHead() {
   rhStatus.title = isFailedResult(r) ? resultErrorText(r) : '';
   rhId.textContent = r.run_id || '—';
   rhProject.textContent = projectLabel(r.project);
-  rhVerdict.textContent = (r.verdict || r.liveVerdict)
-    ? String(r.verdict || r.liveVerdict) + (num(r.confidence) !== null ? ` (${num(r.confidence).toFixed(2)})` : '')
+  const verdict = r.verdict || (isActive(r.status) ? r.liveVerdict : null);
+  rhVerdict.textContent = verdict
+    ? String(verdict) + (num(r.confidence) !== null ? ` (${num(r.confidence).toFixed(2)})` : '')
     : '—';
   const u = r.usage || {};
   rhCost.textContent = fmtUsd(u.estimated_cost_usd ?? 0);

@@ -35,6 +35,7 @@ from .lib.dfa_runner import validate_dfa, run_dfa
 from .lib.hypothesis_module import analyze_hypothesis
 from .lib.type_check import check_lean
 from .lib.progress import ProgressWriter
+from .lib.result_verdict import result_verdict
 
 
 # ---------------------------------------------------------------------------
@@ -636,28 +637,8 @@ def main() -> None:
 
 
 def _result_verdict(result: dict) -> str | None:
-    """Verdict of the reasoning agent (falls back to the hypothesis).
-
-    docs/VERDICT_POLICY.md R3/R1 (reviewer finding): an unresolved
-    contradiction leaves `status == "partial"` with `verdict_gate.
-    contradiction == True` (graph.py's `assemble_result_node`), but that
-    node never clears the reasoning agent's own proposed regular/
-    non_regular verdict field -- only its confidence gets capped. Reading
-    straight through to `reasoning.verdict` here would leak that
-    unconfirmed verdict out as the pipeline's top-level result (and
-    `tfl_eval.runners.extract('reg')` duplicates this same lookup, so it
-    needs the identical guard).
-    """
-    evidence = result.get("evidence", {}) or {}
-    gate = evidence.get("verdict_gate") or result.get("verdict_gate") or {}
-    if result.get("status") == "partial" and gate.get("contradiction"):
-        return None
-    reasoning = evidence.get("reasoning", {}) or {}
-    r_ev = reasoning.get("evidence", reasoning) if isinstance(reasoning, dict) else {}
-    return (r_ev.get("verdict")
-            or reasoning.get("verdict")
-            or result.get("verdict")
-            or (evidence.get("hypothesis", {}) or {}).get("hypothesis"))
+    """Public verdict selected by the REG gate, including legacy results."""
+    return result_verdict(result)
 
 
 # Direct script execution (python agent_system/orchestrator.py) is NOT

@@ -179,6 +179,69 @@ def test_extract_verdict_respects_contradiction_gate():
     assert extract_verdict({"verdict": "cfl", "confidence": 0.9}) == ("cfl", 0.9)
 
 
+@pytest.mark.parametrize("status", ["partial", "failure"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_extract_verdict_rejects_unaccepted_proposals(status, explicit):
+    result = {
+        "status": status,
+        "confidence": 0.4,
+        "evidence": {"reasoning": {"verdict": "non_regular", "confidence": 0.99}},
+    }
+    if explicit:
+        result["verdict"] = "non_regular"
+    assert extract_verdict(result) == (None, 0.4)
+
+
+def test_extract_verdict_preserves_explicit_null_and_gated_direction():
+    result = {
+        "status": "success",
+        "confidence": 0.85,
+        "verdict": None,
+        "evidence": {"reasoning": {"verdict": "non_regular"}},
+    }
+    assert extract_verdict(result) == (None, 0.85)
+    result["verdict"] = "regular"
+    assert extract_verdict(result) == ("regular", 0.85)
+    result["verdict_gate"] = {"contradiction": True}
+    assert extract_verdict(result) == (None, 0.85)
+
+
+@pytest.mark.parametrize("verdict", [
+    "cfl", "non_cfl", "dcfl", "non_dcfl", "ll", "non_ll", "inconclusive", "uncertain",
+])
+def test_extract_verdict_preserves_other_pipeline_decisions(verdict):
+    result = {"verdict": verdict, "confidence": 0.55}
+    assert extract_verdict(result) == (verdict, 0.55)
+
+
+@pytest.mark.parametrize("finish", ["done", "merge"])
+@pytest.mark.parametrize("confidence", [None, 0.4])
+def test_final_unknown_clears_provisional_snapshot_verdict(tmp_path, finish, confidence):
+    writer = ProgressWriter(tmp_path)
+    writer.verdict("regular", 0.99)
+    result = {"status": "partial", "verdict": None, "confidence": confidence}
+    if finish == "done":
+        writer.done(result)
+        event = read_events(tmp_path)[-1]
+        assert event["event"] == "done"
+        assert event["payload"]["verdict"] is None
+        assert event["payload"]["confidence"] == confidence
+    else:
+        writer.node_done("assemble_result_node", {"result": result})
+    snapshot = read_partial(tmp_path)
+    assert snapshot["verdict"] is None
+    assert snapshot["confidence"] == confidence
+    assert snapshot["result"] == result
+
+
+def test_done_without_result_keeps_last_verdict(tmp_path):
+    writer = ProgressWriter(tmp_path)
+    writer.verdict("regular", 0.85)
+    writer.done()
+    snapshot = read_partial(tmp_path)
+    assert (snapshot["verdict"], snapshot["confidence"]) == ("regular", 0.85)
+
+
 # ---------------------------------------------------------------------------
 # REG pipeline integration (mock)
 # ---------------------------------------------------------------------------

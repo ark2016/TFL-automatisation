@@ -102,6 +102,7 @@ def apply_gate(result: dict, block: dict) -> bool:
     result["verdict_gate"] = copy.deepcopy(gate)
     result["status"] = decision["status"]
     result["confidence"] = decision["confidence"]
+    result["verdict"] = direction
     return True
 
 

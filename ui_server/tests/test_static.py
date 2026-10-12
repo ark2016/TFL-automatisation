@@ -50,6 +50,60 @@ def test_app_js_parses():
     assert r.returncode == 0, r.stderr
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+@pytest.mark.parametrize("initial,detail,expected", [
+    ({"status": "running", "liveVerdict": "non_regular"},
+     {"status": "running"}, "non_regular"),
+    ({"status": "running", "liveVerdict": "non_regular"},
+     {"status": "running", "events": [
+         {"event": "verdict", "payload": {"verdict": None, "final": True}},
+     ]}, "—"),
+    ({"status": "running", "liveVerdict": "non_regular"},
+     {"status": "completed", "verdict": None}, "—"),
+    ({"status": "formalizing", "verdict": "regular", "confidence": 0.99},
+     {"status": "completed", "verdict": None, "confidence": None}, "—"),
+    ({"status": "running", "liveVerdict": "regular"},
+     {"status": "completed", "verdict": "non_regular", "confidence": 0.85},
+     "non_regular (0.85)"),
+])
+def test_run_header_keeps_final_decision_separate_from_progress(initial, detail, expected):
+    import json
+
+    helpers = APP[APP.index("const ACTIVE ="):APP.index("function formalizeBlockReason(")]
+    numbers = APP[APP.index("function num(v)"):APP.index("function fmtUsd(v)")]
+    poll = APP[APP.index("const RUN_KEYS ="):APP.index("function updateStatusLine()")]
+    header = APP[APP.index("function renderRunHead()"):APP.index("// Keep the clock of an active run")]
+    script = helpers + numbers + poll + header + r"""
+const input = JSON.parse(process.argv[1]);
+const state = {run: input.initial, runId: 'test', pollGen: 1, cursor: 0, events: [], resultLoaded: true};
+const element = () => ({textContent: '', classList: {add() {}, remove() {}}});
+const runHead = element(), rhStatus = element(), rhId = element(), rhProject = element();
+const rhVerdict = element(), rhCost = element(), rhUsage = element(), rhElapsed = element();
+const logBadge = element();
+const api = async path => path.startsWith('/log/') ? {lines: []} : input.detail;
+const renderProgress = () => {}, syncRunButtons = () => {}, updateStatusLine = () => {};
+const renderLog = () => {}, loadResult = () => {}, refreshRuns = () => {};
+const refreshEstimate = () => {}, activateTab = () => {};
+const projectLabel = value => value || '', fmtUsd = () => '', fmtTok = () => '', runElapsedText = () => '';
+(async () => {
+  await pollOnce(1, false);
+  console.log(JSON.stringify({header: rhVerdict.textContent, run: state.run}));
+})().catch(error => { console.error(error); process.exit(1); });
+"""
+    result = subprocess.run(
+        ["node", "-e", script, json.dumps({"initial": initial, "detail": detail})],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stderr
+    actual = json.loads(result.stdout)
+    assert actual["header"] == expected
+    for key in ("verdict", "confidence"):
+        if key in detail:
+            assert actual["run"][key] == detail[key]
+    if detail.get("events"):
+        assert actual["run"]["liveVerdict"] is None
+
+
 # ---------------------------------------------------------------------------
 # Progress tab model (buildModel), run under node on synthetic events
 # ---------------------------------------------------------------------------
