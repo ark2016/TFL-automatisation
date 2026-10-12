@@ -350,7 +350,7 @@ FIRST/FOLLOW и локальные σ вычисляются до настоящ
   ⋃_k LL(k) ⊊ DCFL = LR(1); собственность первого включения также следует из примеров ниже.
 - Всякая LL(k)-грамматика — LR(k) и однозначна.
 - **Не замкнуты относительно ∪**: {aⁿbⁿ} и {aⁿcⁿ} — LL(1), их объединение — не LL(k) ни при каком k (п. 3.3).
-- **Не замкнуты относительно ∩ REG.** **[ошибка]** `ll_system/CLAUDE.md`: «LL ∩ REG = LL».
+- **Не замкнуты относительно ∩ REG.** **[ошибка]** прежние заметки `ll_system`: «LL ∩ REG = LL».
   Контрпример: L = {aⁿw | w ∈ {b,c}ⁿ, n ≥ 0} — LL(1) (S → aSX | ε, X → b | c; director(S→aSX) = {a},
   director(S→ε) = {b, c, $}), R = a*b* ∪ a*c* регулярен, L ∩ R = {aⁿbⁿ} ∪ {aⁿcⁿ} — не LL.
 - Замкнутость относительно дополнения/конкатенации без источника не утверждать.
@@ -421,14 +421,14 @@ LL-язык был бы регулярным): конфигурация вклю
 | `dcfl_system/prompts/dcfl_pumping.md`, `tz_dcfl` §5.4, §6.1.3 | формулировка 1.1 (пара (x₂,x₄) в условии (1)); пример {aⁿbⁿ}∪{aⁿb²ⁿ}; ловушка {aⁿbⁿcᵐ}; поля контракта `condition1_argument` (пары внутри x) и `condition2_argument` |
 | `dcfl_system/prompts/shallit.md`, `tz_dcfl` §5.5, §6.1.4, `lib/oracle_verifier.py::_verify_shallit`, моки `*_shallit.json` | теорема 4.7.4 в форме 1.2 + лемма о продолжении 1.3 (`technique`: `nerode_classes` \| `prefix_continuation`); обязательное поле `dead_class_status ∈ {empty, infinite}` для `nerode_classes` (D замкнут справа, поэтому «конечен» ⇔ «пуст»); `not_applicable`, если мёртвый класс бесконечен |
 | `dcfl_system/prompts/closure_reduction.md` | таблица 1.4 (добавить L/R, MIN, MAX, haspref/L_$ как ссылку на shallit) |
-| `dcfl_system/CLAUDE.md`, `README.md` | формулировки 1.1–1.3, ссылка на этот файл |
+| заметки `dcfl_system`, `README.md` | формулировки 1.1–1.3, ссылка на этот файл |
 | `dcfl_system/tests` | тест-ловушки: проверка формулировок в промптах (contract-тест), {aⁿbⁿcᵐ} в объяснении леммы Ю |
 | `cfl_system/prompts/cfl_closure_reduction.md`, `cfl_pumping.md`, `cfl_reasoning.md`, `cfl_retry_planner.md`, `tz_cfl_agent_system.md` | пример раздела 2 (R = a⁺b⁺ac·a⁺b⁺ac); в `cfl_pumping.md` Example 2 → честный `uncertain` |
 | `cfl_system/tests/test_prompt_examples.py` (новый) | перебор из раздела 2: пересечение и накачка вниз |
 | `ll_system/lib/ll_table_builder.py`, `first_follow.py` | полный LL(k)-тест 3.1 (`check_ll_k` → LL(k), `is_strong_ll_k` отдельно, бюджет), `find_min_ll_k`: левая рекурсия ⇒ сертификат, `max_k_checked` |
 | `ll_system/orchestrator.py` | вердикт «не LL(k)» только по полному тесту; при отсутствии сертификата — «k ≤ K», не conclusive |
 | `ll_system/tests` | регрессия S→aAaa\|bAba, A→b\|ε (LL(2), не SLL(2), SLL(3)); левая рекурсия; LL(1)=SLL(1) |
-| `ll_system/CLAUDE.md` | замкнутость 3.2; strong vs LL |
+| заметки `ll_system` | замкнутость 3.2; strong vs LL |
 | `ll_system/prompts/ll_prefix_classes_agent.md`, `ll_substitution_agent.md`, `tz_ll` §4.7/§4.9, `lib/claim_verifier.py`, моки | теория 3.3: prefix_classes → теорема 4.7.4 (⇒ не DCFL ⇒ не LL) с полем `dead_class_finite`; substitution → аргумент «развилки» (C) с полями `common_prefix`, `branch_words`, `deciding_nonterminal_argument`, `pigeonhole_argument` |
 | `TODO.md` §1 | закрыть пункты Шаллита, CFL-примера, LL ∩ REG; уточнить пункт strong LL(k) |
 
@@ -539,7 +539,7 @@ c перед a нет). Объединение двух дизъюнктных �
 Мок `dcfl_exam_03_dcfl_pumping.json` → success с этим доказательством; reasoning → primary dcfl_pumping.
 
 ## 1.9. Ещё по DCFL-документации
-- `dcfl_system/CLAUDE.md`: «For every DCFL there exists an SLR(1) grammar» → без источника не утверждать;
+- заметки `dcfl_system`: «For every DCFL there exists an SLR(1) grammar» → без источника не утверждать;
   заменить на «у каждого DCFL есть LR(1)-грамматика; L$ — LR(0)»:
   проверен [оригинал Knuth 1965](https://harrymoreno.com/assets/greatPapersInCompSci/2.5_-_On_the_translation_of_languages_from_left_to_right-Donald_E._Knuth.pdf),
   печатные с. 630–636; однозначность LR(k) — с. 611.
@@ -766,8 +766,8 @@ T → c | aSab | bTb (FIRST попарно дизъюнктны).
 | Где | Что |
 |---|---|
 | `agent_system/prompts/grammar_analyzer.md`, `proof_checker.md`, `reasoning_agent.md`, `nerode_agent.md` | §0 |
-| `dcfl_system/prompts/stack_strategy.md`, `inh_ambiguity.md`, `shallit.md` (+пример L₂ и приём с ∩REG/частным/φ⁻¹), `closure_reduction.md` (пример exam_01), `dcfl_system/CLAUDE.md` (SLR), `lib/pattern_db.py` | §1.6–1.9 |
-| `dcfl_system/examples/mock/dcfl_exam_01_*`, `_02_*`, `_03_*`, `tests/test_orchestrator.py` TASKS, `examples/output/*` если генерируются | exam_01 → non_dcfl (closure_reduction/shallit), exam_02 → non_dcfl (shallit: L₂), exam_03 → non_dcfl через dcfl_pumping, inh_ambiguity → not_applicable |
+| `dcfl_system/prompts/stack_strategy.md`, `inh_ambiguity.md`, `shallit.md` (+пример L₂ и приём с ∩REG/частным/φ⁻¹), `closure_reduction.md` (пример exam_01), заметки `dcfl_system` (SLR), `lib/pattern_db.py` | §1.6–1.9 |
+| `dcfl_system/examples/mock/dcfl_exam_01_*`, `_02_*`, `_03_*`, `tests/test_orchestrator.py` TASKS | exam_01 → non_dcfl (closure_reduction/shallit), exam_02 → non_dcfl (shallit: L₂), exam_03 → non_dcfl через dcfl_pumping, inh_ambiguity → not_applicable |
 | `cfl_system/prompts/cfl_classifier.md`, `cfl_cfg_builder.md`, `cfl_reasoning.md`, `cfl_interchange.md`, `cfl_retry_planner.md`, `tz_cfl_agent_system.md`, моки `task_grammar_filter_49_*`, `tests/test_e2e.py`, `tests/test_prompt_examples.py` (+ тест Огдена по §2.3) | §2.3–2.4 |
 | `ll_system/prompts/ll_classifier.md`, `ll_marker_analyzer.md`, `ll_grammar_builder.md`, `ll_reasoning_agent.md`, `ll_grammar_transformer.md`, `ll_ambiguity_detector.md`, `ll_substitution_agent.md` (второй пример {aⁱbʲ \| i ≥ j} и лемма), моки `wbcwR_*`, `tests/test_orchestrator.py` | §3.4–3.5 |
 | `README.md`, `TODO.md` | эталоны E2E исправлены; запись про grammar_filter_49 переписана |
