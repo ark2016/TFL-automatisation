@@ -10,7 +10,7 @@ import pytest
 
 from agent_system.config import EFFORT, MODELS
 from agent_system.lib import llm_client
-from agent_system.lib.llm_client import LLMRunner, _is_adaptive_model
+from agent_system.lib.llm_client import LLMRunner, _is_adaptive_model, system_text
 
 
 def _api_error(cls, status_code: int):
@@ -175,7 +175,7 @@ def test_student_notes_appear_only_once(runner):
 
     kwargs = runner._client.messages.stream.call_args.kwargs
     user_content = kwargs["messages"][0]["content"]
-    assert kwargs["system"].count(note) == 1
+    assert system_text(kwargs["system"]).count(note) == 1
     assert note not in user_content
     assert "student_notes" not in user_content
 
@@ -194,7 +194,7 @@ def test_student_notes_nested_in_ir_appear_only_once(runner):
 
     kwargs = runner._client.messages.stream.call_args.kwargs
     user_content = kwargs["messages"][0]["content"]
-    assert kwargs["system"].count(note) == 1
+    assert system_text(kwargs["system"]).count(note) == 1
     assert note not in user_content
     assert "language_spec" in user_content
 

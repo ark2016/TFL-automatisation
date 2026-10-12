@@ -171,6 +171,7 @@ def _aggregate_usage(records: list[dict]) -> dict:
     and estimated cost when every contributing record's cost is known."""
     total_calls = 0
     input_tokens = output_tokens = 0
+    cache_read_tokens = cache_write_tokens = 0
     total_tokens = 0
     structured_output_calls = 0
     extraction_fallback_calls = 0
@@ -186,6 +187,8 @@ def _aggregate_usage(records: list[dict]) -> dict:
         total_calls += usage.get("calls", 0) or 0
         input_tokens += usage.get("input_tokens", 0) or 0
         output_tokens += usage.get("output_tokens", 0) or 0
+        cache_read_tokens += usage.get("cache_read_input_tokens", 0) or 0
+        cache_write_tokens += usage.get("cache_creation_input_tokens", 0) or 0
         total_tokens += usage.get("total_tokens", 0) or 0
         structured_output_calls += usage.get("structured_output_calls", 0) or 0
         extraction_fallback_calls += usage.get("extraction_fallback_calls", 0) or 0
@@ -201,6 +204,8 @@ def _aggregate_usage(records: list[dict]) -> dict:
         "calls": total_calls,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "cache_read_input_tokens": cache_read_tokens,
+        "cache_creation_input_tokens": cache_write_tokens,
         "total_tokens": total_tokens,
         "structured_output_calls": structured_output_calls,
         "extraction_fallback_calls": extraction_fallback_calls,

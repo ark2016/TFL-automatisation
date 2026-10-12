@@ -286,17 +286,21 @@ class LiveRunner:
 
     def _build_request_kwargs(self, model: str, max_tokens: int,
                               temperature: float, system_prompt: str,
-                              user_msg: str, effort: str | None = None) -> dict:
+                              user_msg: str, effort: str | None = None,
+                              cache_system: bool = True) -> dict:
         """Build kwargs for messages.stream / messages.create.
 
         Thinking models get `thinking: adaptive` + an explicit effort level
         (Opus 5.5 would silently default to "medium"); legacy models get
         `temperature` instead. Delegates to the shared AnthropicClient so
-        every pipeline builds kwargs the same way (TODO.md §3).
+        every pipeline builds kwargs the same way (TODO.md §3). The system
+        prompt carries the prompt-caching breakpoint (everything task-specific
+        is in `user_msg`); `cache_system=False` is for the short Haiku
+        JSON-repair call.
         """
         return self._shared.build_request_kwargs(
             model, max_tokens, system_prompt, user_msg,
-            effort=effort, temperature=temperature,
+            effort=effort, temperature=temperature, cache_system=cache_system,
         )
 
     @staticmethod
@@ -364,6 +368,7 @@ class LiveRunner:
         request_kwargs = self._build_request_kwargs(
             model=self._json_repair_model, max_tokens=repair_max_tokens,
             temperature=0.0, system_prompt=system, user_msg=user_msg,
+            cache_system=False,
         )
         try:
             with get_concurrency_semaphore():

@@ -46,7 +46,9 @@ def test_emit_lines_have_contract_fields(tmp_path):
     assert [e["event"] for e in events] == ["node_start", "node_done"]
     for e in events:
         assert set(e) == {"ts", "event", "node", "payload", "usage"}
-        assert set(e["usage"]) == {"calls", "input_tokens", "output_tokens", "estimated_cost_usd"}
+        assert set(e["usage"]) == {"calls", "input_tokens", "output_tokens",
+                                   "cache_read_input_tokens", "cache_creation_input_tokens",
+                                   "estimated_cost_usd"}
         assert e["usage"]["estimated_cost_usd"] == 0.0
     assert events[1]["payload"]["summary"]["hypothesis"]["hypothesis"] == "regular"
 

@@ -209,6 +209,18 @@ across all four pipelines share one process-wide semaphore, sized by the `TFL_MA
 `UsageTracker` accumulates tokens/cache-hit/cost per run (`as_dict()`) and is now wired into each pipeline's
 top-level result JSON and CLI `--verbose` output, so every run reports its own token/cost usage block.
 
+**Prompt caching.** The large, stable per-agent system prompt (15-30 KB) is sent by `build_request_kwargs()` as a
+`system` text block carrying `cache_control: {"type": "ephemeral"}` (default 5-minute TTL); everything task-specific
+(task IR, retry/error context, and in REG the "Student Notes" section, which goes in a second unmarked `system` block)
+comes after the breakpoint, so repeat calls of the same agent (JSON retries, prover attempts, consecutive tasks of an
+eval batch, all inside five minutes) read the prompt at 0.1x input price (0.05x on Opus 5.5) instead of paying full
+price; a write costs 1.25x. This covers the REG `LLMRunner`, the three `LiveRunner`s and the Lean prover calls
+(`formalize_run.LiveSource`); the short Haiku JSON-repair and quick-validate calls are not cached
+(`cache_system=False`). Cache buckets appear as `cache_read_input_tokens` / `cache_creation_input_tokens` in the
+`usage` block, the progress events, the TFL Lab run header and `tfl-eval` totals; `input_tokens` is the uncached
+remainder only. Minimum cacheable prefix: 512 tokens on Opus/Sonnet 5.5, 4096 on Haiku 4.5 (shorter prompts are sent
+normally and simply not cached). Keep the cached block free of timestamps, ids and unsorted JSON.
+
 **Structured outputs.** Agent responses are parsed primarily via the Messages API's `output_config.format`
 (a closed per-agent JSON schema built by `build_agent_output_schema()` / `agent_output_schema.py` in each
 system), which sidesteps the old "first `{` to last `}`" heuristic breaking on set-builder notation like

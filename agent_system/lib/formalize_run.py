@@ -295,6 +295,8 @@ def _sum_usage(tracker: UsageTracker) -> dict:
         "calls": d["calls"],
         "input_tokens": d["input_tokens"],
         "output_tokens": d["output_tokens"],
+        "cache_read_input_tokens": d.get("cache_read_input_tokens", 0),
+        "cache_creation_input_tokens": d.get("cache_creation_input_tokens", 0),
         "estimated_cost_usd": d["estimated_cost_usd"] if d["calls"] else 0.0,
     }
 
@@ -316,6 +318,8 @@ class Proposal:
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_input_tokens: int = 0       # prompt cache (input_tokens is the uncached rest)
+    cache_creation_input_tokens: int = 0
     cost_usd: float | None = None
     salvaged: bool = False          # body cut out of a truncated JSON reply
 
@@ -380,6 +384,8 @@ class LiveSource:
             stop_reason=res.stop_reason, model=res.model or model,
             input_tokens=getattr(usage, "input_tokens", 0) or 0,
             output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+            cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
             cost_usd=estimate_cost_usd(res.model or model, usage),
             truncated=res.stop_reason == "max_tokens",
         )
@@ -795,6 +801,9 @@ def _run_loop(prep: Prepared, spec: SystemSpec, settings: FormalizeSettings,
             "stop_reason": prop.stop_reason, "input_tokens": prop.input_tokens,
             "output_tokens": prop.output_tokens, "cost_usd": prop.cost_usd,
         }
+        if prop.cache_read_input_tokens or prop.cache_creation_input_tokens:
+            rec["cache_read_input_tokens"] = prop.cache_read_input_tokens
+            rec["cache_creation_input_tokens"] = prop.cache_creation_input_tokens
         if prop.notes:
             rec["notes"] = prop.notes
         attempts.append(rec)

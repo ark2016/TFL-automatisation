@@ -16,7 +16,10 @@ Files in ``run_dir``
          "node": "run_reasoning_node",          # "" when not node-bound
          "payload": {...},                      # event-specific, small
          "usage": {"calls": 3, "input_tokens": 1200, "output_tokens": 800,
+                   "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
                    "estimated_cost_usd": 0.0421}}   # CUMULATIVE for the run
+                   # (input_tokens = uncached part only; the cache_* buckets are
+                   # prompt-cache reads / writes, priced into estimated_cost_usd)
 
     Payloads:
 
@@ -79,6 +82,7 @@ _SKIP_STATE_KEYS = frozenset({
 _ACCUMULATING_KEYS = frozenset({"specialist_outputs", "errors", "call_cap_notes"})
 
 _ZERO_USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+               "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
                "estimated_cost_usd": 0.0}
 
 
@@ -273,6 +277,8 @@ class ProgressWriter:
                     "calls": int(d.get("calls") or 0),
                     "input_tokens": int(d.get("input_tokens") or 0),
                     "output_tokens": int(d.get("output_tokens") or 0),
+                    "cache_read_input_tokens": int(d.get("cache_read_input_tokens") or 0),
+                    "cache_creation_input_tokens": int(d.get("cache_creation_input_tokens") or 0),
                     "estimated_cost_usd": d.get("estimated_cost_usd"),
                 }
                 if cur["calls"] == 0 and cur["estimated_cost_usd"] is None:
@@ -287,6 +293,12 @@ class ProgressWriter:
             "calls": cur["calls"] + int(base.get("calls") or 0),
             "input_tokens": cur["input_tokens"] + int(base.get("input_tokens") or 0),
             "output_tokens": cur["output_tokens"] + int(base.get("output_tokens") or 0),
+            # prompt-cache buckets (absent in progress files written before
+            # prompt caching -> 0); input_tokens above is the UNCACHED part only
+            "cache_read_input_tokens": cur.get("cache_read_input_tokens", 0)
+            + int(base.get("cache_read_input_tokens") or 0),
+            "cache_creation_input_tokens": cur.get("cache_creation_input_tokens", 0)
+            + int(base.get("cache_creation_input_tokens") or 0),
             "estimated_cost_usd": total_cost,
         }
         return out
