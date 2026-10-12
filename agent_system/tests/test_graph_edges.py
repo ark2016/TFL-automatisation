@@ -247,7 +247,7 @@ class TestEscalateAction(unittest.TestCase):
             },
         )
         result = assemble_result_node(state)["result"]
-        self.assertAlmostEqual(result["confidence"], 0.85)
+        self.assertAlmostEqual(result["confidence"], 0.40)
 
 
 # ── decide_retry routing ──────────────────────────────────────────────────

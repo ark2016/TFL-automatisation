@@ -10,7 +10,8 @@ priority over every other track: status ``success``, confidence
 ``CONFIDENCE_CAPS["verified"]`` (0.98), no contradiction left standing. When
 the reasoning agent's verdict is set and disagrees with the proven direction,
 the reasoning verdict flips to the proven direction (recorded in
-``downgrades``). Without a reasoning verdict the verdict is left alone.
+``downgrades``). Without a reasoning verdict that diagnostic field is left
+alone; the public result verdict still follows the proven direction.
 """
 
 from __future__ import annotations

@@ -11,6 +11,7 @@ import html as html_module
 from pathlib import Path
 from typing import Any
 
+from .result_verdict import result_verdict
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -442,6 +443,7 @@ def render_markdown(result: dict) -> str:
 
     # --- Итог ---
     _add("## Итог")
+    _add(f"**Вердикт:** {result_verdict(result) or 'не определено'}  ")
     _add(f"**Статус:** {result.get('status', 'unknown')}  ")
     _add(f"**Уверенность:** {result.get('confidence', 'N/A')}")
     verdict_gate = result.get("verdict_gate") or evidence.get("verdict_gate")
@@ -569,9 +571,7 @@ def render_html(result: dict) -> str:
     # --- Determine final verdict ---
     reasoning = evidence.get("reasoning")
     reas_ev = (reasoning or {}).get("evidence", reasoning or {})
-    final_verdict = (reas_ev.get("verdict")
-                     or (reasoning or {}).get("verdict")
-                     or evidence.get("hypothesis", {}).get("hypothesis", "unknown"))
+    final_verdict = result_verdict(result)
     final_confidence = result.get("confidence", 0.0)
 
     # Badge

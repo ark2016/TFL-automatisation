@@ -132,24 +132,11 @@ def extract(system: str, result: dict) -> dict:
     pipelines already expose `verdict`/`confidence` at the top level.
     """
     if system == "reg":
+        from agent_system.lib.result_verdict import result_verdict
+
         evidence = result.get("evidence", {}) or {}
         gate = evidence.get("verdict_gate") or result.get("verdict_gate") or {}
-        # docs/VERDICT_POLICY.md R3/R1 (reviewer finding): an unresolved
-        # contradiction (status=="partial", verdict_gate.contradiction=True)
-        # must not surface the reasoning agent's own proposed regular/
-        # non_regular verdict as if it were confirmed — see the matching
-        # guard in agent_system.orchestrator._result_verdict.
-        if result.get("status") == "partial" and gate.get("contradiction"):
-            verdict = None
-        else:
-            reasoning = evidence.get("reasoning", {}) or {}
-            r_ev = reasoning.get("evidence", reasoning) if isinstance(reasoning, dict) else {}
-            verdict = (
-                r_ev.get("verdict")
-                or reasoning.get("verdict")
-                or result.get("verdict")
-                or (evidence.get("hypothesis") or {}).get("hypothesis")
-            )
+        verdict = result_verdict(result)
         confidence = result.get("confidence")
         k = None
     else:

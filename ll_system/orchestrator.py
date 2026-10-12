@@ -777,6 +777,18 @@ def _run_ll_k_oracle_on(grammar: dict, requested_k: int | None) -> dict:
     return ff_result
 
 
+def _constructive_grammar(output: dict) -> dict | None:
+    """Select the same candidate artifact for the oracle and final report."""
+    proof_sketch = output.get("proof_sketch") or {}
+    return (
+        proof_sketch.get("grammar")
+        or proof_sketch.get("ll_grammar")
+        or proof_sketch.get("transformed_grammar")
+        or (output.get("artifacts") or {}).get("ll_grammar")
+        or output.get("grammar")
+    )
+
+
 def first_follow_oracle_node(state: PipelineState) -> dict:
     """Run LL(k) oracle on a grammar.
 
@@ -808,14 +820,7 @@ def first_follow_oracle_node(state: PipelineState) -> dict:
         for agent_name in ("ll_grammar_builder", "marker_analyzer", "grammar_transformer"):
             out = agent_results.get(agent_name, {})
             if isinstance(out, dict):
-                proof_sketch = out.get("proof_sketch") or {}
-                g = (
-                    proof_sketch.get("grammar")
-                    or proof_sketch.get("ll_grammar")
-                    or proof_sketch.get("transformed_grammar")
-                    or out.get("artifacts", {}).get("ll_grammar")
-                    or out.get("grammar")
-                )
+                g = _constructive_grammar(out)
                 if g:
                     candidates.append((agent_name, g))
 
@@ -1812,13 +1817,7 @@ def assemble_result_node(state: PipelineState) -> dict:
         if not isinstance(out, dict):
             return None, None
         ps = out.get("proof_sketch") or {}
-        g = (
-            ps.get("grammar")
-            or ps.get("ll_grammar")
-            or ps.get("transformed_grammar")
-            or out.get("grammar")
-            or out.get("artifacts", {}).get("ll_grammar")
-        )
+        g = _constructive_grammar(out)
         if g:
             return {"method": ps.get("method", "ll_grammar_construction"), "details": ps}, g
         return None, None
@@ -1848,15 +1847,18 @@ def assemble_result_node(state: PipelineState) -> dict:
                 "min_k": ff.get("min_k"),
                 "checked_k": ff.get("checked_k"),
                 "conflicts": ff.get("conflicts", []),
+                "grammar_source": ff.get("grammar_source"),
             },
         }
-        # Pull grammar from constructive agents using the same fixed order as the
-        # oracle node, so the grammar shown in the result is the one oracle checked.
-        for agent_name in ("ll_grammar_builder", "marker_analyzer", "grammar_transformer"):
-            _, g = _extract_constructive_proof(agent_name)
-            if g is not None:
-                grammar = g
-                break
+        # The oracle may have checked the task's grammar or skipped earlier
+        # candidates. Never attach another artifact to its verification result.
+        grammar_source = ff.get("grammar_source")
+        if grammar_source == "given_grammar":
+            grammar = ir.get("language_spec")
+        elif grammar_source == "task_grammar":
+            grammar = ir.get("grammar")
+        elif grammar_source in _CONSTRUCTIVE_AGENTS:
+            _, grammar = _extract_constructive_proof(grammar_source)
     elif verdict != "not_ll":
         # Try primary agent first, then fall back to all constructive agents
         candidates = (

@@ -67,6 +67,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .result_verdict import result_verdict as reg_result_verdict
+
 PROGRESS_FILENAME = "progress.jsonl"
 PARTIAL_FILENAME = "partial_result.json"
 
@@ -132,24 +134,24 @@ def _dig_verdict(d: Any) -> tuple[Any, Any]:
 def extract_verdict(result: Any) -> tuple[Any, Any]:
     """(verdict, confidence) of an assembled pipeline result, any system.
 
-    Mirrors ``agent_system.orchestrator._result_verdict``: an unresolved
-    contradiction (partial + ``verdict_gate.contradiction``) yields no
-    verdict."""
+    An explicit final verdict, including null, supersedes agent proposals.
+    Legacy REG results use the same gated reader as reports and the CLI."""
     if not isinstance(result, dict):
         return None, None
     ev = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
-    gate = ev.get("verdict_gate") or result.get("verdict_gate") or {}
-    if (result.get("status") == "partial" and isinstance(gate, dict)
-            and gate.get("contradiction")):
+    if result.get("status") in ("partial", "failure"):
         return None, result.get("confidence")
+    if "verdict" in result:
+        verdict = result["verdict"]
+        if verdict in ("regular", "non_regular"):
+            verdict = reg_result_verdict(result)
+        return verdict, result.get("confidence")
+
     verdict, conf = _dig_verdict(result)
-    if verdict is None:
-        verdict, conf2 = _dig_verdict(ev.get("reasoning"))
-        conf = conf if conf is not None else conf2
-    if verdict is None:
-        hyp = ev.get("hypothesis")
-        if isinstance(hyp, dict):
-            verdict = hyp.get("hypothesis")
+    if "reasoning" in ev or "hypothesis" in ev:
+        verdict = reg_result_verdict(result)
+        if conf is None:
+            _, conf = _dig_verdict(ev.get("reasoning"))
     return verdict, conf
 
 
@@ -396,9 +398,8 @@ class ProgressWriter:
             with self._lock:
                 if result is not None:
                     self._result = jsonable(result)
+                    self._verdict = (verdict, conf)
                 self._status = "done"
-                self._verdict = (verdict if verdict is not None else self._verdict[0],
-                                 conf if conf is not None else self._verdict[1])
                 self.emit("done", "", {
                     "verdict": verdict, "confidence": conf,
                     "status": (result or {}).get("status") if isinstance(result, dict) else None,
@@ -422,8 +423,7 @@ class ProgressWriter:
                 if key == "result" and isinstance(safe, dict) and safe:
                     self._result = safe
                     v, c = extract_verdict(safe)
-                    if v is not None or c is not None:
-                        self._verdict = (v, c)
+                    self._verdict = (v, c)
                     continue
                 if key in _ACCUMULATING_KEYS and isinstance(safe, list):
                     cur = self._acc.get(key)

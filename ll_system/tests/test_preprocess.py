@@ -214,6 +214,44 @@ class TestCheckRegularityHints:
         result = check_regularity_hints(IR_FORMAT3_REGEX)
         assert result["method"] == "regex_pattern"
 
+    @pytest.mark.parametrize("declared_backreferences", [True, False, None])
+    @pytest.mark.parametrize("pattern", [r"([ab]*)\1", r"(?P<word>[ab]*)(?P=word)",
+                                         r"(?=([ab]*)\1)[ab]*"])
+    def test_backreferences_never_certify_regularity(self, pattern, declared_backreferences):
+        spec = {"kind": "regex", "pattern": pattern}
+        if declared_backreferences is not None:
+            spec["has_backreferences"] = declared_backreferences
+        result = check_regularity_hints({"language_spec": spec})
+        assert result["is_regular"] is False
+        assert result["method"] is None
+
+    @pytest.mark.parametrize("pattern", [None, 3, "[ab", "a(**)", r"(?R)",
+                                         r"(a)?(?(1)b|c)", r"(?<=a*)b"])
+    def test_invalid_or_unsupported_regex_does_not_certify_regularity(self, pattern):
+        result = check_regularity_hints({"language_spec": {
+            "kind": "regex", "pattern": pattern, "has_backreferences": False,
+        }})
+        assert result["is_regular"] is False
+        assert result["method"] is None
+
+    @pytest.mark.parametrize("pattern", ["", "(a|b)*", "[a-z]+", r"\d{1,3}",
+                                         r"(?:ab)?c*", r"(?P<word>[ab]*)", r"^a*$",
+                                         r"\(a\)\\1", r"(?=ab)[ab]*", r"(?>a*)b",
+                                         r"a*+b", r"a*?b"])
+    def test_supported_regular_regex_remains_certified(self, pattern):
+        result = check_regularity_hints({"language_spec": {
+            "kind": "regex", "pattern": pattern, "has_backreferences": False,
+        }})
+        assert result["is_regular"] is True
+        assert result["method"] == "regex_pattern"
+
+    @pytest.mark.parametrize("declared_backreferences", [True, None, 0, "false"])
+    def test_regex_requires_explicit_false_backreference_flag(self, declared_backreferences):
+        result = check_regularity_hints({"language_spec": {
+            "kind": "regex", "pattern": "a*", "has_backreferences": declared_backreferences,
+        }})
+        assert result["is_regular"] is False
+
     def test_recursive_grammar_not_regular(self):
         result = check_regularity_hints(IR_FORMAT3_LL1)
         assert result["is_regular"] is False

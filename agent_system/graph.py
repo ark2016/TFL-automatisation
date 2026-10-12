@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import operator
 import os
 import sys
@@ -1711,15 +1712,24 @@ def assemble_result_node(state: PipelineState) -> dict:
 
     def _bounded(value: Any, cap: float) -> float:
         try:
-            return min(float(value), cap)
+            number = float(value)
         except (TypeError, ValueError):
             return cap
+        return min(max(number, 0.0), cap) if math.isfinite(number) else cap
 
     # Escalation → needs human review, never mark as "success"
     if reasoning_action == "escalate":
         status = "partial"
-        confidence = float(reasoning_confidence or hypothesis.get("confidence", 0.0))
+        confidence = _bounded(
+            reasoning_confidence if reasoning_confidence is not None
+            else hypothesis.get("confidence", 0.0),
+            CONFIDENCE_CAPS["not_verified"],
+        )
         evidence["needs_human_review"] = True
+        downgrades.append(
+            "reasoning escalated for human review -> no verdict, "
+            "confidence <= 0.40 (VERDICT_POLICY.md §2)"
+        )
     else:
         # -- Lean formal proof (docs/VERDICT_POLICY.md R-Lean): a
         #    deterministic `status == "proved"` result (no compile errors,
@@ -1762,6 +1772,7 @@ def assemble_result_node(state: PipelineState) -> dict:
             # `agent_system.formalize.apply_gate` (lib/reg_lean_gate.py).
             status = lean_decision["status"]
             confidence = lean_decision["confidence"]
+            selected_verdict = lean_decision["direction"]
             basis.append(lean_decision["basis"])
             if lean_decision["override"]:
                 downgrades.append(lean_decision["downgrade"])
@@ -1798,6 +1809,7 @@ def assemble_result_node(state: PipelineState) -> dict:
                     "(VERDICT_POLICY.md R3')"
                 )
                 _set_reasoning_verdict(evidence, "regular")
+                selected_verdict = "regular"
             elif cross_check["constructive_refuted"] and not cross_check["destructive_refuted"]:
                 # R3' resolved it the other way: the DFA itself is wrong ->
                 # non_regular, capped at the destructive proof's own ceiling.
@@ -1811,6 +1823,7 @@ def assemble_result_node(state: PipelineState) -> dict:
                     "(VERDICT_POLICY.md R3')"
                 )
                 _set_reasoning_verdict(evidence, "non_regular")
+                selected_verdict = "non_regular"
             else:
                 # Unresolved (neither refuted, both refuted, or the
                 # cross-check couldn't run at all) -- stays inconclusive.
@@ -1841,6 +1854,7 @@ def assemble_result_node(state: PipelineState) -> dict:
             # refuted, absent, or even passed) is never earned.
             if destructive_ok:
                 status = "success"
+                selected_verdict = "non_regular"
                 confidence = _bounded(reasoning_confidence, _cap(destructive_trust))
                 if constructive_trust == "refuted":
                     downgrades.append(
@@ -1865,6 +1879,7 @@ def assemble_result_node(state: PipelineState) -> dict:
                     "admissible basis: regular (bounded_pass) (VERDICT_POLICY.md R4')"
                 )
                 _set_reasoning_verdict(evidence, "regular")
+                selected_verdict = "regular"
             else:
                 status = "partial"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
@@ -1882,6 +1897,7 @@ def assemble_result_node(state: PipelineState) -> dict:
             # oracle_test) is never evidence FOR regular on its own.
             if constructive_trust == "bounded_pass":
                 status = "success"
+                selected_verdict = "regular"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
             elif destructive_ok:
                 # docs/VERDICT_POLICY.md R4' — reasoning's own regular
@@ -1898,6 +1914,7 @@ def assemble_result_node(state: PipelineState) -> dict:
                     "(VERDICT_POLICY.md R4')"
                 )
                 _set_reasoning_verdict(evidence, "non_regular")
+                selected_verdict = "non_regular"
             else:
                 status = "partial"
                 confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
@@ -1912,6 +1929,7 @@ def assemble_result_node(state: PipelineState) -> dict:
             # reasoning agent ran) — fall back to whatever deterministic
             # evidence exists, as before.
             status = "success"
+            selected_verdict = "regular"
             confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["bounded_pass"])
 
         elif destructive_ok:
@@ -1942,14 +1960,13 @@ def assemble_result_node(state: PipelineState) -> dict:
             )
 
         elif reasoning_verdict is not None:
-            # Reasoning proposed some other (unrecognized) verdict value,
-            # and nothing deterministic backs it -> capped at well_formed
-            # (structural-only trust).
-            status = "success"
-            confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["well_formed"])
+            # An unsupported proposal with no admissible evidence is not
+            # a completed classification (including "unknown"/"uncertain").
+            status = "partial"
+            confidence = _bounded(reasoning_confidence, CONFIDENCE_CAPS["not_verified"])
             downgrades.append(
-                "reasoning verdict has no deterministic evidence behind it "
-                "-> capped at well_formed 0.55 (VERDICT_POLICY.md §2)"
+                "unrecognized reasoning verdict without admissible evidence "
+                "-> partial, confidence <= 0.40 (VERDICT_POLICY.md §2)"
             )
 
         elif errors:
@@ -1988,8 +2005,7 @@ def assemble_result_node(state: PipelineState) -> dict:
     )
     # Also top-level, per VERDICT_POLICY.md §5 (new field, additive only).
     result["verdict_gate"] = verdict_gate
-    if selected_verdict is not None:
-        result["verdict"] = selected_verdict
+    result["verdict"] = selected_verdict
 
     return {"result": result}
 

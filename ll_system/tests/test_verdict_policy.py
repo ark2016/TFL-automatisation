@@ -387,6 +387,18 @@ class TestRegularityShortcutHonorsHeuristicConfidence:
         # min(0.95 hard ceiling, 0.98 verified cap, 1.0 heuristic confidence) == 0.95
         assert result["confidence"] == 0.95
 
+    @pytest.mark.parametrize("declared_backreferences", [True, False, None])
+    def test_copy_language_regex_does_not_shortcut_to_verified_ll(self, declared_backreferences):
+        spec = {"kind": "regex", "pattern": r"([ab]*)\1", "alphabet": ["a", "b"]}
+        if declared_backreferences is not None:
+            spec["has_backreferences"] = declared_backreferences
+        out = preprocess_node({"ir": {
+            "task_type": "ll_check_language", "source_text": "L = {ww}",
+            "language_spec": spec,
+        }, "log": []})
+        assert out["preprocess_hints"]["is_regular"] is False
+        assert "result" not in out
+
     def test_regularity_shortcut_reads_correct_keys(self):
         """Regression: the shortcut used to read hints['reason']/['confidence'],
         which compute_preprocess_hints never sets (always None/default)."""

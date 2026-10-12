@@ -603,8 +603,8 @@ class TestAssembleOraclePrimaryAgent:
 class TestOracleGrammarUsesFixedOrder:
     """Regression Round 7 Finding 1: assemble_result_node used an unordered set to pick
     the grammar for display when primary_agent='first_follow_oracle'.  The grammar shown
-    might not match the one oracle actually checked.  Fix: iterate in the same fixed order
-    as first_follow_oracle_node: ll_grammar_builder → marker_analyzer → grammar_transformer.
+    must match the source selected by first_follow_oracle_node, which tries
+    ll_grammar_builder → marker_analyzer → grammar_transformer.
     """
 
     GRAMMAR_FROM_MARKER = {
@@ -624,10 +624,8 @@ class TestOracleGrammarUsesFixedOrder:
         state = _base_assemble_state("ll", primary_agent="first_follow_oracle")
         state["reasoning_output"]["primary_method"] = "first_follow_oracle"
         state["reasoning_output"]["k"] = 1
-        state["first_follow_result"] = {
-            "found": True, "min_k": 1, "is_ll_k": True, "conflicts": [],
-        }
         state["agent_results"] = agents
+        state.update(first_follow_oracle_node(state))
         return state
 
     def test_ll_grammar_builder_preferred_over_marker_analyzer(self):
