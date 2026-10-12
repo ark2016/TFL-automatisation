@@ -1,6 +1,6 @@
 """Exercise the real SDK over an in-memory HTTP transport; no network or key lookup."""
 
-import httpx
+import httpx2 as httpx
 import pytest
 from anthropic import Anthropic as SDKAnthropic
 

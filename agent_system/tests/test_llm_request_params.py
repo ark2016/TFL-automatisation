@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 
 from agent_system.config import EFFORT, MODELS
@@ -58,7 +58,8 @@ def test_request_params(runner):
     assert kw["extra_body"] == {"fallbacks": "default"}
 
     kw = runner._build_request_kwargs("claude-haiku-4-5", 256, "sys", "u", effort="low", temperature=0.0)
-    assert kw["temperature"] == 0.0 and "output_config" not in kw
+    assert kw["extra_body"] == {"temperature": 0.0}
+    assert "temperature" not in kw and "output_config" not in kw
 
 
 def test_request_params_with_output_schema(runner):
@@ -75,7 +76,8 @@ def test_request_params_with_output_schema(runner):
     kw = runner._shared.build_request_kwargs(
         "claude-haiku-4-5", 256, "sys", "u", effort="low", temperature=0.0, output_schema=schema,
     )
-    assert kw["temperature"] == 0.0
+    assert kw["extra_body"] == {"temperature": 0.0}
+    assert "temperature" not in kw  # removed from the 1.x SDK signatures
     assert kw["output_config"] == {"format": {"type": "json_schema", "schema": schema}}
 
 

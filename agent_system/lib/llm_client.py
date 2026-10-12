@@ -967,7 +967,8 @@ class AnthropicClient:
         """Build kwargs for ``messages.stream`` / ``messages.create``.
 
         Thinking models get adaptive thinking + an explicit effort (Opus 5.5
-        would silently default to "medium"); legacy models get `temperature`.
+        would silently default to "medium"); legacy models get `temperature` (sent via
+        ``extra_body``: removed from the 1.x SDK signatures).
         ``output_schema`` (TODO.md §3 M), when given, requests structured
         outputs (``output_config.format``) instead of the "extract JSON from
         prose" heuristic — verified against the Anthropic Python SDK /
@@ -993,7 +994,9 @@ class AnthropicClient:
                 kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
                 kwargs["extra_body"] = {"fallbacks": "default"}
         else:
-            kwargs["temperature"] = 0.0 if temperature is None else temperature
+            # anthropic>=1 removed `temperature` from the SDK signatures; the API
+            # still honours it on legacy models, so it travels in `extra_body`.
+            kwargs["extra_body"] = {"temperature": 0.0 if temperature is None else temperature}
             if output_format is not None:
                 kwargs["output_config"] = output_format
         return kwargs

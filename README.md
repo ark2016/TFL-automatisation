@@ -599,7 +599,7 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 
 ## External dependencies
 
-- **Python 3.12+** — `anthropic>=0.77`, `langgraph`, `python-dotenv` (declared in `pyproject.toml`), `pytest` for tests
+- **Python 3.12+** — `anthropic>=1.13` (1.x, HTTP via `httpx2`), `langgraph`, `python-dotenv` (declared in `pyproject.toml`), `pytest` for tests
 - **Graphviz `dot` binary** — rendering PDA state diagrams as inline SVG in HTML reports. Falls back to [Mermaid](https://mermaid.js.org/) via CDN if `dot` is absent. Install it from https://graphviz.org/download/ and make sure `dot` is on `PATH`.
 - **Lean 4 + Docker** (optional) — `--formalize` type-checks generated proofs against the `tfl-lean4` image
   (Lean/Mathlib v4.33.0 + langlib); see "R-Lean architecture" above.
