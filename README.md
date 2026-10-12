@@ -9,13 +9,8 @@ Multi-agent pipelines for **Theory of Formal Languages** problems — classify a
 
 > The system targets the formal languages course at **ИУ-9, МГТУ им. Баумана**. Inputs are Russian problem statements; outputs are structured Markdown / HTML / JSON reports with LaTeX-typeset proofs, grammar constructions, PDA diagrams, and case analyses.
 
-Offline HTML guides (Russian): [ticket 50 and Lean explained](docs/examples/cfl_ticket50_w1bw2w3_lean_proved/walkthrough.html),
-[interactive architecture audit](docs/architecture_explorer.html), and
-[September 30 fixes, source checks and validation](docs/audit_fixes_2026-09-30.html).
-The subsequent [theory audit with searchable findings](docs/theory_audit_2026-09-30.html)
-covers additional mathematical and implementation corrections; see the
-[theorem and source registry](docs/THEORY_REFERENCE.md) for exact hypotheses and source-reading limits.
-The architecture guide preserves the pre-fix snapshot; the last report records the corrected behavior and remaining limits.
+Offline HTML guide (Russian): [ticket 50 and Lean explained](docs/examples/cfl_ticket50_w1bw2w3_lean_proved/walkthrough.html).
+See the [theorem and source registry](docs/THEORY_REFERENCE.md) for exact hypotheses and source-reading limits.
 
 ---
 
@@ -66,7 +61,7 @@ Or run a pipeline directly from the command line. All four orchestrators share o
     --save cfl_system/examples/live_outputs/
 
 # Live, cheap: every agent on Haiku (use this for testing)
-TFL_MODEL_OVERRIDE=claude-haiku-4-5 .venv/Scripts/python -m cfl_system.orchestrator \
+TFL_MODEL_OVERRIDE=claude-haiku-5-5 .venv/Scripts/python -m cfl_system.orchestrator \
     cfl_system/examples/task11_ai_bj_between.json \
     --live --verbose --save cfl_system/examples/live_outputs/
 
@@ -186,7 +181,7 @@ The [`LiveRunner`](cfl_system/orchestrator.py) (same pattern in cfl / dcfl / ll;
 ```
 Opus response → _extract_json (3 strategies: whole / fenced / braces)
               ├─ success → return parsed dict
-              └─ failure → Haiku repair (claude-haiku-4-5, ~$0.01, ~2s)
+              └─ failure → Haiku repair (claude-haiku-5-5, effort low, well under $0.01, ~2s)
                          ├─ success → return parsed dict
                          └─ failure → Opus retry with detailed parse-error
                                       (position + context snippet + prior
@@ -196,9 +191,9 @@ Opus response → _extract_json (3 strategies: whole / fenced / braces)
 ```
 
 - **Streaming API** everywhere — non-streaming requests are rejected by the Anthropic SDK when `max_tokens × projected latency > 10 min`, and with adaptive thinking `max_tokens` has to cover reasoning + answer (64K).
-- **Request parameters per model.** Opus 5.5 / Sonnet 5.5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; only legacy models (Haiku 4.5) get `temperature`. See `LiveRunner._build_request_kwargs()`.
-- **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-4-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
-- **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`).
+- **Request parameters per model.** Opus 5.5 / Sonnet 5.5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; Haiku 5.5 is a thinking model too (adaptive thinking, effort `low` for the repair/validator roles, no `temperature`); only legacy models (Haiku 4.5, if pinned) get `temperature`. See `LiveRunner._build_request_kwargs()`.
+- **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-5-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
+- **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`); Haiku 5.5 has no server-side fallback and never gets it.
 
 **Shared client (`agent_system/lib/llm_client.py`).** `cfl_system`/`dcfl_system`/`ll_system`'s `LiveRunner` are now
 thin wrappers around one `AnthropicClient`: `build_request_kwargs()` builds the thinking/effort/temperature kwargs
@@ -208,6 +203,19 @@ model, usage, refusal info). API errors are typed — `FatalAPIError` (400/401/4
 across all four pipelines share one process-wide semaphore, sized by the `TFL_MAX_CONCURRENCY` env var. A
 `UsageTracker` accumulates tokens/cache-hit/cost per run (`as_dict()`) and is now wired into each pipeline's
 top-level result JSON and CLI `--verbose` output, so every run reports its own token/cost usage block.
+
+**Prompt caching.** The stable per-agent system prompt (about 3-19 KB; REG prompts ~4-11 KB) is sent by `build_request_kwargs()` as a
+`system` text block carrying `cache_control: {"type": "ephemeral"}` (default 5-minute TTL); everything task-specific
+(task IR, retry/error context, and in REG the "Student Notes" section, which goes in a second unmarked `system` block)
+comes after the breakpoint, so repeat calls of the same agent (JSON retries, prover attempts, consecutive tasks of an
+eval batch, all inside five minutes) read the prompt at 0.1x input price (0.05x on Opus 5.5) instead of paying full
+price; a write costs 1.25x. This covers the REG `LLMRunner`, the three `LiveRunner`s and the Lean prover calls
+(`formalize_run.LiveSource`); the short Haiku JSON-repair and quick-validate calls are not cached
+(`cache_system=False`). Cache buckets appear as `cache_read_input_tokens` / `cache_creation_input_tokens` in the
+`usage` block, the progress events, the TFL Lab run header and `tfl-eval` totals; `input_tokens` is the uncached
+remainder only. Minimum cacheable prefix: 512 tokens on Opus/Sonnet/Haiku 5.5, 4096 on legacy Haiku 4.5 (shorter prompts are sent
+normally and simply not cached), so on Haiku 4.5 the smaller prompts (all REG agents except possibly the largest) fall
+below the minimum and only the larger prompts and the Lean prover prompts cache. Keep the cached block free of timestamps, ids and unsorted JSON.
 
 **Structured outputs.** Agent responses are parsed primarily via the Messages API's `output_config.format`
 (a closed per-agent JSON schema built by `build_agent_output_schema()` / `agent_output_schema.py` in each
@@ -339,9 +347,9 @@ All four pipelines use the same three-tier model stack:
 |---|---|---|---|
 | Heavy reasoning | `claude-opus-5-5` (effort `high`) | $4 / $20 per MTok | All specialists, reasoning, proof_checker, formalizer |
 | Fast structured | `claude-sonnet-5-5` (effort `medium`) | $2 / $10 per MTok | `classifier`, `retry_planner`, `input_parser` |
-| JSON repair | `claude-haiku-4-5` | $1 / $5 per MTok | `_repair_json_with_haiku` hook in `LiveRunner` |
+| JSON repair | `claude-haiku-5-5` (effort `low`) | $0.10 / $0.50 per MTok (prompt <= 100K tokens; $0.50 / $2.50 above) | `_repair_json_with_haiku` hook in `LiveRunner` |
 
-**Run cost.** On the previous stack (Opus 4.7 without thinking) a medium CFL problem (`task_w1bw2w3_ticket50.json`) cost **≈ $2–3**, a simple one **≈ $1**. Opus 5.5 is cheaper per token but thinks on every call, so these numbers need re-measuring; tune `EFFORT` per agent in each `config.py`. For development, `TFL_MODEL_OVERRIDE=claude-haiku-4-5` runs a full CFL pipeline (≈20 calls incl. a retry round) for well under $1.
+**Run cost.** On the previous stack (Opus 4.7 without thinking) a medium CFL problem (`task_w1bw2w3_ticket50.json`) cost **≈ $2–3**, a simple one **≈ $1**. Opus 5.5 is cheaper per token but thinks on every call, so these numbers need re-measuring; tune `EFFORT` per agent in each `config.py`. For development, `TFL_MODEL_OVERRIDE=claude-haiku-5-5` runs a full CFL pipeline (≈20 calls incl. a retry round) for well under $1.
 
 > Opus 5.5 **always** uses adaptive thinking (it can't be disabled) and defaults to effort `medium` when none is sent, so every agent has an explicit level in `EFFORT`. Thinking tokens count toward `max_tokens`, hence `MAX_TOKENS = 64000` with streaming. Sampling parameters (`temperature`) are rejected with a 400 and are only sent to legacy models.
 
@@ -353,7 +361,7 @@ All four pipelines use the same three-tier model stack:
 
 - **Sidebar:** project switcher (REG / CFL / DCFL / LL) + `examples/*.json` file list
 - **Editor:** monospace IR editor with live JSON validator and line gutter
-- **Run bar:** `Mock Run` (free, no LLM) and `Live Run` (gated by an explicit "I confirm API spend" checkbox with red border). Start the server with `TFL_MODEL_OVERRIDE=claude-haiku-4-5` to make live runs cheap.
+- **Run bar:** `Mock Run` (free, no LLM) and `Live Run` (gated by an explicit "I confirm API spend" checkbox with red border). Start the server with `TFL_MODEL_OVERRIDE=claude-haiku-5-5` to make live runs cheap.
 - **Result pane:** four tabs — HTML (iframe of the rendered report with KaTeX + inline Graphviz SVG), JSON (formatted), Markdown (Preview ↔ Raw GitHub-style toggle), Log (streamed stderr, color-coded)
 
 Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS (`static/app.js`, no inline `<script>`) + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/) (served from cdnjs, not jsdelivr, so a strict `script-src` can allow-list a single host) + [DOMPurify](https://github.com/cure53/DOMPurify) to sanitize the rendered Markdown before it goes into `innerHTML`. No framework, no build step.
@@ -423,7 +431,7 @@ Pure-function modules have pytest coverage; LLM-driven layers are covered by moc
 
 ```bash
 .venv/Scripts/python -m pytest -q
-# → 1383 passed, 3 skipped
+# → 3447 passed, 161 skipped, 2 xfailed (with -n 4)
 ```
 
 The configured `testpaths` include `tfl_eval/tests` and exclude the legacy `pumping_lemma/tests`, which call the
@@ -524,7 +532,7 @@ bundles a small pinned lake project, `agent_system/docker/tfl_lean/` (`lakefile.
 [langlib](https://github.com/nielstron/langlib) pinned by commit `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — its
 own lakefile requires the same Mathlib tag, so there's no transitive-revision conflict to resolve). `TflLean/Basic.lean`
 imports `Mathlib.Computability.{DFA, RegularExpressions, MyhillNerode, ContextFreeGrammar}` (what the formalizer
-prompt and the LL(k) live-run Lean examples under `ll_system/examples/live_outputs/*.lean` depend on);
+prompt and the LL(k) live-run Lean examples depend on);
 `TflLean/Langlib.lean` imports langlib's `Classes.Regular`/`Classes.ContextFree`/`Classes.DeterministicContextFree`
 definitions, `Classes.ContextFree.Basics.{Pumping,Ogden}` (`CF_pumping`, `Language.IsContextFree.ogdens_lemma`),
 `Classes.DeterministicContextFree.Closure.{Complement,IntersectionRegular}`, and the `AnBnCn` / `AnBn` worked
@@ -590,16 +598,15 @@ per-system / trap-task accuracy, a Brier score for confidence calibration, the i
 "false confident wrong" rate (confidence ≥ 0.6 but incorrect verdict). Results land under `.tfl_lab_runs/evals/`.
 This is what lets a prompt or model change be measured rather than eyeballed.
 
-The first `--live` run (24 trap tasks, Haiku, 2026-09-27) is written up in
-[`docs/EVAL_RESULTS.md`](docs/EVAL_RESULTS.md): 19/19 solved tasks correct, 0 false-confident-wrong, with
-per-task tables, per-pipeline token/cost usage, and the diagnoses that fed the DCFL certificate, R4′ and the
+The first `--live` run (24 trap tasks, Haiku, 2026-09-27; its write-up is kept locally and not tracked) gave
+19/19 solved tasks correct and 0 false-confident-wrong, and its diagnoses fed the DCFL certificate, R4′ and the
 structured-output fixes below. A full-74-task run and a re-run after those fixes are still open.
 
 ---
 
 ## External dependencies
 
-- **Python 3.12+** — `anthropic>=0.77`, `langgraph`, `python-dotenv` (declared in `pyproject.toml`), `pytest` for tests
+- **Python 3.12+** — `anthropic>=1.13` (1.x, HTTP via `httpx2`), `langgraph`, `python-dotenv` (declared in `pyproject.toml`), `pytest` for tests
 - **Graphviz `dot` binary** — rendering PDA state diagrams as inline SVG in HTML reports. Falls back to [Mermaid](https://mermaid.js.org/) via CDN if `dot` is absent. Install it from https://graphviz.org/download/ and make sure `dot` is on `PATH`.
 - **Lean 4 + Docker** (optional) — `--formalize` type-checks generated proofs against the `tfl-lean4` image
   (Lean/Mathlib v4.33.0 + langlib); see "R-Lean architecture" above.
@@ -623,4 +630,4 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 
 Built for the Theory of Formal Languages course at **МГТУ им. Н.Э. Баумана, ИУ-9**.
 
-Powered by [Claude](https://www.anthropic.com/claude) (Opus 5.5 / Sonnet 5.5 / Haiku 4.5) via the Anthropic API, orchestrated through [LangGraph](https://langchain-ai.github.io/langgraph/).
+Powered by [Claude](https://www.anthropic.com/claude) (Opus 5.5 / Sonnet 5.5 / Haiku 5.5) via the Anthropic API, orchestrated through [LangGraph](https://langchain-ai.github.io/langgraph/).

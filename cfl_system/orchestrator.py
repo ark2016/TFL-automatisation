@@ -31,7 +31,9 @@ from langgraph.types import Send
 
 from cfl_system.config import (
     FORMALIZATION_ENABLED,
+    JSON_REPAIR_EFFORT,
     JSON_REPAIR_MAX_TOKENS,
+    JSON_REPAIR_MODEL,
     JSON_REPAIR_TIMEOUT_S,
     LEAN_TIMEOUT,
     MAX_CALLS_PER_AGENT,
@@ -241,7 +243,7 @@ class LiveRunner:
         self.client = anthropic.Anthropic(api_key=resolved_key)
         self.models = MODELS
         # TFL_MODEL_OVERRIDE forces every agent onto one model — used for cheap
-        # live test runs (e.g. TFL_MODEL_OVERRIDE=claude-haiku-4-5).
+        # live test runs (e.g. TFL_MODEL_OVERRIDE=claude-haiku-5-5).
         self.model_override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
         self.temperatures = TEMPERATURES
         self.efforts = EFFORT
@@ -259,7 +261,7 @@ class LiveRunner:
         # conversion — ideal for turning "Opus wrote prose around its JSON"
         # into pure JSON. One repair call ≈ $0.01 vs ≈ $0.25 for a full
         # Opus retry, and it's faster too (~2s vs ~30s).
-        self._json_repair_model = "claude-haiku-4-5"
+        self._json_repair_model = JSON_REPAIR_MODEL
         # Shared call machinery (TODO.md §3): kwargs building, streaming,
         # retry/backoff, usage tracking. Not the SDK client itself — `self.
         # client` stays the mutable attribute (tests swap it for a mock).
@@ -275,7 +277,7 @@ class LiveRunner:
     # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
     # Opus 4.7+, Sonnet 5 / 5.5 and Opus 5.x reject `temperature` with a 400, so
     # thinking models never get sampling parameters.
-    _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
+    _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku(?!-5)|-4(-[015])?(-\d{8})?$")
     # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
     _FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
 
@@ -286,17 +288,21 @@ class LiveRunner:
 
     def _build_request_kwargs(self, model: str, max_tokens: int,
                               temperature: float, system_prompt: str,
-                              user_msg: str, effort: str | None = None) -> dict:
+                              user_msg: str, effort: str | None = None,
+                              cache_system: bool = True) -> dict:
         """Build kwargs for messages.stream / messages.create.
 
         Thinking models get `thinking: adaptive` + an explicit effort level
         (Opus 5.5 would silently default to "medium"); legacy models get
         `temperature` instead. Delegates to the shared AnthropicClient so
-        every pipeline builds kwargs the same way (TODO.md §3).
+        every pipeline builds kwargs the same way (TODO.md §3). The system
+        prompt carries the prompt-caching breakpoint (everything task-specific
+        is in `user_msg`); `cache_system=False` is for the short Haiku
+        JSON-repair call.
         """
         return self._shared.build_request_kwargs(
             model, max_tokens, system_prompt, user_msg,
-            effort=effort, temperature=temperature,
+            effort=effort, temperature=temperature, cache_system=cache_system,
         )
 
     @staticmethod
@@ -360,10 +366,11 @@ class LiveRunner:
         )
 
         t0 = _time.monotonic()
-        repair_max_tokens = min(len(raw_text) // 2 + 2000, JSON_REPAIR_MAX_TOKENS)
+        repair_max_tokens = min(len(raw_text) // 2 + 6000, JSON_REPAIR_MAX_TOKENS)
         request_kwargs = self._build_request_kwargs(
             model=self._json_repair_model, max_tokens=repair_max_tokens,
             temperature=0.0, system_prompt=system, user_msg=user_msg,
+            effort=JSON_REPAIR_EFFORT, cache_system=False,
         )
         try:
             with get_concurrency_semaphore():
@@ -379,7 +386,8 @@ class LiveRunner:
         elapsed = _time.monotonic() - t0
         repaired_text = ""
         for block in response.content:
-            if hasattr(block, "text"):
+            # by type: a Haiku 5.5 response may start with thinking blocks
+            if getattr(block, "type", None) == "text":
                 repaired_text += block.text
 
         usage = getattr(response, "usage", None)
@@ -481,7 +489,7 @@ class LiveRunner:
             # when max_tokens × projected latency exceeds 10 minutes; streaming
             # lifts that cap and handles long proofs / audits reliably.
             # Thinking models get adaptive thinking + this agent's effort;
-            # temperature is only sent to legacy models (Haiku 4.5). The
+            # temperature is only sent to legacy models (legacy Haiku 4.5). The
             # shared client also retries a retryable error (429/5xx/network/
             # broken stream) with backoff before giving up, and never
             # retries a fatal one (400/401/403/404) — TODO.md §2/§3.

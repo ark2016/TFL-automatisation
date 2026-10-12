@@ -19,7 +19,7 @@ Run the full test suite before pushing:
 python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests ui_server/tests -q
 ```
 
-All suites must stay green (currently: **1383 passed, 3 skipped** — the skips need Docker with the Lean 4 image). A bare `pytest` from the repo root now collects the same suites (`[tool.pytest.ini_options] testpaths` in `pyproject.toml`) and the root `conftest.py` blocks any real Anthropic API call for the whole session as a safety net — but the legacy `pumping_lemma/tests`, which call the real API, are intentionally left out of `testpaths`, so run it against them explicitly (and expect a real bill) only if you mean to.
+All suites must stay green (currently: **3447 passed, 161 skipped, 2 xfailed** — the skips mostly need Docker with the Lean 4 image). A bare `pytest` from the repo root now collects the same suites (`[tool.pytest.ini_options] testpaths` in `pyproject.toml`) and the root `conftest.py` blocks any real Anthropic API call for the whole session as a safety net — but the legacy `pumping_lemma/tests`, which call the real API, are intentionally left out of `testpaths`, so run it against them explicitly (and expect a real bill) only if you mean to.
 
 ## Scope of a good PR
 
@@ -34,7 +34,7 @@ All suites must stay green (currently: **1383 passed, 3 skipped** — the skips 
 
 - Don't add hard dependencies that aren't already in `pyproject.toml` unless necessary. Streamlit/React/etc. are out of scope — the UI is intentionally vanilla JS + stdlib Python.
 - Don't commit live run artifacts. `examples/live_outputs/` and `examples/output/` are git-ignored; if you need to share a specific run, attach the JSON in the PR description instead.
-- Don't bump LLM model IDs without updating every project together. All four pipelines use the same three-tier model stack — Opus 5.5 (reasoning), Sonnet 5.5 (parsing / classification), Haiku 4.5 (JSON repair) — pinned in each project's `config.py` together with the per-agent `EFFORT` levels. Don't reintroduce `temperature` for thinking models (400 on Opus 4.7+ / Sonnet 5 / 5.5).
+- Don't bump LLM model IDs without updating every project together. All four pipelines use the same three-tier model stack — Opus 5.5 (reasoning), Sonnet 5.5 (parsing / classification), Haiku 5.5 (JSON repair) — pinned in each project's `config.py` together with the per-agent `EFFORT` levels. Don't reintroduce `temperature` for thinking models (400 on Opus 4.7+ / Sonnet 5 / 5.5).
 - Don't include a real `ANTHROPIC_API_KEY` anywhere — `.env` is git-ignored, `.env.example` uses a placeholder.
 
 ## Code style
@@ -55,7 +55,7 @@ python -m cfl_system.orchestrator cfl_system/examples/task11_ai_bj_between.json 
 python -m cfl_system.orchestrator cfl_system/examples/task_w1w2w1w3.json --mock cfl_system/examples/mock/ --save out/
 
 # 3. Live but cheap: every agent on Haiku (a full CFL run is well under $1)
-TFL_MODEL_OVERRIDE=claude-haiku-4-5 python -m cfl_system.orchestrator     cfl_system/examples/task11_ai_bj_between.json --live --verbose --save out/
+TFL_MODEL_OVERRIDE=claude-haiku-5-5 python -m cfl_system.orchestrator     cfl_system/examples/task11_ai_bj_between.json --live --verbose --save out/
 ```
 
 Only run the production models (Opus 5.5 / Sonnet 5.5) when you need to judge answer quality. If a regression is isolable to a pure-function module (`lib/`), add a unit test and keep the LLM out of the critical path.

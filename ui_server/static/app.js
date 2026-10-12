@@ -540,8 +540,13 @@ function renderRunHead() {
     : '—';
   const u = r.usage || {};
   rhCost.textContent = fmtUsd(u.estimated_cost_usd ?? 0);
+  // input_tokens is the UNCACHED part only; prompt-cache reads/writes are billed
+  // separately (0.1x / 1.25x) and already included in the cost above.
+  const cacheRead = num(u.cache_read_input_tokens) || 0, cacheWrite = num(u.cache_creation_input_tokens) || 0;
+  const cacheText = (cacheRead || cacheWrite)
+    ? ` · cache ${fmtTok(cacheRead)} read / ${fmtTok(cacheWrite)} written` : '';
   rhUsage.textContent = r.usage
-    ? `${u.calls ?? 0} calls · ${fmtTok(u.input_tokens)} in / ${fmtTok(u.output_tokens)} out`
+    ? `${u.calls ?? 0} calls · ${fmtTok(u.input_tokens)} in / ${fmtTok(u.output_tokens)} out${cacheText}`
     : '';
   rhElapsed.textContent = runElapsedText(r);
 }

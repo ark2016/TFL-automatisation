@@ -171,7 +171,7 @@ class FormalizeSettings:
 
     def with_env_override(self) -> "FormalizeSettings":
         """``TFL_MODEL_OVERRIDE`` forces every call onto one model (cheap live
-        checks, e.g. claude-haiku-4-5), exactly as in the pipelines."""
+        checks, e.g. claude-haiku-5-5), exactly as in the pipelines."""
         override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
         if override:
             return FormalizeSettings(override, override, self.retries, self.max_tokens)
@@ -295,6 +295,8 @@ def _sum_usage(tracker: UsageTracker) -> dict:
         "calls": d["calls"],
         "input_tokens": d["input_tokens"],
         "output_tokens": d["output_tokens"],
+        "cache_read_input_tokens": d.get("cache_read_input_tokens", 0),
+        "cache_creation_input_tokens": d.get("cache_creation_input_tokens", 0),
         "estimated_cost_usd": d["estimated_cost_usd"] if d["calls"] else 0.0,
     }
 
@@ -316,6 +318,8 @@ class Proposal:
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_input_tokens: int = 0       # prompt cache (input_tokens is the uncached rest)
+    cache_creation_input_tokens: int = 0
     cost_usd: float | None = None
     salvaged: bool = False          # body cut out of a truncated JSON reply
 
@@ -352,6 +356,18 @@ def parse_proposal_text(text: str) -> tuple[str | None, bool, str | None, bool]:
     return None, False, None, False
 
 
+def _cache_prover_prompt(model: str, retry_model: str, attempt_no: int, max_attempts: int) -> bool:
+    """Whether this prover attempt should write the prompt cache.
+
+    Caches are per model and a write costs 1.25x, so it only pays when a later
+    attempt of the same formalization reuses the same model.  Every correction
+    runs on ``retry_model``: an attempt on any other model (the first one, when
+    ``first_model`` differs) is never followed by a read, and the last allowed
+    attempt has no successor.
+    """
+    return model == retry_model and attempt_no < max_attempts
+
+
 class LiveSource:
     """Prover calls through the shared :class:`AnthropicClient`."""
 
@@ -362,11 +378,12 @@ class LiveSource:
 
     def propose(self, *, agent: str, model: str, effort: str, max_tokens: int,
                 system: str, user: str, temperature: float, schema: dict | None,
-                attempt: int) -> Proposal:
+                attempt: int, cache_system: bool = True) -> Proposal:
         try:
             res = self.shared.call(
                 self.client, model=model, max_tokens=max_tokens, system=system, user=user,
                 effort=effort, temperature=temperature, output_schema=schema, agent=agent,
+                cache_system=cache_system,
             )
         except FatalAPIError as exc:
             if exc.status_code == 400:      # a malformed request for this call only
@@ -380,6 +397,8 @@ class LiveSource:
             stop_reason=res.stop_reason, model=res.model or model,
             input_tokens=getattr(usage, "input_tokens", 0) or 0,
             output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+            cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
             cost_usd=estimate_cost_usd(res.model or model, usage),
             truncated=res.stop_reason == "max_tokens",
         )
@@ -789,12 +808,16 @@ def _run_loop(prep: Prepared, spec: SystemSpec, settings: FormalizeSettings,
             max_tokens=settings.max_tokens_for(model), system=system_prompt, user=user,
             temperature=float(spec.temperatures.get(agent, 0.0)),
             schema=spec.output_schema, attempt=attempt_no,
+            cache_system=_cache_prover_prompt(model, settings.retry_model, attempt_no, max_attempts),
         )
         rec: dict[str, Any] = {
             "attempt": attempt_no, "role": role, "model": prop.model or model,
             "stop_reason": prop.stop_reason, "input_tokens": prop.input_tokens,
             "output_tokens": prop.output_tokens, "cost_usd": prop.cost_usd,
         }
+        if prop.cache_read_input_tokens or prop.cache_creation_input_tokens:
+            rec["cache_read_input_tokens"] = prop.cache_read_input_tokens
+            rec["cache_creation_input_tokens"] = prop.cache_creation_input_tokens
         if prop.notes:
             rec["notes"] = prop.notes
         attempts.append(rec)

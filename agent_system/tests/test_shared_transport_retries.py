@@ -1,6 +1,6 @@
 """Exercise the real SDK over an in-memory HTTP transport; no network or key lookup."""
 
-import httpx
+import httpx2 as httpx
 import pytest
 from anthropic import Anthropic as SDKAnthropic
 
@@ -59,3 +59,112 @@ def test_shared_fatal_http_error_is_not_retried(monkeypatch):
                                        system="offline", user="offline")
 
     assert exc.value.status_code == 401 and len(requests) == 1
+
+
+GRAMMAR_BODY = {"type": "error", "error": {
+    "type": "overloaded_error",
+    "message": "Grammar compilation is temporarily unavailable. Please try again."}}
+SCHEMA = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"],
+          "additionalProperties": False}
+
+
+def _sdk_with(respond):
+    http_client = httpx.Client(transport=httpx.MockTransport(respond))
+    return SDKAnthropic(api_key="offline-not-a-secret", http_client=http_client, max_retries=0)
+
+
+def test_grammar_compilation_outage_has_clear_bounded_error(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(503, json=GRAMMAR_BODY)
+
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", lambda *a: None)
+    with _sdk_with(respond) as sdk:
+        with pytest.raises(RetryableAPIError) as exc:
+            AnthropicClient(max_retries=3).call(
+                sdk, model="claude-haiku-4-5", max_tokens=10, system="s", user="u",
+                output_schema=SCHEMA)
+    assert len(requests) == 3  # bounded, no schema-less fallback
+    msg = str(exc.value)
+    assert "grammar compilation" in msg and "Anthropic side" in msg and "not a local/Docker" in msg
+    assert exc.value.status_code == 503
+    assert exc.value.original is not None
+
+
+def test_other_overloaded_messages_keep_generic_error(monkeypatch):
+    def respond(request):
+        return httpx.Response(529, json={"type": "error", "error": {
+            "type": "overloaded_error", "message": "Overloaded"}})
+
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", lambda *a: None)
+    with _sdk_with(respond) as sdk:
+        with pytest.raises(RetryableAPIError) as exc:
+            AnthropicClient(max_retries=2).call(
+                sdk, model="claude-haiku-4-5", max_tokens=10, system="s", user="u")
+    assert "Overloaded" in str(exc.value) and "grammar" not in str(exc.value).lower()
+
+
+def test_agent_error_carries_grammar_outage_message(monkeypatch):
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", lambda *a: None)
+    runner = llm_client.LLMRunner(api_key="sk-ant-test-not-used")
+    with _sdk_with(lambda request: httpx.Response(503, json=GRAMMAR_BODY)) as sdk:
+        runner._client = sdk
+        out = runner.run_agent("classifier", {"language": "a*"})
+    assert out["status"] == "agent_error"
+    assert "grammar compilation is temporarily unavailable" in out["errors"][0]
+    assert "retry the run later" in out["errors"][0]
+
+
+def test_grammar_outage_as_sse_error_frame_on_a_200_stream(monkeypatch):
+    """anthropic 1.x raises APIStatusError(status_code=200) for ``event: error``
+    inside an already-open stream; the clear message must still apply."""
+    requests = []
+    frame = (
+        "event: error\n"
+        'data: {"type": "error", "error": {"type": "overloaded_error", '
+        '"message": "Grammar compilation is temporarily unavailable. Please try again."}}\n\n'
+    )
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              content=frame.encode())
+
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", lambda *a: None)
+    with _sdk_with(respond) as sdk:
+        with pytest.raises(RetryableAPIError) as exc:
+            AnthropicClient(max_retries=3).call(
+                sdk, model="claude-haiku-4-5", max_tokens=10, system="s", user="u",
+                output_schema=SCHEMA)
+    assert len(requests) == 3  # still bounded
+    assert exc.value.status_code == 200
+    assert "Anthropic side" in str(exc.value) and "not a local/Docker" in str(exc.value)
+
+
+def test_missing_credentials_is_fatal_and_sends_nothing(monkeypatch):
+    for name in list(__import__("os").environ):
+        if name.startswith(("ANTHROPIC_", "CLAUDE_CODE_")):
+            monkeypatch.delenv(name)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        pytest.fail("no request may be sent without credentials")
+
+    def unexpected_backoff(*_args):
+        pytest.fail("missing credentials must not back off")
+
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", unexpected_backoff)
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        with SDKAnthropic(http_client=http_client) as sdk:
+            with pytest.raises(FatalAPIError) as exc:
+                AnthropicClient().call(sdk, model="claude-haiku-4-5", max_tokens=10,
+                                       system="offline", user="offline")
+    assert "API key is not configured" in str(exc.value)
+    assert requests == []
+
+
+def test_unrelated_type_error_stays_retryable():
+    assert isinstance(llm_client._classify_api_exception(TypeError("boom")), RetryableAPIError)

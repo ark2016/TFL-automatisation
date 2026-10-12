@@ -142,7 +142,7 @@ def fatal_error(status_code: int = 400, message: str = "boom") -> Exception:
     """A real ``anthropic.<Error>`` the SDK would raise for `status_code`
     (400/401/403/404 -- classified ``FatalAPIError``, never retried)."""
     import anthropic
-    import httpx
+    import httpx2 as httpx
 
     cls_name = _FATAL_STATUS_TO_CLS.get(status_code)
     if cls_name is None:

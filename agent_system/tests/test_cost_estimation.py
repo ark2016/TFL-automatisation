@@ -1,7 +1,7 @@
 """``MODEL_PRICING`` / ``estimate_cost_usd``.
 
 Pricing (USD per 1M tokens, 2026-06-24 snapshot -- update by hand when
-prices change): claude-haiku-4-5 1.00 / 5.00, claude-sonnet-5-5 (and legacy claude-sonnet-5) 2.00 / 10.00,
+prices change): claude-haiku-4-5 1.00 / 5.00, claude-haiku-5-5 0.10 / 0.50 (prompt <= 100K tokens; 0.50 / 2.50 above), claude-sonnet-5-5 (and legacy claude-sonnet-5) 2.00 / 10.00,
 claude-opus-5-5 4.00 / 20.00; cache reads ~0.1x input (Opus 5.5 is the
 documented exception at a flat $0.20/MTok, not 0.1x its own $4.00 input
 rate), cache writes ~1.25x input for all three.
@@ -33,6 +33,7 @@ def _usage(input_tokens=0, output_tokens=0, cache_read=0, cache_write=0):
 
 @pytest.mark.parametrize("model,expected", [
     ("claude-haiku-4-5", {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25}),
+    ("claude-haiku-5-5", {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125}),
     ("claude-sonnet-5-5", {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50}),
     ("claude-sonnet-5", {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50}),  # legacy
     ("claude-opus-5-5", {"input": 4.00, "output": 20.00, "cache_read": 0.20, "cache_write": 5.00}),
@@ -49,6 +50,8 @@ def test_model_pricing_table_matches_the_2026_06_24_snapshot(model, expected):
     # 1M input + 1M output + 1M cache_read + 1M cache_write tokens ->
     # input + output + cache_read + cache_write price, summed.
     ("claude-haiku-4-5", 1.00 + 5.00 + 0.10 + 1.25),
+    # 1M-token buckets: the request prompt (input + cache) is over 100K, so the long card applies
+    ("claude-haiku-5-5", 0.50 + 2.50 + 0.05 + 0.625),
     ("claude-sonnet-5-5", 2.00 + 10.00 + 0.20 + 2.50),
     ("claude-sonnet-5", 2.00 + 10.00 + 0.20 + 2.50),  # legacy
     ("claude-opus-5-5", 4.00 + 20.00 + 0.20 + 5.00),
@@ -68,6 +71,7 @@ def test_estimate_cost_usd_scales_linearly_with_tokens():
 
 @pytest.mark.parametrize("dated_model,base_model", [
     ("claude-haiku-4-5-20251001", "claude-haiku-4-5"),
+    ("claude-haiku-5-5-20260101", "claude-haiku-5-5"),
     ("claude-sonnet-5-5-20260928", "claude-sonnet-5-5"),
     ("claude-sonnet-5-20260115", "claude-sonnet-5"),
     ("claude-opus-5-5-20260301", "claude-opus-5-5"),

@@ -23,3 +23,12 @@ TODO.md
 CLAUDE.md
 **/CLAUDE.md
 docs/NIGHT_REPORT_*.md
+AGENTS.md
+# Drafts, audit artefacts, historical run logs and generated diagrams — local only
+docs/pumping_lemma_idea.md
+docs/architecture_explorer.html
+docs/*audit*.html
+docs/audits/
+docs/EVAL_RESULTS.md
+**/workflow_graph.png
+cfl_system/cfl_architecture_v2.html

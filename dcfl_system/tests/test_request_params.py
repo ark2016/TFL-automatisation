@@ -24,6 +24,7 @@ def runner():
     ("claude-sonnet-4-6", True),
     ("claude-haiku-4-5", False),
     ("claude-haiku-4-5-20251001", False),
+    ("claude-haiku-5-5", True),
     ("claude-opus-4-5", False),
     ("claude-sonnet-4-20250514", False),
 ])
@@ -52,7 +53,8 @@ def test_sonnet_request_has_no_fallback(runner):
 
 def test_haiku_request_keeps_temperature(runner):
     kw = runner._build_request_kwargs("claude-haiku-4-5", 800, 0.0, "sys", "u")
-    assert kw["temperature"] == 0.0
+    assert kw["extra_body"] == {"temperature": 0.0}
+    assert "temperature" not in kw  # removed from the 1.x SDK signatures
     assert "thinking" not in kw and "output_config" not in kw
 
 
@@ -94,7 +96,8 @@ def test_model_override_env_forces_haiku(monkeypatch):
     # Legacy models still get `temperature`; `output_config` is present too
     # now, but only carries `format` (structured outputs, TODO.md §3 M) —
     # classifier has a closed contract, no `effort` key belongs on Haiku.
-    assert "temperature" in kwargs
+    assert kwargs["extra_body"] == {"temperature": 0.0}
+    assert "temperature" not in kwargs
     assert "effort" not in kwargs["output_config"]
     assert kwargs["output_config"]["format"]["type"] == "json_schema"
 
@@ -120,7 +123,7 @@ def test_haiku_repair_after_max_tokens_is_flagged_inconclusive(runner):
     stream.get_final_message.return_value = truncated_final
 
     repair_response = SimpleNamespace(content=[
-        SimpleNamespace(text=json.dumps({
+        SimpleNamespace(type="text", text=json.dumps({
             "agent_name": "stack_strategy", "status": "success",
             "verdict": "dcfl", "confidence": 0.9, "proof_sketch": {}, "errors": [],
         }))

@@ -5,12 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 
 from agent_system.config import EFFORT, MODELS
 from agent_system.lib import llm_client
-from agent_system.lib.llm_client import LLMRunner, _is_adaptive_model
+from agent_system.lib.llm_client import LLMRunner, _is_adaptive_model, system_text
 
 
 def _api_error(cls, status_code: int):
@@ -39,6 +39,8 @@ def _mock_stream(runner, message):
     ("claude-sonnet-5-5", True),
     ("claude-sonnet-5", True),  # legacy, still available
     ("claude-haiku-4-5", False),
+    ("claude-haiku-5-5", True),
+    ("claude-haiku-4-5-20251001", False),
     ("claude-opus-4-5", False),
 ])
 def test_is_adaptive_model(model, adaptive):
@@ -58,7 +60,8 @@ def test_request_params(runner):
     assert kw["extra_body"] == {"fallbacks": "default"}
 
     kw = runner._build_request_kwargs("claude-haiku-4-5", 256, "sys", "u", effort="low", temperature=0.0)
-    assert kw["temperature"] == 0.0 and "output_config" not in kw
+    assert kw["extra_body"] == {"temperature": 0.0}
+    assert "temperature" not in kw and "output_config" not in kw
 
 
 def test_request_params_with_output_schema(runner):
@@ -75,7 +78,8 @@ def test_request_params_with_output_schema(runner):
     kw = runner._shared.build_request_kwargs(
         "claude-haiku-4-5", 256, "sys", "u", effort="low", temperature=0.0, output_schema=schema,
     )
-    assert kw["temperature"] == 0.0
+    assert kw["extra_body"] == {"temperature": 0.0}
+    assert "temperature" not in kw  # removed from the 1.x SDK signatures
     assert kw["output_config"] == {"format": {"type": "json_schema", "schema": schema}}
 
 
@@ -173,7 +177,7 @@ def test_student_notes_appear_only_once(runner):
 
     kwargs = runner._client.messages.stream.call_args.kwargs
     user_content = kwargs["messages"][0]["content"]
-    assert kwargs["system"].count(note) == 1
+    assert system_text(kwargs["system"]).count(note) == 1
     assert note not in user_content
     assert "student_notes" not in user_content
 
@@ -192,7 +196,7 @@ def test_student_notes_nested_in_ir_appear_only_once(runner):
 
     kwargs = runner._client.messages.stream.call_args.kwargs
     user_content = kwargs["messages"][0]["content"]
-    assert kwargs["system"].count(note) == 1
+    assert system_text(kwargs["system"]).count(note) == 1
     assert note not in user_content
     assert "language_spec" in user_content
 

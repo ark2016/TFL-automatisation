@@ -34,7 +34,11 @@ def _usage_summary_line(result: dict) -> str | None:
     tokens = usage.get("total_tokens", 0)
     cost = usage.get("estimated_cost_usd")
     cost_s = f"${cost:.4f}" if cost is not None else "n/a"
-    return f"{calls} calls, {tokens} tokens, estimated cost ≈ {cost_s}"
+    cache_read = usage.get("cache_read_input_tokens") or 0
+    cache_write = usage.get("cache_creation_input_tokens") or 0
+    cache_s = (f" (+ prompt cache: {cache_read} read, {cache_write} written)"
+               if cache_read or cache_write else "")
+    return f"{calls} calls, {tokens} tokens{cache_s}, estimated cost ≈ {cost_s}"
 
 
 def _verdict_label(verdict: str | None) -> str:

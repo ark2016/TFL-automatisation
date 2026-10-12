@@ -47,9 +47,10 @@ except ImportError:
 
 # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
 # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
-# 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
-# Opus 4.7+, Sonnet 5 / 5.5 and Opus 5.x reject `temperature` with a 400.
-_LEGACY_MODEL_RE = re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
+# 4.6+ and every 5.x model (Haiku 5.5 included) run adaptive thinking steered
+# by `effort`, and Opus 4.7+, Sonnet 5 / 5.5, Opus 5.x and Haiku 5.5 reject
+# `temperature` with a 400.
+_LEGACY_MODEL_RE = re.compile(r"^claude-3|haiku(?!-5)|-4(-[015])?(-\d{8})?$")
 # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
 _FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
 
@@ -494,6 +495,45 @@ _FATAL_EXCEPTION_TYPES = (
 )
 
 
+GRAMMAR_COMPILATION_OUTAGE_MESSAGE = (
+    "Anthropic API: structured-output grammar compilation is temporarily "
+    "unavailable on the Anthropic side (overloaded_error). This is "
+    "not a local/Docker problem; retry the run later."
+)
+
+
+def _is_grammar_compilation_outage(exc: Exception, status_code: int | None) -> bool:
+    """The Anthropic-side ``overloaded_error`` "Grammar compilation is
+    temporarily unavailable" returned for requests carrying a structured-output
+    schema (``output_config.format``).
+
+    It arrives as HTTP 503/529, but also as an SSE ``event: error`` frame in a
+    stream that already answered 200 (the SDK then raises an APIStatusError
+    with ``status_code`` 200), so the status is not a reliable discriminator:
+    the error type and message are checked instead.
+    """
+    body = getattr(exc, "body", None)
+    err = body.get("error") if isinstance(body, dict) else None
+    err = err if isinstance(err, dict) else (body if isinstance(body, dict) else {})
+    err_type = str(err.get("type") or "").lower()
+    text = (str(exc) + " " + str(err.get("message") or "")).lower()
+    if "grammar compilation" not in text:
+        return False
+    if err_type:
+        return err_type == "overloaded_error"
+    return "overloaded" in text or status_code in (503, 529)
+
+
+MISSING_CREDENTIALS_MESSAGE = (
+    "Anthropic API key is not configured (ANTHROPIC_API_KEY / auth profile); nothing was sent."
+)
+
+
+def _is_missing_credentials_error(exc: Exception) -> bool:
+    """The SDK's pre-flight failure when no api_key/auth_token/credentials exist."""
+    return isinstance(exc, TypeError) and "Could not resolve authentication method" in str(exc)
+
+
 def _classify_api_exception(exc: Exception) -> FatalAPIError | RetryableAPIError:
     """Classify an exception raised while calling the Anthropic API.
 
@@ -504,8 +544,13 @@ def _classify_api_exception(exc: Exception) -> FatalAPIError | RetryableAPIError
     retryable.
     """
     status_code = getattr(exc, "status_code", None)
+    if _is_missing_credentials_error(exc):
+        return FatalAPIError(MISSING_CREDENTIALS_MESSAGE, status_code=None, original=exc)
     if isinstance(exc, _FATAL_EXCEPTION_TYPES):
         return FatalAPIError(str(exc), status_code=status_code, original=exc)
+    if _is_grammar_compilation_outage(exc, status_code):
+        return RetryableAPIError(GRAMMAR_COMPILATION_OUTAGE_MESSAGE,
+                                 status_code=status_code, original=exc)
     return RetryableAPIError(str(exc), status_code=status_code, original=exc)
 
 
@@ -577,7 +622,19 @@ MODEL_PRICING: dict[str, dict[str, float | None]] = {
     "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
     # Legacy (still available, same rates as 5.5).
     "claude-sonnet-5":  {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    # Haiku 4.5 is kept for results recorded before the move to 5.5.
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00,  "cache_read": 0.10, "cache_write": 1.25},
+    # Haiku 5.5 has two rate cards chosen by the request's prompt length: this
+    # one for prompts of <= LONG_PROMPT_THRESHOLD_TOKENS, MODEL_PRICING_LONG_PROMPT
+    # above. Cache read is 0.1x input, 5-minute write 1.25x (1-hour write 2x, not modelled).
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50,  "cache_read": 0.01, "cache_write": 0.125},
+}
+
+# Rate card for a request whose prompt (input + cache read + cache write
+# tokens) exceeds LONG_PROMPT_THRESHOLD_TOKENS. Models not listed have one card.
+LONG_PROMPT_THRESHOLD_TOKENS = 100_000
+MODEL_PRICING_LONG_PROMPT: dict[str, dict[str, float | None]] = {
+    "claude-haiku-5-5": {"input": 0.50, "output": 2.50, "cache_read": 0.05, "cache_write": 0.625},
 }
 
 
@@ -613,25 +670,58 @@ def estimate_cost_usd(model: str, usage: Any) -> float | None:
     :data:`MODEL_PRICING` is keyed by."""
     if usage is None:
         return None
-    prices = MODEL_PRICING.get(_normalize_model_id(model))
+    key = _normalize_model_id(model)
+    prices = MODEL_PRICING.get(key)
     if not prices:
         return None
+    long_prices = MODEL_PRICING_LONG_PROMPT.get(key)
     buckets = (
         ("input_tokens", "input"),
         ("output_tokens", "output"),
         ("cache_read_input_tokens", "cache_read"),
         ("cache_creation_input_tokens", "cache_write"),
     )
-    total = 0.0
-    for attr, price_key in buckets:
-        n = getattr(usage, attr, 0) or 0
-        if not n:
-            continue
-        price = prices.get(price_key)
-        if price is None:
-            return None
-        total += n / 1_000_000 * price
-    return total
+
+    def _cost(card: dict[str, float | None], counts: dict[str, int]) -> float | None:
+        total = 0.0
+        for attr, price_key in buckets:
+            n = counts[attr]
+            if not n:
+                continue
+            price = card.get(price_key)
+            if price is None:
+                return None
+            total += n / 1_000_000 * price
+        return total
+
+    counts = {attr: getattr(usage, attr, 0) or 0 for attr, _ in buckets}
+    if not long_prices:
+        return _cost(prices, counts)
+    # Two rate cards. An aggregate (UsageTotals) carries the share of its
+    # tokens that came from over-threshold requests in ``long_*`` fields; a
+    # single SDK Usage object is classified by its own prompt length.
+    if hasattr(usage, "long_input_tokens"):
+        long_counts = {attr: getattr(usage, "long_" + attr, 0) or 0 for attr, _ in buckets}
+    elif is_long_prompt(usage):
+        long_counts = dict(counts)
+    else:
+        long_counts = {attr: 0 for attr, _ in buckets}
+    short_counts = {k: counts[k] - long_counts[k] for k in counts}
+    short_cost = _cost(prices, short_counts)
+    long_cost = _cost(long_prices, long_counts)
+    if short_cost is None or long_cost is None:
+        return None
+    return short_cost + long_cost
+
+
+def is_long_prompt(usage: Any) -> bool:
+    """Whether one request's prompt (input + cache read + cache write tokens)
+    exceeds :data:`LONG_PROMPT_THRESHOLD_TOKENS` (the higher rate card)."""
+    prompt = sum(
+        getattr(usage, attr, 0) or 0
+        for attr in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    )
+    return prompt > LONG_PROMPT_THRESHOLD_TOKENS
 
 
 @dataclasses.dataclass
@@ -643,6 +733,13 @@ class UsageTotals:
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     calls: int = 0
+    # The part of the buckets above that came from requests with a prompt over
+    # LONG_PROMPT_THRESHOLD_TOKENS (billed on the higher rate card, if the
+    # model has one). Only :meth:`UsageTracker.record` fills these.
+    long_input_tokens: int = 0
+    long_output_tokens: int = 0
+    long_cache_read_input_tokens: int = 0
+    long_cache_creation_input_tokens: int = 0
 
 
 def _totals_to_dict(model: str, t: "UsageTotals") -> dict:
@@ -720,8 +817,14 @@ class UsageTracker:
         cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
         model_key = model or "unknown"
         agent_key = agent or "unknown"
+        long_call = is_long_prompt(usage)
         with self._lock:
             totals = self._by_model.setdefault(model_key, UsageTotals())
+            if long_call:
+                totals.long_input_tokens += input_tokens
+                totals.long_output_tokens += output_tokens
+                totals.long_cache_read_input_tokens += cache_read
+                totals.long_cache_creation_input_tokens += cache_creation
             totals.input_tokens += input_tokens
             totals.output_tokens += output_tokens
             totals.cache_read_input_tokens += cache_read
@@ -731,6 +834,11 @@ class UsageTracker:
             agent_totals = self._by_agent.setdefault(agent_key, {}).setdefault(
                 model_key, UsageTotals(),
             )
+            if long_call:
+                agent_totals.long_input_tokens += input_tokens
+                agent_totals.long_output_tokens += output_tokens
+                agent_totals.long_cache_read_input_tokens += cache_read
+                agent_totals.long_cache_creation_input_tokens += cache_creation
             agent_totals.input_tokens += input_tokens
             agent_totals.output_tokens += output_tokens
             agent_totals.cache_read_input_tokens += cache_read
@@ -847,8 +955,13 @@ class UsageTracker:
             f" structured_output={d['structured_output_calls']}/{so_total}"
             if so_total else ""
         )
+        cache_str = (
+            f" cache_read={d['cache_read_input_tokens']} "
+            f"cache_write={d['cache_creation_input_tokens']}"
+            if d["cache_read_input_tokens"] or d["cache_creation_input_tokens"] else ""
+        )
         return (
-            f"[usage] calls={d['calls']} total_tokens={d['total_tokens']} "
+            f"[usage] calls={d['calls']} total_tokens={d['total_tokens']}{cache_str} "
             f"estimated_cost≈{cost_str}{so_str}"
         )
 
@@ -907,7 +1020,7 @@ def format_structured_output_flag(result: "CallResult") -> str:
 
 
 # Hard per-model output limits (prefix match, so dated variants are covered).
-# Models not listed are not clamped.
+# Models not listed are not clamped (Haiku 5.5: 128K output, no clamp needed).
 MODEL_MAX_OUTPUT_TOKENS: dict[str, int] = {
     "claude-haiku-4-5": 64000,
 }
@@ -919,6 +1032,53 @@ def clamp_max_tokens(model: str, requested: int) -> int:
         if model.startswith(prefix):
             return min(requested, cap)
     return requested
+
+
+# Prompt caching. The per-agent system prompt (identical for every task) is the
+# one large stable part of a request, so it is sent as a text block carrying a breakpoint (the default 5-minute TTL: write 1.25x input,
+# read 0.1x -- see MODEL_PRICING). Everything task-specific (student notes,
+# the task IR, retry context) must come AFTER the last breakpoint: either in
+# the user message or in a second, unmarked system block
+# (``system_volatile``). Prompts are only ~3-19 KB (REG ~4-11 KB, the Lean
+# formalizer ~19 KB): below the model's minimum cacheable prefix (512 tokens on
+# Opus/Sonnet/Haiku 5.5, 4096 on Haiku 4.5) a request is sent normally and not
+# cached, so on Haiku 4.5 only the largest prompts cache. Render order is tools -> system -> messages and the
+# cache is a byte-exact prefix match, so nothing volatile (timestamps, run
+# ids, unsorted JSON) may ever be added to the cached block.
+CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
+
+
+def build_system_blocks(
+    system: str, *, volatile: str | None = None, cache: bool = True,
+) -> str | list[dict[str, Any]]:
+    """The ``system`` request parameter for `system` (stable) + `volatile`.
+
+    With ``cache`` the stable text becomes a text block with a 5-minute
+    ``cache_control`` breakpoint and the volatile text (when given) a second
+    block *without* one, after it. Without ``cache`` a lone system prompt
+    stays a plain string (short one-off calls such as the Haiku JSON repair
+    are below every model's minimum cacheable prefix, so a marker would only
+    be noise); a volatile part is still sent as a separate block.
+    """
+    if not cache and not volatile:
+        return system
+    first: dict[str, Any] = {"type": "text", "text": system}
+    if cache:
+        first["cache_control"] = dict(CACHE_CONTROL_EPHEMERAL)
+    blocks = [first]
+    if volatile:
+        blocks.append({"type": "text", "text": volatile})
+    return blocks
+
+
+def system_text(system: Any) -> str:
+    """Plain text of a ``system`` request parameter (string, or blocks)."""
+    if isinstance(system, str):
+        return system
+    return "".join(
+        (b.get("text", "") if isinstance(b, dict) else getattr(b, "text", ""))
+        for b in system or ()
+    )
 
 
 class AnthropicClient:
@@ -963,21 +1123,32 @@ class AnthropicClient:
         self, model: str, max_tokens: int, system: str, user: str,
         *, effort: str | None = None, temperature: float | None = None,
         output_schema: dict[str, Any] | None = None,
+        system_volatile: str | None = None, cache_system: bool = True,
     ) -> dict[str, Any]:
         """Build kwargs for ``messages.stream`` / ``messages.create``.
 
+        Prompt caching: with ``cache_system`` (default) ``system`` is sent as
+        a text block with a 5-minute ``cache_control`` breakpoint, followed
+        by ``system_volatile`` (task-specific system text such as student
+        notes) as an unmarked block -- see :func:`build_system_blocks`.
+        ``cache_system=False`` is for short throwaway calls (JSON repair,
+        the quick validator).
+
         Thinking models get adaptive thinking + an explicit effort (Opus 5.5
-        would silently default to "medium"); legacy models get `temperature`.
+        would silently default to "medium"); legacy models get `temperature` (sent via
+        ``extra_body``: removed from the 1.x SDK signatures).
         ``output_schema`` (TODO.md §3 M), when given, requests structured
         outputs (``output_config.format``) instead of the "extract JSON from
         prose" heuristic — verified against the Anthropic Python SDK /
         ``claude-api`` skill: GA, no beta header, works on every model this
-        codebase uses (Opus 5.5, Sonnet 5.5, Haiku 4.5).
+        codebase uses (Opus 5.5, Sonnet 5.5, Haiku 5.5, legacy Haiku 4.5).
         """
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": clamp_max_tokens(model, max_tokens),
-            "system": system,
+            "system": build_system_blocks(
+                system, volatile=system_volatile, cache=cache_system,
+            ),
             "messages": [{"role": "user", "content": user}],
         }
         output_format = (
@@ -993,7 +1164,9 @@ class AnthropicClient:
                 kwargs["extra_headers"] = {"anthropic-beta": "server-side-fallback-2026-07-01"}
                 kwargs["extra_body"] = {"fallbacks": "default"}
         else:
-            kwargs["temperature"] = 0.0 if temperature is None else temperature
+            # anthropic>=1 removed `temperature` from the SDK signatures; the API
+            # still honours it on legacy models, so it travels in `extra_body`.
+            kwargs["extra_body"] = {"temperature": 0.0 if temperature is None else temperature}
             if output_format is not None:
                 kwargs["output_config"] = output_format
         return kwargs
@@ -1002,6 +1175,7 @@ class AnthropicClient:
         self, client: Any, *, model: str, max_tokens: int, system: str, user: str,
         effort: str | None = None, temperature: float | None = None,
         output_schema: dict[str, Any] | None = None, agent: str | None = None,
+        system_volatile: str | None = None, cache_system: bool = True,
     ) -> CallResult:
         """Make one logical (possibly retried) streamed call through `client`.
 
@@ -1040,7 +1214,7 @@ class AnthropicClient:
             result = self._call_once(
                 client, model=model, max_tokens=max_tokens, system=system, user=user,
                 effort=effort, temperature=temperature, output_schema=None,
-                agent=agent,
+                agent=agent, system_volatile=system_volatile, cache_system=cache_system,
             )
             result.requested_structured_output = True
             result.schema_fallback_reason = (
@@ -1052,7 +1226,7 @@ class AnthropicClient:
             result = self._call_once(
                 client, model=model, max_tokens=max_tokens, system=system, user=user,
                 effort=effort, temperature=temperature, output_schema=output_schema,
-                agent=agent,
+                agent=agent, system_volatile=system_volatile, cache_system=cache_system,
             )
             result.requested_structured_output = requested
             return result
@@ -1062,7 +1236,7 @@ class AnthropicClient:
                 result = self._call_once(
                     client, model=model, max_tokens=max_tokens, system=system, user=user,
                     effort=effort, temperature=temperature, output_schema=None,
-                    agent=agent,
+                    agent=agent, system_volatile=system_volatile, cache_system=cache_system,
                 )
                 result.requested_structured_output = True
                 result.schema_fallback_reason = f"schema rejected by the API: {exc}"
@@ -1073,12 +1247,14 @@ class AnthropicClient:
         self, client: Any, *, model: str, max_tokens: int, system: str, user: str,
         effort: str | None = None, temperature: float | None = None,
         output_schema: dict[str, Any] | None = None, agent: str | None = None,
+        system_volatile: str | None = None, cache_system: bool = True,
     ) -> CallResult:
         """One logical (possibly retried-on-transient-error) streamed call —
         no structured-output fallback here, :meth:`call` owns that."""
         kwargs = self.build_request_kwargs(
             model, max_tokens, system, user, effort=effort, temperature=temperature,
-            output_schema=output_schema,
+            output_schema=output_schema, system_volatile=system_volatile,
+            cache_system=cache_system,
         )
         classified: FatalAPIError | RetryableAPIError | None = None
         for attempt in range(1, self.max_retries + 1):
@@ -1206,7 +1382,7 @@ class LLMRunner:
         """Get model ID for an agent. Checks: env override → model_map → default.
 
         TFL_MODEL_OVERRIDE forces every agent onto one model (cheap live test
-        runs, e.g. claude-haiku-4-5); TFL_MODEL_FAST / TFL_MODEL_DEEP override
+        runs, e.g. claude-haiku-5-5); TFL_MODEL_FAST / TFL_MODEL_DEEP override
         the fast / deep tier only.
         """
         override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
@@ -1236,21 +1412,26 @@ class LLMRunner:
     def _build_request_kwargs(
         self, model: str, max_tokens: int, system: str, user: str,
         effort: str | None = None, temperature: float | None = None,
+        system_volatile: str | None = None, cache_system: bool = True,
     ) -> dict[str, Any]:
         """Build kwargs for messages.stream / messages.create.
 
         Thinking models get adaptive thinking + an explicit effort (Opus 5.5
         would silently default to "medium"); legacy models get temperature.
+        The stable system prompt carries the prompt-caching breakpoint,
+        ``system_volatile`` (student notes) follows it unmarked.
         """
         return self._shared.build_request_kwargs(
             model, max_tokens, system, user,
             effort=effort,
             temperature=self.temperature if temperature is None else temperature,
+            system_volatile=system_volatile, cache_system=cache_system,
         )
 
     def _stream_text(
         self, model: str, system: str, user: str, effort: str,
         output_schema: dict[str, Any] | None = None, agent_name: str | None = None,
+        system_volatile: str | None = None,
     ) -> str:
         """Make one streamed API call (through the shared client) and return
         the answer text.
@@ -1277,7 +1458,7 @@ class LLMRunner:
             result = self._shared.call(
                 self._client, model=model, max_tokens=self.max_tokens,
                 system=system, user=user, effort=effort, output_schema=output_schema,
-                agent=agent_name,
+                agent=agent_name, system_volatile=system_volatile,
             )
         except FatalAPIError as exc:
             if exc.status_code == 400:
@@ -1292,10 +1473,17 @@ class LLMRunner:
         if self.verbose:
             tokens_in = result.usage.input_tokens if result.usage else 0
             tokens_out = result.usage.output_tokens if result.usage else 0
+            cache_read = getattr(result.usage, "cache_read_input_tokens", 0) or 0
+            cache_write = getattr(result.usage, "cache_creation_input_tokens", 0) or 0
+            cache_str = (
+                f" cache_read={cache_read} cache_write={cache_write}"
+                if cache_read or cache_write else ""
+            )
             so_str = format_structured_output_flag(result)
             print(
                 f"[{agent_name or 'LLM'}] model={result.model} effort={effort} "
-                f"tokens_in={tokens_in} tokens_out={tokens_out} time={elapsed:.1f}s{so_str}",
+                f"tokens_in={tokens_in} tokens_out={tokens_out}{cache_str} "
+                f"time={elapsed:.1f}s{so_str}",
                 file=sys.stderr, flush=True,
             )
 
@@ -1336,7 +1524,9 @@ class LLMRunner:
         output_schema = schema_for(self._resolve_prompt_name(agent_name))
 
         # Student notes are kept in exactly ONE place: appended to the
-        # system prompt as a clearly-labelled "## Student Notes" section,
+        # system prompt -- as a second, UNCACHED system block after the
+        # cached prompt (prompt caching: they differ per task) -- as a
+        # clearly-labelled "## Student Notes" section,
         # then stripped from input_data before it is serialized into the
         # user JSON. Leaving them in both places would show the agent the
         # same free-form (untrusted) text twice -- once flagged as student
@@ -1363,9 +1553,10 @@ class LLMRunner:
         else:
             user_msg = "{}"
 
+        system_volatile: str | None = None
         if student_notes:
-            system_prompt += (
-                "\n\n## Student Notes\n\n"
+            system_volatile = (
+                "## Student Notes\n\n"
                 "The student provided the following comments, ideas, or partial "
                 "solutions. Take these into account — they may contain useful "
                 "insights, hypotheses to verify, or mistakes to address:\n\n"
@@ -1376,6 +1567,7 @@ class LLMRunner:
         try:
             parsed = self._call_and_parse(
                 system_prompt, user_msg, model, effort, output_schema, agent_name=agent_name,
+                system_volatile=system_volatile,
             )
         except _AgentRefusal as exc:
             # A safety-classifier decline is not a parse problem -- a
@@ -1398,6 +1590,7 @@ class LLMRunner:
         try:
             parsed = self._call_and_parse(
                 system_prompt, retry_msg, model, effort, output_schema, agent_name=agent_name,
+                system_volatile=system_volatile,
             )
         except _AgentRefusal as exc:
             return self._error_output(agent_name, str(exc))
@@ -1421,6 +1614,7 @@ class LLMRunner:
     def _call_and_parse(
         self, system: str, user: str, model: str, effort: str | None = None,
         output_schema: dict[str, Any] | None = None, agent_name: str | None = None,
+        system_volatile: str | None = None,
     ) -> dict | None:
         """Make one API call and try to parse JSON from response.
 
@@ -1430,7 +1624,7 @@ class LLMRunner:
         """
         text = self._stream_text(
             model, system, user, effort or self.default_effort, output_schema,
-            agent_name=agent_name,
+            agent_name=agent_name, system_volatile=system_volatile,
         )
         return extract_json(text)
 
@@ -1440,7 +1634,7 @@ class LLMRunner:
         Returns a short natural-language assessment (1-3 sentences).
         Used for intermediate progress output.
         """
-        model = self.model_map.get("validator", "claude-haiku-4-5")
+        model = self.model_map.get("validator", "claude-haiku-5-5")
         if isinstance(data, (dict, list)):
             data_str = json.dumps(data, indent=2, ensure_ascii=False)
         else:
@@ -1448,10 +1642,10 @@ class LLMRunner:
 
         try:
             kwargs = self._shared.build_request_kwargs(
-                model, 256,
+                model, 2048,  # room for adaptive thinking (Haiku 5.5) plus the 1-2 sentence answer
                 system="You are a formal language theory expert. Answer in 1-2 sentences, in Russian.",
                 user=f"{question}\n\nДанные:\n{data_str[:2000]}",
-                effort="low", temperature=0.0,
+                effort="low", temperature=0.0, cache_system=False,
             )
             with get_concurrency_semaphore():
                 response = self._client.messages.create(**kwargs)

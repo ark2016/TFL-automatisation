@@ -12,7 +12,7 @@ class _Messages:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        block = type("Block", (), {"text": '{"a": 1}'})()
+        block = type("Block", (), {"type": "text", "text": '{"a": 1}'})()
         return type("Response", (), {
             "content": [block],
             "usage": type("Usage", (), {"input_tokens": 1, "output_tokens": 1})(),
@@ -42,4 +42,4 @@ def test_repair_budget_still_scales_down_for_short_inputs():
     runner = LiveRunner(api_key="fake-key-for-unit-test")
     runner.client = _Client()
     runner._repair_json_with_haiku("shallit", '{"a": 1,}', was_truncated=False)
-    assert runner.client.messages.calls[0]["max_tokens"] < 3000
+    assert runner.client.messages.calls[0]["max_tokens"] < 8000  # + room for adaptive thinking
