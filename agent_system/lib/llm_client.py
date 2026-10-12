@@ -524,6 +524,16 @@ def _is_grammar_compilation_outage(exc: Exception, status_code: int | None) -> b
     return "overloaded" in text or status_code in (503, 529)
 
 
+MISSING_CREDENTIALS_MESSAGE = (
+    "Anthropic API key is not configured (ANTHROPIC_API_KEY / auth profile); nothing was sent."
+)
+
+
+def _is_missing_credentials_error(exc: Exception) -> bool:
+    """The SDK's pre-flight failure when no api_key/auth_token/credentials exist."""
+    return isinstance(exc, TypeError) and "Could not resolve authentication method" in str(exc)
+
+
 def _classify_api_exception(exc: Exception) -> FatalAPIError | RetryableAPIError:
     """Classify an exception raised while calling the Anthropic API.
 
@@ -534,6 +544,8 @@ def _classify_api_exception(exc: Exception) -> FatalAPIError | RetryableAPIError
     retryable.
     """
     status_code = getattr(exc, "status_code", None)
+    if _is_missing_credentials_error(exc):
+        return FatalAPIError(MISSING_CREDENTIALS_MESSAGE, status_code=None, original=exc)
     if isinstance(exc, _FATAL_EXCEPTION_TYPES):
         return FatalAPIError(str(exc), status_code=status_code, original=exc)
     if _is_grammar_compilation_outage(exc, status_code):

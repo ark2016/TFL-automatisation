@@ -141,3 +141,30 @@ def test_grammar_outage_as_sse_error_frame_on_a_200_stream(monkeypatch):
     assert len(requests) == 3  # still bounded
     assert exc.value.status_code == 200
     assert "Anthropic side" in str(exc.value) and "not a local/Docker" in str(exc.value)
+
+
+def test_missing_credentials_is_fatal_and_sends_nothing(monkeypatch):
+    for name in list(__import__("os").environ):
+        if name.startswith(("ANTHROPIC_", "CLAUDE_CODE_")):
+            monkeypatch.delenv(name)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        pytest.fail("no request may be sent without credentials")
+
+    def unexpected_backoff(*_args):
+        pytest.fail("missing credentials must not back off")
+
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", unexpected_backoff)
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        with SDKAnthropic(http_client=http_client) as sdk:
+            with pytest.raises(FatalAPIError) as exc:
+                AnthropicClient().call(sdk, model="claude-haiku-4-5", max_tokens=10,
+                                       system="offline", user="offline")
+    assert "API key is not configured" in str(exc.value)
+    assert requests == []
+
+
+def test_unrelated_type_error_stays_retryable():
+    assert isinstance(llm_client._classify_api_exception(TypeError("boom")), RetryableAPIError)
