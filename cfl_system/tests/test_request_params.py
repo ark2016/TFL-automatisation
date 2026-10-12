@@ -23,6 +23,7 @@ def runner():
     ("claude-sonnet-4-6", True),
     ("claude-haiku-4-5", False),
     ("claude-haiku-4-5-20251001", False),
+    ("claude-haiku-5-5", True),
     ("claude-opus-4-5", False),
     ("claude-sonnet-4-20250514", False),
 ])

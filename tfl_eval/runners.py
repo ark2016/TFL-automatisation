@@ -26,7 +26,7 @@ MOCK_DIRS: dict[str, Path] = {
 # Env var each system's LiveRunner (or llm_client) reads to override the
 # configured model — see root CLAUDE.md ("Models and LLM calls").
 _MODEL_OVERRIDE_ENV = "TFL_MODEL_OVERRIDE"
-_DEFAULT_LIVE_MODEL = "claude-haiku-4-5"
+_DEFAULT_LIVE_MODEL = "claude-haiku-5-5"
 
 
 def validate(system: str, ir: dict) -> list[str]:

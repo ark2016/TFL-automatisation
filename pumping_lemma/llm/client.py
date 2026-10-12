@@ -46,7 +46,8 @@ class LLMClient:
         if system:
             kwargs["system"] = system
         response = self.client.messages.create(**kwargs)
-        return response.content[0].text
+        # by type: a thinking model may put thinking blocks before the answer
+        return "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
 
     def complete_json(self, prompt: str, system: str = "", max_tokens: int = 4096) -> Dict:
         """Send request expecting JSON response."""

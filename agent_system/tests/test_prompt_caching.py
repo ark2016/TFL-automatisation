@@ -51,7 +51,7 @@ def _attach(runner, client):
 # build_request_kwargs / build_system_blocks
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"])
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-haiku-5-5"])
 def test_stable_system_block_carries_the_breakpoint(model):
     kw = AnthropicClient().build_request_kwargs(model, 1000, "STABLE PROMPT", "task json")
     assert kw["system"] == [{"type": "text", "text": "STABLE PROMPT", "cache_control": EPHEMERAL}]
@@ -71,7 +71,7 @@ def test_volatile_system_part_is_a_second_unmarked_block():
 
 def test_cache_system_false_keeps_a_plain_string_for_throwaway_calls():
     kw = AnthropicClient().build_request_kwargs(
-        "claude-haiku-4-5", 256, "repair json", "u", cache_system=False,
+        "claude-haiku-5-5", 256, "repair json", "u", cache_system=False,
     )
     assert kw["system"] == "repair json"
     assert _breakpoints(kw) == 0
@@ -221,12 +221,15 @@ def test_reg_quick_validate_is_not_cached():
 @pytest.mark.parametrize("module", ["cfl_system", "dcfl_system", "ll_system"])
 def test_haiku_json_repair_call_is_not_cached(module):
     runner = importlib.import_module(f"{module}.orchestrator").LiveRunner(api_key="sk-ant-test-not-used")
-    client = FakeAnthropic([text_turn('{"fixed": true}', model="claude-haiku-4-5")])
+    client = FakeAnthropic([text_turn('{"fixed": true}', model="claude-haiku-5-5")])
     _attach(runner, client)
     assert runner._repair_json_with_haiku("classifier", '{"fixed": true,', False) == {"fixed": True}
     kw = client.create_calls[0]
     assert isinstance(kw["system"], str) and _breakpoints(kw) == 0
-    assert kw["extra_body"] == {"temperature": 0.0}
+    # Haiku 5.5: thinking model, no temperature anywhere; effort low
+    assert "extra_body" not in kw and "temperature" not in kw
+    assert kw["thinking"] == {"type": "adaptive"}
+    assert kw["output_config"]["effort"] == "low"
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +275,7 @@ def _usage(**kw):
 
 
 @pytest.mark.parametrize("model, read_mult", [
-    ("claude-haiku-4-5", 0.1), ("claude-sonnet-5-5", 0.1), ("claude-sonnet-5", 0.1),
+    ("claude-haiku-4-5", 0.1), ("claude-haiku-5-5", 0.1), ("claude-sonnet-5-5", 0.1), ("claude-sonnet-5", 0.1),
     ("claude-opus-5-5", 0.05),     # Opus 5.5 reads at 0.05x (docs: prompt-caching Economics)
 ])
 def test_pricing_table_uses_the_documented_cache_multipliers(model, read_mult):

@@ -8,7 +8,9 @@ Edit this file to change models or behavior.
 # ---------------------------------------------------------------------------
 # Model assignments per agent (§4 spec table)
 # ---------------------------------------------------------------------------
-# Available: "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"
+# Available: "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"
+# (Haiku 5.5 is a thinking model like the others: adaptive thinking + effort,
+# no temperature. Haiku 4.5 still works but takes the legacy temperature path.)
 
 MODELS = {
     # Fast / structured tasks → Sonnet
@@ -34,8 +36,8 @@ MODELS = {
     "retry_planner":    "claude-sonnet-5-5",
 
     # Quick validation / summarization → Haiku (logs & translation only)
-    "validator":        "claude-haiku-4-5",
-    "summarizer":       "claude-haiku-4-5",
+    "validator":        "claude-haiku-5-5",
+    "summarizer":       "claude-haiku-5-5",
 }
 
 # Reasoning depth per agent (`output_config.effort`). Opus 5.5 always runs
@@ -59,6 +61,9 @@ EFFORT = {
     "formalizer_retry": "high",
     "proof_checker":    "high",
     "retry_planner":    "medium",
+    # Haiku 5.5 roles: quick, short answers -- as little thinking as possible.
+    "validator":        "low",
+    "summarizer":       "low",
 }
 DEFAULT_EFFORT = "high"
 
@@ -78,7 +83,7 @@ REFUSAL_FALLBACK = True
 MAX_TOKENS = 64000
 
 # Temperature — only sent to legacy models (Haiku 4.5). Adaptive-thinking
-# models (Opus 4.7+, Sonnet 5 / 5.5, Opus 5.x) reject sampling parameters.
+# models (Opus 4.7+, Sonnet 5 / 5.5, Opus 5.x, Haiku 5.5) reject sampling parameters.
 TEMPERATURE = 0.0
 
 # Lean 4 type check timeout (seconds)

@@ -30,7 +30,9 @@ from langgraph.types import Send
 
 from dcfl_system.config import (
     FORMALIZATION_ENABLED,
+    JSON_REPAIR_EFFORT,
     JSON_REPAIR_MAX_TOKENS,
+    JSON_REPAIR_MODEL,
     JSON_REPAIR_TIMEOUT_S,
     LEAN_TIMEOUT,
     MAX_CALLS_PER_AGENT,
@@ -207,7 +209,7 @@ class LiveRunner:
         self.client = anthropic.Anthropic(api_key=resolved_key)
         self.models = MODELS
         # TFL_MODEL_OVERRIDE forces every agent onto one model — used for cheap
-        # live test runs (e.g. TFL_MODEL_OVERRIDE=claude-haiku-4-5).
+        # live test runs (e.g. TFL_MODEL_OVERRIDE=claude-haiku-5-5).
         self.model_override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
         self.temperatures = TEMPERATURES
         self.efforts = EFFORT
@@ -220,7 +222,7 @@ class LiveRunner:
         self.prompts_dir = Path(__file__).parent / "prompts"
         self.verbose = verbose
         self._prompt_cache: dict[str, str] = {}
-        self._json_repair_model = "claude-haiku-4-5"
+        self._json_repair_model = JSON_REPAIR_MODEL
         # Shared call machinery (TODO.md §3): kwargs building, streaming,
         # retry/backoff, usage tracking. Not the SDK client itself — `self.
         # client` stays the mutable attribute (tests swap it for a mock).
@@ -249,7 +251,7 @@ class LiveRunner:
     # 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
     # Opus 4.7+, Sonnet 5 / 5.5 and Opus 5.x reject `temperature` with a 400, so
     # thinking models never get sampling parameters.
-    _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
+    _LEGACY_MODEL_RE = _re.compile(r"^claude-3|haiku(?!-5)|-4(-[015])?(-\d{8})?$")
     # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
     _FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
 
@@ -310,9 +312,9 @@ class LiveRunner:
         user_msg = f"Agent: {agent_name}\nRepair this:{truncation_note}\n```\n{raw_text}\n```"
         request_kwargs = self._build_request_kwargs(
             model=self._json_repair_model,
-            max_tokens=min(len(raw_text) // 2 + 2000, JSON_REPAIR_MAX_TOKENS),
+            max_tokens=min(len(raw_text) // 2 + 6000, JSON_REPAIR_MAX_TOKENS),
             temperature=0.0, system_prompt=system, user_msg=user_msg,
-            cache_system=False,
+            effort=JSON_REPAIR_EFFORT, cache_system=False,
         )
         try:
             with get_concurrency_semaphore():
@@ -323,7 +325,9 @@ class LiveRunner:
                 )
         except Exception:
             return None
-        repaired = "".join(b.text for b in response.content if hasattr(b, "text"))
+        repaired = "".join(
+            b.text for b in response.content if getattr(b, "type", None) == "text"
+        )
         self.usage_tracker.record(
             getattr(response, "model", self._json_repair_model), getattr(response, "usage", None),
             agent=agent_name, used_structured_output=False,
@@ -360,7 +364,7 @@ class LiveRunner:
             raw_text = ""
             stop_reason = None
             # Thinking models get adaptive thinking + this agent's effort;
-            # temperature is only sent to legacy models (Haiku 4.5). The
+            # temperature is only sent to legacy models (legacy Haiku 4.5). The
             # shared client also retries a retryable error (429/5xx/network/
             # broken stream) with backoff before giving up, and never
             # retries a fatal one (400/401/403/404) — TODO.md §2/§3.

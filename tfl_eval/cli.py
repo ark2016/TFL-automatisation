@@ -280,7 +280,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--live", action="store_true", help="Call the real pipelines (Anthropic API).")
     parser.add_argument(
         "--model", default=None,
-        help="Explicit TFL_MODEL_OVERRIDE for --live (default: claude-haiku-4-5, see root CLAUDE.md).",
+        help="Explicit TFL_MODEL_OVERRIDE for --live (default: claude-haiku-5-5, see root CLAUDE.md).",
     )
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST), help="Path to manifest.json.")
     parser.add_argument(

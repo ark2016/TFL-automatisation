@@ -39,6 +39,8 @@ def _mock_stream(runner, message):
     ("claude-sonnet-5-5", True),
     ("claude-sonnet-5", True),  # legacy, still available
     ("claude-haiku-4-5", False),
+    ("claude-haiku-5-5", True),
+    ("claude-haiku-4-5-20251001", False),
     ("claude-opus-4-5", False),
 ])
 def test_is_adaptive_model(model, adaptive):

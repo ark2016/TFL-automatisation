@@ -23,7 +23,7 @@ MODELS: dict[str, str] = {
     "lean_formalizer_retry": "claude-sonnet-5-5",
 }
 
-# Temperature per agent — only sent to legacy models (Haiku 4.5, pre-4.6).
+# Temperature per agent — only sent to legacy models (Haiku 4.5, pre-4.6; Haiku 5.5 rejects it).
 # Adaptive-thinking models (Opus 4.7+, Sonnet 5 / 5.5, Opus 5.x) reject sampling
 # parameters with a 400, so for them these values are ignored; see EFFORT.
 TEMPERATURES: dict[str, float] = {
@@ -81,9 +81,12 @@ MAX_TOKENS_PER_AGENT: dict[str, int] = {}
 
 # Haiku JSON-repair call: output ceiling. A repair re-emits the whole object,
 # so a truncated 64K-token answer cannot be repaired within 8000 tokens.
-# Haiku 4.5 allows 64K output; 32000 leaves headroom. The call is
+# Haiku 5.5 allows 128K output; 32000 leaves headroom. The call is
 # non-streaming, so it passes an explicit timeout (JSON_REPAIR_TIMEOUT_S) --
 # without one the SDK refuses non-streaming max_tokens > ~21333.
+JSON_REPAIR_MODEL = "claude-haiku-5-5"
+# Haiku 5.5 thinks by default; a mechanical syntax repair needs the least thinking.
+JSON_REPAIR_EFFORT = "low"
 JSON_REPAIR_MAX_TOKENS = 32000
 JSON_REPAIR_TIMEOUT_S = 600.0
 LLM_JSON_RETRIES = 2

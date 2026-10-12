@@ -47,9 +47,10 @@ except ImportError:
 
 # Legacy models — Haiku 4.5 and anything before the 4.6 family — take
 # sampling parameters and have no adaptive thinking / effort. Opus/Sonnet
-# 4.6+ and every 5.x model run adaptive thinking steered by `effort`, and
-# Opus 4.7+, Sonnet 5 / 5.5 and Opus 5.x reject `temperature` with a 400.
-_LEGACY_MODEL_RE = re.compile(r"^claude-3|haiku|-4(-[015])?(-\d{8})?$")
+# 4.6+ and every 5.x model (Haiku 5.5 included) run adaptive thinking steered
+# by `effort`, and Opus 4.7+, Sonnet 5 / 5.5, Opus 5.x and Haiku 5.5 reject
+# `temperature` with a 400.
+_LEGACY_MODEL_RE = re.compile(r"^claude-3|haiku(?!-5)|-4(-[015])?(-\d{8})?$")
 # Models that get the server-side refusal fallback (see REFUSAL_FALLBACK).
 _FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5")
 
@@ -609,7 +610,19 @@ MODEL_PRICING: dict[str, dict[str, float | None]] = {
     "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
     # Legacy (still available, same rates as 5.5).
     "claude-sonnet-5":  {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    # Haiku 4.5 is kept for results recorded before the move to 5.5.
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00,  "cache_read": 0.10, "cache_write": 1.25},
+    # Haiku 5.5 has two rate cards chosen by the request's prompt length: this
+    # one for prompts of <= LONG_PROMPT_THRESHOLD_TOKENS, MODEL_PRICING_LONG_PROMPT
+    # above. Cache read is 0.1x input, 5-minute write 1.25x (1-hour write 2x, not modelled).
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50,  "cache_read": 0.01, "cache_write": 0.125},
+}
+
+# Rate card for a request whose prompt (input + cache read + cache write
+# tokens) exceeds LONG_PROMPT_THRESHOLD_TOKENS. Models not listed have one card.
+LONG_PROMPT_THRESHOLD_TOKENS = 100_000
+MODEL_PRICING_LONG_PROMPT: dict[str, dict[str, float | None]] = {
+    "claude-haiku-5-5": {"input": 0.50, "output": 2.50, "cache_read": 0.05, "cache_write": 0.625},
 }
 
 
@@ -645,25 +658,58 @@ def estimate_cost_usd(model: str, usage: Any) -> float | None:
     :data:`MODEL_PRICING` is keyed by."""
     if usage is None:
         return None
-    prices = MODEL_PRICING.get(_normalize_model_id(model))
+    key = _normalize_model_id(model)
+    prices = MODEL_PRICING.get(key)
     if not prices:
         return None
+    long_prices = MODEL_PRICING_LONG_PROMPT.get(key)
     buckets = (
         ("input_tokens", "input"),
         ("output_tokens", "output"),
         ("cache_read_input_tokens", "cache_read"),
         ("cache_creation_input_tokens", "cache_write"),
     )
-    total = 0.0
-    for attr, price_key in buckets:
-        n = getattr(usage, attr, 0) or 0
-        if not n:
-            continue
-        price = prices.get(price_key)
-        if price is None:
-            return None
-        total += n / 1_000_000 * price
-    return total
+
+    def _cost(card: dict[str, float | None], counts: dict[str, int]) -> float | None:
+        total = 0.0
+        for attr, price_key in buckets:
+            n = counts[attr]
+            if not n:
+                continue
+            price = card.get(price_key)
+            if price is None:
+                return None
+            total += n / 1_000_000 * price
+        return total
+
+    counts = {attr: getattr(usage, attr, 0) or 0 for attr, _ in buckets}
+    if not long_prices:
+        return _cost(prices, counts)
+    # Two rate cards. An aggregate (UsageTotals) carries the share of its
+    # tokens that came from over-threshold requests in ``long_*`` fields; a
+    # single SDK Usage object is classified by its own prompt length.
+    if hasattr(usage, "long_input_tokens"):
+        long_counts = {attr: getattr(usage, "long_" + attr, 0) or 0 for attr, _ in buckets}
+    elif is_long_prompt(usage):
+        long_counts = dict(counts)
+    else:
+        long_counts = {attr: 0 for attr, _ in buckets}
+    short_counts = {k: counts[k] - long_counts[k] for k in counts}
+    short_cost = _cost(prices, short_counts)
+    long_cost = _cost(long_prices, long_counts)
+    if short_cost is None or long_cost is None:
+        return None
+    return short_cost + long_cost
+
+
+def is_long_prompt(usage: Any) -> bool:
+    """Whether one request's prompt (input + cache read + cache write tokens)
+    exceeds :data:`LONG_PROMPT_THRESHOLD_TOKENS` (the higher rate card)."""
+    prompt = sum(
+        getattr(usage, attr, 0) or 0
+        for attr in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    )
+    return prompt > LONG_PROMPT_THRESHOLD_TOKENS
 
 
 @dataclasses.dataclass
@@ -675,6 +721,13 @@ class UsageTotals:
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     calls: int = 0
+    # The part of the buckets above that came from requests with a prompt over
+    # LONG_PROMPT_THRESHOLD_TOKENS (billed on the higher rate card, if the
+    # model has one). Only :meth:`UsageTracker.record` fills these.
+    long_input_tokens: int = 0
+    long_output_tokens: int = 0
+    long_cache_read_input_tokens: int = 0
+    long_cache_creation_input_tokens: int = 0
 
 
 def _totals_to_dict(model: str, t: "UsageTotals") -> dict:
@@ -752,8 +805,14 @@ class UsageTracker:
         cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
         model_key = model or "unknown"
         agent_key = agent or "unknown"
+        long_call = is_long_prompt(usage)
         with self._lock:
             totals = self._by_model.setdefault(model_key, UsageTotals())
+            if long_call:
+                totals.long_input_tokens += input_tokens
+                totals.long_output_tokens += output_tokens
+                totals.long_cache_read_input_tokens += cache_read
+                totals.long_cache_creation_input_tokens += cache_creation
             totals.input_tokens += input_tokens
             totals.output_tokens += output_tokens
             totals.cache_read_input_tokens += cache_read
@@ -763,6 +822,11 @@ class UsageTracker:
             agent_totals = self._by_agent.setdefault(agent_key, {}).setdefault(
                 model_key, UsageTotals(),
             )
+            if long_call:
+                agent_totals.long_input_tokens += input_tokens
+                agent_totals.long_output_tokens += output_tokens
+                agent_totals.long_cache_read_input_tokens += cache_read
+                agent_totals.long_cache_creation_input_tokens += cache_creation
             agent_totals.input_tokens += input_tokens
             agent_totals.output_tokens += output_tokens
             agent_totals.cache_read_input_tokens += cache_read
@@ -944,7 +1008,7 @@ def format_structured_output_flag(result: "CallResult") -> str:
 
 
 # Hard per-model output limits (prefix match, so dated variants are covered).
-# Models not listed are not clamped.
+# Models not listed are not clamped (Haiku 5.5: 128K output, no clamp needed).
 MODEL_MAX_OUTPUT_TOKENS: dict[str, int] = {
     "claude-haiku-4-5": 64000,
 }
@@ -965,8 +1029,8 @@ def clamp_max_tokens(model: str, requested: int) -> int:
 # the user message or in a second, unmarked system block
 # (``system_volatile``). Prompts are only ~3-19 KB (REG ~4-11 KB, the Lean
 # formalizer ~19 KB): below the model's minimum cacheable prefix (512 tokens on
-# Opus/Sonnet 5.5, 4096 on Haiku 4.5) a request is sent normally and not
-# cached, so on Haiku only the largest prompts cache. Render order is tools -> system -> messages and the
+# Opus/Sonnet/Haiku 5.5, 4096 on Haiku 4.5) a request is sent normally and not
+# cached, so on Haiku 4.5 only the largest prompts cache. Render order is tools -> system -> messages and the
 # cache is a byte-exact prefix match, so nothing volatile (timestamps, run
 # ids, unsorted JSON) may ever be added to the cached block.
 CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
@@ -1065,7 +1129,7 @@ class AnthropicClient:
         outputs (``output_config.format``) instead of the "extract JSON from
         prose" heuristic — verified against the Anthropic Python SDK /
         ``claude-api`` skill: GA, no beta header, works on every model this
-        codebase uses (Opus 5.5, Sonnet 5.5, Haiku 4.5).
+        codebase uses (Opus 5.5, Sonnet 5.5, Haiku 5.5, legacy Haiku 4.5).
         """
         kwargs: dict[str, Any] = {
             "model": model,
@@ -1306,7 +1370,7 @@ class LLMRunner:
         """Get model ID for an agent. Checks: env override → model_map → default.
 
         TFL_MODEL_OVERRIDE forces every agent onto one model (cheap live test
-        runs, e.g. claude-haiku-4-5); TFL_MODEL_FAST / TFL_MODEL_DEEP override
+        runs, e.g. claude-haiku-5-5); TFL_MODEL_FAST / TFL_MODEL_DEEP override
         the fast / deep tier only.
         """
         override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
@@ -1558,7 +1622,7 @@ class LLMRunner:
         Returns a short natural-language assessment (1-3 sentences).
         Used for intermediate progress output.
         """
-        model = self.model_map.get("validator", "claude-haiku-4-5")
+        model = self.model_map.get("validator", "claude-haiku-5-5")
         if isinstance(data, (dict, list)):
             data_str = json.dumps(data, indent=2, ensure_ascii=False)
         else:
@@ -1566,7 +1630,7 @@ class LLMRunner:
 
         try:
             kwargs = self._shared.build_request_kwargs(
-                model, 256,
+                model, 2048,  # room for adaptive thinking (Haiku 5.5) plus the 1-2 sentence answer
                 system="You are a formal language theory expert. Answer in 1-2 sentences, in Russian.",
                 user=f"{question}\n\nДанные:\n{data_str[:2000]}",
                 effort="low", temperature=0.0, cache_system=False,

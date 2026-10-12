@@ -121,6 +121,13 @@ def test_model_override_env_forces_both_and_clamps_haiku(spec, monkeypatch):
     assert not hasattr(fr, "MODEL_MAX_OUTPUT")
 
 
+def test_model_override_haiku_5_5_is_not_clamped(spec, monkeypatch):
+    monkeypatch.setenv("TFL_MODEL_OVERRIDE", "claude-haiku-5-5")
+    s = fr.FormalizeSettings.defaults(spec)
+    assert s.first_model == s.retry_model == "claude-haiku-5-5"
+    assert s.max_tokens_for("claude-haiku-5-5") == 128000    # 128K output, no 64K clamp
+
+
 # ---------------------------------------------------------------------------
 # the model loop
 # ---------------------------------------------------------------------------

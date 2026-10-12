@@ -1022,7 +1022,7 @@ class TestHaikuRepairTruncatedFlag:
             return TestHaikuRepairTruncatedFlag._FakeStream(self._stream_text, final)
 
         def create(self, **kwargs):
-            block = type("Block", (), {"text": self._repaired_json})()
+            block = type("Block", (), {"type": "text", "text": self._repaired_json})()
             return type("Response", (), {
                 "content": [block],
                 "usage": type("Usage", (), {"input_tokens": 10, "output_tokens": 20})(),

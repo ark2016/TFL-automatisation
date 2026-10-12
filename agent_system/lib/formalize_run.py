@@ -171,7 +171,7 @@ class FormalizeSettings:
 
     def with_env_override(self) -> "FormalizeSettings":
         """``TFL_MODEL_OVERRIDE`` forces every call onto one model (cheap live
-        checks, e.g. claude-haiku-4-5), exactly as in the pipelines."""
+        checks, e.g. claude-haiku-5-5), exactly as in the pipelines."""
         override = os.environ.get("TFL_MODEL_OVERRIDE", "").strip()
         if override:
             return FormalizeSettings(override, override, self.retries, self.max_tokens)

@@ -61,7 +61,7 @@ Or run a pipeline directly from the command line. All four orchestrators share o
     --save cfl_system/examples/live_outputs/
 
 # Live, cheap: every agent on Haiku (use this for testing)
-TFL_MODEL_OVERRIDE=claude-haiku-4-5 .venv/Scripts/python -m cfl_system.orchestrator \
+TFL_MODEL_OVERRIDE=claude-haiku-5-5 .venv/Scripts/python -m cfl_system.orchestrator \
     cfl_system/examples/task11_ai_bj_between.json \
     --live --verbose --save cfl_system/examples/live_outputs/
 
@@ -181,7 +181,7 @@ The [`LiveRunner`](cfl_system/orchestrator.py) (same pattern in cfl / dcfl / ll;
 ```
 Opus response → _extract_json (3 strategies: whole / fenced / braces)
               ├─ success → return parsed dict
-              └─ failure → Haiku repair (claude-haiku-4-5, ~$0.01, ~2s)
+              └─ failure → Haiku repair (claude-haiku-5-5, effort low, well under $0.01, ~2s)
                          ├─ success → return parsed dict
                          └─ failure → Opus retry with detailed parse-error
                                       (position + context snippet + prior
@@ -191,9 +191,9 @@ Opus response → _extract_json (3 strategies: whole / fenced / braces)
 ```
 
 - **Streaming API** everywhere — non-streaming requests are rejected by the Anthropic SDK when `max_tokens × projected latency > 10 min`, and with adaptive thinking `max_tokens` has to cover reasoning + answer (64K).
-- **Request parameters per model.** Opus 5.5 / Sonnet 5.5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; only legacy models (Haiku 4.5) get `temperature`. See `LiveRunner._build_request_kwargs()`.
-- **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-4-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
-- **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`).
+- **Request parameters per model.** Opus 5.5 / Sonnet 5.5 run adaptive thinking steered by a per-agent `effort` level (`EFFORT` in each `config.py`) and reject `temperature`; Haiku 5.5 is a thinking model too (adaptive thinking, effort `low` for the repair/validator roles, no `temperature`); only legacy models (Haiku 4.5, if pinned) get `temperature`. See `LiveRunner._build_request_kwargs()`.
+- **Cheap live test runs.** `TFL_MODEL_OVERRIDE=claude-haiku-5-5` forces every agent onto one model (all four pipelines); production models stay in `config.py`.
+- **Refusals.** A safety-classifier decline (`stop_reason="refusal"`) becomes an `agent_error` immediately — no JSON repair or retry. Opus 5.x calls opt into the server-side refusal fallback (`fallbacks: "default"`, toggle `REFUSAL_FALLBACK`); Haiku 5.5 has no server-side fallback and never gets it.
 
 **Shared client (`agent_system/lib/llm_client.py`).** `cfl_system`/`dcfl_system`/`ll_system`'s `LiveRunner` are now
 thin wrappers around one `AnthropicClient`: `build_request_kwargs()` builds the thinking/effort/temperature kwargs
@@ -213,8 +213,8 @@ price; a write costs 1.25x. This covers the REG `LLMRunner`, the three `LiveRunn
 (`formalize_run.LiveSource`); the short Haiku JSON-repair and quick-validate calls are not cached
 (`cache_system=False`). Cache buckets appear as `cache_read_input_tokens` / `cache_creation_input_tokens` in the
 `usage` block, the progress events, the TFL Lab run header and `tfl-eval` totals; `input_tokens` is the uncached
-remainder only. Minimum cacheable prefix: 512 tokens on Opus/Sonnet 5.5, 4096 on Haiku 4.5 (shorter prompts are sent
-normally and simply not cached), so on Haiku the smaller prompts (all REG agents except possibly the largest) fall
+remainder only. Minimum cacheable prefix: 512 tokens on Opus/Sonnet/Haiku 5.5, 4096 on legacy Haiku 4.5 (shorter prompts are sent
+normally and simply not cached), so on Haiku 4.5 the smaller prompts (all REG agents except possibly the largest) fall
 below the minimum and only the larger prompts and the Lean prover prompts cache. Keep the cached block free of timestamps, ids and unsorted JSON.
 
 **Structured outputs.** Agent responses are parsed primarily via the Messages API's `output_config.format`
@@ -347,9 +347,9 @@ All four pipelines use the same three-tier model stack:
 |---|---|---|---|
 | Heavy reasoning | `claude-opus-5-5` (effort `high`) | $4 / $20 per MTok | All specialists, reasoning, proof_checker, formalizer |
 | Fast structured | `claude-sonnet-5-5` (effort `medium`) | $2 / $10 per MTok | `classifier`, `retry_planner`, `input_parser` |
-| JSON repair | `claude-haiku-4-5` | $1 / $5 per MTok | `_repair_json_with_haiku` hook in `LiveRunner` |
+| JSON repair | `claude-haiku-5-5` (effort `low`) | $0.10 / $0.50 per MTok (prompt <= 100K tokens; $0.50 / $2.50 above) | `_repair_json_with_haiku` hook in `LiveRunner` |
 
-**Run cost.** On the previous stack (Opus 4.7 without thinking) a medium CFL problem (`task_w1bw2w3_ticket50.json`) cost **≈ $2–3**, a simple one **≈ $1**. Opus 5.5 is cheaper per token but thinks on every call, so these numbers need re-measuring; tune `EFFORT` per agent in each `config.py`. For development, `TFL_MODEL_OVERRIDE=claude-haiku-4-5` runs a full CFL pipeline (≈20 calls incl. a retry round) for well under $1.
+**Run cost.** On the previous stack (Opus 4.7 without thinking) a medium CFL problem (`task_w1bw2w3_ticket50.json`) cost **≈ $2–3**, a simple one **≈ $1**. Opus 5.5 is cheaper per token but thinks on every call, so these numbers need re-measuring; tune `EFFORT` per agent in each `config.py`. For development, `TFL_MODEL_OVERRIDE=claude-haiku-5-5` runs a full CFL pipeline (≈20 calls incl. a retry round) for well under $1.
 
 > Opus 5.5 **always** uses adaptive thinking (it can't be disabled) and defaults to effort `medium` when none is sent, so every agent has an explicit level in `EFFORT`. Thinking tokens count toward `max_tokens`, hence `MAX_TOKENS = 64000` with streaming. Sampling parameters (`temperature`) are rejected with a 400 and are only sent to legacy models.
 
@@ -361,7 +361,7 @@ All four pipelines use the same three-tier model stack:
 
 - **Sidebar:** project switcher (REG / CFL / DCFL / LL) + `examples/*.json` file list
 - **Editor:** monospace IR editor with live JSON validator and line gutter
-- **Run bar:** `Mock Run` (free, no LLM) and `Live Run` (gated by an explicit "I confirm API spend" checkbox with red border). Start the server with `TFL_MODEL_OVERRIDE=claude-haiku-4-5` to make live runs cheap.
+- **Run bar:** `Mock Run` (free, no LLM) and `Live Run` (gated by an explicit "I confirm API spend" checkbox with red border). Start the server with `TFL_MODEL_OVERRIDE=claude-haiku-5-5` to make live runs cheap.
 - **Result pane:** four tabs — HTML (iframe of the rendered report with KaTeX + inline Graphviz SVG), JSON (formatted), Markdown (Preview ↔ Raw GitHub-style toggle), Log (streamed stderr, color-coded)
 
 Backend is stdlib-only (`http.server` + `ThreadingHTTPServer`); frontend is vanilla JS (`static/app.js`, no inline `<script>`) + CDN-loaded [marked](https://marked.js.org/) + [KaTeX](https://katex.org/) (served from cdnjs, not jsdelivr, so a strict `script-src` can allow-list a single host) + [DOMPurify](https://github.com/cure53/DOMPurify) to sanitize the rendered Markdown before it goes into `innerHTML`. No framework, no build step.
@@ -630,4 +630,4 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 
 Built for the Theory of Formal Languages course at **МГТУ им. Н.Э. Баумана, ИУ-9**.
 
-Powered by [Claude](https://www.anthropic.com/claude) (Opus 5.5 / Sonnet 5.5 / Haiku 4.5) via the Anthropic API, orchestrated through [LangGraph](https://langchain-ai.github.io/langgraph/).
+Powered by [Claude](https://www.anthropic.com/claude) (Opus 5.5 / Sonnet 5.5 / Haiku 5.5) via the Anthropic API, orchestrated through [LangGraph](https://langchain-ai.github.io/langgraph/).
