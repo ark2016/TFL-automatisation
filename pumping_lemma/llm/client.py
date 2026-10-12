@@ -1,5 +1,6 @@
 """Anthropic SDK wrapper for LLM calls."""
 import os
+import re
 import json
 from typing import Optional, List, Dict, Any
 
@@ -39,10 +40,12 @@ class LLMClient:
             "model": self.model,
             "max_tokens": max_tokens,
             "messages": messages,
-            # anthropic>=1.0 dropped sampling parameters from the method signatures;
-            # models that still accept them (e.g. Sonnet 4.5) get them in the request body.
-            "extra_body": {"temperature": temperature},
         }
+        # anthropic>=1.0 dropped sampling parameters from the method signatures.
+        # Claude 4.5/4.6 models still accept them in the request body; newer models
+        # (Haiku 5.5, Sonnet 5.x, Opus 4.7+) reject non-default values, so omit it there.
+        if re.search(r"-4-[56](?!\d)", self.model):
+            kwargs["extra_body"] = {"temperature": temperature}
         if system:
             kwargs["system"] = system
         response = self.client.messages.create(**kwargs)

@@ -83,7 +83,7 @@ def main():
         if use_llm:
             model = st.selectbox("Модель", [
                 "claude-sonnet-4-5",
-                "claude-haiku-4-5",
+                "claude-haiku-5-5",
                 "claude-opus-4-5",
             ])
 
