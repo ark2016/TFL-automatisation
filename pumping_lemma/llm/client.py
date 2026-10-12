@@ -39,7 +39,9 @@ class LLMClient:
             "model": self.model,
             "max_tokens": max_tokens,
             "messages": messages,
-            "temperature": temperature,
+            # anthropic>=1.0 dropped sampling parameters from the method signatures;
+            # models that still accept them (e.g. Sonnet 4.5) get them in the request body.
+            "extra_body": {"temperature": temperature},
         }
         if system:
             kwargs["system"] = system
