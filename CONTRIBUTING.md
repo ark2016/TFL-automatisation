@@ -19,7 +19,7 @@ Run the full test suite before pushing:
 python -m pytest agent_system/tests cfl_system/tests dcfl_system/tests ll_system/tests ui_server/tests -q
 ```
 
-All suites must stay green (currently: **1383 passed, 3 skipped** — the skips need Docker with the Lean 4 image). A bare `pytest` from the repo root now collects the same suites (`[tool.pytest.ini_options] testpaths` in `pyproject.toml`) and the root `conftest.py` blocks any real Anthropic API call for the whole session as a safety net — but the legacy `pumping_lemma/tests`, which call the real API, are intentionally left out of `testpaths`, so run it against them explicitly (and expect a real bill) only if you mean to.
+All suites must stay green (currently: **3447 passed, 161 skipped, 2 xfailed** — the skips mostly need Docker with the Lean 4 image). A bare `pytest` from the repo root now collects the same suites (`[tool.pytest.ini_options] testpaths` in `pyproject.toml`) and the root `conftest.py` blocks any real Anthropic API call for the whole session as a safety net — but the legacy `pumping_lemma/tests`, which call the real API, are intentionally left out of `testpaths`, so run it against them explicitly (and expect a real bill) only if you mean to.
 
 ## Scope of a good PR
 

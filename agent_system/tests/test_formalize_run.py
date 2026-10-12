@@ -156,6 +156,35 @@ def test_attempt_models_and_correction_inputs(tmp_path, spec, check):
     assert block["errors"] == []
 
 
+def _is_cached(call: dict) -> bool:
+    system = call["system"]
+    return isinstance(system, list) and any("cache_control" in b for b in system)
+
+
+def test_prompt_cache_only_where_the_model_is_reused(tmp_path, spec, check):
+    """First attempt on Opus is followed only by Sonnet corrections, so writing
+    its cache would never pay; Sonnet attempts cache except the last allowed."""
+    run_dir = make_run_dir(tmp_path)
+    check(tc("error", [{"severity": "error", "data": "e1"}]),
+          tc("error", [{"severity": "error", "data": "e2"}]),
+          tc("error", [{"severity": "error", "data": "e3"}]))
+    _, client = run(run_dir, spec, [
+        body_turn("a"), body_turn("b", model=SONNET), body_turn("c", model=SONNET),
+    ])
+    assert [c["model"] for c in client.stream_calls] == [OPUS, SONNET, SONNET]
+    assert [_is_cached(c) for c in client.stream_calls] == [False, True, False]
+
+
+def test_prompt_cache_when_first_and_retry_model_match(tmp_path, spec, check):
+    run_dir = make_run_dir(tmp_path)
+    check(tc("error", [{"severity": "error", "data": "e1"}]),
+          tc("proved", axioms=["propext"]))
+    settings = fr.FormalizeSettings(SONNET, SONNET, retries=2, max_tokens=1000)
+    _, client = run(run_dir, spec, [body_turn("a", model=SONNET), body_turn("b", model=SONNET)],
+                    settings=settings)
+    assert [_is_cached(c) for c in client.stream_calls] == [True, True]
+
+
 def test_all_attempts_fail_changes_nothing_but_the_block(tmp_path, spec, check):
     run_dir = make_run_dir(tmp_path)
     before = load_result(run_dir)

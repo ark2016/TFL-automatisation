@@ -115,3 +115,29 @@ def test_agent_error_carries_grammar_outage_message(monkeypatch):
     assert out["status"] == "agent_error"
     assert "grammar compilation is temporarily unavailable" in out["errors"][0]
     assert "retry the run later" in out["errors"][0]
+
+
+def test_grammar_outage_as_sse_error_frame_on_a_200_stream(monkeypatch):
+    """anthropic 1.x raises APIStatusError(status_code=200) for ``event: error``
+    inside an already-open stream; the clear message must still apply."""
+    requests = []
+    frame = (
+        "event: error\n"
+        'data: {"type": "error", "error": {"type": "overloaded_error", '
+        '"message": "Grammar compilation is temporarily unavailable. Please try again."}}\n\n'
+    )
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              content=frame.encode())
+
+    monkeypatch.setattr(llm_client, "_sleep_with_backoff", lambda *a: None)
+    with _sdk_with(respond) as sdk:
+        with pytest.raises(RetryableAPIError) as exc:
+            AnthropicClient(max_retries=3).call(
+                sdk, model="claude-haiku-4-5", max_tokens=10, system="s", user="u",
+                output_schema=SCHEMA)
+    assert len(requests) == 3  # still bounded
+    assert exc.value.status_code == 200
+    assert "Anthropic side" in str(exc.value) and "not a local/Docker" in str(exc.value)

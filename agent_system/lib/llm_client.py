@@ -496,19 +496,31 @@ _FATAL_EXCEPTION_TYPES = (
 
 GRAMMAR_COMPILATION_OUTAGE_MESSAGE = (
     "Anthropic API: structured-output grammar compilation is temporarily "
-    "unavailable on the Anthropic side (HTTP 503, overloaded_error). This is "
+    "unavailable on the Anthropic side (overloaded_error). This is "
     "not a local/Docker problem; retry the run later."
 )
 
 
 def _is_grammar_compilation_outage(exc: Exception, status_code: int | None) -> bool:
-    """The Anthropic-side 503 ``overloaded_error`` "Grammar compilation is
+    """The Anthropic-side ``overloaded_error`` "Grammar compilation is
     temporarily unavailable" returned for requests carrying a structured-output
-    schema (``output_config.format``)."""
-    if status_code not in (503, 529):
+    schema (``output_config.format``).
+
+    It arrives as HTTP 503/529, but also as an SSE ``event: error`` frame in a
+    stream that already answered 200 (the SDK then raises an APIStatusError
+    with ``status_code`` 200), so the status is not a reliable discriminator:
+    the error type and message are checked instead.
+    """
+    body = getattr(exc, "body", None)
+    err = body.get("error") if isinstance(body, dict) else None
+    err = err if isinstance(err, dict) else (body if isinstance(body, dict) else {})
+    err_type = str(err.get("type") or "").lower()
+    text = (str(exc) + " " + str(err.get("message") or "")).lower()
+    if "grammar compilation" not in text:
         return False
-    text = str(exc).lower()
-    return "grammar compilation" in text and "overloaded" in text
+    if err_type:
+        return err_type == "overloaded_error"
+    return "overloaded" in text or status_code in (503, 529)
 
 
 def _classify_api_exception(exc: Exception) -> FatalAPIError | RetryableAPIError:
@@ -946,13 +958,15 @@ def clamp_max_tokens(model: str, requested: int) -> int:
     return requested
 
 
-# Prompt caching. The per-agent system prompt (15-20 KB, identical for every
-# task) is the one large stable part of a request, so it is sent as a text
-# block carrying a breakpoint (the default 5-minute TTL: write 1.25x input,
+# Prompt caching. The per-agent system prompt (identical for every task) is the
+# one large stable part of a request, so it is sent as a text block carrying a breakpoint (the default 5-minute TTL: write 1.25x input,
 # read 0.1x -- see MODEL_PRICING). Everything task-specific (student notes,
 # the task IR, retry context) must come AFTER the last breakpoint: either in
 # the user message or in a second, unmarked system block
-# (``system_volatile``). Render order is tools -> system -> messages and the
+# (``system_volatile``). Prompts are only ~3-19 KB (REG ~4-11 KB, the Lean
+# formalizer ~19 KB): below the model's minimum cacheable prefix (512 tokens on
+# Opus/Sonnet 5.5, 4096 on Haiku 4.5) a request is sent normally and not
+# cached, so on Haiku only the largest prompts cache. Render order is tools -> system -> messages and the
 # cache is a byte-exact prefix match, so nothing volatile (timestamps, run
 # ids, unsorted JSON) may ever be added to the cached block.
 CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
@@ -1085,7 +1099,7 @@ class AnthropicClient:
         self, client: Any, *, model: str, max_tokens: int, system: str, user: str,
         effort: str | None = None, temperature: float | None = None,
         output_schema: dict[str, Any] | None = None, agent: str | None = None,
-        system_volatile: str | None = None,
+        system_volatile: str | None = None, cache_system: bool = True,
     ) -> CallResult:
         """Make one logical (possibly retried) streamed call through `client`.
 
@@ -1124,7 +1138,7 @@ class AnthropicClient:
             result = self._call_once(
                 client, model=model, max_tokens=max_tokens, system=system, user=user,
                 effort=effort, temperature=temperature, output_schema=None,
-                agent=agent, system_volatile=system_volatile,
+                agent=agent, system_volatile=system_volatile, cache_system=cache_system,
             )
             result.requested_structured_output = True
             result.schema_fallback_reason = (
@@ -1136,7 +1150,7 @@ class AnthropicClient:
             result = self._call_once(
                 client, model=model, max_tokens=max_tokens, system=system, user=user,
                 effort=effort, temperature=temperature, output_schema=output_schema,
-                agent=agent, system_volatile=system_volatile,
+                agent=agent, system_volatile=system_volatile, cache_system=cache_system,
             )
             result.requested_structured_output = requested
             return result
@@ -1146,7 +1160,7 @@ class AnthropicClient:
                 result = self._call_once(
                     client, model=model, max_tokens=max_tokens, system=system, user=user,
                     effort=effort, temperature=temperature, output_schema=None,
-                    agent=agent, system_volatile=system_volatile,
+                    agent=agent, system_volatile=system_volatile, cache_system=cache_system,
                 )
                 result.requested_structured_output = True
                 result.schema_fallback_reason = f"schema rejected by the API: {exc}"
@@ -1157,13 +1171,14 @@ class AnthropicClient:
         self, client: Any, *, model: str, max_tokens: int, system: str, user: str,
         effort: str | None = None, temperature: float | None = None,
         output_schema: dict[str, Any] | None = None, agent: str | None = None,
-        system_volatile: str | None = None,
+        system_volatile: str | None = None, cache_system: bool = True,
     ) -> CallResult:
         """One logical (possibly retried-on-transient-error) streamed call —
         no structured-output fallback here, :meth:`call` owns that."""
         kwargs = self.build_request_kwargs(
             model, max_tokens, system, user, effort=effort, temperature=temperature,
             output_schema=output_schema, system_volatile=system_volatile,
+            cache_system=cache_system,
         )
         classified: FatalAPIError | RetryableAPIError | None = None
         for attempt in range(1, self.max_retries + 1):

@@ -1106,7 +1106,7 @@ _SPECIALIST_PANELS: list[tuple[str, str, Any]] = [
 def render_html(result: dict) -> str:
     """Convert CFL pipeline result to standalone tabbed HTML page.
 
-    Structure (modeled after agent_system/examples/output/task_z1wawbz2.html):
+    Structure (modeled after the REG pipeline's standalone HTML report):
       - Header: task text + verdict badge
       - Verification banner (verified / not verified)
       - Primary proof callout (from formalizer or fallback)

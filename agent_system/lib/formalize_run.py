@@ -356,6 +356,18 @@ def parse_proposal_text(text: str) -> tuple[str | None, bool, str | None, bool]:
     return None, False, None, False
 
 
+def _cache_prover_prompt(model: str, retry_model: str, attempt_no: int, max_attempts: int) -> bool:
+    """Whether this prover attempt should write the prompt cache.
+
+    Caches are per model and a write costs 1.25x, so it only pays when a later
+    attempt of the same formalization reuses the same model.  Every correction
+    runs on ``retry_model``: an attempt on any other model (the first one, when
+    ``first_model`` differs) is never followed by a read, and the last allowed
+    attempt has no successor.
+    """
+    return model == retry_model and attempt_no < max_attempts
+
+
 class LiveSource:
     """Prover calls through the shared :class:`AnthropicClient`."""
 
@@ -366,11 +378,12 @@ class LiveSource:
 
     def propose(self, *, agent: str, model: str, effort: str, max_tokens: int,
                 system: str, user: str, temperature: float, schema: dict | None,
-                attempt: int) -> Proposal:
+                attempt: int, cache_system: bool = True) -> Proposal:
         try:
             res = self.shared.call(
                 self.client, model=model, max_tokens=max_tokens, system=system, user=user,
                 effort=effort, temperature=temperature, output_schema=schema, agent=agent,
+                cache_system=cache_system,
             )
         except FatalAPIError as exc:
             if exc.status_code == 400:      # a malformed request for this call only
@@ -795,6 +808,7 @@ def _run_loop(prep: Prepared, spec: SystemSpec, settings: FormalizeSettings,
             max_tokens=settings.max_tokens_for(model), system=system_prompt, user=user,
             temperature=float(spec.temperatures.get(agent, 0.0)),
             schema=spec.output_schema, attempt=attempt_no,
+            cache_system=_cache_prover_prompt(model, settings.retry_model, attempt_no, max_attempts),
         )
         rec: dict[str, Any] = {
             "attempt": attempt_no, "role": role, "model": prop.model or model,

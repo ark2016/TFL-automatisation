@@ -9,13 +9,8 @@ Multi-agent pipelines for **Theory of Formal Languages** problems — classify a
 
 > The system targets the formal languages course at **ИУ-9, МГТУ им. Баумана**. Inputs are Russian problem statements; outputs are structured Markdown / HTML / JSON reports with LaTeX-typeset proofs, grammar constructions, PDA diagrams, and case analyses.
 
-Offline HTML guides (Russian): [ticket 50 and Lean explained](docs/examples/cfl_ticket50_w1bw2w3_lean_proved/walkthrough.html),
-[interactive architecture audit](docs/architecture_explorer.html), and
-[September 30 fixes, source checks and validation](docs/audit_fixes_2026-09-30.html).
-The subsequent [theory audit with searchable findings](docs/theory_audit_2026-09-30.html)
-covers additional mathematical and implementation corrections; see the
-[theorem and source registry](docs/THEORY_REFERENCE.md) for exact hypotheses and source-reading limits.
-The architecture guide preserves the pre-fix snapshot; the last report records the corrected behavior and remaining limits.
+Offline HTML guide (Russian): [ticket 50 and Lean explained](docs/examples/cfl_ticket50_w1bw2w3_lean_proved/walkthrough.html).
+See the [theorem and source registry](docs/THEORY_REFERENCE.md) for exact hypotheses and source-reading limits.
 
 ---
 
@@ -209,7 +204,7 @@ across all four pipelines share one process-wide semaphore, sized by the `TFL_MA
 `UsageTracker` accumulates tokens/cache-hit/cost per run (`as_dict()`) and is now wired into each pipeline's
 top-level result JSON and CLI `--verbose` output, so every run reports its own token/cost usage block.
 
-**Prompt caching.** The large, stable per-agent system prompt (15-30 KB) is sent by `build_request_kwargs()` as a
+**Prompt caching.** The stable per-agent system prompt (about 3-19 KB; REG prompts ~4-11 KB) is sent by `build_request_kwargs()` as a
 `system` text block carrying `cache_control: {"type": "ephemeral"}` (default 5-minute TTL); everything task-specific
 (task IR, retry/error context, and in REG the "Student Notes" section, which goes in a second unmarked `system` block)
 comes after the breakpoint, so repeat calls of the same agent (JSON retries, prover attempts, consecutive tasks of an
@@ -219,7 +214,8 @@ price; a write costs 1.25x. This covers the REG `LLMRunner`, the three `LiveRunn
 (`cache_system=False`). Cache buckets appear as `cache_read_input_tokens` / `cache_creation_input_tokens` in the
 `usage` block, the progress events, the TFL Lab run header and `tfl-eval` totals; `input_tokens` is the uncached
 remainder only. Minimum cacheable prefix: 512 tokens on Opus/Sonnet 5.5, 4096 on Haiku 4.5 (shorter prompts are sent
-normally and simply not cached). Keep the cached block free of timestamps, ids and unsorted JSON.
+normally and simply not cached), so on Haiku the smaller prompts (all REG agents except possibly the largest) fall
+below the minimum and only the larger prompts and the Lean prover prompts cache. Keep the cached block free of timestamps, ids and unsorted JSON.
 
 **Structured outputs.** Agent responses are parsed primarily via the Messages API's `output_config.format`
 (a closed per-agent JSON schema built by `build_agent_output_schema()` / `agent_output_schema.py` in each
@@ -435,7 +431,7 @@ Pure-function modules have pytest coverage; LLM-driven layers are covered by moc
 
 ```bash
 .venv/Scripts/python -m pytest -q
-# → 1383 passed, 3 skipped
+# → 3447 passed, 161 skipped, 2 xfailed (with -n 4)
 ```
 
 The configured `testpaths` include `tfl_eval/tests` and exclude the legacy `pumping_lemma/tests`, which call the
@@ -536,7 +532,7 @@ bundles a small pinned lake project, `agent_system/docker/tfl_lean/` (`lakefile.
 [langlib](https://github.com/nielstron/langlib) pinned by commit `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — its
 own lakefile requires the same Mathlib tag, so there's no transitive-revision conflict to resolve). `TflLean/Basic.lean`
 imports `Mathlib.Computability.{DFA, RegularExpressions, MyhillNerode, ContextFreeGrammar}` (what the formalizer
-prompt and the LL(k) live-run Lean examples under `ll_system/examples/live_outputs/*.lean` depend on);
+prompt and the LL(k) live-run Lean examples depend on);
 `TflLean/Langlib.lean` imports langlib's `Classes.Regular`/`Classes.ContextFree`/`Classes.DeterministicContextFree`
 definitions, `Classes.ContextFree.Basics.{Pumping,Ogden}` (`CF_pumping`, `Language.IsContextFree.ogdens_lemma`),
 `Classes.DeterministicContextFree.Closure.{Complement,IntersectionRegular}`, and the `AnBnCn` / `AnBn` worked
@@ -602,9 +598,8 @@ per-system / trap-task accuracy, a Brier score for confidence calibration, the i
 "false confident wrong" rate (confidence ≥ 0.6 but incorrect verdict). Results land under `.tfl_lab_runs/evals/`.
 This is what lets a prompt or model change be measured rather than eyeballed.
 
-The first `--live` run (24 trap tasks, Haiku, 2026-09-27) is written up in
-[`docs/EVAL_RESULTS.md`](docs/EVAL_RESULTS.md): 19/19 solved tasks correct, 0 false-confident-wrong, with
-per-task tables, per-pipeline token/cost usage, and the diagnoses that fed the DCFL certificate, R4′ and the
+The first `--live` run (24 trap tasks, Haiku, 2026-09-27; its write-up is kept locally and not tracked) gave
+19/19 solved tasks correct and 0 false-confident-wrong, and its diagnoses fed the DCFL certificate, R4′ and the
 structured-output fixes below. A full-74-task run and a re-run after those fixes are still open.
 
 ---
