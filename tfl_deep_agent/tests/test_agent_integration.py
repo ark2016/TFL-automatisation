@@ -517,14 +517,15 @@ def test_cli_budget_exhausted_writes_the_partial_report(tmp_path, runs_dir, caps
     setpath = tmp_path / "settings.json"
     setpath.write_text(json.dumps(settings), encoding="utf-8")
     out = tmp_path / "out"
-    rc = cli.main(["--mock-script", str(spath), "--save", str(out), "--settings", str(setpath)])
+    rc = cli.main(["--mock-script", str(spath), "--save", str(out), "--settings", str(setpath),
+                   "--auto-approve"])
     assert rc == 1
     data = json.loads((out / "result.json").read_text(encoding="utf-8"))
     assert data["status"] == "budget_exhausted"
     assert data["partial_report"]["established"][0]["id"] == "ev-dfa"
     assert data["budget_refusals"][0]["node"] == "task"
     md = (out / "result.md").read_text(encoding="utf-8")
-    assert "Частичный отчёт" in md and "ev-dfa" in md
+    assert "отчёт частичный" in md and "ev-dfa" in md  # the P3 partial template
     assert not (runs_dir / B.SPEND_LOG_NAME).exists()
 
 

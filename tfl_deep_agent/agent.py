@@ -18,8 +18,13 @@ What is wired here (P2):
   ``CompositeBackend`` route (:class:`ReadOnlyFilesystemBackend` plus a deny rule);
 * ``write_todos`` (langchain's ``TodoListMiddleware``: deepagents 0.7.34 no
   longer adds it by itself);
-* a minimal ``submit_report`` tool and :class:`ReportGateMiddleware`, which ends
-  the run after a valid report (P3 replaces rendering and adds HITL 2);
+* the P3 ``submit_report`` tool (``tools/report.py``) and
+  :class:`ReportGateMiddleware`, which ends the run after an accepted report;
+* P3: the evidence ledger (``evidence=``; ``EvidenceMiddleware`` on every
+  agent), the task file under ``/input/`` (read-only, ``run_task(files=)``)
+  and HITL (``hitl=``, ``hitl.py``): HITL 1 after an ir-builder answer, HITL 2
+  on ``submit_report`` (``interrupt_on``); ``collect_result(evidence=)``
+  rates the report from the ledger (``evidence.policy.evaluate_report``);
 * middleware slots: ``middleware=`` (main agent) and ``subagent_middleware=``
   (each role). When they are not given, :func:`default_middleware` fills them
   from ``middleware/budget.py`` / ``middleware/concurrency.py`` /
@@ -44,15 +49,18 @@ import dataclasses
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr
 
 from . import config
 from .roles import MAIN_TOOL_GROUPS, PKG_DIR, ROLES, SANDBOX_ONLY_TOOLS, load_prompt, role_model_request
 
 SKILLS_DIR = PKG_DIR / "skills"
 SKILLS_ROUTE = "/skills/"
+#: the task file (PDF / image) in the run's state files; the built-in write
+#: tools are denied there, so the source stays as the human gave it
+INPUT_ROUTE = "/input/"
 SETTINGS_EXAMPLE = PKG_DIR / "settings.example.json"
 
 TEMPLATES: tuple[str, ...] = ("full_proof", "exam_solution", "short_verdict", "lean_appendix")
@@ -224,7 +232,7 @@ def make_backend(*, default: Any = None, routes: Mapping[str, Any] | None = None
     return CompositeBackend(default=default if default is not None else StateBackend(), routes=all_routes)
 
 
-def readonly_permissions(prefixes: Iterable[str] = (SKILLS_ROUTE,)) -> list[Any]:
+def readonly_permissions(prefixes: Iterable[str] = (SKILLS_ROUTE, INPUT_ROUTE)) -> list[Any]:
     """Deny rules for the built-in write tools on the read-only routes (the
     backend refuses as well; the rule gives the model a clear message first)."""
     from deepagents.middleware.filesystem import FilesystemPermission
@@ -544,110 +552,43 @@ def default_middleware(settings: Mapping[str, Any], role_key: str, *,
 
 
 # ---------------------------------------------------------------------------
-# submit_report (minimal; P3 replaces rendering and adds HITL 2)
+# submit_report (the P3 schema of tools/report.py; HITL 2 interrupts on it)
 # ---------------------------------------------------------------------------
 
 SUBMIT_REPORT = "submit_report"
 
 
 def _report_args_models() -> tuple[type[BaseModel], type[BaseModel]]:
-    from .tools.base import ToolArgs
+    """``(ReportStep, SubmitReportArgs)`` of the report tool: the P3 schema of
+    ``tools/report.py`` (a superset of the P2 schema, so P2 mock reports
+    still validate)."""
+    from .tools.report import report_args_models
 
-    class ReportStep(BaseModel):
-        """One claim of the report with the tool results that support it."""
-
-        model_config = ConfigDict(extra="forbid")
-
-        claim: str = Field(min_length=1, max_length=4000,
-                           description="the statement of this step, e.g. 'the DFA accepts exactly L'")
-        justification: str = Field(default="", max_length=8000,
-                                   description="the argument for the step (lemma used, case analysis)")
-        evidence_ids: list[str] = Field(default_factory=list, max_length=40, description=(
-            "ids of the tool calls whose results support this claim (the tool_call_id of each "
-            "oracle call). A claim with no tool result behind it is reported as not_verified."))
-
-    class SubmitReportArgs(ToolArgs):
-        verdict: str = Field(min_length=1, max_length=200, description=(
-            "the answer, e.g. 'regular', 'not regular', 'CFL', 'not CFL', 'DCFL', 'not DCFL', 'LL(1)', "
-            "'not LL(1)', 'not LL(k) for any k', or 'unknown' when you could not settle it. Code maps it "
-            "to the policy token: reg regular / non_regular / partial, cfl cfl / non_cfl / null, "
-            "dcfl dcfl / non_dcfl / null, ll ll / not_ll / uncertain ('unknown' is the last of each)"))
-        answer: Literal["yes", "no", "inconclusive"] | None = Field(default=None, description=(
-            "the direction of the verdict: yes = the language (grammar) IS in the class asked, "
-            "no = it is NOT, inconclusive = not settled. Give it whenever the verdict text is not a "
-            "plain 'X' / 'not X'; a disagreement with the verdict text makes the verdict inconclusive"))
-        language_class: Literal["reg", "cfl", "dcfl", "ll"] = Field(
-            description="the class the task asks about: reg, cfl, dcfl or ll")
-        method: str = Field(min_length=1, max_length=2000, description=(
-            "the proof method, e.g. 'construction: regex -> minimal DFA', 'pumping lemma for CFL', "
-            "'LL(1) table without conflicts'"))
-        steps: list[ReportStep] = Field(min_length=1, max_length=60,
-                                        description="the proof as ordered steps")
-        evidence_ids: list[str] = Field(default_factory=list, max_length=200, description=(
-            "tool-call ids supporting the verdict as a whole (in addition to the per-step ids)"))
-        template: Literal["full_proof", "exam_solution", "short_verdict", "lean_appendix"] = Field(
-            default="full_proof", description="report template to render")
-        summary: str = Field(default="", max_length=4000,
-                             description="two or three sentences: hypothesis, method, conclusion")
-        ir_fingerprint: str | None = Field(default=None, max_length=64, description=(
-            "fingerprint of the IR the oracle results refer to (validate_ir data.ir_fingerprint)"))
-
-    return ReportStep, SubmitReportArgs
+    return report_args_models()
 
 
 def make_submit_report_tool() -> Any:
-    """The ``submit_report`` LangChain tool.
+    """The ``submit_report`` LangChain tool: ``tools.report.make_submit_report_tool``
+    (P3 schema: lemmas, claims, construction, conclusion, Lean block on top
+    of the P2 fields). It validates the structured fields and returns them as
+    the ToolMessage artifact ``{"ok": true, "report": {...}}``;
+    :class:`ReportGateMiddleware` then ends the run (HITL 2, when on,
+    interrupts before the tool runs). It never sets trust: the evidence and
+    trust labels are computed by code (:func:`collect_result`, the renderer)."""
+    from .tools.report import make_submit_report_tool as _make
 
-    It validates the structured fields and returns them as the ToolMessage
-    artifact ``{"ok": true, "report": {...}}``; :class:`ReportGateMiddleware`
-    then ends the run. It never sets trust: the evidence and trust labels are
-    computed by code (:func:`collect_result`, P3's renderer)."""
-    from langchain_core.tools import StructuredTool
-    from pydantic import ValidationError
-
-    _, args_model = _report_args_models()
-
-    def _run(**kwargs: Any) -> tuple[str, dict[str, Any]]:
-        report = args_model.model_validate(kwargs).model_dump(mode="json")
-        content = json.dumps({
-            "tool": SUBMIT_REPORT, "ok": True, "status": "report_submitted",
-            "note": "report recorded; the run ends here. Evidence and trust are computed by code.",
-        }, ensure_ascii=False)
-        return content, {"tool": SUBMIT_REPORT, "ok": True, "report": report}
-
-    def _on_error(exc: Exception) -> str:
-        if isinstance(exc, ValidationError):
-            parts = [f"{'.'.join(str(x) for x in e.get('loc', ())) or '(root)'}: {e.get('msg')}"
-                     for e in exc.errors(include_url=False)]
-            msg = "; ".join(parts)
-        else:
-            msg = str(exc)
-        return json.dumps({"tool": SUBMIT_REPORT, "ok": False, "error_kind": "invalid_input",
-                           "error": f"report not accepted, fix and resubmit: {msg[:1500]}"},
-                          ensure_ascii=False)
-
-    _run.__name__ = SUBMIT_REPORT
-    return StructuredTool.from_function(
-        func=_run, name=SUBMIT_REPORT, args_schema=args_model, infer_schema=False,
-        response_format="content_and_artifact", handle_validation_error=_on_error,
-        description=(
-            "Submit the final report and END the run. Give the verdict, the class, the method, the "
-            "proof as steps, and for every step the ids of the tool calls (tool_call_id) whose "
-            "results support it. Do not claim that something is verified: trust labels and the "
-            "evidence block are generated by code from the referenced tool results, and an id "
-            "with no tool result behind it makes its claim not_verified. Call it once, alone, as "
-            "your last action."),
-        metadata={"tfl_group": "report"},
-    )
+    return _make()
 
 
 # ---------------------------------------------------------------------------
 # The agent
 # ---------------------------------------------------------------------------
 
-def main_system_prompt(settings: Mapping[str, Any], *, template: str = "full_proof") -> str:
+def main_system_prompt(settings: Mapping[str, Any], *, template: str = "full_proof",
+                       hitl: Mapping[str, bool] | None = None) -> str:
     """``prompts/main.md`` plus the run's own parameters (template, budget,
-    allowed models). Static per run, so prompt caching keeps working."""
+    allowed models, HITL points). Static per run, so prompt caching keeps
+    working."""
     budget = _section(settings, "budget")
     models = _section(settings, "models")
     limits = _section(settings, "limits")
@@ -657,6 +598,24 @@ def main_system_prompt(settings: Mapping[str, Any], *, template: str = "full_pro
         "## This run",
         f"- Report template requested: `{template}` (pass it to submit_report).",
     ]
+    points = dict(hitl or {})
+    if points.get("formalization"):
+        lines.append(
+            "- HITL 1 is on: after each ir-builder answer a human reviews the transcription, the IR "
+            "restatement and sample words. Their decision arrives as a message starting with "
+            "\"HITL 1\": on approval go on with that IR; on approval with edits use exactly the "
+            "edited text / IR; on rejection fix the formalization (intake / ir-builder again, with "
+            "the comment) before any proof. An IR you validate yourself with validate_ir is reviewed "
+            "the same way. Only oracle results for the IR approved at HITL 1 count for the verdict "
+            "(checked by code): after an edit re-run the checks you rely on against the new IR.")
+    if points.get("report"):
+        lines.append(
+            "- HITL 2 is on: a human reviews submit_report before it is accepted. They may approve "
+            "it, edit fields, or return it with a comment; a returned report comes back as an error "
+            "result of submit_report with the comment: address every point, then call "
+            "submit_report again.")
+    if points.get("execute"):
+        lines.append("- A human approves every `execute` call of the coder before it runs.")
     if budget:
         lines.append(
             "- Budget: per task ${:.2f}, per subagent at most ${:.2f}, reserve for the report ${:.2f}.".format(
@@ -704,8 +663,29 @@ def create_tfl_agent(
     debug: bool = False,
     budget: Any = None,
     budget_options: Mapping[str, Any] | None = None,
+    evidence: Any = None,
+    hitl: Any = None,
+    task_source: Mapping[str, Any] | None = None,
 ) -> Any:
     """Build the TFL Deep Agent graph.
+
+    Evidence (``evidence=``): an ``evidence.ledger.EvidenceLedger`` makes every
+    stack (main and each role) record its tool calls into it
+    (``EvidenceMiddleware`` through the default middleware hook; the build runs
+    inside ``use_evidence(ledger)``). ``None``: the ledger of an enclosing
+    ``use_evidence`` block, if any (else nothing is recorded). The ledger used
+    is attached as ``graph.tfl_evidence``.
+
+    HITL (``hitl=``; ``hitl.py``): ``None`` / ``False`` = off (library default;
+    the CLI and ``hitl.start_run`` pass the settings). ``True`` = the points of
+    ``settings.hitl``; a mapping ``{"formalization", "report", "execute"}``
+    picks them. HITL 1 (``formalization``) interrupts the main agent after an
+    ir-builder answer (``hitl.FormalizationReviewMiddleware``), HITL 2
+    (``report``) interrupts on ``submit_report`` (deepagents ``interrupt_on``
+    with a validity predicate), ``execute`` interrupts the coder's sandbox
+    calls. Any point needs a ``checkpointer``. ``task_source`` (the input file's
+    ``TaskInput.metadata()``) is shown at HITL 1. The points in force are
+    attached as ``graph.tfl_hitl``.
 
     Budget (one ledger for the whole run): the main agent and every fixed role
     get a ``BudgetMiddleware`` over the same scope, and the main agent a
@@ -774,17 +754,60 @@ def create_tfl_agent(
             # live without a ledger: the per-task ledger with the per-day check
             # and the shared spend log, never a fresh in-memory one
             budget = budget_mod.BudgetLedger.for_task(settings_mod.validate_settings(cfg))
+    points = hitl_points(cfg, hitl)
+    if any(points.values()) and checkpointer is None:
+        raise ValueError("HITL needs a checkpointer (hitl.start_run uses SQLite in the run dir); "
+                         "pass checkpointer=..., or hitl=False")
     scope_cm, node = _budget_scope(budget, cfg, budget_options)
-    with scope_cm:
+    evidence_cm, ledger = _evidence_scope(evidence)
+    with scope_cm, evidence_cm:
         graph = _build_agent(
             cfg, model_factory=model_factory, checkpointer=checkpointer, middleware=middleware,
             subagent_middleware=subagent_middleware, interrupt_on=interrupt_on, backend=backend,
-            template=template, roles=roles, extra_tools=extra_tools, store=store, name=name, debug=debug)
-    try:
-        graph.tfl_budget = node
-    except (AttributeError, TypeError):  # pragma: no cover - a graph class without __dict__
-        pass
+            template=template, roles=roles, extra_tools=extra_tools, store=store, name=name, debug=debug,
+            hitl=points, evidence_ledger=ledger, task_source=task_source)
+    for attr, value in (("tfl_budget", node), ("tfl_evidence", ledger), ("tfl_hitl", points)):
+        try:
+            setattr(graph, attr, value)
+        except (AttributeError, TypeError):  # pragma: no cover - a graph class without __dict__
+            pass
     return graph
+
+
+HITL_POINTS: tuple[str, ...] = ("formalization", "report", "execute")
+
+
+def hitl_points(settings: Mapping[str, Any], hitl: Any) -> dict[str, bool]:
+    """The HITL points in force: ``None`` / ``False`` -> all off, ``True`` ->
+    ``settings.hitl``, a mapping -> its flags (missing ones off)."""
+    if hitl is None or hitl is False:
+        return dict.fromkeys(HITL_POINTS, False)
+    if hitl is True:
+        src: Mapping[str, Any] = _section(settings, "hitl")
+    elif isinstance(hitl, Mapping):
+        src = hitl
+    else:
+        dump = getattr(hitl, "model_dump", None)
+        if not callable(dump):
+            raise TypeError(f"hitl must be None, a bool or a mapping, not {type(hitl).__name__}")
+        src = dump()
+    unknown = sorted(set(src) - set(HITL_POINTS))
+    if unknown:
+        raise ValueError(f"unknown HITL point(s) {unknown}; known: {list(HITL_POINTS)}")
+    return {p: bool(src.get(p, False)) for p in HITL_POINTS}
+
+
+def _evidence_scope(evidence: Any) -> tuple[Any, Any]:
+    """``(context manager, ledger)`` for :func:`create_tfl_agent`'s ``evidence``."""
+    import contextlib
+
+    from .evidence.ledger import EvidenceLedger, current_evidence, use_evidence
+
+    if evidence is None:
+        return contextlib.nullcontext(), current_evidence()
+    if not isinstance(evidence, EvidenceLedger):
+        raise TypeError(f"evidence must be an EvidenceLedger or None, not {type(evidence).__name__}")
+    return use_evidence(evidence), evidence
 
 
 def _budget_scope(budget: Any, cfg: Mapping[str, Any],
@@ -836,6 +859,8 @@ def _build_agent(
     subagent_middleware: Sequence[Any] | Callable[[str], Sequence[Any]] | None,
     interrupt_on: Mapping[str, Any] | None, backend: Any, template: str, roles: Sequence[str] | None,
     extra_tools: Sequence[Any], store: Any, name: str, debug: bool,
+    hitl: Mapping[str, bool] | None = None, evidence_ledger: Any = None,
+    task_source: Mapping[str, Any] | None = None,
 ) -> Any:
     from deepagents import create_deep_agent
     from langchain.agents.middleware import TodoListMiddleware
@@ -880,20 +905,36 @@ def _build_agent(
     main_mw = (list(middleware) if middleware is not None
                else default_middleware(cfg, "main", run_semaphore=limits.semaphore))
     main_mw = _with_subagent_budget(main_mw)
+    points = dict(hitl or {})
+    hitl_mw: list[Any] = []
+    all_interrupts: dict[str, Any] = {}
+    if any(points.values()):
+        from . import hitl as hitl_mod
+
+        if points.get("formalization"):
+            hitl_mw.append(hitl_mod.FormalizationReviewMiddleware(
+                evidence=evidence_ledger, source=task_source))
+        if points.get("report"):
+            all_interrupts[SUBMIT_REPORT] = hitl_mod.report_interrupt_config(
+                evidence_ledger, formalization_on=bool(points.get("formalization")))
+        if points.get("execute"):
+            # inherited by every declarative subagent; only the coder has execute
+            all_interrupts["execute"] = hitl_mod.execute_interrupt_config()
+    all_interrupts.update(interrupt_on or {})
     main_mw = [TodoListMiddleware(), call_limit_middleware(limits, role="main"), *main_mw,
-               exclude_tools_middleware(SANDBOX_ONLY_TOOLS), report_gate_middleware()]
+               exclude_tools_middleware(SANDBOX_ONLY_TOOLS), *hitl_mw, report_gate_middleware()]
     main_mw = _with_budgeted_summarization(main_mw, model_for("main"), backend)
 
     graph = create_deep_agent(
         model=model_for("main"),
         tools=[*main_tools(), *extra_tools],
-        system_prompt=main_system_prompt(cfg, template=template),
+        system_prompt=main_system_prompt(cfg, template=template, hitl=points),
         middleware=main_mw,
         subagents=subagents,
         skills=skills_sources,
         permissions=readonly_permissions(),
         backend=backend,
-        interrupt_on=dict(interrupt_on) if interrupt_on else None,
+        interrupt_on=all_interrupts or None,
         checkpointer=checkpointer,
         store=store,
         name=name,
@@ -933,14 +974,22 @@ def _with_budgeted_summarization(mw: list[Any], model: Any, backend: Any) -> lis
 
 
 def run_task(agent: Any, task_text: str, *, thread_id: str | None = None,
-             config_overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Invoke the agent on one task text and return the final state."""
+             config_overrides: Mapping[str, Any] | None = None,
+             files: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Invoke the agent on one task text and return the final state.
+    ``files`` seeds the state's files (``{"/input/task.pdf": FileData}``,
+    ``intake.files.TaskInput.to_file_data``). With HITL the state may stop at
+    an interrupt (``"__interrupt__"`` in the returned state); ``hitl.py``
+    drives that case."""
     from langchain_core.messages import HumanMessage
 
     run_config: dict[str, Any] = dict(config_overrides or {})
     if thread_id is not None:
         run_config.setdefault("configurable", {})["thread_id"] = thread_id
-    return agent.invoke({"messages": [HumanMessage(content=task_text)]}, run_config or None)
+    inputs: dict[str, Any] = {"messages": [HumanMessage(content=task_text)]}
+    if files:
+        inputs["files"] = dict(files)
+    return agent.invoke(inputs, run_config or None)
 
 
 
@@ -1093,8 +1142,17 @@ def _classify(entry: Mapping[str, Any], lang: str, verdict_k: int | None,
     return out
 
 
+#: ``formalization["status"]`` values that leave the verdict without an approved IR
+_FORMALIZATION_BLOCKS = {
+    "not_held": ("HITL 1 is on, but no formalization was reviewed (no ir-builder answer or validate_ir "
+                 "reached HITL 1): no human-approved IR"),
+    "rejected": "the last HITL 1 decision rejected the formalization and no IR was approved after it",
+    "no_ir": "the formalization approved at HITL 1 has no IR (no fingerprint)",
+}
+
+
 def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]],
-                 cited: Iterable[str]) -> dict[str, Any]:
+                 cited: Iterable[str], *, formalization: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Trust and confidence ceiling of the report's verdict, by code
     (VERDICT_POLICY R1-R4, R4', R5, R6).
 
@@ -1112,11 +1170,19 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
     * a cited supporting result that is refuted is a contradiction (<= 0.50);
     * a cited id without a result lowers the trust one level;
     * with the report's ``ir_fingerprint``, results for another IR are
-      excluded; without it, a basis spanning several IRs is not admissible.
+      excluded; without it, a basis spanning several IRs is not admissible;
+    * ``formalization`` (HITL 1 on; ``hitl.formalization_binding``): the IR
+      the human approved or edited at HITL 1 is the required one, whatever the
+      report names -- results for another IR are excluded, and a report
+      fingerprint that differs is a downgrade line. A rejected, missing or
+      IR-less formalization gives no basis at all (``not_verified``): the
+      model's own field never decides which IR its evidence is measured
+      against.
 
     Returns ``trust``, ``confidence_cap``, ``direction``, ``verdict_token``,
     ``basis`` (ids), ``verdict_gate`` (the downgrade reasons, R4),
-    ``contradiction``, ``excluded_ir_mismatch``."""
+    ``contradiction``, ``excluded_ir_mismatch``, ``required_ir_fingerprint``
+    (the fingerprint results were filtered by, if any) and ``formalization``."""
     from .tools.base import CONFIDENCE_CAPS, TRUST_LEVELS, confidence_cap, trust_at_least, trust_rank
 
     lang = report.get("language_class") or ""
@@ -1128,7 +1194,9 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
     if note:
         gate.append(note)
     out: dict[str, Any] = {"direction": direction, "verdict_token": tokens.get(direction), "basis": [],
-                           "contradiction": False, "excluded_ir_mismatch": []}
+                           "contradiction": False, "excluded_ir_mismatch": [],
+                           "required_ir_fingerprint": None,
+                           "formalization": dict(formalization) if formalization is not None else None}
 
     def finish(trust: str, cap: float) -> dict[str, Any]:
         unknown = [i for i in cited if i not in by_id]
@@ -1142,12 +1210,27 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
         return out
 
     report_fp = report.get("ir_fingerprint") or None
+    whose = "the report's"
+    if formalization is not None:
+        status = str(formalization.get("status") or "not_held")
+        approved_fp = formalization.get("ir_fingerprint") or None
+        if status == "approved" and not approved_fp:
+            status = "no_ir"
+        if status != "approved":
+            why = _FORMALIZATION_BLOCKS.get(status, f"HITL 1 status {status!r}: no human-approved IR")
+            gate.append(why + "; oracle results have no approved IR to refer to: not_verified")
+            return finish("not_verified", CONFIDENCE_CAPS["not_verified"])
+        if report_fp and report_fp != approved_fp:
+            gate.append(f"the report names IR {report_fp}, but the IR approved at HITL 1 is {approved_fp}: "
+                        "results are judged against the approved IR")
+        report_fp, whose = approved_fp, "the HITL 1-approved"
+    out["required_ir_fingerprint"] = report_fp
     usable = [e for e in entries if e.get("ok")]
     if report_fp:
         mismatch = [e for e in usable if _entry_fingerprint(e) not in (None, report_fp)]
         if mismatch:
             out["excluded_ir_mismatch"] = [e["id"] for e in mismatch]
-            gate.append(f"results for another IR than the report's {report_fp} excluded: "
+            gate.append(f"results for another IR than {whose} {report_fp} excluded: "
                         f"{out['excluded_ir_mismatch']}")
         usable = [e for e in usable if e not in mismatch]
 
@@ -1222,9 +1305,24 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
 # Result (P2 stand-in for the P3 renderer / evidence ledger)
 # ---------------------------------------------------------------------------
 
-def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewed (HITL arrives in P3)",
-                   ledger: Any = None) -> dict[str, Any]:
+def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewed",
+                   ledger: Any = None, evidence: Any = None,
+                   pending_report: Mapping[str, Any] | None = None,
+                   formalization: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Report + evidence from the final state.
+
+    ``evidence`` (the run's ``EvidenceLedger``, P3): the evidence list, the
+    per-step trust and the verdict gate come from the ledger
+    (``evidence.policy.evaluate_report``), so the tool results of subagents
+    count, and **any** cited id that is not in the ledger makes its step
+    ``not_verified`` (verdict-level unknown ids lower the verdict one level).
+    Without it the P2 rule below applies (main-thread tool results only).
+    ``pending_report`` rates a report that is not accepted yet (the HITL 2
+    draft): the result gets ``status: awaiting_human``.
+
+    ``formalization`` (``hitl.formalization_binding``; ``None`` = HITL 1 off):
+    the IR approved at HITL 1 is the one the verdict's evidence must refer to
+    (:func:`verdict_gate`); it is copied to ``result["formalization"]``.
 
     ``ledger`` (the run's ``BudgetLedger``, optional): a refused call anywhere
     in its tree makes a run without a report ``budget_exhausted`` even when the
@@ -1261,8 +1359,9 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
 
     from .tools.base import confidence_cap, strongest_trust
 
+    ledger_of_evidence = evidence  # the parameter; ``evidence`` below is the main-thread view
     messages = list(state.get("messages") or [])
-    evidence: dict[str, dict[str, Any]] = {}
+    evidence: dict[str, dict[str, Any]] = {}  # type: ignore[no-redef]
     gate_entries: list[dict[str, Any]] = []
     report: dict[str, Any] | None = None
     tool_calls: list[dict[str, Any]] = []
@@ -1299,16 +1398,26 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
                 "refuted_evidence": [e["id"] for e in found if e.get("trust") == "refuted"],
                 "unknown_ids": unknown}
 
+    status = "submitted" if report is not None else "incomplete"
+    if report is None and pending_report is not None:
+        report, status = dict(pending_report), "awaiting_human"
     result: dict[str, Any] = {
-        "status": "submitted" if report is not None else "incomplete",
+        "status": status,
         "human_review": human_review,
         "report": report,
         "evidence": list(evidence.values()),
         "tool_calls": tool_calls,
-        "note": "P2 result: evidence from the main thread's tool results; the P3 renderer and "
-                "evidence ledger replace this block.",
+        "note": "P2 result: evidence from the main thread's tool results (no evidence ledger given).",
     }
-    if report is not None:
+    if formalization is not None:
+        result["formalization"] = dict(formalization)
+    if ledger_of_evidence is not None:
+        result["evidence"] = ledger_evidence(ledger_of_evidence)
+        result["note"] = ("evidence from the run's evidence ledger (every tool call of the main agent and "
+                          "the subagents); trust set by code")
+    if report is not None and ledger_of_evidence is not None:
+        _rate_from_ledger(result, report, ledger_of_evidence, formalization=formalization)
+    elif report is not None:
         steps = []
         step_ids: list[str] = []
         for step in report.get("steps") or []:
@@ -1317,7 +1426,7 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
             steps.append({**step, **judge(ids)})
         every_ids = list(dict.fromkeys([*(report.get("evidence_ids") or []), *step_ids]))
         every = judge(every_ids)
-        gate = verdict_gate(report, gate_entries, every_ids)
+        gate = verdict_gate(report, gate_entries, every_ids, formalization=formalization)
         result["steps"] = steps
         result["trust"] = gate["trust"]
         result["confidence_cap"] = gate["confidence_cap"]
@@ -1329,6 +1438,7 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
         result["basis"] = gate["basis"]
         result["contradiction"] = gate["contradiction"]
         result["excluded_ir_mismatch"] = gate["excluded_ir_mismatch"]
+        result["required_ir_fingerprint"] = gate["required_ir_fingerprint"]
         result["unknown_ids"] = every["unknown_ids"]
         result["refuted_evidence"] = every["refuted_evidence"]
     else:
@@ -1363,6 +1473,61 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
     if ledger is not None:
         result["budget_refusals"] = budget_refusals(ledger)
     return result
+
+
+def ledger_evidence(evidence: Any) -> list[dict[str, Any]]:
+    """The tool results of an evidence ledger (records with a ``ToolResult``)
+    in the compact shape of ``result["evidence"]``: id, tool, ok, trust,
+    trust_reason, bounds, error, role, ir_fingerprint (no args / data)."""
+    from .evidence.policy import as_records
+
+    out: list[dict[str, Any]] = []
+    for rec in as_records(evidence).values():
+        if not rec.get("has_tool_result", rec.get("trust") is not None):
+            continue
+        entry = {"id": rec["id"], "tool": rec.get("tool"), "ok": rec.get("ok"), "trust": rec.get("trust"),
+                 "trust_reason": rec.get("trust_reason"), "bounds": rec.get("bounds"),
+                 "error": rec.get("error"), "role": rec.get("role")}
+        fp = _entry_fingerprint({"data": rec.get("data") if isinstance(rec.get("data"), Mapping) else {},
+                                 "args": rec.get("args") if isinstance(rec.get("args"), Mapping) else {}})
+        if fp:
+            entry["ir_fingerprint"] = fp
+        out.append(entry)
+    return out
+
+
+def _rate_from_ledger(result: dict[str, Any], report: Mapping[str, Any], evidence: Any, *,
+                      formalization: Mapping[str, Any] | None = None) -> None:
+    """Fill the rating fields of ``result`` from ``evidence.policy.evaluate_report``."""
+    from .evidence.policy import evaluate_report
+
+    ev = evaluate_report(report, evidence, formalization=formalization)
+    steps = []
+    for step, rating in zip(report.get("steps") or [], ev["steps"], strict=False):
+        steps.append({**step, "trust": rating["trust"], "unknown_ids": rating["unknown_ids"],
+                      "refuted_evidence": rating["refuted_ids"], "not_evidence": rating["not_evidence"],
+                      "trust_reasons": rating["reasons"]})
+    result["steps"] = steps
+    if ev["claims"]:
+        result["claims"] = [{**claim, "trust": rating["trust"], "unknown_ids": rating["unknown_ids"],
+                             "refuted_evidence": rating["refuted_ids"], "not_evidence": rating["not_evidence"],
+                             "trust_reasons": rating["reasons"]}
+                            for claim, rating in zip(report.get("claims") or [], ev["claims"], strict=False)]
+    result["trust"] = ev["trust"]
+    result["confidence_cap"] = ev["confidence_cap"]
+    result["trust_basis"] = ("code-derived (VERDICT_POLICY): " + ", ".join(ev["basis"]) if ev["basis"]
+                             else "no admissible basis (VERDICT_POLICY)")
+    result["verdict_direction"] = ev["verdict_direction"]
+    result["verdict_token"] = ev["verdict_token"]
+    result["published_verdict"] = ev["verdict"]
+    result["verdict_gate"] = ev["verdict_gate"]
+    result["basis"] = ev["basis"]
+    result["contradiction"] = ev["contradiction"]
+    result["excluded_ir_mismatch"] = ev["excluded_ir_mismatch"]
+    result["required_ir_fingerprint"] = ev["required_ir_fingerprint"]
+    result["unknown_ids"] = ev["unknown_ids"]
+    result["refuted_evidence"] = ev["refuted_ids"]
+    result["trust_source"] = ev["trust_source"]
 
 
 def ledger_wrapped_up(ledger: Any) -> bool:
@@ -1477,6 +1642,7 @@ def _scripted_model_class() -> type:
         _cursor: int = PrivateAttr(default=0)
         _bound: list[str] | None = PrivateAttr(default=None)
         _received: list[list[Any]] = PrivateAttr(default_factory=list)
+        _on_advance: Any = PrivateAttr(default=None)  # ScriptedModels persists the cursor
 
         @property
         def _llm_type(self) -> str:
@@ -1519,6 +1685,8 @@ def _scripted_model_class() -> type:
             index = self._cursor
             reply = self.replies[index]
             self._cursor += 1
+            if self._on_advance is not None:
+                self._on_advance()
             expect = reply.get("expect") or {}
             needle = expect.get("last_message_contains")
             if needle is not None:
@@ -1600,29 +1768,66 @@ def load_mock_script(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
 class ScriptedModels:
     """``model_factory`` over a mock script: one :class:`ScriptedChatModel`
     per role, each replaying its own list. ``models[role]`` gives the
-    instance (for assertions on calls made / messages received)."""
+    instance (for assertions on calls made / messages received).
 
-    def __init__(self, script: str | Path | Mapping[str, Any]) -> None:
+    ``state_path`` (a JSON file, ``{role: replies used}``) makes the replay
+    survive a process boundary: the cursors start where the file says and
+    are written after every reply. A HITL run resumed in a new process
+    (``hitl.resume_run``) continues the script instead of replaying it from
+    the start."""
+
+    def __init__(self, script: str | Path | Mapping[str, Any], *,
+                 state_path: str | Path | None = None) -> None:
+        import threading
+
         self.script = load_mock_script(script)
         self.models: dict[str, Any] = {}
+        self.state_path = Path(state_path) if state_path is not None else None
+        self._lock = threading.Lock()
+        self._start: dict[str, int] = {}
+        if self.state_path is not None and self.state_path.exists():
+            try:
+                raw = json.loads(self.state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ScriptError(f"mock cursor file {self.state_path} is unreadable: {exc}") from None
+            self._start = {str(k): int(v) for k, v in (raw.get("cursors") or {}).items()}
 
     def __call__(self, role_key: str, model_id: str) -> Any:
         cls = scripted_model_class()
         model = cls(model=model_id, role=role_key,
                     replies=self.script["models"].get(role_key, []), defs=self.script["defs"])
+        model._cursor = self._start.get(role_key, 0)
+        if self.state_path is not None:
+            model._on_advance = self._save
         self.models[role_key] = model
         return model
+
+    def cursors(self) -> dict[str, int]:
+        """Replies used so far per role (this process and the earlier ones)."""
+        out = dict(self._start)
+        out.update({role: m.calls_made for role, m in self.models.items()})
+        return out
+
+    def _save(self) -> None:
+        assert self.state_path is not None
+        with self._lock:
+            tmp = self.state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"cursors": self.cursors()}, sort_keys=True), encoding="utf-8")
+            tmp.replace(self.state_path)
 
     def unused_replies(self) -> dict[str, int]:
         """Replies left over per role (a finished script has none)."""
         out = {}
+        used_by_role = self.cursors()
         for role, replies in self.script["models"].items():
-            used = self.models[role].calls_made if role in self.models else 0
+            used = used_by_role.get(role, 0)
             if used < len(replies):
                 out[role] = len(replies) - used
         return out
 
 
-def scripted_model_factory(script: str | Path | Mapping[str, Any]) -> ScriptedModels:
-    """A ``model_factory`` replaying ``script`` (see :func:`load_mock_script`)."""
-    return ScriptedModels(script)
+def scripted_model_factory(script: str | Path | Mapping[str, Any], *,
+                           state_path: str | Path | None = None) -> ScriptedModels:
+    """A ``model_factory`` replaying ``script`` (see :func:`load_mock_script`);
+    ``state_path`` persists the reply cursors (see :class:`ScriptedModels`)."""
+    return ScriptedModels(script, state_path=state_path)

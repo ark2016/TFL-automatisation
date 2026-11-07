@@ -1273,3 +1273,357 @@ models; no live call was made. New tests: `tests/test_p2_core_fix.py`; updated: 
   with verdict "not established", `not_verified`, and the evidence established so far. All pass.
 - Still open before commit (from the P2 notes): the adversarial Opus review of the prompt / skill theory text
   (light-model-drift rule), and the summarization-middleware budget hole.
+
+## P3 io+hitl — evidence (2026-11-08)
+
+Files: `evidence/ledger.py`, `evidence/policy.py`, `middleware/evidence.py`, `tests/test_evidence.py` (48 tests, ~14 s,
+scripted models, no API / network / Docker).
+
+### Ledger (`evidence/ledger.py`)
+
+- `EvidenceLedger(path=None)` / `EvidenceLedger.open(run_dir)` → `run_dir/evidence.jsonl`, one canonical-JSON line per
+  record, appended + flushed under a lock. Re-opening an existing file (HITL resume in a new process) loads it and
+  continues ids and the chain; a torn last line is skipped. `EvidenceLedger.load(path)` reads one back.
+- Record fields: `id, seq, tool, tool_call_id, args, ok, trust, trust_reason, bounds, error, error_kind, data,
+  has_tool_result, status, role, scope (budget node path), model, turn_usd, cost_usd, result_digest, args_digest,
+  truncated, elapsed_s, ts, v, prev, digest`. `data` > 200k / `args` > 50k JSON chars are stored as a preview;
+  `result_digest` (sha256) always covers the full result.
+- Hash chain (`prev` / `digest`), `verify()` lists edited / removed / reordered lines. A tamper check for the human
+  and renderer, not a security boundary.
+- **Ids**: the tool-call id when unique in the ledger, else `<tool_call_id or "call">~<seq>` (scripted models reuse
+  ids across subagents; a resumed run may too). The P2 reports that cite main-thread tool-call ids keep working.
+- `use_evidence(ledger)` (contextvar, read at build time, like `budget.use_budget`); listeners like `BudgetLedger`
+  (event `evidence`, compact view) for the P7 UI.
+
+### Middleware (`middleware/evidence.py`)
+
+- `make_middleware(settings, role=...)` is the `agent.default_middleware` hook: returns an `EvidenceMiddleware` over the
+  `use_evidence` ledger, **`None` outside such a block** (nothing recorded; same rule as the budget). So the
+  integration (CLI / run / UI, not in my scope) must build the agent inside
+  `with use_evidence(EvidenceLedger.open(run_dir)):` — every role stack then records into the same ledger.
+- Trust is set by code only: evidence = a **registered TFL tool** (`tools.base.REGISTRY`) whose ToolMessage artifact
+  validates as a `ToolResult` of that same tool; its trust is clamped to the tool's ceiling again. Everything else
+  (`task` answers, built-ins, validation errors, `status="error"`, raised calls, a non-TFL tool returning a
+  trust-shaped artifact) is recorded `not_verified`, `has_tool_result: false`.
+- State: the handler result becomes a `Command(update={"messages": [msg], "tfl_evidence": [compact record]})`
+  (a Command from the tool, e.g. deepagents' `task`, keeps its update and gains the key). Reducer `merge_evidence`
+  merges **by id** — deepagents passes non-excluded state keys into the subagent and back through `task`'s Command,
+  so without it subagent records would be duplicated. The compact view has no `args` / `data`.
+- The ToolMessage always gets `additional_kwargs["tfl_evidence_id"]`; the content is changed only when the evidence
+  id differs from the tool-call id (JSON object: `"evidence_id"` key first; text: a `[evidence_id: …]` line), so
+  main-thread content and the budget estimates of existing runs are unchanged.
+- `model`: the requesting AIMessage's `response_metadata` model, else the ledger record of that turn, else the role's
+  configured model. `turn_usd`: the cost of that model call (last `BudgetLedger` record of this role in the caller's
+  scope; shared by parallel calls of the turn). `cost_usd`: 0.0 for local tools; for a spawning tool run inside a
+  fresh `SubagentBudgetMiddleware` allocation, the spend of that allocation (`task` → the subagent's cost); `None`
+  for a spawning tool without one. **For P4**: `spawn_subagent` / `run_workflow` allocate inside the tool, so their
+  `cost_usd` is `None` here; either run them inside an allocation opened outside this middleware or report the
+  spend in the ToolResult data.
+- Interrupts (`GraphBubbleUp`) and cancellations are not recorded (the call re-runs on resume); other exceptions are
+  recorded (`error_kind: "raised"`) and re-raised.
+- Not recorded, by position: calls refused by `TFLCallLimit`, by the budget wrap-up, or by `SubagentBudgetMiddleware`
+  (they are outside this middleware and are refusals, not results).
+
+### Policy (`evidence/policy.py`)
+
+- `claim_trust(ids, records)`: strongest non-refuted trust among cited records with a tool result (`ok`). **Any id
+  not in the ledger makes the claim `not_verified`** (architecture.html), whatever else it cites. A cited `refuted`
+  record → `contradiction`, cap 0.50 (the R3 ceiling, as `verdict_gate` does for refuted cited support). Records
+  without a tool result are listed in `not_evidence`. Works on the ledger, the jsonl records or the compact state view.
+- `rate_claims` drops any model-supplied `trust` / `confidence` on a claim.
+- `evaluate_report(report, ledger)`: steps via `claim_trust`; the verdict via the existing `agent.verdict_gate` (R1-R6)
+  fed with **all** ledger records that carry a tool result, subagents included (fixes the P2 limit "a report cannot
+  cite subagent results"; R4′ basis can now be a subagent's check). Verdict-level unknown ids still lower one level
+  (the P2 gate's rule, stated in `main.md`); only per-claim is strict. Needs full records (args / data); the compact
+  state view rates steps but gives the verdict no basis.
+- `final_confidence(cap, own) = min(cap, own)`; a non-number / NaN / bool model value is ignored, so it can never
+  raise the cap. `evaluate_report` takes `model_confidence=` or the report's `confidence` field if one appears.
+- `published_verdict`: REG goes through `agent_system/lib/result_verdict.result_verdict` (null for partial / an
+  unresolved contradiction; a contradiction R3 resolved for a verified side keeps its verdict); other classes publish
+  the gate token. That is the only place `result_verdict` fits (it is the REG result reader, not a cap function);
+  caps come from `tools.base.CONFIDENCE_CAPS` = `agent_system.lib.claim_verifier.CONFIDENCE_CAPS`.
+
+### Not done here (outside my files)
+
+- `agent.collect_result` still builds evidence from main-thread ToolMessages; the renderer / CLI should switch to
+  `policy.evaluate_report(report, ledger)` and wrap the build in `use_evidence`. In the mocks the ledger-based rating
+  is never below P2's (pinned by `test_reg_and_ll_runs_publish_through_the_policy`).
+- Tests: `pytest -q -n 4 tfl_deep_agent/tests`: 1089 passed, 1 xfailed.
+
+## P3 io+hitl — intake (2026-11-08)
+
+Files: `intake/files.py`, `prompts/intake.md`, `tests/test_intake.py`. `cli.py`, `agent.py` and the `/input` route are
+not touched; wiring them to the API below is the HITL / CLI / UI owners' step.
+
+### API (`tfl_deep_agent.intake.files`)
+
+- `from_text(text)`, `from_path(path)` (CLI `--file`), `from_bytes(data, name=, declared_mime=)`,
+  `from_base64(payload, name=, declared_mime=)` (TFL Lab upload; plain base64 or a `data:<mime>;base64,` URL) each
+  return a frozen `TaskInput` or raise `IntakeError(ValueError)` with a human-readable message and a stable `.code`
+  (`empty`, `too_large`, `too_many_pages`, `unsupported_type`, `type_mismatch`, `corrupt`, `encrypted`, `not_utf8`,
+  `bad_base64`, `not_found`, `image_too_large`) for the UI.
+- `limits=` takes `IntakeLimits`, a `Settings`, its `.intake`, a mapping, or `None` (= `settings.DEFAULTS["intake"]`).
+- `TaskInput`: `kind` (`text` / `pdf` / `image`), `mime_type`, `name`, `data`, `text`, `pages`, `width`/`height`,
+  `warnings`; `content_blocks(instruction=None)` -> langchain standard blocks (`{"type": "file", "base64", "mime_type":
+  "application/pdf"}`, `{"type": "image", "base64", "mime_type"}`, text block for text), the format `models.py` pins;
+  `input_path` (`/input/task.<ext>`), `to_file_data()` (deepagents `FileData`, base64 for binaries),
+  `metadata()` (JSON-safe, no content, with sha256), `describe()`, `needs_transcription`.
+
+### Decisions
+
+- **Type by magic bytes**, not extension / browser MIME. A known extension that disagrees with the content (a `.jpg`
+  that is a PNG) is a `warning`, and the content's type is used. A `.pdf` / image extension (or declared MIME) on
+  content without a recognised signature is `type_mismatch`. GIF / BMP / TIFF / HEIC / AVIF / ZIP-DOCX / DOC / RTF /
+  executables are named in the error. Unsigned content is text only if it has no NUL in the first 8 KB and is valid
+  UTF-8 (BOM stripped). Text is normalised: CRLF -> LF, **NFC** (NFKC would fold `aⁿ` to `an`), stripped.
+- `max_file_mb` uses 1 MB = 1024² bytes and applies to every input, text included. `from_path` checks `stat()` before
+  reading; `from_base64` checks the encoded length before decoding.
+- **Anthropic API caps added on top of the settings** (settings can only lower them), so the API's 400 becomes a readable
+  intake error: images <= 5 MB and <= 8000 px per side, PDFs <= 100 pages, no encrypted PDFs (also owner-password-only
+  ones; the message suggests re-printing to a new PDF). Image dimensions come from the PNG / JPEG (SOF scan) / WebP
+  (VP8 / VP8L / VP8X) headers by hand, no Pillow dependency; an unreadable header is `corrupt`.
+- PDF page count: `pypdf.PdfReader(strict=False)`; any pypdf / parse error -> `corrupt`. pypdf logs "EOF marker not
+  found" for a truncated file; harmless.
+- `input_path` is a fixed ASCII `/input/task.<ext>` with the extension of the sniffed type, because deepagents'
+  `read_file` picks the block MIME type from `mimetypes.guess_type(suffix)`. **Finding:** Python 3.12 on this Windows host
+  has no `.webp` mapping, so `read_file` would send a WebP as `application/octet-stream`. `files.py` registers
+  `image/webp` with `mimetypes.add_type` at import when it is missing (process-global, benign). Whoever wires `/input`
+  must import `intake.files` before the agent reads a WebP (pinned by the deepagents read_file test).
+- `prompts/intake.md` (no theory statements, only transcription rules): read `/input/task.*` with `read_file`; keep
+  the original wording; Unicode formulas (`aⁿbⁿ`, `|w|ₐ`, `→`, `ε`, `wᴿ`; `^(...)` / `_` when no Unicode glyph);
+  grammars / automata copied symbol by symbol; every task of a multi-task file as a numbered list with its page; every
+  uncertain reading with both readings and the one used; no silent typo fixes. Fixed answer format for HITL 1 parsing:
+  `## Tasks` (numbered list) and `## Uncertain readings` (`- none` when clear).
+
+### Tests
+
+- `tests/test_intake.py`, 53 tests, fixtures generated in the test (pypdf `PdfWriter` for 1..101-page and encrypted PDFs,
+  hand-built PNG / JPEG / WebP headers, Pillow JPEG / progressive JPEG / WebP lossy + lossless via `importorskip`).
+  Covers limits, sniffing, mismatches, corrupt / encrypted / oversized files, base64 / data URLs, `FileData`, a real
+  deepagents `read_file` round-trip through a scripted model (PDF and WebP), and the blocks on the wire through
+  `make_chat_model(role="intake")` (`document` / `image` with a `base64` source).
+- `pytest -q tfl_deep_agent/tests`: 1041 passed, 1 xfailed. Full `pytest -q -n auto`: the only failures (37) are the
+  Docker Lean tests in `agent_system` / `cfl_system` / `dcfl_system` (`docker: ... OCI runtime start failed: runc ...
+  exit status 139`), a host Docker problem unrelated to this change.
+
+## P3 io+hitl — reports (2026-11-08)
+
+Files: `skills/report-templates/` (SKILL.md, `full_proof.md`, `exam_solution.md`, `short_verdict.md`,
+`lean_appendix.md`, internal `partial.md`), `reports/render.py`, `tools/report.py`, `tests/test_reports.py`
+(48 tests, ~5 s, scripted models, no API / network / Docker).
+
+### Templates
+
+- `string.Template` files; every placeholder is in `render.PLACEHOLDERS` (pinned by a test). The structure follows the
+  goldens `docs/examples/reg_grammar_SaSb_lean_proved/result.md` and `cfl_ticket50_w1bw2w3_lean_proved/result.md`:
+  `> [!theorem] Вердикт:` callout, `**Шаг N. title**` + `**Обоснование:**`, `## Lean 4 formalization (R-Lean)` with
+  "Statement (generated from the IR):" / "Proof body:".
+- `lean_appendix` = the `full_proof` body + the Lean section. The Lean section is appended to any template when the
+  report has a `lean` block or the ledger has a `lean_check` entry; status / axioms / statement / proof body are read
+  from those ledger entries (P6 writes them), never from the model's note. No entry: "не подтверждён журналом".
+- `partial` (not selectable) renders a run without an accepted report (`budget_exhausted`, `incomplete`, `error`):
+  verdict "Не установлен", trust `not_verified`, what the ledger established, refuted / failed calls, subagent answers
+  (escaped), todos, last message, number of rejected report attempts.
+
+### Renderer (`reports/render.py`)
+
+- `render_report(result, *, evidence=, budget=, task_text=, human_review=, template=, status=, title=)` ->
+  `RenderedReport(markdown, html, data)`; `write_report(run_dir, result, **kw)` writes `result.json` / `result.md` /
+  `result.html` and reads `run_dir/evidence.jsonl` when no evidence is passed. `result.json` = the result plus
+  `"rendered"` (per-claim / per-step trust, where-used, integrity, budget); `data` / `args` of records are not copied.
+- The "Свидетельства, модели и расходы" block is appended by code after template substitution, so no template can
+  drop it: evidence table (who called, trust, where used, note, model / cost when present), hash-chain integrity
+  (`EvidenceLedger.verify()`), model-only / unknown / refuted citations, cost by model and by role, spent / limit,
+  budget refusals, run status, review mark.
+- Per-claim trust is computed by code from the ledger: strongest non-refuted cited record with a tool result; any id
+  not in the ledger -> `not_verified` and the id is listed; no ids -> "держится только на словах модели"; a refuted
+  citation supports nothing. Verdict trust is `result["trust"]` (the P2 `verdict_gate`) and is **never raised**: the cap
+  is `min(result cap, policy cap of that trust)`. A result without trust runs `agent.verdict_gate` itself; failing that,
+  `not_verified` / 0.40. Same rule as `evidence/policy.claim_trust` (strict per claim), implemented locally so the
+  renderer also works on a plain list / jsonl / compact state view; the two can be merged later.
+- Inputs are duck-typed: evidence = path / dir / list / mapping / `EvidenceLedger` (records via `to_dict` /
+  `model_dump` / `asdict`), deduplicated by id; budget = `BudgetLedger`, a node (`.ledger`) or a `summary()` dict.
+- Anti-spoof: model text lines starting with `#`, `>` or three backticks are escaped (`\#`, ...), so a report cannot
+  open a section, a callout (`[!success]`) or a fence; a fence inside a Lean proof body gets a zero-width space; all
+  HTML is escaped. HTML: the evidence block is in `<section class="generated" data-generated-by="code">`; the
+  `[!success]` callout only for `verified`.
+- Markdown -> HTML is a small local converter (headings, paragraphs, lists, tables, fences, quotes, callouts, bold,
+  code). `agent_system/lib/renderer.py` renders its own result schema, so only the trust labels and the KaTeX snippet
+  (from the cfl renderer) are reused. KaTeX is loaded only when the body has math and renders only inside `<main>`,
+  so the `$` of the cost table is never math.
+- Human review: `normalize_review` maps strings / dicts (also langchain-style `approve` / `edit` / `reject`) to
+  `approved`, `edited` (edited fields listed), `auto_approved`, `rejected`, `awaiting`, `not_reviewed`; everything but
+  approved / edited is marked "Без проверки человеком". `status="awaiting_human"` marks a HITL 2 draft.
+
+### Tools (`tools/report.py`)
+
+- `SubmitReportArgs(ToolArgs)` (extra="forbid", no reserved names): verdict, answer, language_class, method,
+  hypothesis, lemmas [{theorem_id, use}], claims [{text, evidence_ids}], steps (1..60) [{title, claim, justification,
+  theorem_ids, evidence_ids}], construction, conclusion, evidence_ids, template, summary, ir_fingerprint,
+  lean {evidence_ids, proof_path, note}. A superset of the P2 schema: every P2 mock `submit_report` validates (test).
+- **Deviation**: the task's "class" field is `language_class` (`class` is a Python keyword, and `agent.verdict_gate`
+  already reads `language_class`).
+- Theorem ids are checked against docs/THEORY.md (`load_theory().resolve`); the check is skipped if the file is
+  unavailable. Evidence ids are **not** rejected: an unknown id is accepted and costs trust in the renderer and the
+  gate (a fabricated id must lower trust, not just cause a retry).
+- `submit_report` is not a registry tool (the report gate `_is_submitted_report` needs `artifact.report`, and
+  `agent.main_tools()` filters out any registry `submit_report`). `make_submit_report_tool()` is a drop-in for
+  `agent.make_submit_report_tool()` with the same artifact contract (pinned by a test against `_is_submitted_report`).
+- `list_report_templates(name=None)` is a registry tool (group `report`, `not_verified`): names, titles, when to use,
+  fields; with `name`, also the template text and its placeholders.
+
+### Not done here (outside my files)
+
+- `agent.py` (integrator): switch `main_tools()` to `tools.report.make_submit_report_tool` (P3 schema), fix its
+  docstring, and have the CLI / run call `write_report(run_dir, result, evidence=<EvidenceLedger>, budget=<BudgetLedger>,
+  task_text=..., human_review=...)` instead of its own writer. Until then P2 runs still use the P2 schema (which the
+  renderer reads fine).
+- The renderer's per-claim rule duplicates `evidence/policy.claim_trust`; when `collect_result` switches to
+  `policy.evaluate_report`, the renderer can call it instead.
+- Dev caveat: editing these files with a bash heredoc that runs Python mangles backslashes; use the Edit tool.
+
+## P3 io+hitl — HITL + integration (2026-11-08)
+
+Files: `hitl.py` (new), `agent.py`, `cli.py` (rewritten), `tests/test_hitl.py`, `tests/test_e2e_mock.py`,
+`tests/hitl_scripts.py` (new: shared mock-script variants for the two test files); minimal edits to
+`tests/test_agent_fake_model.py` / `tests/test_agent_integration.py` (see below).
+
+What is wired into `create_tfl_agent` now:
+- `evidence=EvidenceLedger` → the build runs inside `use_evidence(ledger)`, so `default_middleware` gives
+  `EvidenceMiddleware` to the main agent and every role; `graph.tfl_evidence` is the ledger.
+- `submit_report` / its schema are `tools.report.make_submit_report_tool` / `report_args_models` (the P2 copy is
+  gone); `/input/` is a read-only route next to `/skills/`; `run_task(files=)` seeds the state's files.
+- `hitl=` (`None`/`False` off — the library default, so P2 callers are unchanged; `True` = `settings.hitl`; a
+  mapping of points). Any point on without a checkpointer is a `ValueError`. `graph.tfl_hitl` = the points.
+  `main_system_prompt(hitl=)` adds one line per point under "## This run".
+- `collect_result(evidence=ledger)` rates the report with `evidence.policy.evaluate_report` (subagent tool results
+  count; any cited id not in the ledger makes its step `not_verified`, a verdict-level unknown id lowers the verdict
+  one level); `result["evidence"]` is the ledger's tool results. Without `evidence=` the P2 rule stays.
+  `pending_report=` rates a not-yet-accepted report (the HITL 2 draft, `status: awaiting_human`).
+- `ScriptedModels(state_path=)` persists the per-role reply cursors (`mock_cursors.json`) so a mock run resumed in
+  a new process continues the script; `ScriptedChatModel._on_advance` is the hook.
+
+Decisions:
+- HITL 1 is a custom `FormalizationReviewMiddleware` (`before_model` of the main agent + `langgraph.types.interrupt`),
+  not `interrupt_on`: the stop must come *after* the ir-builder answer, and `interrupt_on` only stops *before* a tool
+  runs. On resume only the hook re-runs (no model / subagent call is repeated). It fires once per ir-builder answer
+  (`tfl_hitl` state key, reducer merges by `(point, id)`); an answer whose IR fingerprint was already approved
+  passes (`decision: unchanged`). The request is built by code in the `HITLRequest` shape (action
+  `formalization`): task text, source metadata, the intake answer (transcription), the IR (the answer's JSON block,
+  else the ir-builder's last accepted `validate_ir` in the evidence ledger — the mock ir-builder answers in prose),
+  and `validate_ir` + `ir_to_text` run by code on that IR (restatement + oracle-labelled words; `ir_to_text`
+  already samples words, so `sample_words` is not called). These calls are not evidence. The decision reaches the
+  model as a `HumanMessage` starting "HITL 1" (after the tool messages; langchain-anthropic merges consecutive user
+  turns). Edit: `transcription` / `ir` / `class`, the IR validated before resuming (`DecisionError` keeps the run
+  waiting).
+- HITL 2 is deepagents `interrupt_on["submit_report"]` with a `when` predicate (only a report that passes
+  `validate_report` is shown; an invalid one returns its validation error to the model) and a callable description
+  (code-rated summary via `policy.evaluate_report`, unknown ids flagged). Reject → the tool's error result "User
+  rejected the tool call for `submit_report` with reason: HITL 2: the human returned the report ... «comment»"; the
+  agent continues and resubmits. Edit → merged over the original args, validated, `edited_fields` recorded and
+  rendered ("утверждён с правками; изменённые поля: ...").
+- `execute` (off by default) is `interrupt_on["execute"]`, inherited by the declarative subagents (only the coder
+  has it). Not exercised by a test (needs a sandbox backend).
+- Runner (`hitl.start_run` / `resume_run`): one SQLite checkpointer per run dir (`thread_id` = run id); at an
+  unanswered stop `run.json` gets `status: awaiting_human` + the pending request, `hitl.md` the card, and at HITL 2
+  `result.*` the draft (rendered with `status="awaiting_human"`), then the process returns (CLI exit 3). Resume
+  rebuilds everything fresh: settings snapshot from run.json, budget (mock: `already_spent_usd` + restored
+  `CallRecord`s, no day log; live: `BudgetLedger.for_task(resume=True)`), `RunLimits` counters, the evidence ledger
+  (`EvidenceLedger.open` continues `evidence.jsonl`), the mock cursors. A live run needs `--live` again to resume;
+  a mock run refuses `--live`. The mock script is copied into the run dir (`mock_script.json`), the task file into
+  `input/`.
+- `--auto-approve` answers every stop with approve in the same process (review `source: auto`, decision
+  `auto_approved`; the report says "Без проверки человеком ... `--auto-approve`"). A `dialog` (CLI: `TTYDialog`,
+  only when stdin and stdout are TTYs and neither `--no-dialog` nor `--auto-approve`) asks in-process; "later"
+  leaves the run awaiting. A dialog decision that does not fit (bad edit) is reported and asked again.
+- `result["human_review"]` stays a string ("approved by a human at HITL 2", "approved with edits ...",
+  `AUTO_APPROVED_LABEL`, "not reviewed ..."); `result["hitl"]` has the points, every review, the formalization
+  records and `report_rejections`. When the edited transcription exists it becomes `result["task"]`.
+- CLI: `--resume RUN_DIR --decision approve|edit|reject [--payload JSON|@file] [--comment TEXT]`, `--no-dialog`;
+  `--save` is the run dir (default `default_runs_dir()/deep-<timestamp>-<hex>`); PDF / image files go through
+  `intake.files.from_path` and are passed to the agent as state files at `/input/task.<ext>` with a first message
+  that tells main to delegate to `intake`. Exit codes 0 / 1 / 2 / 3 (3 = awaiting human).
+- `hitl.run_state(run_dir)` reads the latest state through a fresh agent with empty replays (the checkpoint blob in
+  langgraph 1.2 does not carry `messages` in `channel_values`, so `SqliteSaver.get_tuple` alone is not enough).
+
+Existing tests changed (HITL is on by default in `settings.example.json`, and pytest has no TTY, so a run without
+`--auto-approve` now stops with exit 3): `--auto-approve` added to five CLI tests (the "not reviewed" assertion of
+`test_cli_task_text_overrides_script_task` became "auto-approved"); the `task.pdf` needle "P3" became
+`type_mismatch` (a PDF holding `b"x"` is an intake error now); the partial-report needle "Частичный отчёт" became
+"отчёт частичный" (the P3 renderer's wording).
+
+Known limitations / open:
+- HITL 1 fires only when the agent calls `ir-builder`; a run that never does is recorded as
+  `hitl.formalization = "not held (no ir-builder answer)"`, and the report still goes through HITL 2.
+- With several tasks in one file the human picks at HITL 1 via an edited transcription; no separate chooser.
+- `execute` HITL is wired but untested; HITL inside a subagent (interrupt in a `task` tool call) resumes by
+  re-running that subagent's pending tool call — not checked against deepagents 0.7.34 yet.
+- The TFL Lab UI tab and the eval adapter should call `hitl.start_run` / `resume_run` (eval: `auto_approve=True`).
+
+## P3 io+hitl FIX (2026-11-08)
+
+Review findings (9) checked against the code; all real, all fixed. Files: `hitl.py`, `agent.py`,
+`evidence/ledger.py`, `evidence/policy.py`, `middleware/evidence.py`, `reports/render.py`, tests
+(`test_hitl.py`, `test_evidence.py`, `hitl_scripts.py`).
+
+### HITL 1 binds the verdict by code (findings 1, 6, 2, 9)
+- `hitl.formalization_binding(tfl_hitl records, on=, auto=)` -> `None` (HITL 1 off) or
+  `{"status": approved | rejected | no_ir | not_held, "decision", "ir_fingerprint", "review_id", "auto"}` from
+  the last non-superseded formalization record (`approved` / `edited` / `unchanged` = approved).
+  `hitl.run_binding(run, state)` is what `final_result` and the HITL 2 draft pass to
+  `collect_result(formalization=)` -> `evaluate_report(formalization=)` -> `verdict_gate(formalization=)`.
+- `verdict_gate`: with an approved binding, the approved fingerprint is the required IR whatever
+  `report.ir_fingerprint` says (results for another IR go to `excluded_ir_mismatch`; a differing report
+  fingerprint is a gate line). `rejected` / `not_held` / `no_ir` -> `not_verified` with a gate line, no basis.
+  `binding=None` keeps the P2 rule (the report's own fingerprint). New result fields: `formalization`,
+  `required_ir_fingerprint`.
+- HITL 2 card (`report_review_text(..., formalization_on=)`, `formalization_note`) always states the HITL 1
+  outcome when it is on, including "NOT REVIEWED" and "DIFFERENT IR" / excluded ids. The renderer's IR line
+  (`_ir_line`) and the generated evidence block print `formalization_label` (not reviewed / rejected /
+  auto-approved / approved, IR fp, excluded ids).
+- Bypass (findings 2, 9): `FormalizationReviewMiddleware` also stops after an accepted `validate_ir` call of
+  the **main** agent (request `trigger: "validate_ir"`, IR = the call's argument; `reviewed_call_id`;
+  `ir_builder_call_id` is `None` then). An already approved fingerprint passes as `unchanged`. A run that
+  never reaches HITL 1 (oracles on an IR nobody validated) is `not_held` -> `not_verified`. Rejecting
+  `submit_report` after a HITL 1 rejection was not added: the report goes through and is `not_verified` with
+  the reason, which keeps the flow simple and the human informed. The main-prompt HITL line says so.
+
+### HITL 1 IR lookup per call (finding 4)
+- `EvidenceRecord.parent_call` (new field, default `None`): `EvidenceMiddleware` sets a context variable
+  (`_PARENT_CALL`) to the spawning call's `tool_call_id` while a `task` call runs; the subagent's middleware
+  records it. Tested for sequential calls (cfl / ll mock runs); parallel `task` calls should keep their own
+  value (context variables follow langchain's `copy_context` executor threads and awaited coroutines), but no
+  test runs two ir-builders in parallel yet. `find_ir(call_id=)` / `_ledger_validations(parent_call=)` take only the
+  reviewed call's validations; a ledger without `parent_call` (older run dirs) uses the call's seq window
+  (after the previous ir-builder `task` record, before its own). None there -> "no IR" (never an older IR).
+
+### Smaller fixes
+- Finding 3: `evaluate_report` cites `claims[].evidence_ids` and `lean.evidence_ids` too (unknown ids lower the
+  verdict, reach `unknown_ids`, the card); returns `claims` rated with `rate_claims`; `collect_result` writes
+  `result["claims"]`. The renderer's `_verdict_trust` fallback cites the same set.
+- Finding 5: `EvidenceLedger._load` remembers a missing trailing newline; the next `_write` starts a new line,
+  so a record is never glued to a torn fragment (verify reports only the fragment line).
+- Finding 7: `start_run(model_factory=<tfl_live factory>)` is `mode: "live"` (`run["factory"] = "custom"`):
+  per-day ledger (`BudgetLedger.for_task`), shared spend log, `--live` needed on resume, and the factory too.
+  `_budget_ledger` also checks `is_live_factory(factory)`; a live factory cannot resume a mock / custom run.
+- Finding 8: `render._judge` makes a claim with an id not in the ledger `not_verified` (the `claim_trust`
+  rule); `rendered.steps[*].trust` now equals `result.steps[*].trust`.
+
+Tests: 18 new (test_hitl: edited IR binds the verdict, report fp cannot override, report after a HITL 1
+rejection, a run that skips HITL 1, main validate_ir triggers HITL 1, per-call IR lookup, live factory,
+full_proof render of a fabricated id; test_evidence: torn tail append, claims / lean ids, gate binding
+cases, parent_call). `tfl_deep_agent/tests`: 1188 passed, 1 xfailed.
+
+## P3 io+hitl — GATE (2026-11-08)
+
+- `pytest -q tfl_deep_agent/tests`: 1188 passed, 1 xfailed (about 130 s serial).
+- Full suite (`pytest -q -n auto`): 4816 passed, 75 skipped, 3 xfailed, 33 failed. All 33 failures are real-Docker
+  Lean tests in `agent_system` / `cfl_system` / `dcfl_system` (`test_lean_ir.py`, `test_lean_examples.py`,
+  `test_lean_formalize.py`, `test_phase3.py`, `test_constraint_semantics.py`). They fail inside the Docker daemon
+  itself (`OCI runtime start failed: runc did not terminate successfully: exit status 139`) and keep failing when rerun
+  one at a time, so they come from the environment and not from this phase. P3 touched none of those packages.
+- Acceptance: reject -> fix -> approve: `test_e2e_mock.py::test_reject_fix_approve_across_four_processes`,
+  `test_hitl.py::test_hitl1_reject_then_fix_then_approve`, `test_hitl.py::test_hitl2_reject_then_fix_then_approve_on_fresh_agents`.
+  Fabricated evidence id lowers trust: `test_evidence.py::test_a_fabricated_evidence_id_lowers_trust`,
+  `test_hitl.py::test_fabricated_evidence_id_lowers_trust`, `test_reports.py::test_fabricated_evidence_id_lowers_trust_end_to_end`.
+  All pass, none skipped.

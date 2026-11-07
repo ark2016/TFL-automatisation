@@ -1,7 +1,10 @@
 """``tfl-deep`` command line.
 
-    tfl-deep (TEXT | --file task.txt) [--save DIR] [--template T]
-             [--mock-script FILE | --live] [--auto-approve] [--settings JSON]
+    tfl-deep (TEXT | --file task.{txt,md,pdf,png,jpg,jpeg,webp}) [--save RUN_DIR]
+             [--template T] [--mock-script FILE | --live] [--auto-approve]
+             [--no-dialog] [--settings JSON]
+    tfl-deep --resume RUN_DIR --decision approve|edit|reject
+             [--payload JSON] [--comment TEXT] [--live] [--auto-approve] [--no-dialog]
 
 Mock mode is the default: the agent runs its real loop and its real tools, but
 every model reply is replayed from ``--mock-script`` (a JSON replay, see
@@ -11,29 +14,39 @@ without ``--live`` and without a script is refused with a clear message.
 ``--live`` builds real ``ChatAnthropic`` models and spends money. It needs
 ``ANTHROPIC_API_KEY`` in the environment (this command never loads ``.env``).
 Per the repository rules it is used only on the user's explicit request, with
-a budget agreed beforehand.
+a budget agreed beforehand. Resuming a live run needs ``--live`` again.
 
-P2 scope: text tasks (``TEXT`` or a ``.txt`` / ``.md`` file). PDF / image
-intake, HITL dialogs and the template renderer arrive in P3; until then
-``--save`` writes a minimal ``result.json`` / ``result.md`` and
-``--auto-approve`` is only recorded in the result.
+Human in the loop (``tfl_deep_agent.hitl``): the run stops after the
+formalization (HITL 1) and at the report (HITL 2), as ``settings.hitl`` says.
+On a terminal the stop is an interactive dialog; otherwise (``--no-dialog``,
+a pipe, a test) the process writes ``run.json`` with ``status:
+awaiting_human`` and the card ``hitl.md``, prints the resume commands and
+exits with code 3; ``--resume RUN_DIR --decision ...`` continues it in a new
+process. ``--auto-approve`` (eval, tests) approves every stop and marks the
+report "без проверки человеком".
 
-Exit codes: 0 report submitted, 1 the run ended without a report (partial
-result written), 2 usage / setup error.
+The run directory (``--save``, default ``<runs dir>/<run id>``) holds
+``run.json``, ``checkpoints.sqlite``, ``evidence.jsonl``, the input file and
+``result.{json,md,html}`` (a draft while HITL 2 waits).
+
+Exit codes: 0 report accepted, 1 the run ended without a report (partial
+result written), 2 usage / setup error, 3 waiting for a human decision.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import datetime as _dt
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
 TEMPLATES = ["full_proof", "exam_solution", "short_verdict", "lean_appendix"]
 TEXT_SUFFIXES = {".txt", ".md"}
 FILE_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+EXIT_USAGE = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,8 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="TFL Deep Agent: solve a Theory of Formal Languages task (REG / CFL / DCFL / LL(k)).",
     )
     p.add_argument("text", nargs="?", help="task statement as text")
-    p.add_argument("--file", help="task file: .txt / .md (P2); .pdf / .png / .jpg / .webp arrive in P3")
-    p.add_argument("--save", metavar="DIR", help="directory for result.{json,md}")
+    p.add_argument("--file", help="task file: .txt / .md, or .pdf / .png / .jpg / .jpeg / .webp (transcribed by "
+                                  "the intake role, checked by the human at HITL 1)")
+    p.add_argument("--save", metavar="RUN_DIR",
+                   help="run directory (run.json, checkpoints, evidence, result.{json,md,html}); "
+                        "default: <runs dir>/<run id> ($TFL_DEEP_RUNS_DIR or .tfl_lab_runs)")
     p.add_argument("--template", default=None, choices=TEMPLATES,
                    help="report template (default: the mock script's, else full_proof)")
     p.add_argument("--live", action="store_true",
@@ -52,30 +68,41 @@ def build_parser() -> argparse.ArgumentParser:
                    help="scripted model replay for a mock run (the default mode when --live is absent); "
                         "see tfl_deep_agent/examples/mock/")
     p.add_argument("--auto-approve", action="store_true",
-                   help="approve both HITL points without asking (recorded in the result)")
+                   help="approve every HITL stop without asking (eval / tests; marked in the report)")
+    p.add_argument("--no-dialog", action="store_true",
+                   help="never ask on the terminal: stop with status awaiting_human (exit 3) instead")
     p.add_argument("--settings", metavar="JSON", help="settings file (default: tfl_deep_agent/settings.json)")
+    r = p.add_argument_group("resume a run waiting for a human decision")
+    r.add_argument("--resume", metavar="RUN_DIR", help="the run directory to resume")
+    r.add_argument("--decision", choices=["approve", "edit", "reject"], help="the decision on the pending stop")
+    r.add_argument("--payload", metavar="JSON",
+                   help="edit: a JSON object of the fields to change (HITL 1: transcription / ir / class; "
+                        "HITL 2: report fields); reject: the comment (a JSON string or {\"comment\": ...}); "
+                        "@FILE reads it from a file")
+    r.add_argument("--comment", metavar="TEXT", help="the comment for the agent (required with reject)")
     return p
 
 
 def _fail(msg: str) -> int:
     print(f"tfl-deep: error: {msg}", file=sys.stderr)
-    return 2
+    return EXIT_USAGE
 
 
-def _read_task_file(path: str) -> str:
+def _read_task_file(path: str) -> Any:
+    """A ``TaskInput`` for ``path`` (``intake.files.from_path``)."""
+    from .intake import files as intake_files
+
     p = Path(path)
     suffix = p.suffix.lower()
-    if suffix in FILE_SUFFIXES:
-        raise ValueError(f"{p.name}: PDF / image intake arrives in phase P3; give the task as text for now")
-    if suffix not in TEXT_SUFFIXES:
+    if suffix not in TEXT_SUFFIXES | FILE_SUFFIXES:
         raise ValueError(f"{p.name}: unsupported task file type {suffix or '(none)'}; "
-                         f"use .txt / .md ({', '.join(sorted(FILE_SUFFIXES))} in P3)")
+                         f"use {', '.join(sorted(TEXT_SUFFIXES | FILE_SUFFIXES))}")
     if not p.is_file():
         raise ValueError(f"task file not found: {path}")
-    text = p.read_text(encoding="utf-8").strip()
-    if not text:
-        raise ValueError(f"task file is empty: {path}")
-    return text
+    try:
+        return intake_files.from_path(p)
+    except intake_files.IntakeError as exc:
+        raise ValueError(f"{p.name}: {exc} ({exc.code})") from None
 
 
 def _load_settings(path: str | None) -> Any:
@@ -92,84 +119,90 @@ def _load_settings(path: str | None) -> Any:
         raise ValueError(f"{exc}{': ' + problems if problems else ''}") from None
 
 
-def _render_markdown(result: dict[str, Any], task_text: str) -> str:
-    report = result.get("report") or {}
-    lines = ["# TFL Deep Agent — result", "", "## Условие", "", task_text, ""]
-    if result["status"] != "submitted":
-        lines += ["## Статус", "", f"**{result['status']}** — {result.get('reason', '')}", ""]
-        if result.get("last_message"):
-            lines += ["Последнее сообщение агента:", "", result["last_message"], ""]
-        partial = result.get("partial_report") or {}
-        if partial:
-            lines += ["## Частичный отчёт (сгенерирован кодом)", "",
-                      f"Вердикт: **{partial.get('verdict')}**, доверие `{partial.get('trust')}`, "
-                      f"потолок confidence {partial.get('confidence_cap')}.", ""]
-            if partial.get("established"):
-                lines.append("Установлено инструментами:")
-                lines += [f"- `{e['id']}` {e['tool']}: `{e['trust']}`" for e in partial["established"]]
-                lines.append("")
-            if partial.get("refuted"):
-                lines.append("Опровергнуто инструментами:")
-                lines += [f"- `{e['id']}` {e['tool']}" for e in partial["refuted"]]
-                lines.append("")
-            for sub in partial.get("subagents") or []:
-                answer = " ".join(str(sub.get("answer") or "").split())[:300]
-                lines.append(f"- субагент {sub.get('subagent')}: {answer}")
-            if partial.get("subagents"):
-                lines.append("")
-    else:
-        lines += [
-            "## Вердикт", "",
-            f"**{report.get('verdict')}** (класс `{report.get('language_class')}`), "
-            f"доверие по свидетельствам вердикта: `{result.get('trust')}`, потолок confidence "
-            f"{result.get('confidence_cap')}", "",
-            f"Метод: {report.get('method')}", "",
-        ]
-        basis = ", ".join(result.get("basis") or []) or "нет допустимого основания"
-        lines += [f"Токен вердикта по VERDICT_POLICY: `{result.get('verdict_token')}`; основание (выбрано кодом): "
-                  f"{basis}", ""]
-        if result.get("verdict_gate"):
-            lines.append("Понижения (VERDICT_POLICY R1–R4):")
-            lines += [f"- {g}" for g in result["verdict_gate"]]
-            lines.append("")
-        if report.get("summary"):
-            lines += [report["summary"], ""]
-        lines += ["## Доказательство", ""]
-        for i, step in enumerate(result.get("steps") or [], 1):
-            ids = ", ".join(step.get("evidence_ids") or []) or "—"
-            lines.append(f"{i}. {step.get('claim')} — свидетельства: {ids} "
-                         f"(сильнейшее: `{step.get('trust')}`)")
-            if step.get("justification"):
-                lines.append(f"   {step['justification']}")
-            if step.get("unknown_ids"):
-                lines.append(f"   несуществующие id: {', '.join(step['unknown_ids'])}")
-        lines.append("")
-    lines += ["## Свидетельства (сгенерировано кодом)", "", "| id | инструмент | trust | основание |",
-              "|---|---|---|---|"]
-    for ev in result.get("evidence") or []:
-        reason = str(ev.get("trust_reason") or "").replace("|", "\\|").replace("\n", " ")
-        lines.append(f"| `{ev['id']}` | {ev.get('tool')} | {ev.get('trust')} | {reason[:200]} |")
-    lines += ["", f"Проверка человеком: {result.get('human_review')}", ""]
-    return "\n".join(lines)
+def new_run_id() -> str:
+    return "deep-" + _dt.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
 
 
-def save_result(result: dict[str, Any], task_text: str, save_dir: str | Path) -> list[Path]:
-    """Write ``result.json`` and ``result.md`` (P2 minimal; P3's renderer adds
-    the templates and ``result.html``)."""
-    d = Path(save_dir)
-    d.mkdir(parents=True, exist_ok=True)
-    payload = {"task": task_text, **result}
-    json_path = d / "result.json"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
-                         encoding="utf-8")
-    md_path = d / "result.md"
-    md_path.write_text(_render_markdown(result, task_text), encoding="utf-8")
-    return [json_path, md_path]
+def _dialog(args: argparse.Namespace) -> Any:
+    """The TTY dialog, only when both ends are a terminal and not disabled."""
+    if args.no_dialog or args.auto_approve:
+        return None
+    try:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return None
+    except (AttributeError, ValueError):
+        return None
+    from .hitl import TTYDialog
+
+    return TTYDialog()
+
+
+def _report(outcome: Any) -> int:
+    """Print the outcome of a run segment and return its exit code."""
+    from . import hitl
+
+    if outcome.awaiting:
+        info = outcome.pending
+        print(f"tfl-deep: waiting for a human decision at {info.point} (HITL); run dir {outcome.run_dir}",
+              file=sys.stderr)
+        print(f"tfl-deep: the card is {outcome.run_dir / hitl.CARD_FILE}; resume with:", file=sys.stderr)
+        print(hitl.resume_hint(outcome.run_dir, info.point), file=sys.stderr)
+        print(f"awaiting_human: {info.point}")
+        return outcome.exit_code
+    result = outcome.result or {}
+    if outcome.paths:
+        print("tfl-deep: wrote " + ", ".join(str(p) for p in outcome.paths.values()), file=sys.stderr)
+    if result.get("status") == "submitted":
+        report = result["report"]
+        print(f"verdict: {report['verdict']} ({report['language_class']}); evidence trust: "
+              f"{result['trust']}; confidence cap {result['confidence_cap']}; review: {result.get('human_review')}")
+        return outcome.exit_code
+    print(f"no report: {result.get('status')}: {result.get('reason', '')}", file=sys.stderr)
+    return outcome.exit_code
+
+
+def _payload(text: str | None) -> Any:
+    if text is None:
+        return None
+    if text.startswith("@"):
+        path = Path(text[1:])
+        if not path.is_file():
+            raise ValueError(f"--payload file not found: {path}")
+        return path.read_text(encoding="utf-8")
+    return text
+
+
+def _resume(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from . import hitl
+
+    if args.text or args.file or args.mock_script or args.template or args.settings or args.save:
+        parser.error("--resume takes only --decision / --payload / --comment / --live / --no-dialog / "
+                     "--auto-approve; the run keeps its task, script, template and settings")
+    if not args.decision:
+        parser.error("--resume needs --decision approve|edit|reject")
+    try:
+        run = hitl.load_run(args.resume)
+        if run.get("mode") == "live" and args.live and not os.environ.get("ANTHROPIC_API_KEY"):
+            return _fail("--live needs ANTHROPIC_API_KEY in the environment (tfl-deep never loads .env)")
+        decision = hitl.parse_decision(args.decision, _payload(args.payload), comment=args.comment)
+        if args.auto_approve:
+            run["auto_approve"] = True
+            hitl.save_run(args.resume, run)
+        if run.get("mode") == "live":
+            print("tfl-deep: LIVE mode: real Anthropic API calls, this spends money.", file=sys.stderr)
+        outcome = hitl.resume_run(args.resume, decision, live=args.live, dialog=_dialog(args))
+    except (hitl.RunError, hitl.DecisionError, ValueError) as exc:
+        return _fail(str(exc))
+    return _report(outcome)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.resume:
+        return _resume(args, parser)
+    if args.decision or args.payload or args.comment:
+        parser.error("--decision / --payload / --comment go with --resume RUN_DIR")
     if args.text and args.file:
         parser.error("give either TEXT or --file, not both")
     if args.live and args.mock_script:
@@ -184,104 +217,50 @@ def main(argv: list[str] | None = None) -> int:
             "pass --live only with an agreed budget.")
 
     try:
-        task_text = _read_task_file(args.file) if args.file else (args.text or "")
+        task = _read_task_file(args.file) if args.file else (args.text or "")
         settings = _load_settings(args.settings)
     except ValueError as exc:
         return _fail(str(exc))
 
     from . import agent as agent_mod
+    from . import hitl
+    from .intake import files as intake_files
 
     script = None
     if args.mock_script:
         try:
-            factory = agent_mod.scripted_model_factory(args.mock_script)
+            script = agent_mod.load_mock_script(args.mock_script)
         except agent_mod.ScriptError as exc:
             return _fail(str(exc))
-        script = factory.script
-        if not task_text:
-            task_text = str(script.get("task") or "").strip()
-        if not task_text:
+        if not task:
+            task = str(script.get("task") or "").strip()
+        if not task:
             return _fail("no task: give TEXT / --file, or put a 'task' into the mock script")
-        mode = "mock"
-    else:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            return _fail("--live needs ANTHROPIC_API_KEY in the environment (tfl-deep never loads .env)")
-        factory = agent_mod.default_model_factory
-        mode = "live"
-        print("tfl-deep: LIVE mode: real Anthropic API calls, this spends money.", file=sys.stderr)
-
-    template = args.template or (script or {}).get("template") or "full_proof"
-    human_review = ("auto-approved (--auto-approve): without human review" if args.auto_approve
-                    else "not reviewed (HITL arrives in P3)")
-    from langgraph.checkpoint.memory import InMemorySaver
-
-    from .middleware import budget as budget_mod
-
-    # Budget: a live run charges the shared per-day log in the runs directory
-    # and is refused when the task does not fit in the day. A mock run gets its
-    # own ledger without the log (no money is spent): the scripted replies'
-    # token estimates still go through BudgetMiddleware, so the path is the
-    # same, and the numbers are reported as an estimate.
-    try:
-        if mode == "live":
-            ledger = budget_mod.BudgetLedger.for_task(settings)
-        else:
-            b = settings.budget
-            ledger = budget_mod.BudgetLedger(
-                b.per_task_usd, reserve_for_report_usd=b.reserve_for_report_usd,
-                per_subagent_max_usd=b.per_subagent_max_usd, spend_log=None, task_id="mock-run")
-    except budget_mod.BudgetExceeded as exc:
-        return _fail(f"budget: {exc}")
-
-    # In-memory checkpoints keep the state of a run that fails half-way, so a
-    # partial result can still be written. P3 replaces this with SQLite in the
-    # run dir (resume in a new process).
-    checkpointer = InMemorySaver()
-    thread_id = "tfl-deep-cli"
-    try:
-        graph = agent_mod.create_tfl_agent(settings, model_factory=factory, template=template,
-                                           checkpointer=checkpointer, budget=ledger)
-    except (ValueError, TypeError) as exc:
-        return _fail(f"cannot build the agent: {exc}")
-
-    error: str | None = None
-    state: dict[str, Any] = {"messages": []}
-    try:
-        state = agent_mod.run_task(graph, task_text, thread_id=thread_id)
-    except Exception as exc:  # noqa: BLE001 - any agent failure still yields a partial result
-        prefix = "mock script" if isinstance(exc, agent_mod.ScriptError) else type(exc).__name__
-        error = f"{prefix}: {exc}"
+    elif not os.environ.get("ANTHROPIC_API_KEY"):
+        return _fail("--live needs ANTHROPIC_API_KEY in the environment (tfl-deep never loads .env)")
+    if isinstance(task, str):
         try:
-            state = dict(graph.get_state({"configurable": {"thread_id": thread_id}}).values)
-        except Exception:  # noqa: BLE001
-            state = {"messages": []}
+            task = intake_files.from_text(task)
+        except intake_files.IntakeError as exc:
+            return _fail(f"{exc} ({exc.code})")
 
-    result = agent_mod.collect_result(state, human_review=human_review, ledger=ledger)
-    result["mode"] = mode
-    result["template"] = template
-    result["budget_refusal"] = result.pop("budget", None)
-    result["budget"] = {**ledger.summary(),
-                        "note": ("live: charged to the per-day log" if mode == "live"
-                                 else "mock: token estimates of the scripted replies; no money spent")}
-    if not result["budget_refusal"]:
-        result.pop("budget_refusal")
-    if error:
-        result["status"] = "error"
-        result["reason"] = error
-        if result.get("partial_report"):
-            result["partial_report"]["status"] = "error"
-            result["partial_report"]["reason"] = error
     if args.save:
-        paths = save_result(result, task_text, args.save)
-        print("tfl-deep: wrote " + ", ".join(str(p) for p in paths), file=sys.stderr)
+        run_dir = Path(args.save)
+        run_id = None
+    else:
+        from .middleware.budget import default_runs_dir
 
-    if result["status"] == "submitted":
-        report = result["report"]
-        print(f"verdict: {report['verdict']} ({report['language_class']}); evidence trust: "
-              f"{result['trust']}; confidence cap {result['confidence_cap']}")
-        return 0
-    print(f"no report: {result['status']}: {result.get('reason', '')}", file=sys.stderr)
-    return 1
+        run_id = new_run_id()
+        run_dir = default_runs_dir() / run_id
+    if args.live:
+        print("tfl-deep: LIVE mode: real Anthropic API calls, this spends money.", file=sys.stderr)
+    try:
+        outcome = hitl.start_run(
+            run_dir, task, settings=settings, mock_script=script, live=args.live, template=args.template,
+            auto_approve=args.auto_approve, dialog=_dialog(args), run_id=run_id)
+    except (hitl.RunError, hitl.DecisionError, ValueError, TypeError) as exc:
+        return _fail(str(exc))
+    return _report(outcome)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -415,12 +415,13 @@ def test_cli_mock_run_end_to_end(tmp_path, runs_dir, capsys):
 def test_cli_task_text_overrides_script_task(tmp_path, runs_dir, capsys):
     out = tmp_path / "out"
     rc = cli.main(["Является ли (ab)*a|b регулярным?", "--mock-script", str(MOCK / "reg_regex_regular.json"),
-                   "--save", str(out), "--settings", str(SETTINGS_EXAMPLE), "--template", "exam_solution"])
+                   "--save", str(out), "--settings", str(SETTINGS_EXAMPLE), "--template", "exam_solution",
+                   "--auto-approve"])
     assert rc == 0, capsys.readouterr().err
     data = json.loads((out / "result.json").read_text(encoding="utf-8"))
     assert data["task"] == "Является ли (ab)*a|b регулярным?"
     assert data["template"] == "exam_solution"
-    assert data["human_review"].startswith("not reviewed")
+    assert data["human_review"].startswith("auto-approved")
 
 
 def test_cli_script_error_writes_partial_result(tmp_path, runs_dir, capsys):
@@ -430,7 +431,8 @@ def test_cli_script_error_writes_partial_result(tmp_path, runs_dir, capsys):
     path = tmp_path / "broken.json"
     path.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
     out = tmp_path / "out"
-    rc = cli.main(["--mock-script", str(path), "--save", str(out), "--settings", str(SETTINGS_EXAMPLE)])
+    rc = cli.main(["--mock-script", str(path), "--save", str(out), "--settings", str(SETTINGS_EXAMPLE),
+                   "--auto-approve"])
     assert rc == 1
     data = json.loads((out / "result.json").read_text(encoding="utf-8"))
     assert data["status"] == "error" and "mock script" in data["reason"]
@@ -456,7 +458,7 @@ def test_cli_live_and_script_exclude_each_other():
     assert exc.value.code == 2
 
 
-@pytest.mark.parametrize("name, needle", [("task.pdf", "P3"), ("task.docx", "unsupported"),
+@pytest.mark.parametrize("name, needle", [("task.pdf", "type_mismatch"), ("task.docx", "unsupported"),
                                           ("missing.txt", "not found")])
 def test_cli_task_file_errors(tmp_path, name, needle, capsys):
     path = tmp_path / name
@@ -472,7 +474,7 @@ def test_cli_text_file_task(tmp_path, runs_dir, capsys):
     task.write_text("S → aAb | bBa; A → aA | ε; B → bB | ε. LL(1)?", encoding="utf-8")
     out = tmp_path / "out"
     rc = cli.main(["--file", str(task), "--mock-script", str(MOCK / "ll_simple_ll1.json"),
-                   "--save", str(out), "--settings", str(SETTINGS_EXAMPLE)])
+                   "--save", str(out), "--settings", str(SETTINGS_EXAMPLE), "--auto-approve"])
     assert rc == 0, capsys.readouterr().err
     assert json.loads((out / "result.json").read_text(encoding="utf-8"))["task"].startswith("S → aAb")
 
@@ -491,7 +493,7 @@ def test_cli_budget_exhausted_status(tmp_path, runs_dir, capsys):
     spath.write_text(json.dumps(settings), encoding="utf-8")
     out = tmp_path / "out"
     rc = cli.main(["--mock-script", str(MOCK / "reg_regex_regular.json"), "--save", str(out),
-                   "--settings", str(spath)])
+                   "--settings", str(spath), "--auto-approve"])
     assert rc == 1
     data = json.loads((out / "result.json").read_text(encoding="utf-8"))
     assert data["status"] == "budget_exhausted"
