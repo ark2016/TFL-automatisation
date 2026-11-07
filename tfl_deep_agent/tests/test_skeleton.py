@@ -107,9 +107,9 @@ def test_cli_requires_a_task(capsys):
         cli.main(["some text", "--file", "x.pdf"])
 
 
-def test_cli_stub_returns_not_implemented(capsys):
+def test_cli_without_mock_script_or_live_is_refused(capsys):
     assert cli.main(["L = {a^n b^n}", "--save", "out"]) == 2
-    assert "not implemented" in capsys.readouterr().err
+    assert "--mock-script" in capsys.readouterr().err
 
 
 def test_cli_parser_contract():
