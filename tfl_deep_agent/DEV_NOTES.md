@@ -2086,3 +2086,336 @@ No code changes in this step. Docker 27.5.1 is up, and the images `tfl-sandbox:l
     test.
   - P6: `test_tools_lean::test_golden_reg_proof_verifies_through_the_tools` ran against the real `tfl-lean4`:
     status proved, trust verified.
+
+## P7 UI — backend routes (2026-11-08)
+
+Files:
+- `ui_server/deep_routes.py` (new)
+- `ui_server/server.py` (a minimal hook)
+- `tfl_deep_agent/progress.py` (new: the event emitter)
+- `tfl_deep_agent/hitl.py` (emitter calls in `_segment`, plus a retry in `save_run`)
+- `ui_server/tests/test_deep_routes.py` (new)
+- `ui_server/tests/conftest.py` (now imports the guard fixtures)
+
+Python is `.venv/Scripts/python`.
+
+### Endpoints
+
+All live under `/api/deep/`. Every endpoint below is listed in the `deep_routes` docstring.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET, POST | `runs` | create a run |
+| GET | `runs/<id>?after=N&limit=M` | run detail, polled |
+| GET | `runs/<id>/files/<path>` | whitelisted run files |
+| POST | `runs/<id>/resume` | answer a HITL stop |
+| POST | `runs/<id>/cancel` | stop a run |
+| GET | `estimate` | money limits and measured cost |
+| GET, PUT | `settings` | deep-agent settings |
+| GET | `mock-scripts` | added: the UI needs to list the replay scripts |
+
+`server.py` changes:
+- `do_GET` and `_handle_body_request` hand `/api/deep/*` to `deep_routes.dispatch`, which maps its own errors: 400 / 404 / 409, 503 when the `[deep]` extra is missing, otherwise 500.
+- `/api/deep/*` keeps the same loopback-Host and same-origin JSON guards as every other route.
+- The body limit for `/api/deep/*` is `deep_routes.max_body_bytes()`: `intake.max_file_mb` × 4/3 + 1 MB, capped at 64 MB. Every other route keeps `MAX_BODY_BYTES`.
+- `main()` calls `deep_routes.restore_runs()` after the pipeline restore. Errors are logged and never block start-up.
+- `deep_routes` is imported lazily, and it imports `ui_server.server` lazily for the stateless helpers: `_read_progress`, `_files_in`, `process_identity`, `_pid_matches`, `_kill_pid`. Under `python -m ui_server.server` that is a second module object, which is harmless because only pure functions are used. A smoke test on port 8799 under `-m` passed; that server was stopped afterwards.
+
+### Decisions
+
+**Run directory.** Runs live in `.tfl_lab_runs/deep/<12 hex>/`. The pipeline registry only scans 12-hex directories directly under `.tfl_lab_runs`, so it never sees these (tested). The 12-hex name is the agent's `run_id` through `--save`.
+
+**Who owns which file.**
+- The agent owns `run.json`, checkpoints, evidence, `progress.jsonl` and `result.*`.
+- The server owns `lab.json` (status, live, pid + identity, segments with argv / rc / outcome), `run.log` (child stderr; stdout prefixed), `upload/task.<ext>`, `ui_settings.json`, `ui_mock_script.json` and `ui_decisions/NNN-<point>-<decision>.json`.
+
+**Status values.**
+- `queued` and `running` mean a process exists.
+- After exit, the status comes from the agent's `run.json` together with the exit code:
+  - rc 3 + `awaiting_human` + pending → `awaiting_human`;
+  - rc 0/1 + a final status → `completed` with `result_status` = submitted / incomplete / budget_exhausted / error;
+  - any other rc → `error` with the stderr tail.
+- No process while the agent status is still `running` → `interrupted` (a server restart or a crash).
+- `cancelled` is a lab override.
+
+**Subprocess.** Every run, start or resume, is one `python -m tfl_deep_agent` process with `--no-dialog`.
+- Start: `--file upload/task.<ext> --save <dir> --settings ui_settings.json [--template] [--auto-approve] (--mock-script F | --live)`.
+- Resume: `--resume <dir> --decision D [--payload @ui_decisions/…json] [--live]`.
+- Text tasks also go through `--file task.txt`, which is one code path and avoids the argv length limit.
+- `build_start_command` and `build_resume_command` are module functions so tests can swap them.
+
+**Child environment.**
+- `PYTHONIOENCODING` and `PYTHONUTF8` are set.
+- `TFL_DEEP_RUNS_DIR` is set to `deep_routes.spend_dir()`, which is the env value or `.tfl_lab_runs`. This is the CLI's default, so UI runs and CLI runs share one daily spend log.
+- A mock child gets **no** `ANTHROPIC_API_KEY` even if the server has one. A live child inherits the server's environment as it is; the server never loads `.env`.
+
+**Money.**
+- Mock mode is the default and needs a `mock_script`: either an `examples/mock/*.json` name (only a lookup key into that directory) or an inline script object.
+- `live` needs `confirm_spend: true` (exactly `true`) and excludes `mock_script`.
+- A live run is checked against `DailySpendLog.check_can_start` before anything is spawned (409 when refused). The CLI checks again.
+- Resuming a live run needs `confirm_spend` again, because each segment spends.
+
+**Settings for a run.** The current deep settings, merged with `settings_override` by `apply_overrides` and validated, are snapshotted to `ui_settings.json`. A broken settings file is a 409, never a silent fallback to the defaults (it holds the money limits). `PUT /settings` merges a partial object, validates it, and saves it atomically (`save_settings`).
+
+**Uploads.**
+- `text`, or `file_b64` + `mime` (+ `name`); a `data:` URL is accepted.
+- Pre-validated in the server process by `intake.files.from_text` / `from_base64` with the run's limits. An `IntakeError` is a 400 that carries its code (`bad_base64`, `too_large`, a bad PDF, …).
+- The file is stored as `upload/task.<ext>`, with the extension taken from the sniffed type, and the user's file name is kept in `lab.json`.
+
+**Resume.**
+- Only from `awaiting_human`, with no live process, not cancelled, and when the agent's `run.json` has a `pending`.
+- The decision is pre-checked with `hitl.parse_decision` + `hitl.resume_value(pending.request, …)`, so a misfit is a 400 now and the run keeps waiting.
+- `reject` needs a comment. The HITL library accepts an empty one, but the agent needs something to act on (UI choice).
+- `payload` + `comment` go to a JSON file passed as `--payload @file`.
+
+**Cancel.**
+- A queued run is never started, and its slot wait notices the flag.
+- A running run's process tree is killed (`taskkill /T` on Windows).
+- An awaiting run becomes `cancelled` and can no longer be resumed.
+- Cancel is idempotent on terminal runs.
+- An adopted orphan (after a restart) is killed through `server._kill_pid` with its identity.
+
+**Concurrency.** A separate gate, `TFL_LAB_MAX_DEEP_RUNS` (default 2), counted apart from the pipeline gate.
+
+**Detail response.**
+- `events`, `next` and `total` follow the same `after=N` contract as `/api/runs/<id>`.
+- These views are folded from **all** of `progress.jsonl`, so a late poller sees everything (`fold_events`):
+  - `todos` (latest)
+  - `tools` (count by trust, failed)
+  - `subagents`: a tree by node path (`t1/prover/spawn:x`), with allocated / spent / returned USD, the per-model spend, calls, roles, open/closed status, and `subtree_spent_usd`
+  - `budget`: the latest event snapshot, plus today's spend and limit
+  - `budget_signals`
+  - `orchestration`: spawn_* and workflow_* events
+  - `hitl.decisions`
+  - `done`
+- `hitl.pending` is read from the agent's `run.json`, which is the authority. It carries the point, interrupt_id, allowed decisions, action args, the `hitl.md` card, the source file URL, and at HITL 2 the draft and its URLs.
+- `result` comes from `result.json`.
+
+**File route.** Only `result.{json,md,html}`, `hitl.md`, `evidence.jsonl`, `progress.jsonl`, `run.log`, `input/*` and `upload/*`. These go through `server._files_in`, so there is no `..` and no symlink escape. `run.json`, `lab.json`, the settings snapshot and `checkpoints.sqlite` are not served.
+
+**Estimate.**
+- Limits come from the settings, optionally with an override passed as a URL-encoded JSON query parameter.
+- Today's spend comes from the spend log.
+- `model_cost_table(settings)` gives the worst-case cost per call per tier.
+- Measured cost: n / mean / min / max of `budget.spent_usd` over finished **live** deep runs (optionally of one template), with the high value capped at `per_task_usd`. It reports "no data" until such a run exists; there is no static price table, as in `/api/estimate`.
+
+**Restore.**
+- A `lab.json` that says queued/running with a dead pid is settled from `run.json`, so a HITL stop stays resumable after a restart (tested).
+- A live pid is adopted and watched, and settled when it exits.
+- Unlike the pipelines, start-up is never refused for deep runs.
+
+**Event emitter** (`tfl_deep_agent/progress.py`). `ProgressEmitter` listens to `BudgetLedger` and `EvidenceLedger` and appends JSON lines to `progress.jsonl`, thread-safe and never raising. Each line carries the cumulative `usage` (calls, tokens, estimated cost) and a `budget` snapshot. Event kinds:
+- `segment_start` / `segment_end`, with a 1-based `segment`
+- `model_call` (node, role, model, usd)
+- `subagent_start` / `subagent_end` (node, kind, allocated / returned USD)
+- `subagent_refused`, `budget_wrap_up`, `budget_refused`
+- the orchestration events, passed through under their own names
+- `todos` (from `write_todos` evidence)
+- `tool_call` (id, tool, ok, **trust**, trust_reason, error_kind, role, scope, model, cost, parent_call, elapsed, args preview ≤300 chars, and subagent_type for `task`)
+- `hitl_awaiting` (the card ≤20 kB, and the draft at the report point)
+- `hitl_decision`
+- `done` (status, verdict, language_class, trust, confidence_cap, error)
+
+`hitl._segment` changes:
+- Opens the emitter after the evidence ledger.
+- Calls `hitl_awaiting` after `_write_awaiting`.
+- Calls `hitl_decision` after an in-loop decision.
+- Calls `segment_end` / `done` at the two exits.
+- Calls `detach()` in `finally`.
+
+### Bug found and fixed
+
+The bug was on Windows, while the UI polls a running run:
+- `GET /runs/<id>` read the agent's `run.json`.
+- The agent's `save_run` does `tmp.replace(run.json)`. It failed with `PermissionError: [WinError 5]` while the server had the file open, and the run ended as `error`. This was reproduced by the real mock test.
+
+There are two fixes:
+1. `deep_routes` never opens `run.json` / `result.json` of a run whose process is alive (`_agent_run_if_idle`; the estimate skips busy runs too). A live run is shown from `progress.jsonl`, which is append-only and safe to read.
+2. `hitl.save_run` retries the replace on `PermissionError` (40 × 50 ms) before raising. This covers other readers too: an editor, an antivirus scan.
+
+The agent's `result.*` are written in place with `write_text` (no replace), so readers do not break them.
+
+### Tests
+
+`ui_server/tests/test_deep_routes.py` has 34 tests. No live calls, and no `.env` is loaded.
+- **Fake-agent tests.** The start and resume builders are replaced by a script that writes `run.json`, `progress.jsonl` and `result.json`, then exits 0 / 3 / 2 or sleeps. The real builders' argv is recorded and asserted. These cover:
+  - 14 parametrised 400s
+  - argv and child env (`ANTHROPIC_API_KEY` is dropped for mock)
+  - live + `confirm_spend`
+  - the day-budget 409
+  - PDF upload storage
+  - resume validation, payload file and `--live`
+  - cancel: running / queued / awaiting
+  - a crash returns the stderr tail
+  - restore after a dead server
+  - the pipeline registry ignores the deep directory
+  - the file whitelist
+  - `fold_events` tree / costs
+  - settings GET / PUT / broken file
+  - estimate: no data → measured, plus override
+- **HTTP tests** through the real `srv.Handler` on port 0:
+  - routes and 404
+  - 403 for a cross-origin POST and for a non-JSON PUT
+  - `after=N` polling
+  - a body over the pipeline 1 MB limit is accepted
+  - over the deep limit → 413. This test sends only the Content-Length header, because a large unread body makes Windows reset the connection.
+- **One real mock run** through the actual CLI subprocesses: a PDF with `hitl_scripts.pdf_script()` → HITL 1 (card, source URL, tool trust, subagent tree with intake and ir-builder, budget, usage) → resume `edit` of the transcription → HITL 2 (draft and its URLs). A bad edit there is a 400 and the run keeps waiting. Then `approve` → `completed` / `submitted`, `result.task` equals the edited transcription, segment rcs are `[3, 3, 0]`, and the day spend stays 0.
+
+`ui_server/tests/conftest.py` now imports `tfl_deep_agent.tests.guard`. `test_network_guard::test_other_test_dirs_that_use_the_agent_import_the_guard` requires that for any test directory that uses the agent.
+
+### Test results
+
+| Command | Result |
+|---|---|
+| `pytest -q ui_server/tests tfl_deep_agent/tests/test_hitl.py tfl_deep_agent/tests/test_e2e_mock.py` | 191 passed |
+| `pytest -q ui_server/tests/test_deep_routes.py`, run 3× | 34 passed each time |
+| `pytest -q -n 4 tfl_deep_agent/tests` | all passed, except the guard test above, which then passed |
+| full `pytest -q -n 6` | only failures are Docker-Lean compile tests in agent_system / cfl_system / dcfl_system (`OCI runtime create failed`, `runc ... exit status 139`), the same daemon flake recorded at the P3 and P4-P6 gates |
+
+### Open points
+
+- There is no frontend yet; that is the P7 UI step. The routes return everything the tab needs.
+- No `examples/mock` script exercises the PDF intake path. The UI can upload a PDF only with an inline `mock_script`, or in live mode. A small `examples/mock/ll_pdf_intake.json` (built from `pdf_script()`) would make a PDF demo one click.
+- The deep runs have their own concurrency gate, so the two gates together can start 2 + 2 processes. A shared gate would need a change to `server.py`'s slot code.
+
+## P7 UI — frontend tab (2026-11-08)
+
+TFL Lab has a second workspace, **Deep Agent**, next to the existing pipelines workspace. A switch in the top bar flips between them (`#mode-pipelines` / `#mode-deep`; the choice is remembered in `localStorage`, and `#deep` in the URL opens it). The pipelines workspace and its tabs are unchanged. The tab talks only to `/api/deep/*` (`ui_server/deep_routes.py`) and follows its contract field for field.
+
+Files: `ui_server/static/index.html` (the `#deep-view` markup and the deep settings modal), `ui_server/static/lab.css` (an appended "Deep Agent" section), `ui_server/static/app.js` (an appended self-contained section plus three one-line changes to shared handlers), `ui_server/tests/test_deep_frontend.py` (new).
+
+### What the tab shows
+
+- **Left, the composer.**
+  - A text area that also takes drag-and-drop, a file picker or a pasted image. PDF, PNG, JPG and WebP files are read with `FileReader.readAsDataURL` and sent as `file_b64` + `mime` + `name`; a text file is loaded into the text area. The file is checked against `intake.max_file_mb` before upload, and the server checks again.
+  - Run controls: template ("agent picks" leaves it to the agent), main model, budget per task and the two review points. These go out as `settings_override` holding only the values that differ from the saved settings.
+  - Mode: one entry per `examples/mock` script, "inline replay script (JSON)", or "live · paid API calls". A live run needs the "I confirm API spend" tick and sends `live: true, confirm_spend: true`. The tick resets after each live start. Cmd/Ctrl+Enter starts only a mock run, never a live one.
+  - An auto-approve option.
+  - An estimate from `GET /estimate`, debounced. In mock mode it says "$0" and shows the live cap; in live mode it shows the measured average, the cap, the reserve, the main model's worst case per call and today's spend. It turns red when `day.can_start` is false.
+  - The list of deep runs, refreshed every 3 s while one is active.
+- **Centre.**
+  - The run header: status, id, mode, template, verdict with its trust chip and cap, cost, elapsed time, and a cancel button.
+  - The plan, from the `todos` in the detail response.
+  - The timeline, built from `progress.jsonl` events fetched with the `after` cursor every 0.8 s while a run is queued or running. Each tool call carries its trust chip, indented by scope depth, with model, cost and elapsed time; clicking it shows `args_preview` and the trust reason. Model calls, subagent start and end, spawn and workflow steps, budget signals, HITL stops and decisions, segments and `done` also appear. Filters: all / tools / agents / review. The last 600 rows are drawn.
+- **Right, four tabs.**
+  - **Review**: the HITL cards.
+    - *HITL 1* puts the source (PDF in an iframe, image, or text) next to the editable transcription. It also shows the class select with the `validate_ir` result, the IR as editable JSON, the `ir_to_text` restatement, sample words (`in_language` / `not_in_language`, with "" shown as ε) and the ir-builder answer.
+    - *HITL 2* shows the rendered draft in a sandboxed iframe (`draft_urls.html`) next to editable fields: template switcher, verdict, answer, language class, method and summary; hypothesis, construction, conclusion and the steps (as JSON) sit in a drawer. The card head carries the draft's trust and cap, and a banner lists any `unknown_ids`.
+    - Any other stop (sandbox `execute`) shows its arguments as JSON, editable when `edit` is allowed.
+    - Every card has a comment box and Approve / Save edits / Reject with comment. Changed fields are highlighted, and the edit button lists them.
+    - The review history comes from `hitl.decisions`.
+  - **Agents**: the subagent and workflow tree from `subagents`, with the per-model cost, calls, roles, allocated and returned budget and subtree cost. It also shows tool calls by trust level and the orchestration and budget-signal log.
+  - **Report**: the summary, the template switcher, the report as HTML (sandboxed iframe), Markdown (marked + DOMPurify + KaTeX, the same path as the pipelines' Markdown tab) or JSON, and the evidence table from `result.json`. The table lists id, tool, trust, ok, the citing steps and the reason; it tags `basis`, `refuted` and `unknown` ids and is followed by the per-step trust table.
+  - **Log**: `log_tail`, plus the address of the full `run.log`.
+- **Bottom, the budget bar.** Task spend against the limit, with the report reserve hatched, and today's spend against `per_day_usd`. Notes for wrap-up, exhaustion, mock (estimate only) and a reached day limit.
+- **Settings.** In Deep Agent mode the gear (and "deep-agent settings") opens a modal over `GET/PUT /api/deep/settings`. Its groups are budget, models (allowed list, model per role, `opus_needs_reason`), human review (the three points), limits and intake. Validation errors from the server are shown as they come back.
+
+### Decisions
+
+- **Own tab classes.** The existing `app.js` binds every `.tab` and `.panel` in the document to the pipelines result pane. The deep pane therefore uses `.dtab` / `.dpanel`; a test checks that the deep markup has neither class.
+- **Appended section, shared helpers reused.** The deep code is appended at the end of `app.js` and reuses `el`, `num`, `fmtUsd`, `fmtTok`, `fmtDur`, `toMs`, `api`, `sendJson`, `ensureMdLibs` and `preprocessObsidianCallouts`. It does not move or duplicate any marker that `test_static.py` slices by. Three shared handlers changed by one line each:
+  - Cmd+Enter starts a deep mock run in deep mode.
+  - The gear opens the deep settings in deep mode.
+  - Escape also closes the deep settings.
+- **Pure helpers are separated.** Everything without DOM access sits between `// ---- deep: pure helpers begin` and `// ---- deep: pure helpers end ----`, so node can run it in tests. That covers body builders, edit diffs, the timeline, tree, budget and estimate views, and the evidence rows.
+- **An edit sends only changed fields.** IR and steps are compared as canonical JSON, so key order does not matter. "Save edits" with nothing changed is refused in the browser; the backend would have turned it into an approve. A class change without an IR change is refused with the same rule as the backend ("a class change requires the IR").
+- **Polling keeps the reviewer's input.** A card is rebuilt only when the pending `interrupt_id` changes, and the report view only when the result changes. A poll therefore never wipes an edit in progress.
+- **Trust is only displayed.** The chip colours follow the five levels of `docs/VERDICT_POLICY.md`. Nothing in the tab computes or raises trust.
+- **Iframes.** The report and draft HTML load in `sandbox="allow-scripts"` frames, as in the pipelines HTML tab. The source PDF loads in a plain same-origin iframe, which the browser's PDF viewer needs and the CSP allows.
+
+### Deviations and backend findings
+
+- **Template switcher.** There is no re-render route for a finished run. While HITL 2 is pending, picking a template sets the template field of the HITL 2 edit and moves to the Review tab; "Save edits" then re-renders, which the run check below confirmed. For a finished run the other templates are disabled, and a "use for the next run" button copies the template to the composer.
+- **`result.template` in the detail response is the run's start template**, not the one the report was rendered with. After a HITL 2 template edit, `result.json` has `rendered.template = exam_solution` and `report.template = exam_solution`, but top-level `template` is still `short_verdict` (`hitl.py` `result["template"] = run.get("template")`), and `_result_view` passes that value on. The tab reads `rendered.template` from `result.json` (`deepReportTemplate`). The runs-list subtitle still shows the run template. The cleaner fix belongs in `deep_routes._result_view` or `hitl.py`.
+- **PDF demo needs an inline script.** No `examples/mock` script reads `/input/task.pdf`. The browser check used the "inline replay script" mode with `tfl_deep_agent.tests.hitl_scripts.pdf_script()`. The open point from the backend step still stands: an `examples/mock/ll_pdf_intake.json` would make it one click.
+- **A low per-task budget fails a mock run.** With `per_task_usd = 1.5` the PDF mock run ended `budget_exhausted` after 2 calls: the token estimate of the Opus main model's worst-case call does not fit. This is not a UI bug. The tab shows it as "the run ended without an accepted report: budget_exhausted".
+
+### Tests
+
+`ui_server/tests/test_deep_frontend.py` has 17 tests.
+- **Structure (5)**: the deep ids and tabs exist, the existing workspace is still there, no `.tab` / `.panel` in the deep markup, every `/api/deep/*` endpoint is referenced, the sent fields are a subset of `deep_routes.CREATE_KEYS`, the CSS mode toggles and trust classes exist, and the helper markers appear once.
+- **Pure helpers under node (11)**: file kind and limits, the override diff, the create body (mock / inline / live with and without confirm / file still reading), HITL 1 and HITL 2 edit diffs, the resume body rules (reject needs a comment, live needs confirm, allowed decisions), timeline rows from `progress.py`-shaped events, the tree and budget views fed with the **output of `deep_routes.fold_events`** (a contract test), the estimate text, evidence rows, and small helpers including `deepReportTemplate`.
+- **Serving (1)**: `server.Handler` serves the new `app.js` and `index.html`.
+
+### Verification on a separate server (port 8799, mock only)
+
+- **Server.** A scratch launcher started `ui_server.server` on port 8799. It redirected `RUNS_DIR`, `SETTINGS_PATH`, `deep_routes.DEEP_RUNS_DIR` / `SETTINGS_PATH` (a copy of `settings.example.json`) and `TFL_DEEP_RUNS_DIR` into the session scratchpad, with `ANTHROPIC_API_KEY` removed. The server was stopped afterwards; the user's TFL Lab was not touched.
+- **Scripted HTTP client.** It used the exact bodies the tab builds.
+  - `GET /settings`, `/mock-scripts` and `/estimate` (with `settings_override`).
+  - 400 for a mock run without a script, and for live without `confirm_spend`.
+  - A PDF run with an inline `pdf_script()` stopped at HITL 1. The source served as `application/pdf`. Reject without a comment returned 400; an edit of the transcription was accepted.
+  - HITL 2 delivered a draft (`verified`, cap 0.98, draft html served). An edit of the template was accepted, and the run ended `completed` / `submitted`.
+  - Tree `task` → intake, ir-builder; 10 tool calls (verified 4, well_formed 1, not_verified 5).
+- **Headless browser (Playwright).**
+  - A PDF dropped on the box via a `DragEvent` showed as a file chip. Inline mode then went to "run mock".
+  - At the HITL 1 card, the PDF iframe, IR, restatement and words rendered. Reject without a comment was refused in the browser; the transcription edit was highlighted and sent.
+  - At the HITL 2 card, picking `exam_solution` on the Report tab moved to Review with "Save edits (template)". The edit was sent, and the run finished with the report rendered as `exam_solution`.
+  - The evidence table showed `ev-ll-table` as basis. The budget bar read `$0.1509 / $5.00`.
+  - In the settings modal, a save reported "saved" and updated the composer budget; an invalid value showed the server's 400 text.
+  - Switching to Pipelines restored the old workspace, and its tabs still switched panels.
+  - The console had no errors besides `favicon.ico` 404 and the intentional 400.
+- **Fixes from the browser check**: the left pane overflowed horizontally (two-column field rows now use `minmax(0, 1fr)`); an empty `unknown_ids` printed a bare label; the header template was refreshed only after the next poll.
+
+### Test results
+
+| Command | Result |
+|---|---|
+| `node --check ui_server/static/app.js` | ok |
+| `pytest -q ui_server/tests/test_deep_frontend.py` | 17 passed |
+| `pytest -q ui_server/tests tfl_deep_agent/tests/test_network_guard.py` | 176 passed |
+
+### Open points
+
+- `result.template` in `GET /api/deep/runs/<id>` and the runs list should report the rendered template (see above).
+- There is no re-render route for a finished run's report with another template. The switcher offers the template only for a new run, or at HITL 2.
+- An `examples/mock` script with PDF intake would make the PDF demo one click.
+
+## P7 UI FIX (2026-11-08)
+
+Files: `ui_server/deep_routes.py`, `ui_server/static/app.js`, `ui_server/static/index.html` (one label), `tfl_deep_agent/hitl.py` (`_segment` order), `ui_server/tests/test_deep_routes.py`, `ui_server/tests/test_deep_frontend.py`, `tfl_deep_agent/tests/test_progress_segment.py` (new). All seven review findings were verified in the code and are real; all are fixed.
+
+- **Several actions in one HITL stop (major).** `_hitl_view` returns `pending.actions` (name, args, description, per-action `allowed_decisions`) and `action_count`. The stop's `allowed_decisions` is the intersection over the actions, minus `edit` when there is more than one action, matching `hitl.resume_value`'s rule. `action` / `args` are kept for the first action. `deepGenericCard` renders every action, shows a banner that Approve or Reject applies to all of them, allows editing only for a single action, and puts the `hitl.md` card in a drawer. `deepPendingActions` is a pure helper that falls back to the old single-action shape.
+- **A failed resume stays resumable (major).** `_settle_from_disk_locked` keeps `awaiting_human` whenever the agent's `run.json` is still `awaiting_human` with a pending stop, whatever the exit code. `resume_run` writes `running` before the agent runs, so a waiting record means the decision was never applied. For an rc other than 3, `error` holds the exit code and the stderr tail. `api_resume` records `resume_from` (the interrupt id) in `lab.json`, so the message can say "before applying the decision" when the stop is the same. A failed resume launch (rc None) also keeps the stop.
+- **Report template (minor).** `_result_view.template` is now `rendered.template`, then `report.template`, then the run template (`rendered_template()`). `run_template` carries the start template. `lab.json` stores `report_template` when a run completes, so the runs list shows it too. A new route, **`POST runs/<id>/render {template}`** (`api_render`), renders a finished run's accepted report (lab status `completed`, result `submitted`) with another template **as a view only**: `views/<t>.{md,html}`, served under `views/`. `result.*`, which the human approved, is never rewritten. It is pure code, with no model call. The renderer gets the evidence ledger, the result's budget summary plus the `run.json` records, and `rendered.human_review`. In the Report tab, the switcher is now live for such runs and shows a banner "a view in X"; the JSON and the evidence table stay those of `result.json`.
+- **Checkpointer before emitter (minor).** `_segment` opens the SQLite checkpointer before `open_emitter`. A failure now raises before a `segment_start` is written or listeners are attached; `run.json` is untouched by `_segment`, which is the same state as before P7.
+- **Live settings_override (minor).** For live runs, `_live_override_problems` refuses (400) any `budget.per_day_usd` / `per_task_usd` / `per_subagent_max_usd` above the saved value, and any override that turns off `hitl.formalization` / `hitl.report` while the saved settings have it on. Lowering limits and turning review points on are allowed. Changing these for real goes through `PUT /settings`, an explicit, persistent choice. Mock runs are unchanged.
+- **auto_approve on live (minor).** `api_create` refuses `auto_approve` together with `live` (400). The composer disables the checkbox in live mode, and `deepCreateBody` refuses auto-approve or a review point turned off in live mode before sending. The label says "mock only".
+- **One live deep run at a time (minor).** `_acquire_slot(run_id, live)` also waits for a single live slot (`MAX_CONCURRENT_LIVE_RUNS = 1`, which counts an adopted live orphan too). Mock runs keep the parallel gate (`TFL_LAB_MAX_DEEP_RUNS`). A queued live run is checked against the day budget again by its own CLI when it starts. Still open: a live CLI run started outside TFL Lab is not covered by this gate. Covering it would need cross-process reservations in the spend log.
+
+Tests added:
+- `test_hitl_view_shows_every_action_of_one_stop`
+- `test_a_resume_refused_by_the_cli_keeps_the_run_resumable` (also checks the stop survives a restore)
+- `test_live_override_may_only_lower_money_limits_and_keeps_review`
+- `test_live_runs_run_one_at_a_time`
+- `test_live_slot_counts_an_adopted_live_orphan`
+- `test_result_view_reports_the_rendered_template_and_render_route`
+- a render step at the end of the real mock PDF run
+- node tests for `deepCreateBody` on live runs and for `deepPendingActions`
+- `test_progress_segment.py`: a checkpointer failure leaves no open segment and never opens the emitter
+
+Browser check on a scratch server on port 8799 (mock only, scratchpad dirs, no API key; stopped afterwards):
+- a fake two-command `execute` stop showed both commands with only Approve and Reject;
+- on a finished mock run, picking `full_proof` loaded `views/full_proof.html` with the view banner;
+- the auto-approve box was disabled in live mode.
+
+| Command | Result |
+|---|---|
+| `pytest -q ui_server/tests tfl_deep_agent/tests/test_hitl.py test_e2e_mock.py test_network_guard.py test_progress_segment.py test_reports.py` | 274 passed |
+| `pytest -q -n 4 tfl_deep_agent/tests` | 1362 passed, 1 skipped, 1 xfailed |
+
+## P7 UI — GATE (2026-11-08)
+
+No code changes in this step. Python is `.venv/Scripts/python`; no API key, mock only.
+
+- Full suite, `pytest -q -n 6`: 5053 passed, 70 skipped, 3 xfailed, 35 failed. None of the failures are in
+  tfl_deep_agent or ui_server. All 35 are Docker-Lean compile tests in agent_system / cfl_system / dcfl_system,
+  failing on the daemon flake (`OCI runtime create/start failed`, `read init-p: connection reset by peer`,
+  `runc ... exit status 139`), the same class as at the P3 and P4-P6 gates. A serial rerun of the 35: 23 passed,
+  12 failed again with the same daemon errors.
+- P7 files run serially (`ui_server/tests`, `test_progress_segment.py`, `test_hitl.py`, `test_network_guard.py`):
+  223 passed, 0 skipped (node v22 present, so the frontend node tests ran).
+- Acceptance:
+  - endpoint tests on a fake agent: met (`ui_server/tests/test_deep_routes.py`, the fake-agent and HTTP tests).
+  - a mock PDF run through both HITL points: met
+    (`test_deep_routes.py::test_real_mock_pdf_run_through_both_hitl_points`: PDF -> HITL 1 edit -> HITL 2
+    approve -> `completed` / `submitted`, segment rcs `[3, 3, 0]`, day spend 0).

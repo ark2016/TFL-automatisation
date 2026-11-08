@@ -61,6 +61,7 @@ import datetime as _dt
 import json
 import re
 import shutil
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -925,7 +926,17 @@ def save_run(run_dir: str | Path, run: Mapping[str, Any]) -> Path:
     data = {**dict(run), "updated_at": _now()}
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
-    tmp.replace(p)
+    # Windows: replacing a file another process has open for reading (TFL Lab
+    # polling the run, an editor, an antivirus scan) fails with a transient
+    # sharing violation (WinError 5 / 32); retry briefly instead of failing the run
+    for attempt in range(40):
+        try:
+            tmp.replace(p)
+            break
+        except PermissionError:
+            if attempt == 39:
+                raise
+            time.sleep(0.05)
     return p
 
 
@@ -1223,7 +1234,12 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
         save_run(d, run)
         raise
     evidence = EvidenceLedger.open(d, run_id=run["run_id"])
+    from .progress import open_emitter  # progress.jsonl for the TFL Lab live view (never raises)
+
+    # the checkpointer first: if it cannot be opened, the segment raises before the emitter
+    # writes `segment_start` and attaches its listeners (both are closed only in the finally below)
     saver, conn = _open_checkpointer(d)
+    progress = open_emitter(d, run, segment, budget=budget, evidence=evidence)
     config = {"configurable": {"thread_id": run["thread_id"]}}
     error: str | None = None
     pending: PendingInfo | None = None
@@ -1252,6 +1268,7 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
             decision = Decision("approve", source="auto") if run.get("auto_approve") else None
             if decision is None:
                 _write_awaiting(d, run, info, graph, config, budget, evidence)
+                progress.hitl_awaiting(info, run)
                 decision = _ask(dialog, info)
                 if decision is None:
                     pending = info
@@ -1262,6 +1279,7 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
             run["pending"] = None
             run["status"] = "running"
             save_run(d, run)
+            progress.hitl_decision(review)
             value = Command(resume={intr.id: resume})
     except Exception as exc:  # noqa: BLE001 - a build / checkpoint failure ends the segment as an error
         error = f"{type(exc).__name__}: {exc}"
@@ -1279,6 +1297,7 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
             run["status"] = STATUS_AWAITING
             segment["status"] = STATUS_AWAITING
             save_run(d, run)
+            progress.segment_end(STATUS_AWAITING)
             return RunOutcome(d, run["run_id"], STATUS_AWAITING, EXIT_AWAITING, pending=pending,
                               result=run.get("draft"), paths={"run": d / RUN_FILE, "card": d / CARD_FILE})
         state: dict[str, Any] = {"messages": []}
@@ -1297,9 +1316,11 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
         segment["status"] = result["status"]
         run.pop("draft", None)
         save_run(d, run)
+        progress.done(result, error)
         code = EXIT_SUBMITTED if result["status"] == "submitted" else EXIT_NO_REPORT
         return RunOutcome(d, run["run_id"], result["status"], code, result=result, paths=paths)
     finally:
+        progress.detach()
         conn.close()
 
 

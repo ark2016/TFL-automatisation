@@ -849,6 +849,10 @@
       <span class="brand-mark">TFL Lab</span>
       <span class="brand-tag">agent pipeline runner · local</span>
     </div>
+    <nav class="mode-switch" id="mode-switch" aria-label="workspace">
+      <button class="mode-btn active" id="mode-pipelines" data-mode="pipelines">Pipelines</button>
+      <button class="mode-btn" id="mode-deep" data-mode="deep">Deep Agent</button>
+    </nav>
     <div class="topbar-spacer"></div>
     <div class="topbar-meta">
       <span>run: <kbd>⌘</kbd> <kbd>↵</kbd></span>
@@ -857,7 +861,7 @@
     <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">⚙</button>
   </header>
 
-  <main class="workspace">
+  <main class="workspace" id="workspace">
     <!-- LEFT: project + examples -->
     <aside class="pane sidebar">
       <div class="proj-switch" id="proj-switch">
@@ -995,6 +999,172 @@
       </div>
     </section>
   </main>
+
+  <!-- DEEP AGENT: tfl_deep_agent through /api/deep/* (ui_server/deep_routes.py) -->
+  <main class="deep-view" id="deep-view">
+    <!-- LEFT: task input, run controls, deep runs -->
+    <aside class="pane deep-compose">
+      <div class="pane-header">
+        <span>task</span>
+        <span class="dc-meta" id="deep-input-meta">text</span>
+      </div>
+      <div class="deep-compose-body">
+        <div class="deep-drop" id="deep-drop">
+          <textarea class="deep-text" id="deep-text" spellcheck="false"
+            placeholder="Paste the task text here, or drop a PDF / PNG / JPG / WebP file onto this box."></textarea>
+          <div class="deep-file" id="deep-file">
+            <span class="df-kind" id="deep-file-kind">PDF</span>
+            <span class="df-name" id="deep-file-name">—</span>
+            <span class="df-size" id="deep-file-size"></span>
+            <button class="btn btn-sm" id="deep-file-clear" title="remove the file, back to text">✕</button>
+          </div>
+          <div class="deep-drop-hint">
+            drop a file · paste an image ·
+            <label class="link" for="deep-file-input">choose a file</label>
+            <input type="file" id="deep-file-input" class="visually-hidden"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,application/pdf,image/png,image/jpeg,image/webp,text/plain">
+          </div>
+        </div>
+        <div class="deep-form">
+          <div class="field-row">
+            <div class="field">
+              <label for="deep-template">template</label>
+              <select id="deep-template"><option value="">agent picks</option></select>
+            </div>
+            <div class="field">
+              <label for="deep-main-model">main model</label>
+              <select id="deep-main-model"></select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="deep-budget">budget per task, $</label>
+              <input type="number" id="deep-budget" min="0.01" step="0.25">
+            </div>
+            <div class="field">
+              <span class="lbl">human review</span>
+              <label class="check"><input type="checkbox" id="deep-hitl1" checked><span>transcription + IR</span></label>
+              <label class="check"><input type="checkbox" id="deep-hitl2" checked><span>report</span></label>
+            </div>
+          </div>
+          <div class="field">
+            <label for="deep-mode">mode</label>
+            <select id="deep-mode"></select>
+          </div>
+          <textarea class="deep-inline" id="deep-mock-inline" spellcheck="false"
+            placeholder='inline replay script: {"models": {"main": [...], "intake": [...]}}'></textarea>
+          <label class="check"><input type="checkbox" id="deep-auto-approve"><span>auto-approve both review points (mock only; no human review)</span></label>
+          <div class="deep-estimate" id="deep-estimate">estimate —</div>
+          <div class="deep-run-row">
+            <div class="live-group" id="deep-live-group">
+              <label class="check danger">
+                <input type="checkbox" id="deep-confirm">
+                <span>I confirm API spend</span>
+              </label>
+            </div>
+            <button class="btn btn-primary" id="deep-run">run mock</button>
+          </div>
+          <div class="deep-msg" id="deep-msg"></div>
+        </div>
+      </div>
+      <div class="side-section-title">
+        <span>deep runs</span>
+        <span class="side-count" id="deep-run-count">0</span>
+      </div>
+      <div class="run-list" id="deep-run-list">
+        <div class="example-empty">no deep runs yet</div>
+      </div>
+      <div class="sidebar-footer">
+        <button class="new-btn" id="deep-settings-open">⚙ deep-agent settings</button>
+      </div>
+    </aside>
+
+    <!-- CENTER: run header, plan, timeline -->
+    <section class="pane deep-center">
+      <div class="run-head" id="deep-head">
+        <span class="pill" id="dh-status">—</span>
+        <span class="rh-id" id="dh-id">—</span>
+        <span class="dh-mode" id="dh-mode">—</span>
+        <span id="dh-template">—</span>
+        <span class="rh-sep">·</span>
+        <span>verdict <span class="rh-verdict" id="dh-verdict">—</span></span>
+        <span id="dh-trust"></span>
+        <span class="rh-sep">·</span>
+        <span title="spent by this run (mock: token estimate, nothing billed)">cost <span class="rh-cost" id="dh-cost">$0.0000</span></span>
+        <span id="dh-elapsed"></span>
+        <span class="rh-actions">
+          <button class="btn btn-sm cancel-btn" id="deep-cancel" style="display:none">cancel run</button>
+        </span>
+      </div>
+      <div class="deep-plan-wrap">
+        <div class="pane-header"><span>plan</span><span class="dc-meta" id="deep-plan-meta"></span></div>
+        <div class="deep-plan" id="deep-plan"><div class="progress-empty">no plan yet</div></div>
+      </div>
+      <div class="pane-header">
+        <span>timeline</span>
+        <span class="deep-filters" id="deep-filters">
+          <button class="dfilter active" data-filter="all">all</button>
+          <button class="dfilter" data-filter="tools">tools</button>
+          <button class="dfilter" data-filter="agents">agents</button>
+          <button class="dfilter" data-filter="hitl">review</button>
+        </span>
+      </div>
+      <div class="deep-timeline" id="deep-timeline">
+        <div class="progress-empty">open a deep run, or start one on the left</div>
+      </div>
+    </section>
+
+    <!-- RIGHT: review (HITL), subagents, report, log -->
+    <section class="pane deep-right">
+      <div class="tabs">
+        <button class="dtab active" data-dtab="review">Review <span class="badge" id="deep-review-badge">—</span></button>
+        <button class="dtab" data-dtab="agents">Agents <span class="badge" id="deep-agents-badge">0</span></button>
+        <button class="dtab" data-dtab="report">Report</button>
+        <button class="dtab" data-dtab="log">Log</button>
+        <div class="tabs-right">
+          <button class="btn btn-sm" id="deep-widen" title="widen this pane (side-by-side review)">⤢</button>
+        </div>
+      </div>
+      <div class="tab-panels">
+        <div class="dpanel active" data-dpanel="review"><div class="deep-scroll" id="deep-review"></div></div>
+        <div class="dpanel" data-dpanel="agents"><div class="deep-scroll" id="deep-agents"></div></div>
+        <div class="dpanel" data-dpanel="report"><div class="deep-scroll" id="deep-report"></div></div>
+        <div class="dpanel" data-dpanel="log"><pre id="deep-log" class="empty">—</pre></div>
+      </div>
+    </section>
+
+    <!-- BOTTOM: budget bar (task and day) -->
+    <footer class="deep-budget" id="deep-budget-bar">
+      <div class="bbar">
+        <span class="bbar-label">task</span>
+        <div class="bbar-track" id="deep-bb-task-track"><div class="bbar-reserve" id="deep-bb-task-reserve"></div><div class="bbar-fill" id="deep-bb-task-fill"></div></div>
+        <span class="bbar-text" id="deep-bb-task-text">—</span>
+      </div>
+      <div class="bbar">
+        <span class="bbar-label">today</span>
+        <div class="bbar-track"><div class="bbar-fill" id="deep-bb-day-fill"></div></div>
+        <span class="bbar-text" id="deep-bb-day-text">—</span>
+      </div>
+      <span class="bbar-note" id="deep-bb-note"></span>
+    </footer>
+  </main>
+
+  <div class="modal-back" id="deep-settings-back">
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="deep-settings-title">
+      <div class="modal-head">
+        <span id="deep-settings-title">deep-agent settings</span>
+        <button class="icon-btn" id="deep-settings-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="deep-settings-body">
+        <span class="hint">loading…</span>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary" id="deep-settings-save">save</button>
+        <button class="btn" id="deep-settings-cancel">close</button>
+        <span class="set-status" id="deep-settings-status"></span>
+      </div>
+    </div>
+  </div>
 
   <div class="modal-back" id="settings-back">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
