@@ -1,0 +1,140 @@
+{
+ "description": "tfl-eval deep replay, reg-13: L(S -> aSb | ab) = {a^n b^n | n >= 1} is not regular. ir-builder validates the IR, main checks the family a^n with separating suffix b^n (nerode_probe), then submits.",
+ "task": "S -> aSb | ab",
+ "template": "short_verdict",
+ "defs": {
+  "ir": {
+   "task_type": "classify_and_prove",
+   "source_text": "S -> aSb | ab",
+   "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+     "a",
+     "b"
+    ],
+    "nonterminals": [
+     "S"
+    ],
+    "start": "S",
+    "rules": [
+     {
+      "lhs": "S",
+      "rhs": [
+       "a",
+       "S",
+       "b"
+      ]
+     },
+     {
+      "lhs": "S",
+      "rhs": [
+       "a",
+       "b"
+      ]
+     }
+    ]
+   }
+  }
+ },
+ "models": {
+  "main": [
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-ir-builder",
+      "args": {
+       "subagent_type": "ir-builder",
+       "description": "Класс reg. Построй IR для задачи: «S -> aSb | ab». Верни IR, fingerprint и пересказ."
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "nerode_probe",
+      "id": "ev-nerode",
+      "args": {
+       "cls": "reg",
+       "ir": {
+        "$def": "ir"
+       },
+       "family": {
+        "prefix": "a^n",
+        "suffix": "b^n",
+        "values": [
+         1,
+         2,
+         3,
+         4,
+         5,
+         6
+        ]
+       }
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "submit_report",
+      "id": "call-report",
+      "args": {
+       "verdict": "not regular",
+       "answer": "no",
+       "language_class": "reg",
+       "method": "Майхилл–Нероуд: бесконечное семейство попарно различимых префиксов a^n",
+       "summary": "Грамматика порождает {a^n b^n | n >= 1}; префиксы a^i и a^j при i != j различаются суффиксом b^i, классов Нероуда бесконечно много, язык нерегулярен.",
+       "template": "short_verdict",
+       "steps": [
+        {
+         "claim": "L(S → aSb | ab) = {a^n b^n | n ≥ 1}.",
+         "justification": "Индукция по выводу: каждый шаг S → aSb добавляет по одной a и b, вывод заканчивается правилом S → ab.",
+         "evidence_ids": []
+        },
+        {
+         "claim": "Для i < j суффикс b^i различает префиксы a^i и a^j: a^i b^i ∈ L, a^j b^i ∉ L.",
+         "justification": "Проверено оракулом IR на значениях 1..6.",
+         "evidence_ids": [
+          "ev-nerode"
+         ]
+        },
+        {
+         "claim": "Префиксы a^n попарно неэквивалентны по Нероуду, индекс бесконечен, L нерегулярен.",
+         "justification": "Теорема Майхилла–Нероуда.",
+         "evidence_ids": [
+          "ev-nerode"
+         ]
+        }
+       ],
+       "evidence_ids": [
+        "ev-nerode"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "ir_builder": [
+   {
+    "tool_calls": [
+     {
+      "name": "validate_ir",
+      "id": "ib-validate",
+      "args": {
+       "cls": "reg",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "content": "Класс reg, task_type classify_and_prove, language_spec kind grammar: S → aSb | ab. validate_ir: valid. В L: ab, aabb. Не в L: ε, a, abab. Неуверенные места: нет."
+   }
+  ]
+ }
+}

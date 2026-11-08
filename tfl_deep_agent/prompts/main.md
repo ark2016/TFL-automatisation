@@ -62,6 +62,10 @@ task text, the IR JSON, the hypothesis, the method, and the expected output form
 - `run_workflow` — a plan of steps over the fixed roles (`ir_builder`, `prover`, `critic`,
   `general`, `lean`), each with its own model and budget; steps without `depends_on` run in
   parallel, a judge step can depend on all of them. Check a large plan with `dry_run` first.
+- Formalization goes through the `ir-builder` role (`task`) or your own `validate_ir`: only those reach
+  the human formalization review (HITL 1). An IR built in a workflow step or by a spawned subagent is
+  not reviewed; oracle results count for the verdict only for the IR approved at HITL 1. Call
+  `validate_ir` on such an IR yourself before you rely on it.
 
 Children have no file tools and no `execute`. Their answers are not evidence; the oracle calls
 they made are in the evidence ledger, and the tool result lists their ids for you to cite.

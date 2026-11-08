@@ -2,11 +2,23 @@
 pipelines and report accuracy / confidence calibration.
 
     tfl-eval --systems cfl,ll [--live] [--ids cfl-01,cfl-02] [--out DIR]
+    tfl-eval --systems deep [--ids reg-04,ll-17]      # tfl_deep_agent, mock replays
 
 Without `--live`, each task runs through its pipeline's `MockRunner` when the
 manifest names an existing mock fixture (`mock_task`); otherwise it is
 reported as `skipped` rather than guessed at (TODO.md §7 / root CLAUDE.md:
 "Никаких --live и вызовов Anthropic API" unless explicitly asked for).
+
+`--systems deep` (opt-in, not in the default set) runs `tfl_deep_agent` on
+every selected manifest entry, whatever its class: the agent gets only the
+entry's `source_text`, every HITL stop is auto-approved, and the verdict is the
+policy token from its `result.json` (`runners.extract_deep`). Mock mode uses
+the replay `tfl_deep_agent/examples/mock/eval/<id>.json`; entries without one
+are skipped. Run directories go to `<out>/deep_runs/<id>/` (`<id>-2`, ... when
+that directory is already used, e.g. a second eval with the same `--out`).
+`--live` with deep entries is refused when their worst case
+(min(entries x per_task_usd, per_day_usd)) is above `--deep-max-usd`
+(default $1.00, the per-session budget of root CLAUDE.md).
 
 Metrics implemented in `tfl_eval.metrics`: accuracy overall / per system / on
 trap tasks, a Brier score for confidence calibration, the inconclusive rate,
@@ -26,12 +38,20 @@ from typing import Any
 
 from tfl_eval import metrics
 from tfl_eval.runners import (
+    ALL_SYSTEMS,
+    DEEP_SYSTEM,
     REPO_ROOT,
     SYSTEMS,
+    DeepAdapterError,
+    deep_mock_script,
+    deep_task_text,
     extract,
+    extract_deep,
     has_mocks,
+    load_deep_settings,
     make_live_runner,
     make_mock_runner,
+    run_deep,
     run_pipeline,
     set_live_model_env,
     validate,
@@ -81,6 +101,12 @@ def _usage_delta(after: dict | None, before: dict | None) -> dict | None:
         return a
 
     return _sub(after, before)
+
+
+_API_KEY_ENV = "ANTHROPIC_API_KEY"
+
+# Default cap for `--live --systems deep` (root CLAUDE.md: "order of $1 per session").
+DEFAULT_DEEP_MAX_USD = 1.00
 
 
 def _run_entry(entry: dict, live: bool, live_runner_cache: dict[str, Any]) -> dict:
@@ -159,6 +185,109 @@ def _run_entry(entry: dict, live: bool, live_runner_cache: dict[str, Any]) -> di
         usage=_usage_delta(result.get("usage"), usage_before),
         elapsed_s=elapsed,
         correct=correct,
+        k_correct=k_correct,
+    )
+    return record
+
+
+def _fresh_run_dir(runs_dir: Path, entry_id: str) -> Path:
+    """`<runs_dir>/<entry_id>`, or `<entry_id>-2`, `-3`, ... when that path is
+    already taken: `hitl.start_run` refuses a directory that holds a run, so a
+    second eval into the same `--out` must not reuse the first one's dirs."""
+    candidate = runs_dir / entry_id
+    n = 2
+    while candidate.exists():
+        candidate = runs_dir / f"{entry_id}-{n}"
+        n += 1
+    return candidate
+
+
+def deep_live_worst_case_usd(n_entries: int, settings: Any) -> tuple[float, float, float]:
+    """(worst case, per_task_usd, per_day_usd) of a live deep eval over
+    *n_entries*: each task may spend up to its `per_task_usd`, and all of them
+    together at most what the day allows (`per_day_usd`)."""
+    budget = settings.budget
+    per_task = float(budget.per_task_usd)
+    per_day = float(budget.per_day_usd)
+    return min(n_entries * per_task, per_day), per_task, per_day
+
+
+def _run_deep_entry(entry: dict, live: bool, runs_dir: Path, settings: Any = None) -> dict:
+    """Run one manifest entry through `tfl_deep_agent` (never raises).
+
+    The record has `system: "deep"` and the entry's class in `task_system`;
+    scoring is the same as for the pipelines (verdict and, when the manifest
+    names one, k). A report for another class than the entry's
+    (`class_mismatch`) is scored wrong."""
+    record: dict[str, Any] = {
+        "id": entry["id"],
+        "system": DEEP_SYSTEM,
+        "task_system": entry["system"],
+        "trap": bool(entry.get("trap", False)),
+        "expected": entry.get("expected"),
+        "source": entry.get("source"),
+        "path": entry["path"],
+    }
+
+    try:
+        ir = _load_ir(entry)
+        task_text = deep_task_text(ir)
+    except (OSError, json.JSONDecodeError) as exc:
+        record.update(status="error", error=f"could not load IR: {exc}")
+        return record
+    except DeepAdapterError as exc:
+        record.update(status="error", error=str(exc))
+        return record
+
+    script = None
+    if not live:
+        script = deep_mock_script(entry["id"])
+        if script is None:
+            record.update(status="skipped", reason="no --live and no deep mock script for this task")
+            return record
+
+    run_dir = _fresh_run_dir(runs_dir, entry["id"])
+    record["run_dir"] = str(run_dir)
+    start = time.perf_counter()
+    try:
+        result = run_deep(task_text, run_dir, mock_script=script, live=live, settings=settings)
+    except Exception as exc:  # noqa: BLE001 - report, don't crash the whole run
+        record.update(status="error", error=f"{type(exc).__name__}: {exc}",
+                      elapsed_s=time.perf_counter() - start)
+        return record
+    elapsed = time.perf_counter() - start
+
+    extracted = extract_deep(result, entry["system"])
+    expected = entry.get("expected") or {}
+    verdict = extracted["verdict"]
+    verdict_correct = (verdict is not None and expected.get("verdict") is not None
+                       and verdict == expected["verdict"]
+                       and not extracted["class_mismatch"])
+    expected_k = expected.get("k")
+    k_correct = expected_k is None or extracted["k"] == expected_k
+
+    # Only a live run spends money; a mock run's budget numbers are token
+    # estimates of the scripted replies, so they are not reported as usage.
+    usage = None
+    if live and isinstance(extracted["budget_spent_usd"], (int, float)):
+        usage = {"calls": (result.get("budget") or {}).get("calls", 0) or 0,
+                 "estimated_cost_usd": extracted["budget_spent_usd"]}
+
+    record.update(
+        status="ran",
+        verdict=verdict,
+        confidence=extracted["confidence"],
+        k=extracted["k"],
+        basis_trust=extracted["basis_trust"],
+        verdict_gate=extracted["verdict_gate"],
+        deep_status=extracted["deep_status"],
+        language_class=extracted["language_class"],
+        class_mismatch=extracted["class_mismatch"],
+        trust=extracted["trust"],
+        human_review=extracted["human_review"],
+        usage=usage,
+        elapsed_s=elapsed,
+        correct=verdict_correct and k_correct,
         k_correct=k_correct,
     )
     return record
@@ -254,13 +383,14 @@ def _render_markdown(records: list[dict], report: dict, meta: dict) -> str:
     lines += ["", "## Tasks", "", "| id | system | trap | status | verdict | expected | correct | confidence | k | time (s) |",
               "|---|---|---|---|---|---|---|---|---|---|"]
     for r in records:
+        system_s = r["system"] if not r.get("task_system") else f"{r['system']} ({r['task_system']})"
         expected_v = (r.get("expected") or {}).get("verdict")
         conf = r.get("confidence")
         conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else ""
         elapsed = r.get("elapsed_s")
         elapsed_s = f"{elapsed:.2f}" if isinstance(elapsed, (int, float)) else ""
         lines.append(
-            f"| {r['id']} | {r['system']} | {'yes' if r.get('trap') else ''} | {r['status']} | "
+            f"| {r['id']} | {system_s} | {'yes' if r.get('trap') else ''} | {r['status']} | "
             f"{r.get('verdict', '')} | {expected_v} | {r.get('correct', '')} | {conf_s} | "
             f"{r.get('k', '')} | {elapsed_s} |"
         )
@@ -274,7 +404,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--systems", default=",".join(SYSTEMS),
-        help=f"Comma-separated subset of {SYSTEMS} (default: all).",
+        help=(f"Comma-separated subset of {ALL_SYSTEMS} (default: {','.join(SYSTEMS)}). "
+              f"'{DEEP_SYSTEM}' runs tfl_deep_agent on every selected entry of any class."),
     )
     parser.add_argument("--ids", default=None, help="Comma-separated eval-set ids to restrict to.")
     parser.add_argument("--live", action="store_true", help="Call the real pipelines (Anthropic API).")
@@ -283,6 +414,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Explicit TFL_MODEL_OVERRIDE for --live (default: claude-haiku-5-5, see root CLAUDE.md).",
     )
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST), help="Path to manifest.json.")
+    parser.add_argument(
+        "--deep-settings", default=None, metavar="JSON",
+        help="tfl_deep_agent settings file for --systems deep (default: tfl_deep_agent/settings.json, "
+             "else the built-in defaults); its budget limits apply to every deep task.",
+    )
+    parser.add_argument(
+        "--deep-max-usd", type=float, default=DEFAULT_DEEP_MAX_USD, metavar="USD",
+        help=(f"With --live and --systems deep: refuse to start when the deep entries' worst case "
+              f"(min(entries x per_task_usd, per_day_usd)) is above USD (default: {DEFAULT_DEEP_MAX_USD:.2f}, "
+              f"the per-session budget of root CLAUDE.md). Narrow with --ids or lower per_task_usd "
+              f"in --deep-settings."),
+    )
     parser.add_argument(
         "--out", default=None,
         help="Output directory (default: .tfl_lab_runs/evals/<timestamp>/).",
@@ -295,8 +438,8 @@ def main(argv: list[str] | None = None) -> int:
 
     systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     for s in systems:
-        if s not in SYSTEMS:
-            print(f"Unknown system: {s!r} (expected one of {SYSTEMS})", file=sys.stderr)
+        if s not in ALL_SYSTEMS:
+            print(f"Unknown system: {s!r} (expected one of {ALL_SYSTEMS})", file=sys.stderr)
             return 2
 
     ids = None
@@ -309,22 +452,57 @@ def main(argv: list[str] | None = None) -> int:
     manifest = load_manifest(manifest_path)
 
     entries = [e for e in manifest if e["system"] in systems]
+    deep_entries = list(manifest) if DEEP_SYSTEM in systems else []
     if ids is not None:
         entries = [e for e in entries if e["id"] in ids]
+        deep_entries = [e for e in deep_entries if e["id"] in ids]
+
+    deep_settings = None
+    if deep_entries or args.deep_settings:
+        if DEEP_SYSTEM not in systems:
+            print("--deep-settings goes with --systems deep", file=sys.stderr)
+            return 2
+        try:
+            deep_settings = load_deep_settings(args.deep_settings)
+        except DeepAdapterError as exc:
+            print(f"tfl-eval: {exc}", file=sys.stderr)
+            return 2
+
+    if args.live and deep_entries:
+        worst, per_task, per_day = deep_live_worst_case_usd(len(deep_entries), deep_settings)
+        print(f"tfl-eval: live deep run over {len(deep_entries)} entries: worst case ${worst:.2f} "
+              f"(per_task_usd {per_task:.2f}, per_day_usd {per_day:.2f}), cap --deep-max-usd "
+              f"${args.deep_max_usd:.2f}", file=sys.stderr)
+        if worst > args.deep_max_usd:
+            print("tfl-eval: refused: the worst case is above --deep-max-usd. Narrow the set with --ids, "
+                  "lower budget.per_task_usd in --deep-settings, or raise --deep-max-usd to the budget "
+                  "agreed for this session.", file=sys.stderr)
+            return 2
 
     if args.live:
         set_live_model_env(args.model, os.environ)
-
-    live_runner_cache: dict[str, Any] = {}
-    records = [_run_entry(entry, args.live, live_runner_cache) for entry in entries]
-
-    report = metrics.summarize(records)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = Path(args.out) if args.out else REPO_ROOT / ".tfl_lab_runs" / "evals" / timestamp
     if not out_dir.is_absolute():
         out_dir = REPO_ROOT / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # The pipelines' live runners load `.env` into os.environ (agent_system's
+    # `_load_env`, the cfl/ll orchestrators' `load_dotenv`); `tfl-deep` never
+    # reads `.env`, so the deep entries get the key as it was before them.
+    key_before = os.environ.get(_API_KEY_ENV)
+    live_runner_cache: dict[str, Any] = {}
+    records = [_run_entry(entry, args.live, live_runner_cache) for entry in entries]
+    if deep_entries:
+        if key_before is None:
+            os.environ.pop(_API_KEY_ENV, None)
+        else:
+            os.environ[_API_KEY_ENV] = key_before
+    records += [_run_deep_entry(entry, args.live, out_dir / "deep_runs", deep_settings)
+                for entry in deep_entries]
+
+    report = metrics.summarize(records)
 
     meta = {
         "generated_at": timestamp,
@@ -337,6 +515,11 @@ def main(argv: list[str] | None = None) -> int:
 
     usage_summary = _aggregate_usage(records)
     report_json = {"meta": meta, "metrics": report, "usage": usage_summary, "records": records}
+    deep_records = [r for r in records if r["system"] == DEEP_SYSTEM]
+    if deep_records:
+        # the deep agent's metrics per task class (its records relabelled by class)
+        report_json["deep_by_class"] = metrics.summarize(
+            [{**r, "system": r["task_system"]} for r in deep_records])["by_system"]
     (out_dir / "report.json").write_text(
         json.dumps(report_json, ensure_ascii=False, indent=2, default=str), encoding="utf-8",
     )

@@ -1,0 +1,244 @@
+{
+ "description": "tfl-eval deep replay, dcfl-04 (trap): {a^n b^n c^m | n, m >= 0} is a DCFL. ir-builder validates the IR, main checks a hand-written DPDA against the task (dpda_vs_ir, R2'), then submits. The DPDA is dcfl_system/tests/test_dpda.py::SAFE_ANBNCM_DPDA.",
+ "task": "{a^n b^n c^m | n, m >= 0}",
+ "template": "short_verdict",
+ "defs": {
+  "ir": {
+   "task_id": "dcfl-04",
+   "source_text": "{a^n b^n c^m | n, m >= 0}",
+   "input_format": "set_builder",
+   "task_type": "classify_and_prove_dcfl",
+   "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{a^n b^n c^m | n, m >= 0}",
+    "variables": [],
+    "constraints": []
+   },
+   "alphabet": [
+    "a",
+    "b",
+    "c"
+   ]
+  },
+  "dpda": {
+   "states": [
+    "q0",
+    "q_a",
+    "q_b_mid",
+    "q_b",
+    "q_c",
+    "q_accept"
+   ],
+   "start": "q0",
+   "accept_states": [
+    "q_accept"
+   ],
+   "accept_mode": "final_state",
+   "stack_alphabet": [
+    "Z0",
+    "A1",
+    "A"
+   ],
+   "initial_stack": [
+    "Z0"
+   ],
+   "transitions": [
+    {
+     "from": "q0",
+     "read": "a",
+     "top": "Z0",
+     "to": "q_a",
+     "push": [
+      "A1",
+      "Z0"
+     ]
+    },
+    {
+     "from": "q0",
+     "read": "c",
+     "top": "Z0",
+     "to": "q_c",
+     "push": [
+      "Z0"
+     ]
+    },
+    {
+     "from": "q0",
+     "read": null,
+     "top": "Z0",
+     "to": "q_accept",
+     "push": [
+      "Z0"
+     ]
+    },
+    {
+     "from": "q_a",
+     "read": "a",
+     "top": "A1",
+     "to": "q_a",
+     "push": [
+      "A",
+      "A1"
+     ]
+    },
+    {
+     "from": "q_a",
+     "read": "a",
+     "top": "A",
+     "to": "q_a",
+     "push": [
+      "A",
+      "A"
+     ]
+    },
+    {
+     "from": "q_a",
+     "read": "b",
+     "top": "A1",
+     "to": "q_b",
+     "push": [
+      "Z0"
+     ]
+    },
+    {
+     "from": "q_a",
+     "read": "b",
+     "top": "A",
+     "to": "q_b_mid",
+     "push": []
+    },
+    {
+     "from": "q_b_mid",
+     "read": "b",
+     "top": "A",
+     "to": "q_b_mid",
+     "push": []
+    },
+    {
+     "from": "q_b_mid",
+     "read": "b",
+     "top": "A1",
+     "to": "q_b",
+     "push": [
+      "Z0"
+     ]
+    },
+    {
+     "from": "q_b",
+     "read": "c",
+     "top": "Z0",
+     "to": "q_c",
+     "push": [
+      "Z0"
+     ]
+    },
+    {
+     "from": "q_b",
+     "read": null,
+     "top": "Z0",
+     "to": "q_accept",
+     "push": [
+      "Z0"
+     ]
+    },
+    {
+     "from": "q_c",
+     "read": "c",
+     "top": "Z0",
+     "to": "q_c",
+     "push": [
+      "Z0"
+     ]
+    },
+    {
+     "from": "q_c",
+     "read": null,
+     "top": "Z0",
+     "to": "q_accept",
+     "push": [
+      "Z0"
+     ]
+    }
+   ]
+  }
+ },
+ "models": {
+  "main": [
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-ir-builder",
+      "args": {
+       "subagent_type": "ir-builder",
+       "description": "Класс dcfl. Построй IR для задачи: «{a^n b^n c^m | n, m >= 0}». Верни IR, fingerprint и пересказ."
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "dpda_vs_ir",
+      "id": "ev-dpda-vs-ir",
+      "args": {
+       "dpda": {
+        "$def": "dpda"
+       },
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "submit_report",
+      "id": "call-report",
+      "args": {
+       "verdict": "DCFL",
+       "answer": "yes",
+       "language_class": "dcfl",
+       "method": "построение ДМПА (R2')",
+       "summary": "ДМПА считает a в стеке, снимает их по b и затем читает любое число c; значит язык детерминированный КС.",
+       "template": "short_verdict",
+       "steps": [
+        {
+         "claim": "ДМПА с допуском по заключительному состоянию распознаёт {a^n b^n c^m | n, m >= 0}.",
+         "justification": "Детерминированность и сверка с языком задачи (dpda_vs_ir).",
+         "evidence_ids": [
+          "ev-dpda-vs-ir"
+         ]
+        }
+       ],
+       "evidence_ids": [
+        "ev-dpda-vs-ir"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "ir_builder": [
+   {
+    "tool_calls": [
+     {
+      "name": "validate_ir",
+      "id": "ib-validate",
+      "args": {
+       "cls": "dcfl",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "content": "Класс dcfl, task_type classify_and_prove_dcfl, language_spec kind set_builder: {a^n b^n c^m | n, m >= 0}. validate_ir: valid. В L: ε, c, ab, abcc, aabb. Не в L: b, a, abb, ba. Неуверенные места: нет."
+   }
+  ]
+ }
+}

@@ -1,0 +1,120 @@
+{
+ "description": "tfl-eval deep replay, cfl-04: the language of S -> aSa | bSb | eps is context-free. ir-builder validates the IR, main checks R2-CFG (input_grammar_cfg), then submits.",
+ "task": "S -> aSa | bSb | eps  ({w w^R | w in {a,b}*})",
+ "template": "short_verdict",
+ "defs": {
+  "ir": {
+   "task_type": "classify_and_prove_cfl",
+   "source_text": "S -> aSa | bSb | eps  ({w w^R | w in {a,b}*})",
+   "language_spec": {
+    "kind": "grammar",
+    "terminals": [
+     "a",
+     "b"
+    ],
+    "nonterminals": [
+     "S"
+    ],
+    "start": "S",
+    "rules": [
+     {
+      "lhs": "S",
+      "rhs": [
+       "a",
+       "S",
+       "a"
+      ]
+     },
+     {
+      "lhs": "S",
+      "rhs": [
+       "b",
+       "S",
+       "b"
+      ]
+     },
+     {
+      "lhs": "S",
+      "rhs": []
+     }
+    ]
+   }
+  }
+ },
+ "models": {
+  "main": [
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-ir-builder",
+      "args": {
+       "subagent_type": "ir-builder",
+       "description": "Класс cfl. Построй IR для задачи: «S -> aSa | bSb | eps  ({w w^R | w in {a,b}*})». Верни IR, fingerprint и пересказ."
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "input_grammar_cfg",
+      "id": "ev-input-cfg",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "submit_report",
+      "id": "call-report",
+      "args": {
+       "verdict": "CFL",
+       "answer": "yes",
+       "language_class": "cfl",
+       "method": "язык задан явной КС-грамматикой",
+       "summary": "Язык задан КС-грамматикой S → aSa | bSb | ε, значит он контекстно-свободен.",
+       "template": "short_verdict",
+       "steps": [
+        {
+         "claim": "Язык задачи есть L(G) для КС-грамматики S → aSa | bSb | ε.",
+         "justification": "Условие задачи; грамматика корректна (input_grammar_cfg).",
+         "evidence_ids": [
+          "ev-input-cfg"
+         ]
+        }
+       ],
+       "evidence_ids": [
+        "ev-input-cfg"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "ir_builder": [
+   {
+    "tool_calls": [
+     {
+      "name": "validate_ir",
+      "id": "ib-validate",
+      "args": {
+       "cls": "cfl",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "content": "Класс cfl, task_type classify_and_prove_cfl, language_spec kind grammar: S → aSa | bSb | ε. validate_ir: valid. В L: ε, aa, abba. Не в L: a, ab. Неуверенные места: нет."
+   }
+  ]
+ }
+}

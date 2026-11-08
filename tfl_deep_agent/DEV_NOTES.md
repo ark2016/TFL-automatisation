@@ -2419,3 +2419,262 @@ No code changes in this step. Python is `.venv/Scripts/python`; no API key, mock
   - a mock PDF run through both HITL points: met
     (`test_deep_routes.py::test_real_mock_pdf_run_through_both_hitl_points`: PDF -> HITL 1 edit -> HITL 2
     approve -> `completed` / `submitted`, segment rcs `[3, 3, 0]`, day spend 0).
+
+## P8 eval+docs — docs (2026-11-08)
+
+Files: `tfl_deep_agent/README.md` (rewritten from the P0 stub), `tfl_deep_agent/CLAUDE.md` (new), root `README.md`
+(new section "TFL Deep Agent", plus one line each in Quickstart, Repository layout, `tfl-eval` and External
+dependencies), root `CLAUDE.md` (project list, import direction, the live-run rule for the deep agent, settings and
+budget location, `tfl-deep` commands, allowed actions), `tests/test_docs.py` (new, 19 tests).
+
+### Decisions
+
+- **The docs follow the code, not the plan, where they differ.** Checked against `cli.py`, `settings.py`,
+  `middleware/budget.py`, `hitl.py`, `roles.py`, `config.py`, `sandbox/`, `tools/lean.py`, `ui_server/deep_routes.py`
+  and the sibling eval adapter (`tfl_eval/cli.py`, `runners.py`). Examples:
+  - the eval flag is `--systems deep`, not the plan's `--system deep`;
+  - the sandbox is documented as not opened by the runners (see below);
+  - main's worst-case Opus call ($1.28) is documented as an open budget limitation.
+- **Commands were run, mock only.** I ran the README quick-start commands in the scratchpad with the API key removed
+  and `TFL_DEEP_RUNS_DIR` redirected:
+  - `ll_simple_ll1.json --auto-approve`: exit 0, verified, cap 0.98;
+  - `reg_regex_regular.json --no-dialog`: exit 3 at HITL 1, then 3 at HITL 2, then 0 with `bounded_pass` / 0.85.
+- **Sandbox status is stated as it is.** `hitl.start_run` / `resume_run` still build the agent without `sandbox=`,
+  so CLI and TFL Lab runs have no `coder`. The README says so, and
+  `test_readme_says_the_runners_open_no_sandbox_while_that_is_true` fails as soon as `hitl.py` starts passing
+  `sandbox=`, so the docs change with the behaviour.
+- **Root CLAUDE.md pricing line left as written.** It says model prices live in each project's `config.py`, but
+  the four pipeline `config.py` files hold no prices: `MODEL_PRICING` is in `agent_system/lib/llm_client.py` (P0
+  notes). That is the user's rule text, so I did not rewrite it. I only added the deep-agent line (its `config.py`
+  re-exports the prices from `llm_client.py`) and list the mismatch as an open point.
+
+### Tests (`tests/test_docs.py`)
+
+- CLI: every `--flag` in the README's CLI section is a parser option and vice versa. Every `tfl-deep` /
+  `python -m tfl_deep_agent` command in the `bash` blocks of both READMEs parses, and its `--mock-script` exists.
+- Values against the code:
+  - the settings table against `settings.DEFAULTS`, and the root README's budget figures;
+  - templates, role keys, subagent names and default model tiers (`agent.TEMPLATES`, `roles.ROLES`,
+    `config.MODELS`);
+  - exit codes, run-directory file names (`hitl` constants), env vars and the spend-log name;
+  - the image names.
+- Files: every shipped `examples/mock/*.json` is listed; relative links, anchors and the layout tree resolve.
+- Eval section vs `tfl_eval` (`DEEP_SYSTEM`, opt-in, flags, `DEEP_MOCK_DIR`). It skips when the adapter is absent.
+- Root README section, and root CLAUDE.md / package CLAUDE.md content and paths.
+- **CLAUDE.md files are gitignored** (`.gitignore`: `**/CLAUDE.md`), so the two CLAUDE.md tests skip when the file
+  is missing (fresh clone, CI). It also means `tfl_deep_agent/CLAUDE.md` and the root CLAUDE.md edits are **not
+  committed** unless the user changes `.gitignore` or force-adds them. That is the user's decision; I did not touch
+  `.gitignore`.
+
+### Test runs
+
+- `pytest -q tfl_deep_agent/tests/test_docs.py`: 19 passed.
+- `pytest -q -n 4 tfl_deep_agent/tests tests/test_prompt_contracts.py`: 1623 passed, 62 skipped, 1 xfailed. The
+  skips are `test_prompt_contracts` pseudo-JSON sketches and the Docker tests; the xfail is the known budget pin.
+- `pytest -q -n 4 tests/test_tfl_eval.py tfl_eval/tests` (with the sibling's adapter in the tree): 109 passed,
+  8 skipped.
+
+### Open
+
+- The root CLAUDE.md pricing line (see above).
+- Whether CLAUDE.md files should be tracked (`.gitignore`).
+- The sandbox default for user runs, and the main-agent `max_tokens` vs budget choice, are both still open from
+  earlier phases. The docs describe the current behaviour.
+
+## P8 eval+docs — eval adapter (2026-11-08)
+
+Files: `tfl_eval/runners.py` (deep section at the end + `DEEP_SYSTEM` / `ALL_SYSTEMS` / `DEEP_MOCK_DIR`),
+`tfl_eval/cli.py` (`--systems deep`, `--deep-settings`, `_run_deep_entry`, `deep_by_class`),
+`tfl_eval/tests/test_deep_adapter.py` (new, 39 tests incl. parametrized, ~6 s), `tfl_eval/tests/conftest.py` (new:
+imports `tfl_deep_agent.tests.guard`, required by `test_network_guard.py`'s tripwire once a tfl_eval test uses the
+agent), `tfl_deep_agent/examples/mock/eval/{reg-04,reg-13,cfl-04,ll-17}.json` (new mock replays).
+
+### Behaviour
+
+- `deep` is **opt-in**: `--systems` still defaults to the four pipelines, whose code path (`_run_entry`, `extract`,
+  `validate`, mock / live runners) is unchanged. The one shared change: `out_dir` is computed and created before the
+  runs instead of after (deep run dirs live under it); its path is the same.
+- `--systems deep` runs **every selected manifest entry, whatever its class** (one agent for all classes). The record
+  has `system: "deep"` and the entry's class in `task_system`, so `metrics.by_system` has one `deep` row;
+  `report.json` adds `deep_by_class` (the deep records summarized per class). `report.md` shows `deep (reg)` etc.
+  `--systems reg,deep` runs both, side by side.
+- Input: **only the IR's `source_text`** (`runners.deep_task_text`), no IR. `hitl.start_run(..., auto_approve=True,
+  dialog=None)`, run dir `<out>/deep_runs/<id>/`; the verdict is read from that run's `result.json`.
+- Verdict mapping (`runners.extract_deep`): `published_verdict` (else `verdict_token`) of a `submitted` result: the
+  code-side gate's policy token, already in the eval vocabulary (regular / non_regular / partial, cfl / non_cfl /
+  null, dcfl / non_dcfl / null, ll / not_ll / uncertain). The model's free-text verdict is never used. A run without
+  an accepted report (`incomplete`, `budget_exhausted`, ...) has verdict `None` = inconclusive. LL k is parsed from
+  the report's verdict text (`LL(2)`), only for an `ll` token. Confidence = result `confidence`, else
+  `confidence_cap` (the deep result has no point estimate; the cap is the code-set ceiling).
+- **Class mismatch**: a report whose `language_class` differs from the entry's class is scored wrong
+  (`class_mismatch: true`), even when its token happens to be equal. Its token is from another vocabulary anyway.
+- Mock mode: `tfl_deep_agent/examples/mock/eval/<entry id>.json`; an entry without one is `skipped` (as the
+  pipelines do without fixtures). Each script's `task` equals the entry's `source_text` and `defs.ir` is the
+  manifest's IR (pinned by a test).
+- `--live` (not run): no script; `TFL_MODEL_OVERRIDE` gets the eval's Haiku default as for the pipelines; the
+  agent needs `ANTHROPIC_API_KEY` in the environment (`tfl-deep` never loads `.env`), else every entry is an error
+  record. Usage = `{calls, estimated_cost_usd}` from the result's `budget` block, **live only**: mock budgets are
+  token estimates of the scripted replies, not money, so mock records carry `usage: None`.
+- `--deep-settings JSON` picks the deep settings file (default: `tfl_deep_agent/settings.json`, else the defaults);
+  its per-task / per-day budget applies to every deep entry. Without `--systems deep` it is a usage error (exit 2).
+
+### Mock scripts (`examples/mock/eval/`)
+
+Each: main → ir-builder (`validate_ir`, text answer; HITL 1 auto-approved) → one oracle call → `submit_report`
+(template `short_verdict`, with `answer`).
+
+| id | verdict | basis (code gate) | trust / cap |
+|---|---|---|---|
+| reg-04 `(ab)*a \| b` | regular | `regex_to_dfa` + `dfa_vs_ir` | bounded_pass / 0.85 |
+| reg-13 `S -> aSb \| ab` | non_regular | `nerode_probe` family `a^n` / `b^n`, values 1..6 | bounded_pass / 0.85 |
+| cfl-04 `S -> aSa \| bSb \| eps` | cfl | `input_grammar_cfg` (R2-CFG) | verified / 0.98 |
+| ll-17 `S -> aSb \| eps` (LL(1)?) | ll, k = 1 | `ll_table` on the task's grammar, k = 1 | verified / 0.98 |
+
+No dcfl script: a constructive DCFL basis needs `dpda_vs_ir` with a hand-written DPDA, left for later.
+`tfl-eval --systems deep` (mock): 74 tasks, ran 4, skipped 70, accuracy 1.0, ~5 s.
+
+### Open
+
+- **The input is only `source_text`, as the plan says, but many eval `source_text`s do not say which class is asked**
+  (`{a^n b^n | n >= 0}` is reg-01, dcfl-01 and ll-01). In a live run the agent must guess the class; a wrong guess
+  is a `class_mismatch` (scored wrong). Options: keep it (measures the agent on the raw text), or prefix the
+  question per class (a wording decision for the user). Not decided here.
+- Deep records count in `overall` / `traps` like any system; with `--systems reg,deep` the overall numbers mix
+  both. Per-system rows separate them.
+
+### Test runs
+
+- `pytest -q tfl_eval/tests`: 79 passed, 8 skipped (the pre-existing oracle-coverage skips).
+- `pytest -q tfl_deep_agent/tests/test_network_guard.py ui_server/tests tfl_eval/tests`: 263 passed, 8 skipped;
+  `tfl_deep_agent/tests/test_docs.py`: 19 passed.
+- Full `pytest -q -n auto`: 5112 passed, 73 skipped, 3 xfailed, 31 failed. All 31 are real-Docker Lean checks
+  (`test_lean_ir.py`, `test_lean_formalize.py`, `test_lean_examples.py`, `test_phase3.py`) failing with the known
+  daemon fault `OCI runtime create failed: runc create failed ... read init-p: connection reset by peer` (P0
+  Docker notes); none in tfl_eval, ui_server or tfl_deep_agent.
+
+## P8 eval+docs FIX (2026-11-08)
+
+Files: `tfl_eval/cli.py`, `tfl_eval/tests/test_deep_adapter.py`, `tfl_deep_agent/examples/mock/eval/dcfl-04.json`
+(new), `tfl_deep_agent/tests/test_critic_ticket50.py` (new, 3 tests), `tfl_deep_agent/tests/test_docs.py`,
+`tfl_deep_agent/prompts/main.md` (4 lines), `README.md`, `tfl_deep_agent/README.md`, root `CLAUDE.md` (revert, see
+below), `.github/workflows/tests.yml` (new job). Mock only; no API call, no `.env`.
+
+### Fixed
+
+- **Live deep eval has an eval-level cap.** `tfl-eval --systems deep --live` now prints the worst case
+  min(entries x `per_task_usd`, `per_day_usd`) to stderr before anything runs. It refuses (exit 2, no run, no
+  report) when that is above `--deep-max-usd` (default $1.00, the per-session budget of root CLAUDE.md). With the
+  default $5.00 per task even one entry is refused. The user then narrows `--ids`, lowers `budget.per_task_usd` in
+  `--deep-settings`, or passes the agreed budget as `--deep-max-usd`. Mock mode ignores the cap. The per-task and
+  per-day checks of `BudgetLedger` still apply inside each run.
+- **Reused `--out`.** When a deep run dir is already taken, the entry gets the next free `<id>-2`, `<id>-3`, ...
+  (`cli._fresh_run_dir`). So a second eval into the same `--out` (or two evals in the same second) runs instead of
+  turning every entry into an error record. The first run keeps `<out>/deep_runs/<id>/`, as documented.
+- **`.env` key from the pipelines.** In a mixed live run the pipelines' live runners load `.env` into
+  `os.environ`. `main` now snapshots `ANTHROPIC_API_KEY` before the pipeline entries and restores it (or removes
+  it) before the deep entries, so the deep agent never runs on a key read from `.env`.
+- **Root README.** The coder sentence now says that the CLI, TFL Lab and eval runners do not open a sandbox yet.
+  The budget bullet names the open $1.28-vs-reserve gap and links to "Budget semantics".
+  `test_readme_says_the_runners_open_no_sandbox_while_that_is_true` now checks both READMEs.
+  `test_docs_state_the_main_reserve_gap_while_it_is_open` fails when the READMEs' mention of $1.28 and
+  `FIT_MAX_TOKENS_ROLES` (no `main`) disagree.
+- **Root CLAUDE.md "Allowed actions" reverted to the user's wording.** The P8 docs step had added
+  `tfl_deep_agent/`, `tfl_eval/` and docker for the sandbox to that list. That is the user's permission text, so
+  the widening is withdrawn and left as a proposal below. The other P8 CLAUDE.md additions (projects, live-run
+  rule, settings, commands) stay: they describe, they do not grant.
+- **main.md and HITL 1.** `prompts/main.md` now says:
+  - formalization goes through `ir-builder` (`task`) or the main agent's own `validate_ir`;
+  - an IR built in a workflow step or by a spawned subagent is not reviewed at HITL 1;
+  - oracle results count only for the IR approved at HITL 1.
+
+  `ir_builder` stays in `WORKFLOW_ROLES`. Removing it would change `orchestration/workflow.py` behaviour, and the
+  binding already keeps such an IR from raising trust.
+- **Ticket-50 critic regression.** `tests/test_critic_ticket50.py` drives `hitl.start_run` with a scripted run:
+  - the `critic` gets the golden ticket-50 informal proof, whose `word_instances["4"]` is the wrong a^8 b (ab)^5 a^8;
+  - it calls `pump_check_cfl` in claim mode, and the result is `refuted` (role `critic` in the ledger);
+  - the "not CFL" report is blocked. Cited: R2, `not_verified`, token `null`. Uncited: R1 finds no basis,
+    `not_verified`.
+
+  The claim is read from `docs/examples/.../result.json`, so the test also pins that the golden file still carries
+  the wrong instance.
+- **DCFL replay.** `examples/mock/eval/dcfl-04.json` covers a trap entry, `{a^n b^n c^m | n, m >= 0}`: ir-builder,
+  then `dpda_vs_ir` on `dcfl_system/tests/test_dpda.py::SAFE_ANBNCM_DPDA` (already checked there and in
+  `test_tools_dcfl.py`), then `submit_report`. Result: dcfl, bounded_pass / 0.85, basis `ev-dpda-vs-ir`.
+  `tfl-eval --systems deep` (mock) now runs 5 entries, at least one per class. This supersedes the "No dcfl script"
+  line in the eval-adapter section.
+- **CI runs the deep tests.** New job `pytest-deep` in `.github/workflows/tests.yml`:
+  - it installs `pip install -e ".[deep,dev]"`;
+  - it runs `tfl_deep_agent/tests ui_server/tests tfl_eval/tests tests/test_tfl_eval.py` with
+    `-m "not slow" -n auto --dist loadfile`.
+
+  It is a separate job, so the main `pytest` job and its install are unchanged. **It has not run on GitHub yet**:
+  Linux-only failures, if any, show up on the first push. The real-Docker tests skip there unless the images exist.
+
+### Completeness gaps from the critic list: status
+
+| gap | status |
+|---|---|
+| Sandbox never opened by `hitl.start_run` / `resume_run` / CLI / TFL Lab / eval | **Open, user decision**: default on, off, or a validated `settings.sandbox.enabled`. Then pass `sandbox=`, call `close_sandbox` in a `finally`, and write the sandbox info into `result.json`. The docs state the current behaviour, and a test flips with it. |
+| Adversarial Opus review of the theory text (PLAN non-negotiable 5): `skills/{reg,cfl,dcfl,ll}/SKILL.md`, `theory.md`, `traps.md`, `prompts/*.md` | **Still pending.** Not run in this fix. The existing tests only pin the verbatim quotes against THEORY.md, not the condensed guidance or the traps. P2-P7 were committed without it. **Before the branch is merged, the user must either have it run or accept it as pending.** |
+| Main role `max_tokens` vs `reserve_for_report_usd` (worst case $1.28 > $0.30) | **Open, user decision**: per-role `max_tokens` ceilings, or `main` in `FIT_MAX_TOKENS_ROLES` (at least for wrap-up calls). The strict xfail `test_config.py::test_default_ceilings_fit_the_example_budgets` stays until then. Both READMEs document the gap, and a test pins that. |
+| Ticket-50 critic-role regression | **Fixed** (above). |
+| main.md lists `ir_builder` for `run_workflow` without the HITL 1 note | **Fixed** in main.md (above). Dropping it from `WORKFLOW_ROLES` is left to the user. |
+| Sandbox `execute` output stored `not_verified` (no sandbox tool group with ceiling `well_formed`) | **Deferred.** It needs changes in `tools/base.py` and `middleware/evidence.py`, and it matters only once a runner opens the sandbox (first row). |
+| Eval coverage: no dcfl replay | **Fixed** (dcfl-04). |
+| Eval coverage: no `examples/mock` PDF-intake script | **Deferred.** Scripted tests already cover the PDF path and build the PDF with pypdf (`tests/hitl_scripts.py::pdf_script`, `test_hitl.py::test_pdf_task_goes_through_intake_and_hitl1`). A shipped example would need a binary PDF in `examples/` plus a README row. |
+| Class-ambiguous `source_text` in live eval (a wrong class guess is `class_mismatch`) | **Open, user decision**: keep the raw text, or prefix the question per class. |
+| `--systems` vs the plan's `--system` | Kept `--systems`, the existing flag. Argparse prefix matching accepts `--system deep`. |
+| xdist flaky `ScriptError` (`last_message_contains`) | **Not reproduced.** Four `-n 8` runs over test_orchestration, test_integration_p4_p6, test_hitl, test_e2e_mock and ui_server/tests passed (299 each). Two `-n auto` runs over the whole phase set passed (1679 each). There is no fix without a failing test id; if it shows up again, capture the id with `-rf` first. |
+| `**/CLAUDE.md` gitignored: `tfl_deep_agent/CLAUDE.md` and the root CLAUDE.md edits are not committed | **Open, user decision**: force-add, change `.gitignore`, or keep them local. The commit step must include the untracked P8 files: `tfl_eval/tests/conftest.py`, `tfl_eval/tests/test_deep_adapter.py`, `tfl_deep_agent/examples/mock/eval/`, `tfl_deep_agent/tests/test_docs.py`, `tfl_deep_agent/tests/test_critic_ticket50.py`. |
+| CI lacks `[deep]` | **Fixed** (new job, above; not yet run on GitHub). |
+| TFL Lab deep runs have their own slot gate (2 + 2 processes) | **Open, user decision**: sharing the gate changes `server.py` behaviour. `TFL_MAX_CONCURRENCY` still bounds API calls within each process. |
+
+### Open (for the user)
+
+- The five user decisions in the table: the sandbox default, main `max_tokens`, class-ambiguous eval text,
+  CLAUDE.md tracking, and the shared TFL Lab slot gate.
+- The Opus theory review: pending. Accept it as pending, or have it run before merge.
+- Proposed, not applied: add `tfl_deep_agent/` and `tfl_eval/` to root CLAUDE.md "Allowed actions", and docker for
+  the `tfl-sandbox` image. `tfl_deep_agent/CLAUDE.md` already lists what the package may touch outside itself.
+- The root CLAUDE.md pricing line (from "P8 docs").
+
+### Test runs
+
+- `pytest -q tfl_eval/tests tfl_deep_agent/tests/test_docs.py`: 108 passed, 8 skipped.
+- `pytest -q tfl_deep_agent/tests/test_critic_ticket50.py`: 3 passed.
+- `pytest -q -n auto tfl_deep_agent/tests ui_server/tests tfl_eval/tests tests/test_tfl_eval.py`, run twice: 1679
+  passed, 8 skipped, 1 xfailed (the budget pin) each time.
+- `tfl-eval --systems deep --ids dcfl-04` (mock): ran 1, accuracy 1.0, bounded_pass / 0.85.
+
+## P8 eval+docs — GATE (2026-11-08)
+
+No code or doc changes in this step: it re-checks the P8 FIX state. Mock only; no API call, no `.env`, no key.
+
+### Acceptance
+
+- **`tfl-eval --system deep` passes in mock mode: met.** `python -m tfl_eval.cli --system deep` (argparse prefix of
+  `--systems`) ran 74 tasks: 5 ran (reg-04, reg-13, cfl-04, dcfl-04, ll-17), 69 skipped (no mock replay), 0 errors,
+  accuracy 1.0, exit 0. `deep_by_class` has one row per class. A second eval into the same `--out` got the fresh
+  `<id>-2` run dirs, as the FIX intended. (The `tfl-eval` / `tfl-deep` console scripts are not installed in this
+  `.venv`; `python -m tfl_eval.cli` is the same entry point.)
+- **Docs match code: met.** `tests/test_docs.py` passes in the full run (CLI flags, settings defaults, roles, exit
+  codes, file names, eval section, the sandbox-status and $1.28-reserve statements that flip with the code). Spot
+  check: `hitl.py`, `cli.py` and `ui_server/deep_routes.py` still pass no `sandbox=`, as both READMEs say.
+- **Completeness gaps: closed or explained**, as in the FIX table above. Nothing new was closed here. Still open for
+  the user: the sandbox default for user runs, main `max_tokens` vs the $0.30 reserve (strict xfail stays), the
+  class-ambiguous eval `source_text`, CLAUDE.md tracking (`.gitignore:24 **/CLAUDE.md` still ignores both CLAUDE.md
+  files), and the shared TFL Lab slot gate. Deferred: the `sandbox` tool group with ceiling `well_formed` (matters
+  only once a runner opens the sandbox) and a shipped PDF-intake mock example. **The adversarial Opus review of the
+  theory text (PLAN non-negotiable 5) is still pending and not accepted by the user**; it was not run in this gate.
+
+### Test runs
+
+- Full `pytest -q -n auto` from the repo root: 5064 passed, 90 skipped, 3 xfailed, 75 failed. All 75 failures are
+  real-Docker Lean checks in `agent_system/`, `cfl_system/` and `dcfl_system/` (`test_lean_ir.py`,
+  `test_lean_formalize.py`, `test_lean_examples.py`, `test_phase3.py`, `test_type_check_security.py`): the Docker
+  daemon failed during the run (`runc did not terminate successfully: exit status 139`, then `skipped`/`unavailable`
+  lean results). Right after the run `docker` answered `Internal Server Error` on `_ping`, and a serial rerun of a
+  sample skipped cleanly (Docker unavailable). Same class as the 31 Docker faults recorded in "P8 eval adapter".
+  None of them is in `tfl_deep_agent/`, `ui_server/` or `tfl_eval/`, and no file there was touched by P8.
+- No failure in `tfl_deep_agent/tests`, `ui_server/tests`, `tfl_eval/tests` or `tests/test_tfl_eval.py` in that run;
+  the xdist `ScriptError` flake did not recur.

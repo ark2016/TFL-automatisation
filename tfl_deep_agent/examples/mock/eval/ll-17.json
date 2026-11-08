@@ -1,0 +1,114 @@
+{
+ "description": "tfl-eval deep replay, ll-17: S -> aSb | eps is LL(1). ir-builder validates the IR, main builds the LL(1) table of the task's grammar (ll_table), then submits.",
+ "task": "Format 3: S -> aSb | eps. Is this grammar LL(1)?",
+ "template": "short_verdict",
+ "defs": {
+  "ir": {
+   "task_type": "ll_check_grammar",
+   "source_text": "Format 3: S -> aSb | eps. Is this grammar LL(1)?",
+   "grammar": {
+    "terminals": [
+     "a",
+     "b"
+    ],
+    "nonterminals": [
+     "S"
+    ],
+    "start": "S",
+    "rules": [
+     {
+      "lhs": "S",
+      "rhs": [
+       "a",
+       "S",
+       "b"
+      ]
+     },
+     {
+      "lhs": "S",
+      "rhs": []
+     }
+    ]
+   },
+   "question": "is_ll_k",
+   "k": 1
+  }
+ },
+ "models": {
+  "main": [
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-ir-builder",
+      "args": {
+       "subagent_type": "ir-builder",
+       "description": "Класс ll. Построй IR для задачи: «Format 3: S -> aSb | eps. Is this grammar LL(1)?». Верни IR, fingerprint и пересказ."
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "ll_table",
+      "id": "ev-ll-table",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       },
+       "k": 1
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "submit_report",
+      "id": "call-report",
+      "args": {
+       "verdict": "LL(1)",
+       "answer": "yes",
+       "language_class": "ll",
+       "method": "таблица LL(1) без конфликтов",
+       "summary": "FIRST(aSb) = {a}, FOLLOW(S) = {b, $}; множества выбора альтернатив не пересекаются, таблица LL(1) без конфликтов: грамматика LL(1).",
+       "template": "short_verdict",
+       "steps": [
+        {
+         "claim": "Таблица LL(1) грамматики S → aSb | ε не содержит конфликтов.",
+         "justification": "Полная проверка LL(1) грамматики задачи (ll_table).",
+         "evidence_ids": [
+          "ev-ll-table"
+         ]
+        }
+       ],
+       "evidence_ids": [
+        "ev-ll-table"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "ir_builder": [
+   {
+    "tool_calls": [
+     {
+      "name": "validate_ir",
+      "id": "ib-validate",
+      "args": {
+       "cls": "ll",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "content": "Класс ll, task_type ll_check_grammar, question is_ll_k, k = 1: S → aSb | ε. validate_ir: valid. Неуверенные места: нет."
+   }
+  ]
+ }
+}
