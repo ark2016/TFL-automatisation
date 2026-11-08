@@ -107,8 +107,9 @@ _PROMPT_ALIASES: dict[str, str] = {
 
 
 def _load_env() -> None:
-    """Load .env file from agent_system/ root if it exists."""
-    env_path = Path(__file__).resolve().parent.parent / ".env"
+    """Load the repository-root .env if it exists (the one the cfl / dcfl / ll
+    orchestrators load too); variables already in the environment win."""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
     if not env_path.exists():
         return
     for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -1332,7 +1333,7 @@ class LLMRunner:
         if not resolved_key:
             raise RuntimeError(
                 "ANTHROPIC_API_KEY not set. "
-                "Put it in agent_system/.env or export it."
+                "Put it in the repository-root .env or export it."
             )
 
         try:

@@ -68,7 +68,7 @@ def test_deep_agent_on_a_real_chat_model_is_blocked():
 
 
 def test_env_loaders_cannot_put_the_key_back():
-    """llm_client._load_env (called by LLMRunner.__init__) copies agent_system/.env
+    """llm_client._load_env (called by LLMRunner.__init__) copies the root .env
     into os.environ; the per-test guard makes it, and dotenv.load_dotenv, no-ops."""
     from agent_system.lib import llm_client
 

@@ -9,7 +9,7 @@ module attributes (aliases bound at import time), so the root stub alone does
 NOT cover it. ``guard.py`` points the two aliases at the same stub for the
 session, and strips the key again before every test (code that ran earlier in
 the process, e.g. ``LLMRunner.__init__`` -> ``llm_client._load_env()``, may
-have copied it back from ``agent_system/.env``). ``test_network_guard.py``
+have copied it back from the root ``.env``). ``test_network_guard.py``
 proves both.
 
 ``TFL_ALLOW_LIVE=1`` disables them, as it does the root fixture.

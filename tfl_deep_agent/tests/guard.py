@@ -10,7 +10,7 @@ once at session start and stubs ``anthropic.Anthropic`` / ``AsyncAnthropic``):
 * ``_no_live_anthropic_key`` (function, autouse): the key strip in the root
   conftest happens once, and code that runs later in the same process puts the
   key back -- ``LLMRunner.__init__`` calls ``llm_client._load_env()``, which
-  copies ``agent_system/.env`` into ``os.environ``; the pipeline orchestrators
+  copies the root ``.env`` into ``os.environ``; the pipeline orchestrators
   call ``dotenv.load_dotenv``. So every test starts with the key removed and
   both loaders turned into no-ops (monkeypatch restores them afterwards).
 

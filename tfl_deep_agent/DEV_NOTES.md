@@ -3068,3 +3068,12 @@ in `agent.py` (and the budget line of the main prompt) and `/api/deep/estimate`.
 smaller than per_task_usd" is gone (the clamp makes any non-negative reserve safe). Tests:
 `test_budget.py::test_the_task_ledger_keeps_at_most_a_quarter_of_the_task_as_reserve`; `test_config.py` now asserts
 that the default reserve pays a floor-sized Opus call with an 80k-token prompt and not with a 190k one.
+
+## 2026-11-08: one .env for every pipeline
+
+The repo had two `.env` files: `agent_system/lib/llm_client._load_env` read `agent_system/.env` (REG, the
+formalize entry and every `LLMRunner`), while the cfl / dcfl / ll orchestrators load the root `.env`. With different
+keys in them, REG billed a different organization. User decision: only the root `.env` is used, so `_load_env` now
+reads `<repo>/.env` (`parents[2]`); environment variables still win. This is the one edit to a pipeline package on
+this branch, made on the user's explicit request; it lands in main with the branch PR. `agent_system/.env` is no
+longer read and can be deleted by the user. `tfl-deep` and TFL Lab still read no `.env` at all.
