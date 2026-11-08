@@ -700,17 +700,18 @@ def _report_args_models() -> tuple[type[BaseModel], type[BaseModel]]:
     return report_args_models()
 
 
-def make_submit_report_tool() -> Any:
+def make_submit_report_tool(evidence: Any = None) -> Any:
     """The ``submit_report`` LangChain tool: ``tools.report.make_submit_report_tool``
     (P3 schema: lemmas, claims, construction, conclusion, Lean block on top
     of the P2 fields). It validates the structured fields and returns them as
     the ToolMessage artifact ``{"ok": true, "report": {...}}``;
     :class:`ReportGateMiddleware` then ends the run (HITL 2, when on,
     interrupts before the tool runs). It never sets trust: the evidence and
-    trust labels are computed by code (:func:`collect_result`, the renderer)."""
+    trust labels are computed by code (:func:`collect_result`, the renderer).
+    ``evidence`` (the run's ledger): a report citing an id not in it is refused."""
     from .tools.report import make_submit_report_tool as _make
 
-    return _make()
+    return _make(evidence)
 
 
 # ---------------------------------------------------------------------------
@@ -795,15 +796,15 @@ def main_system_prompt(settings: Mapping[str, Any], *, template: str = "full_pro
     return "\n".join(lines) + "\n"
 
 
-def main_tools() -> list[Any]:
+def main_tools(evidence: Any = None) -> list[Any]:
     """The P1 tools of the main agent (every registered group) plus
-    ``submit_report``. If the report group (tools/report.py, P3) registers its
-    own ``submit_report`` in the registry, that one is used."""
+    ``submit_report`` (over ``evidence``, the run's ledger: it refuses a report
+    citing ids that are not in it)."""
     from .tools import base
 
     base.load_groups([g for g in MAIN_TOOL_GROUPS if g in base.GROUP_MODULES])
     tools = [t for t in base.REGISTRY.langchain_tools(groups=MAIN_TOOL_GROUPS) if t.name != SUBMIT_REPORT]
-    tools.append(make_submit_report_tool())
+    tools.append(make_submit_report_tool(evidence))
     return tools
 
 
@@ -1133,7 +1134,7 @@ def _build_agent(
                                                 taken={getattr(t, "name", None) for t in extra})
     graph = create_deep_agent(
         model=model_for("main"),
-        tools=[*main_tools(), *orch_tools, *extra],
+        tools=[*main_tools(evidence_ledger), *orch_tools, *extra],
         system_prompt=main_system_prompt(cfg, template=template, hitl=points, sandbox=sandbox,
                                          orchestration=bool(orch_tools) or any(
                                              getattr(t, "name", None) in _orchestration_names() for t in extra)),

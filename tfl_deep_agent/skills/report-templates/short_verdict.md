@@ -1,11 +1,21 @@
 # $title
 
-$header
+## Условие
 
-**Задача:** $task
+$task
+
+## Ответ
 
 $verdict_block
 
+## Решение
+
 $summary
+
+$construction_section
+
+### Ключевые шаги
+
+$key_steps
 
 $lean_section

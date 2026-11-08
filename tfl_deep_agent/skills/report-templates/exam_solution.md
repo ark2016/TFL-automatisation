@@ -1,20 +1,24 @@
 # $title
 
-$header
+## Условие
 
-**Задача.** $task
+$task
 
 ## Ответ
 
 $verdict_block
 
+## Решение
+
+$idea_section
+
 $construction_section
 
-## Решение
+### Ключевые шаги
 
 $key_steps
 
-## Вывод
+## Заключение
 
 $conclusion
 

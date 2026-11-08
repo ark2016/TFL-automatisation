@@ -249,13 +249,78 @@ def test_invalid_report_is_not_shown_to_the_human(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Evidence: a fabricated id lowers trust
+# Evidence ids: submit_report refuses ids that are not in the ledger
 # ---------------------------------------------------------------------------
 
-def test_fabricated_evidence_id_lowers_trust(tmp_path):
-    good = start(tmp_path, H.base_script(), name="good", auto_approve=True).result
-    out = start(tmp_path, H.fabricated_ids_script(), name="fab", auto_approve=True)
-    r = out.result
+def _refusals(run_dir) -> list[dict]:
+    return [json.loads(str(m.content)) for m in tool_messages(run_dir, "submit_report") if m.status == "error"]
+
+
+def test_fabricated_ids_are_refused_without_a_stop_then_the_honest_report_is_reviewed(tmp_path):
+    out = _to_report(tmp_path, H.fabricated_then_honest_script())
+    # the fabricated report never reached the human: the stop is for the honest resubmission
+    honest = H.base_script()["models"]["main"][-1]["tool_calls"][0]["args"]
+    assert out.pending.request["action_requests"][0]["args"]["steps"] == honest["steps"]
+    assert out.pending.request["action_requests"][0]["args"]["evidence_ids"] == honest["evidence_ids"]
+    (err,) = _refusals(out.run_dir)
+    assert err["error_kind"] == "unknown_evidence_ids" and err["ok"] is False
+    assert set(err["unknown_ids"]) == {"ev-made-up-step", "ev-made-up-verdict"}
+    assert "ev-ll-table" in json.dumps(err["valid_ids"]) and "Resubmit submit_report" in err["error"]
+    assert hitl.load_run(out.run_dir)["draft"]["unknown_ids"] == []
+    done = hitl.resume_run(out.run_dir, hitl.parse_decision("approve"))
+    assert done.status == "submitted" and done.result["trust"] == "verified" and not done.result["unknown_ids"]
+
+
+def test_reg_report_citing_tool_names_is_refused_then_verified_with_ids(tmp_path):
+    """reg-04 shape: (ab)*a|b, IR approved by a human, the model first cites
+    tool names; the refusal lists the call ids, the resubmission is verified."""
+    s = H.reg_names_then_ids_script()
+    out = start(tmp_path, s, task=s["task"])
+    assert out.pending.point == hitl.FORMALIZATION
+    out = hitl.resume_run(out.run_dir, hitl.parse_decision("approve"))
+    assert out.pending.point == hitl.REPORT
+    (err,) = _refusals(out.run_dir)
+    assert set(err["unknown_ids"]) == {"regex_to_dfa", "dfa_vs_ir"}
+    assert any(v.startswith("ev-dfa (verified, ir-") for v in err["valid_ids"]["regex_to_dfa"])
+    assert "regex_to_dfa -> ev-dfa (verified, ir-" in err["error"] and "a tool NAME, not a call id" in err["error"]
+    # nothing is resolved by code: the report under review is the model's resubmission
+    assert out.pending.request["action_requests"][0]["args"]["evidence_ids"] == ["ev-dfa", "ev-dfa-vs-ir"]
+    done = hitl.resume_run(out.run_dir, hitl.parse_decision("approve"))
+    r = done.result
+    assert done.status == "submitted" and r["trust"] == "verified" and r["unknown_ids"] == []
+    assert r["formalization"]["status"] == "approved" and r["formalization"]["auto"] is False
+
+
+def test_a_model_that_keeps_citing_names_ends_with_a_partial_report(tmp_path):
+    settings = H.example_settings()
+    settings["limits"]["max_model_calls"] = 14
+    s = H.always_names_script(30)
+    out = hitl.start_run(tmp_path / "loop", s["task"], settings=settings, mock_script=s, review_mode="auto")
+    assert out.status == "incomplete" and out.pending is None
+    assert out.result["partial_report"]["verdict"]
+    assert len(_refusals(out.run_dir)) >= 2
+    assert hitl.load_run(out.run_dir)["status"] == "incomplete"
+
+
+def test_a_human_edit_citing_unknown_ids_is_refused_before_resuming(tmp_path):
+    out = _to_report(tmp_path, H.base_script())
+    with pytest.raises(hitl.DecisionError, match="ev-made-up"):
+        hitl.resume_run(out.run_dir, hitl.parse_decision("edit", {"evidence_ids": ["ev-ll-table", "ev-made-up"]}))
+    run = hitl.load_run(out.run_dir)
+    assert run["status"] == hitl.STATUS_AWAITING and run["pending"]["point"] == hitl.REPORT
+
+
+def test_gate_and_policy_still_flag_unknown_ids(tmp_path):
+    """Second line of defence: a report with made-up ids (rated directly,
+    since submit_report no longer accepts one) is lowered by the gate."""
+    from tfl_deep_agent.evidence import policy as P
+    from tfl_deep_agent.evidence.ledger import EvidenceLedger
+    from tfl_deep_agent.tools.report import validate_report
+
+    out = start(tmp_path, H.base_script(), auto_approve=True)
+    good = out.result
+    fab = validate_report(H.fabricated_ids_script()["models"]["main"][-1]["tool_calls"][0]["args"])
+    r = P.evaluate_report(fab, EvidenceLedger.load(out.run_dir), formalization=good.get("formalization"))
     assert good["trust"] == "verified" and not good["unknown_ids"]
     assert set(r["unknown_ids"]) == {"ev-made-up-step", "ev-made-up-verdict"}
     # the step citing it is not verified, although its other id is
@@ -264,14 +329,6 @@ def test_fabricated_evidence_id_lowers_trust(tmp_path):
     # the verdict is lowered one level and the cap with it
     assert r["trust"] == "bounded_pass" and r["confidence_cap"] < good["confidence_cap"]
     assert any("ev-made-up-verdict" in g for g in r["verdict_gate"])
-    md = (out.run_dir / "result.md").read_text(encoding="utf-8")
-    assert "ev-made-up-step" in md
-
-
-def test_fabricated_id_is_flagged_on_the_hitl2_card(tmp_path):
-    out = _to_report(tmp_path, H.fabricated_ids_script())
-    card = (out.run_dir / hitl.CARD_FILE).read_text(encoding="utf-8")
-    assert "ev-made-up-verdict" in card and "not_verified" in card and "bounded_pass" in card
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +343,118 @@ def test_auto_approve_is_marked_in_the_report(tmp_path):
     assert all(r["source"] == "auto" for r in out.result["hitl"]["reviews"])
     for name in ("result.md", "result.html"):
         assert "Без проверки человеком" in (out.run_dir / name).read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Review modes and approve_rest (2026-11-08)
+# ---------------------------------------------------------------------------
+
+def test_review_mode_resolution_and_points():
+    assert hitl.resolve_review_mode() == "all" and hitl.resolve_review_mode(auto_approve=True) == "auto"
+    assert hitl.resolve_review_mode("Formalization") == "formalization"
+    with pytest.raises(hitl.RunError, match="unknown review mode"):
+        hitl.resolve_review_mode("some")
+    with pytest.raises(hitl.RunError, match="conflicts"):
+        hitl.resolve_review_mode("all", auto_approve=True)
+    assert [hitl.auto_approves("formalization", p) for p in ("formalization", "report", "execute")] == \
+        [False, True, False]  # execute is never auto-approved by 'formalization'
+    assert all(hitl.auto_approves("auto", p) for p in ("formalization", "report", "execute"))
+    assert not any(hitl.auto_approves("all", p) for p in ("formalization", "report", "execute"))
+    assert hitl.review_mode_of({"auto_approve": True}) == "auto" and hitl.review_mode_of({}) == "all"
+
+
+def test_review_mode_formalization_waits_at_hitl1_only(tmp_path):
+    s = H.reg_script()
+    out = start(tmp_path, s, task=s["task"], review_mode="formalization")
+    assert out.pending.point == hitl.FORMALIZATION
+    assert hitl.load_run(out.run_dir)["review_mode"] == "formalization"
+    done = hitl.resume_run(out.run_dir, hitl.parse_decision("approve"))
+    r = done.result
+    assert done.status == "submitted"
+    assert [(x["point"], x["decision"], x["source"]) for x in r["hitl"]["reviews"]] == [
+        ("formalization", "approved", "human"), ("report", "auto_approved", "auto")]
+    assert r["human_review"] == hitl.AUTO_APPROVED_LABEL and r["hitl"]["review_mode"] == "formalization"
+    # the IR was approved by a human, so regex_to_dfa(ir=) counts as verified
+    assert r["formalization"]["auto"] is False and r["trust"] == "verified"
+
+
+def test_auto_approved_formalization_is_not_a_human_approval(tmp_path):
+    s = H.reg_script()
+    out = start(tmp_path, s, task=s["task"], review_mode="auto")
+    r = out.result
+    assert out.status == "submitted" and r["hitl"]["review_mode"] == "auto"
+    assert [x["decision"] for x in r["hitl"]["reviews"]] == ["auto_approved", "auto_approved"]
+    assert r["formalization"]["status"] == "approved" and r["formalization"]["auto"] is True
+    dfa = [e for e in r["evidence"] if e["id"] == "ev-dfa"]
+    assert dfa and dfa[0]["trust"] == "verified"  # the tool's own label ...
+    assert r["trust"] == "bounded_pass"  # ... but the gate keeps the verdict at bounded_pass
+    assert any("auto" in g or "human" in g for g in r["verdict_gate"])
+
+
+def test_approve_rest_approves_this_stop_and_auto_approves_the_rest(tmp_path):
+    s = H.reg_script()
+    out = start(tmp_path, s, task=s["task"])
+    with pytest.raises(hitl.DecisionError, match="approve_rest"):
+        hitl.resume_run(out.run_dir, hitl.parse_decision("reject", comment="no"), approve_rest=True)
+    assert hitl.load_run(out.run_dir)["status"] == hitl.STATUS_AWAITING
+    done = hitl.resume_run(out.run_dir, hitl.parse_decision("approve"), approve_rest=True)
+    r = done.result
+    assert done.status == "submitted"
+    reviews = r["hitl"]["reviews"]
+    assert [(x["point"], x["decision"], x["source"]) for x in reviews] == [
+        ("formalization", "approved", "human"), ("report", "auto_approved", "auto")]
+    assert reviews[0]["approve_rest"] is True
+    run = hitl.load_run(out.run_dir)
+    assert run["review_mode"] == "auto" and run["initial_review_mode"] == "all"
+    assert run["approve_rest"]["point"] == "formalization"
+    assert r["hitl"]["review_mode"] == "auto" and r["hitl"]["initial_review_mode"] == "all"
+    # HITL 1 was a human decision: the IR binding stays human
+    assert r["formalization"]["auto"] is False and r["trust"] == "verified"
+
+
+def test_cli_review_mode_and_approve_rest(tmp_path, capsys):
+    script = tmp_path / "reg.json"
+    script.write_text(json.dumps(H.reg_script(), ensure_ascii=False), encoding="utf-8")
+    run_dir = tmp_path / "cli"
+    rc = cli.main([H.reg_script()["task"], "--mock-script", str(script), "--save", str(run_dir), "--no-dialog",
+                   "--review-mode", "all"])
+    assert rc == hitl.EXIT_AWAITING
+    with pytest.raises(SystemExit):
+        cli.main(["--resume", str(run_dir), "--decision", "reject", "--comment", "x", "--approve-rest"])
+    with pytest.raises(SystemExit):
+        cli.main(["--resume", str(run_dir), "--decision", "approve", "--review-mode", "auto"])
+    with pytest.raises(SystemExit):
+        cli.main(["x", "--review-mode", "all", "--auto-approve"])
+    rc = cli.main(["--resume", str(run_dir), "--decision", "approve", "--approve-rest", "--no-dialog"])
+    assert rc == 0
+    run = hitl.load_run(run_dir)
+    assert run["status"] == "submitted" and run["review_mode"] == "auto"
+    assert [r["source"] for r in run["reviews"]] == ["human", "auto"]
+
+
+def test_pending_cards_are_short_and_made_by_code(tmp_path):
+    s = H.reg_script()
+    out = start(tmp_path, s, task=s["task"])
+    card = hitl.load_run(out.run_dir)["pending"]["card"]
+    assert card["point"] == "formalization" and card["title"]
+    assert card["summary"][:2] == ["Класс: REG", "Язык: regex (ab)*a|b над {a, b}"]
+    assert card["summary"][2].startswith("в L: a, b, aba") and card["summary"][3].startswith("не в L: ε")
+    assert card["editable"] == ["transcription", "ir", "class"]
+    assert "Язык по IR" in card["details_md"] and "--resume" not in card["details_md"]
+    out = hitl.resume_run(out.run_dir, hitl.parse_decision("approve"))
+    card = hitl.load_run(out.run_dir)["pending"]["card"]
+    assert card["point"] == "report"
+    assert card["summary"] == ["Ответ: regular", "Доверие: verified · потолок 0.98", "Шагов: 3 · утверждений: 0"]
+    assert "steps" in card["editable"] and "verdict" in card["editable"]
+    for c in (card, hitl.pending_card(out.pending.request)):
+        assert len(c["summary"]) <= 4 and all(len(x) < 90 for x in c["summary"])
+    # an execute stop: the command, the args JSON in the details
+    req = {"action_requests": [{"name": "execute", "args": {"command": "python " + "x" * 200},
+                                "description": "run it"}],
+           "review_configs": [{"action_name": "execute", "allowed_decisions": ["approve", "reject"]}]}
+    ex = hitl.pending_card(req)
+    assert ex["point"] == "execute" and ex["editable"] == [] and len(ex["summary"][0]) < 90
+    assert ex["summary"][0].startswith("Команда: python") and '"command"' in ex["details_md"]
 
 
 def test_hitl_off_in_settings_runs_through(tmp_path):
@@ -531,11 +700,15 @@ def test_a_live_factory_passed_as_model_factory_is_a_live_run(tmp_path):
 
 def test_fabricated_id_renders_as_not_verified_in_full_proof(tmp_path):
     from tfl_deep_agent.reports.render import render_report
+    from tfl_deep_agent.tools.report import validate_report
 
-    out = start(tmp_path, H.fabricated_ids_script(), auto_approve=True)
-    rendered = render_report(out.result, evidence=out.run_dir, template="full_proof")
+    # the renderer is the second line of defence: render a fabricated copy of
+    # an accepted report over the run's ledger (submit_report refuses one)
+    out = start(tmp_path, H.base_script(), auto_approve=True)
+    fab = validate_report(H.fabricated_ids_script()["models"]["main"][-1]["tool_calls"][0]["args"])
+    rendered = render_report({**out.result, "report": fab}, evidence=out.run_dir, template="full_proof")
     steps = rendered.data["rendered"]["steps"]
-    assert out.result["steps"][0]["trust"] == "not_verified" == steps[0]["trust"]
+    assert steps[0]["trust"] == "not_verified" and steps[0]["unknown_ids"] == ["ev-made-up-step"]
     assert steps[1]["trust"] == "verified"
-    first = [ln for ln in rendered.markdown.splitlines() if "ev-made-up-step" in ln and "↳" in ln]
+    first = [ln for ln in rendered.markdown.splitlines() if "ev-made-up-step" in ln]
     assert first and "`not_verified`" in first[0] and "`verified`" not in first[0]

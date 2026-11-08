@@ -117,6 +117,65 @@ def fabricated_ids_script() -> dict[str, Any]:
     return s
 
 
+def fabricated_then_honest_script() -> dict[str, Any]:
+    """:func:`fabricated_ids_script`'s report (refused by submit_report: its
+    made-up ids are not in the ledger), then the honest one."""
+    s = fabricated_ids_script()
+    s["models"]["main"].append(report_call(base_script(), call_id="call-report-honest"))
+    return s
+
+
+def tool_names_by_id(script: dict[str, Any]) -> dict[str, str]:
+    """Every scripted tool-call id -> its tool name (all roles)."""
+    out: dict[str, str] = {}
+    for replies in script["models"].values():
+        for reply in replies:
+            for tc in reply.get("tool_calls") or []:
+                if tc.get("id"):
+                    out[tc["id"]] = tc["name"]
+    return out
+
+
+def names_instead_of_ids(script: dict[str, Any], *, call_id: str = "call-report-names") -> dict[str, Any]:
+    """The script's final report with every evidence id replaced by the name
+    of the tool that produced it (the mistake submit_report refuses)."""
+    names = tool_names_by_id(script)
+    reply = _report(script)
+    call = reply["tool_calls"][0]
+    call["id"] = call_id
+    args = call["args"]
+
+    def swap(ids: list[str]) -> list[str]:
+        return [names.get(i, i) for i in ids]
+
+    args["evidence_ids"] = swap(args.get("evidence_ids") or [])
+    for key in ("steps", "claims"):
+        for item in args.get(key) or []:
+            item["evidence_ids"] = swap(item.get("evidence_ids") or [])
+    if isinstance(args.get("lean"), dict):
+        args["lean"]["evidence_ids"] = swap(args["lean"].get("evidence_ids") or [])
+    return reply
+
+
+def reg_script() -> dict[str, Any]:
+    return copy.deepcopy(json.loads((MOCK / "reg_regex_regular.json").read_text(encoding="utf-8")))
+
+
+def reg_names_then_ids_script() -> dict[str, Any]:
+    """reg (ab)*a|b: a report citing tool names (refused), then the honest one."""
+    s = reg_script()
+    s["models"]["main"] = [*s["models"]["main"][:-1], names_instead_of_ids(s), s["models"]["main"][-1]]
+    return s
+
+
+def always_names_script(times: int) -> dict[str, Any]:
+    """reg: the model keeps citing tool names ``times`` times and never fixes them."""
+    s = reg_script()
+    bad = [names_instead_of_ids(s, call_id=f"call-names-{i}") for i in range(times)]
+    s["models"]["main"] = [*s["models"]["main"][:-1], *bad]
+    return s
+
+
 def pdf_script() -> dict[str, Any]:
     """A PDF task: main delegates the transcription to intake (which reads
     /input/task.pdf with deepagents' read_file), then formalizes it."""

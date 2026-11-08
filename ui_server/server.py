@@ -1585,6 +1585,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_file(STATIC_DIR / "index.html")
                 return
 
+            if path == "/favicon.ico":
+                # browsers ask for it regardless of <link rel="icon">: the same SVG, no 404 noise
+                self._send_file(STATIC_DIR / "favicon.svg")
+                return
+
             if path.startswith("/static/"):
                 fpath = _files_in(STATIC_DIR, recursive=True).get(path[len("/static/"):])
                 if fpath is None:

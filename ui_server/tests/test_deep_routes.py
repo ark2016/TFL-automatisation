@@ -210,7 +210,13 @@ def test_mock_run_command_and_child_env(fake_agent, monkeypatch):
     assert "ANTHROPIC_API_KEY" not in env and env["TFL_DEEP_RUNS_DIR"] == os.environ["TFL_DEEP_RUNS_DIR"]
     assert "ANTHROPIC_API_KEY" in dr._child_env(True)  # live passes the server's own environment through
     # the detail view: status, HITL card from the agent's run.json + hitl.md, events
-    assert data["run"]["pending_point"] == "formalization"
+    card = data["run"]["pending_point"]
+    assert card["point"] == "formalization" and card["title"] and data["pending_point"] == card
+    assert set(card) == {"point", "title", "summary", "details_md", "editable"}
+    assert card["editable"] == ["transcription", "ir", "class"]  # built from the request (no stored card)
+    assert all(len(s) < 90 for s in card["summary"]) and len(card["summary"]) <= 4
+    assert data["run"]["review_mode"] == "all" == data["review_mode"]
+    assert dr.api_runs()["runs"][0]["pending_point"]["point"] == "formalization"
     pending = data["hitl"]["pending"]
     assert pending["interrupt_id"] == "i1" and "card" in pending["card"]
     assert pending["allowed_decisions"] == ["approve", "edit", "reject"]
@@ -417,6 +423,65 @@ def test_live_override_may_only_lower_money_limits_and_keeps_review(fake_agent):
     assert snap["budget"]["per_task_usd"] == 1.0 and snap["budget"]["per_day_usd"] == 10
     out = dr.api_create({**MOCK_TEXT, "auto_approve": True, "settings_override": {"hitl": {"report": False}}})
     wait_status(out["run_id"], {"awaiting_human"})
+
+
+def test_review_mode_on_create(fake_agent):
+    for payload, needle in (({**MOCK_TEXT, "review_mode": "some"}, "review_mode must be one of"),
+                            ({**MOCK_TEXT, "review_mode": "all", "auto_approve": True}, "conflicts")):
+        status, body = dr.dispatch("POST", "/api/deep/runs", "", payload)
+        assert status == 400 and needle in body["error"], body
+    out = dr.api_create({**MOCK_TEXT, "review_mode": "formalization"})
+    assert out["review_mode"] == "formalization"
+    data = wait_status(out["run_id"], {"awaiting_human"})
+    argv = fake_agent["start_argv"][-1]
+    assert argv[argv.index("--review-mode") + 1] == "formalization" and "--auto-approve" not in argv
+    assert data["run"]["review_mode"] == "formalization" and data["hitl"]["review_mode"] == "formalization"
+    lab = json.loads((dr.DEEP_RUNS_DIR / out["run_id"] / "lab.json").read_text(encoding="utf-8"))
+    assert lab["review_mode"] == "formalization"
+    # the default adds no flag; auto_approve stays the mock-only alias of "auto"
+    out = dr.api_create(MOCK_TEXT)
+    wait_status(out["run_id"], {"awaiting_human"})
+    assert "--review-mode" not in fake_agent["start_argv"][-1] and out["review_mode"] == "all"
+    out = dr.api_create({**MOCK_TEXT, "auto_approve": True})
+    assert out["review_mode"] == "auto" and "--auto-approve" in fake_agent["start_argv"][-1]
+    # a live run may choose a review mode (it still needs confirm_spend)
+    status, body = dr.dispatch("POST", "/api/deep/runs", "", {"text": "x", "live": True, "review_mode": "auto"})
+    assert status == 400 and "confirm_spend" in body["error"]
+    out = dr.api_create({"text": "x", "live": True, "confirm_spend": True, "review_mode": "auto"})
+    wait_status(out["run_id"], {"awaiting_human"})
+    argv = fake_agent["start_argv"][-1]
+    assert "--live" in argv and argv[argv.index("--review-mode") + 1] == "auto"
+
+
+def test_resume_approve_rest(fake_agent):
+    run_id = dr.api_create(MOCK_TEXT)["run_id"]
+    wait_status(run_id, {"awaiting_human"})
+    for body_in, needle in (({"decision": "reject", "comment": "no", "approve_rest": True}, "only with"),
+                            ({"decision": "approve", "approve_rest": "yes"}, "boolean")):
+        status, body = dr.dispatch("POST", f"/api/deep/runs/{run_id}/resume", "", body_in)
+        assert status == 400 and needle in body["error"], body
+    assert not fake_agent["resume_argv"]
+    out = dr.api_resume(run_id, {"decision": "approve", "approve_rest": True})
+    assert out["approve_rest"] is True
+    argv = fake_agent["resume_argv"][-1]
+    assert "--approve-rest" in argv and argv[argv.index("--decision") + 1] == "approve"
+    data = wait_status(run_id, {"completed"})
+    assert data["run"]["review_mode"] == "auto" and data["run"]["pending_point"] is None
+    lab = json.loads((dr.DEEP_RUNS_DIR / run_id / "lab.json").read_text(encoding="utf-8"))
+    assert lab["review_mode"] == "auto"
+    assert "--approve-rest" not in dr.build_resume_command(Path("r"), "approve", None, live=False)
+
+
+def test_pending_card_survives_an_unreadable_run_json(tmp_path):
+    (tmp_path / "hitl.md").write_text("# HITL 2\nfull card", encoding="utf-8")
+    run = {"status": "awaiting_human", "run_dir": str(tmp_path)}
+    card = dr.pending_card(run, {}, {"point": "report"})
+    assert card == {"point": "report", "title": dr._CARD_TITLES["report"], "summary": [],
+                    "details_md": "# HITL 2\nfull card", "editable": []}
+    stored = {"point": "report", "title": "t", "summary": ["Ответ: x"], "details_md": "d", "editable": ["steps"]}
+    assert dr.pending_card(run, {"pending": {"point": "report", "card": stored}}) == stored
+    assert dr.pending_card({**run, "pending_card": stored}, {}) == stored  # cached at settle time
+    assert dr.pending_card({**run, "status": "running"}, {"pending": {"point": "report", "card": stored}}) is None
 
 
 def test_live_runs_run_one_at_a_time(fake_agent, monkeypatch):
@@ -747,7 +812,10 @@ def test_real_mock_pdf_run_through_both_hitl_points(port):
                             {"decision": "edit", "payload": {"transcription": H.EDITED_TRANSCRIPTION}})
     assert status == 200, body
     data = wait_status(run_id, {"awaiting_human", "error", "completed"}, timeout=240)
-    assert data["run"]["status"] == "awaiting_human" and data["run"]["pending_point"] == "report", data["log_tail"]
+    assert data["run"]["status"] == "awaiting_human" and data["run"]["pending_point"]["point"] == "report",         data["log_tail"]
+    card = data["pending_point"]
+    assert card["summary"][0].startswith("Ответ: ") and card["summary"][1].startswith("Доверие: ")
+    assert card["summary"][2].startswith("Шагов: ") and "steps" in card["editable"] and card["details_md"]
     assert data["hitl"]["pending"]["draft"] and "md" in data["hitl"]["pending"]["draft_urls"]
     later = dr.api_detail(run_id, after=n)["events"]
     assert later[0]["event"] == "segment_start" and later[0]["segment"] == 2  # 1-based: the first process was segment 1

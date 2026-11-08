@@ -1,10 +1,11 @@
 """``tfl-deep`` command line.
 
     tfl-deep (TEXT | --file task.{txt,md,pdf,png,jpg,jpeg,webp}) [--save RUN_DIR]
-             [--template T] [--mock-script FILE | --live] [--auto-approve]
+             [--template T] [--mock-script FILE | --live]
+             [--review-mode all|formalization|auto] [--auto-approve]
              [--no-dialog] [--settings JSON]
     tfl-deep --resume RUN_DIR --decision approve|edit|reject
-             [--payload JSON] [--comment TEXT] [--live] [--auto-approve] [--no-dialog]
+             [--payload JSON] [--comment TEXT] [--approve-rest] [--live] [--auto-approve] [--no-dialog]
 
 Mock mode is the default: the agent runs its real loop and its real tools, but
 every model reply is replayed from ``--mock-script`` (a JSON replay, see
@@ -22,8 +23,11 @@ On a terminal the stop is an interactive dialog; otherwise (``--no-dialog``,
 a pipe, a test) the process writes ``run.json`` with ``status:
 awaiting_human`` and the card ``hitl.md``, prints the resume commands and
 exits with code 3; ``--resume RUN_DIR --decision ...`` continues it in a new
-process. ``--auto-approve`` (eval, tests) approves every stop and marks the
-report "без проверки человеком".
+process. ``--review-mode`` picks which stops wait: ``all`` (default),
+``formalization`` (HITL 1 waits, the report is auto-approved) or ``auto``
+(every stop auto-approved; ``--auto-approve`` is its alias). An auto-approved
+report is marked "без проверки человеком". ``--resume ... --decision approve
+--approve-rest`` approves the pending stop and auto-approves every later one.
 
 The run directory (``--save``, default ``<runs dir>/<run id>``) holds
 ``run.json``, ``checkpoints.sqlite``, ``evidence.jsonl``, the input file and
@@ -44,6 +48,8 @@ from pathlib import Path
 from typing import Any
 
 TEMPLATES = ["full_proof", "exam_solution", "short_verdict", "lean_appendix"]
+#: the per-run review modes (``hitl.REVIEW_MODES``; kept here so the parser needs no [deep] import)
+REVIEW_MODES = ["all", "formalization", "auto"]
 TEXT_SUFFIXES = {".txt", ".md"}
 FILE_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 EXIT_USAGE = 2
@@ -67,8 +73,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mock-script", metavar="FILE",
                    help="scripted model replay for a mock run (the default mode when --live is absent); "
                         "see tfl_deep_agent/examples/mock/")
+    p.add_argument("--review-mode", choices=list(REVIEW_MODES), default=None,
+                   help="which HITL stops wait for a human: all (default; every enabled point), formalization "
+                        "(HITL 1 waits, the report is auto-approved), auto (every stop auto-approved); "
+                        "auto-approved stops are marked in the report")
     p.add_argument("--auto-approve", action="store_true",
-                   help="approve every HITL stop without asking (eval / tests; marked in the report)")
+                   help="alias of --review-mode auto: approve every HITL stop without asking (eval / tests; "
+                        "marked in the report); with --resume, auto-approve every later stop")
     p.add_argument("--no-dialog", action="store_true",
                    help="never ask on the terminal: stop with status awaiting_human (exit 3) instead")
     p.add_argument("--settings", metavar="JSON", help="settings file (default: tfl_deep_agent/settings.json)")
@@ -80,6 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "HITL 2: report fields); reject: the comment (a JSON string or {\"comment\": ...}); "
                         "@FILE reads it from a file")
     r.add_argument("--comment", metavar="TEXT", help="the comment for the agent (required with reject)")
+    r.add_argument("--approve-rest", action="store_true",
+                   help="with --decision approve: approve this stop (as your decision) and auto-approve every "
+                        "later stop of the run (review mode auto from here on)")
     return p
 
 
@@ -125,7 +139,7 @@ def new_run_id() -> str:
 
 def _dialog(args: argparse.Namespace) -> Any:
     """The TTY dialog, only when both ends are a terminal and not disabled."""
-    if args.no_dialog or args.auto_approve:
+    if args.no_dialog or args.auto_approve or args.review_mode == "auto":
         return None
     try:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -175,22 +189,30 @@ def _payload(text: str | None) -> Any:
 def _resume(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from . import hitl
 
-    if args.text or args.file or args.mock_script or args.template or args.settings or args.save:
-        parser.error("--resume takes only --decision / --payload / --comment / --live / --no-dialog / "
-                     "--auto-approve; the run keeps its task, script, template and settings")
+    if (args.text or args.file or args.mock_script or args.template or args.settings or args.save
+            or args.review_mode):
+        parser.error("--resume takes only --decision / --payload / --comment / --approve-rest / --live / "
+                     "--no-dialog / --auto-approve; the run keeps its task, script, template, settings and "
+                     "review mode")
     if not args.decision:
         parser.error("--resume needs --decision approve|edit|reject")
+    if args.approve_rest and args.decision != "approve":
+        parser.error("--approve-rest goes only with --decision approve")
     try:
         run = hitl.load_run(args.resume)
         if run.get("mode") == "live" and args.live and not os.environ.get("ANTHROPIC_API_KEY"):
             return _fail("--live needs ANTHROPIC_API_KEY in the environment (tfl-deep never loads .env)")
         decision = hitl.parse_decision(args.decision, _payload(args.payload), comment=args.comment)
-        if args.auto_approve:
+        if args.auto_approve and not args.approve_rest:
+            # this decision is the human's; every later stop is auto-approved
+            run.setdefault("initial_review_mode", hitl.review_mode_of(run))
+            run["review_mode"] = hitl.REVIEW_AUTO
             run["auto_approve"] = True
             hitl.save_run(args.resume, run)
         if run.get("mode") == "live":
             print("tfl-deep: LIVE mode: real Anthropic API calls, this spends money.", file=sys.stderr)
-        outcome = hitl.resume_run(args.resume, decision, live=args.live, dialog=_dialog(args))
+        outcome = hitl.resume_run(args.resume, decision, live=args.live, dialog=_dialog(args),
+                                  approve_rest=args.approve_rest)
     except (hitl.RunError, hitl.DecisionError, ValueError) as exc:
         return _fail(str(exc))
     return _report(outcome)
@@ -201,8 +223,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.resume:
         return _resume(args, parser)
-    if args.decision or args.payload or args.comment:
-        parser.error("--decision / --payload / --comment go with --resume RUN_DIR")
+    if args.decision or args.payload or args.comment or args.approve_rest:
+        parser.error("--decision / --payload / --comment / --approve-rest go with --resume RUN_DIR")
+    if args.auto_approve and args.review_mode not in (None, "auto"):
+        parser.error(f"--auto-approve is --review-mode auto; it conflicts with --review-mode {args.review_mode}")
     if args.text and args.file:
         parser.error("give either TEXT or --file, not both")
     if args.live and args.mock_script:
@@ -257,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         outcome = hitl.start_run(
             run_dir, task, settings=settings, mock_script=script, live=args.live, template=args.template,
-            auto_approve=args.auto_approve, dialog=_dialog(args), run_id=run_id)
+            auto_approve=args.auto_approve, review_mode=args.review_mode, dialog=_dialog(args), run_id=run_id)
     except (hitl.RunError, hitl.DecisionError, ValueError, TypeError) as exc:
         return _fail(str(exc))
     return _report(outcome)

@@ -83,9 +83,10 @@ from a script, so no request reaches the Anthropic API. Three scripts ship in [`
 ```
 tfl-deep (TEXT | --file task.{txt,md,pdf,png,jpg,jpeg,webp}) [--save RUN_DIR]
          [--template full_proof|exam_solution|short_verdict|lean_appendix]
-         [--mock-script FILE | --live] [--auto-approve] [--no-dialog] [--settings JSON]
+         [--mock-script FILE | --live] [--review-mode all|formalization|auto] [--auto-approve]
+         [--no-dialog] [--settings JSON]
 tfl-deep --resume RUN_DIR --decision approve|edit|reject
-         [--payload JSON|@FILE] [--comment TEXT] [--live] [--auto-approve] [--no-dialog]
+         [--payload JSON|@FILE] [--comment TEXT] [--approve-rest] [--live] [--auto-approve] [--no-dialog]
 ```
 
 | flag | meaning |
@@ -96,13 +97,15 @@ tfl-deep --resume RUN_DIR --decision approve|edit|reject
 | `--live` | real `ChatAnthropic` models; **spends money**. It needs `ANTHROPIC_API_KEY` in the environment; `tfl-deep` never loads `.env`. It excludes `--mock-script`. |
 | `--save DIR` | the run directory. Default: `<runs dir>/deep-<timestamp>-<hex>`, where the runs dir is `$TFL_DEEP_RUNS_DIR` or `.tfl_lab_runs`. |
 | `--template T` | the report template. Default: the mock script's template, else `full_proof`. The agent may pick another one in `submit_report`. |
-| `--auto-approve` | approve every HITL stop in the same process (for eval and tests). The report says "без проверки человеком". |
+| `--review-mode M` | which HITL stops wait for a human, see [Review modes](#review-modes): `all` (default), `formalization` (HITL 1 waits, the report is auto-approved) or `auto` (every stop is auto-approved). |
+| `--auto-approve` | an alias of `--review-mode auto`: approve every HITL stop in the same process (for eval and tests). The report says "без проверки человеком". With `--resume`, the decision given is yours and every later stop is auto-approved. |
 | `--no-dialog` | never ask on the terminal; stop with `awaiting_human` (exit 3) instead. A run whose stdin or stdout is not a TTY behaves the same way. |
 | `--settings F` | a settings file instead of the default one, see [Settings](#settings). The file must exist. |
-| `--resume DIR` | continue a run that waits for a human decision. It takes only `--decision`, `--payload`, `--comment`, `--live`, `--no-dialog` and `--auto-approve`; the task, script, template and settings are the run's own. |
+| `--resume DIR` | continue a run that waits for a human decision. It takes only `--decision`, `--payload`, `--comment`, `--approve-rest`, `--live`, `--no-dialog` and `--auto-approve`; the task, script, template, settings and review mode are the run's own. |
 | `--decision D` | `approve`, `edit` or `reject` |
 | `--payload P` | for `edit`, a JSON object with the fields to change; for `reject`, the comment (a JSON string or `{"comment": ...}`). `@FILE` reads the payload from a file. |
 | `--comment C` | the comment for the agent; required with `reject` |
+| `--approve-rest` | only with `--decision approve`: approve this stop as your decision, then auto-approve every later stop of the run (its review mode becomes `auto`, stored in `run.json`) |
 
 Exit codes: `0` the report was accepted, `1` the run ended without a report (a partial result is written: `incomplete`,
 `error` or `budget_exhausted`), `2` usage or setup error, `3` waiting for a human decision.
@@ -158,8 +161,15 @@ CLI, TFL Lab and the eval adapter handle them the same way.
   - `edit` takes `transcription`, `ir` and `class`. The edited IR is validated before the run continues.
   - The decision binds the verdict by code. Only oracle results for the approved IR count, whatever fingerprint
     the report names. A rejected or never-reviewed formalization leaves the verdict `not_verified`.
-- **HITL 2, report.** `submit_report` is interrupted before it runs, and only a report whose fields validate is
-  shown. The card has the draft `result.*` and the code-rated trust, with unknown evidence ids flagged.
+- **HITL 2, report.** `submit_report` is interrupted before it runs, and only a report whose fields validate and
+  whose evidence ids are all in the ledger is shown. The card has the draft `result.*` and the code-rated trust.
+  - A report citing an id that is not in `evidence.jsonl` (a tool name such as `regex_to_dfa` instead of its call
+    id, or a made-up label) is not shown and not accepted: `submit_report` returns an error the model sees, with
+    the unknown ids and the valid ids grouped by tool (`regex_to_dfa -> toolu_01Xb... (verified, ir-86ca...)`),
+    and the model resubmits. Code never maps a name to an id. The run limits still apply, so a model that never
+    fixes its ids ends `incomplete` / `budget_exhausted` with a partial report. The verdict gate and the renderer
+    still flag an unknown id (second line of defence), and a human edit at HITL 2 citing one is refused before
+    the run resumes.
   - `edit` changes report fields (for example `verdict`, `answer`, `method`, `steps`, `template`, `summary`). The
     fields are validated again and marked in the report as edited.
   - `reject` returns the comment to the agent, which then fixes the report and submits it again.
@@ -171,7 +181,23 @@ How the decision is given:
   resume commands and exits with code 3. `tfl-deep --resume DIR --decision ...` then continues the run in a new
   process. The budget, the call counters, the evidence ledger and the mock cursors are restored from the run
   directory.
-- `--auto-approve` answers every stop with approve.
+- `--review-mode auto` (or `--auto-approve`) answers every stop with approve, see below.
+
+### Review modes
+
+A run has one review mode (`run.json` `review_mode`), chosen at start (`--review-mode`, TFL Lab `review_mode`):
+
+| mode | HITL 1 (formalization) | HITL 2 (report) | `execute` |
+|---|---|---|---|
+| `all` (default) | waits for a human | waits for a human | waits for a human |
+| `formalization` | waits for a human | auto-approved | waits for a human |
+| `auto` (`--auto-approve`) | auto-approved | auto-approved | auto-approved |
+
+Only enabled points stop at all (`settings.hitl`). An auto-approved stop is recorded with `source: auto` and decision
+`auto_approved`, and an auto-approved report says "без проверки человеком". An auto-approved formalization is not a
+human approval: the verdict gate treats it like HITL 1 off, so `regex_to_dfa(ir=...)` stays `bounded_pass`.
+`--resume ... --decision approve --approve-rest` approves the pending stop as the human's decision and switches the
+run to `auto`; a formalization approved that way still counts as human-approved.
 
 ```bash
 tfl-deep --resume out/reg --decision edit --payload '{"transcription": "...", "ir": {...}}'   # HITL 1
@@ -302,8 +328,9 @@ shape of `AnthropicClient.build_request_kwargs` (adaptive thinking plus effort, 
   `reg_regex_regular.json` takes the first route (HITL 1 off there, so 0.85).
 - **Templates** (`skills/report-templates/`): `full_proof`, `exam_solution`, `short_verdict` and `lean_appendix`.
   Their structure follows the golden reports in `docs/examples/reg_grammar_SaSb_lean_proved/` and
-  `docs/examples/cfl_ticket50_w1bw2w3_lean_proved/`. The evidence block "Свидетельства, модели и расходы" and the
-  trust labels are generated by code.
+  `docs/examples/cfl_ticket50_w1bw2w3_lean_proved/`: Условие, Ответ, Решение (idea, construction, steps with
+  justifications), Заключение. The answer box, the trust marks and the appendix "Проверка" (evidence table, gate
+  notes, run, models and costs) are generated by code.
 
 ### Ad-hoc subagents and workflows
 
@@ -362,19 +389,45 @@ Both need Docker. Their tests skip cleanly when Docker, the daemon or the image 
 TFL Lab (`python -m ui_server.server --port 8765`) has a second workspace, **Deep Agent**. Use the switch in the top
 bar, or open `http://127.0.0.1:8765/#deep`. Backend: `ui_server/deep_routes.py` (`/api/deep/*`).
 
-- **Composer.** Text, or a PDF / image upload by drag-and-drop, a file picker or paste. The run controls are the
-  template, the main model, the budget and the review points. The mode is one of the `examples/mock` scripts, an
-  inline replay script, or live. Live needs the "I confirm API spend" tick, refuses auto-approve, and may only
-  lower the money limits.
-- **Run view.**
-  - the plan (`todos`);
-  - a live timeline of tool calls with trust chips, model calls, subagents, workflow steps and budget signals;
-  - the HITL cards: HITL 1 shows the source next to the editable transcription, the IR and sample words; HITL 2
-    shows the draft next to editable report fields;
-  - the subagent / workflow tree with per-model cost;
-  - the report as HTML, Markdown or JSON, with the evidence table;
-  - the log and the budget bar.
-- **Settings** for the deep agent, in a modal over `GET` / `PUT /api/deep/settings`.
+The tab is a chat (code: `ui_server/static/deep.js`): the runs on the left, one run's conversation in the middle,
+the report on the right.
+
+- **Runs.** "+ Новая задача", the deep runs (first words of the task, status dot, cost), ⚙ for the settings modal
+  (`GET` / `PUT /api/deep/settings`).
+- **Composer** (bottom of the chat). Text, or a PDF / image by drag-and-drop, the attach button or paste; Ctrl+Enter
+  sends a mock run. Chips under it: review mode (`review_mode`: Подтверждать всё / Только формализацию / Без
+  остановок), budget $, main model, report template, and mock script / inline script / live. Live shows a one-line
+  cost note and needs the "подтверждаю расходы API" tick; it may only lower the money limits.
+- **Conversation.** The task as a user message; consecutive model / tool calls folded into one row
+  ("▸ 4 инструмента · haiku · $0.004", expands to tool, trust chip, one-line reason); the plan (`todos`) as a
+  checklist; subagents / spawned agents / workflows as collapsed rows; decisions as one line
+  ("✓ формализация принята · вы"); errors and budget signals visibly. A run at a stop gets an inline card from
+  `pending_point` (title, ≤ 4 summary lines, Принять / Изменить / Отклонить, "Принять всё до конца" =
+  `approve_rest`, "подробнее" = `details_md`); Изменить opens the IR / transcription or the report fields inline.
+  The header carries a slim budget line (task and day).
+- **Report.** The finished report (or the draft at the report stop) in a sandboxed iframe; another template can be
+  viewed for an accepted report; closable, widenable; the raw log is behind "журнал".
+
+API additions (2026-11-08; the full list is in the `ui_server/deep_routes.py` docstring):
+- `POST /api/deep/runs` takes `"review_mode": "all" | "formalization" | "auto"` (live runs too; live still needs
+  `confirm_spend`). `"auto_approve": true` stays a mock-only alias of `"auto"`.
+- `POST /api/deep/runs/<id>/resume` takes `"approve_rest": true`, only with `"decision": "approve"`.
+- `GET /api/deep/runs/<id>` and the runs list carry `review_mode` (the effective one: `auto` after `approve_rest`)
+  and `pending_point`. `pending_point` is `null` unless the run is `awaiting_human`; then it is the stop's card,
+  made by code (no model call), also at the top level of the detail response:
+
+```json
+{"point": "formalization",
+ "title": "HITL 1 · формализация: условие и IR",
+ "summary": ["Класс: REG", "Язык: regex (ab)*a|b над {a, b}", "в L: a, b, aba, ababa, abababa",
+             "не в L: ε, aabbab, aababab, babbbba, aabaabbb"],
+ "details_md": "## HITL 1: transcription and IR ...",
+ "editable": ["transcription", "ir", "class"]}
+```
+
+  `summary` has at most 4 lines, each shorter than 90 characters; for HITL 2 it is
+  `["Ответ: <verdict>", "Доверие: <trust> · потолок <cap>", "Шагов: N · утверждений: M"]`. `details_md` is the full
+  `hitl.md` section of the stop; `editable` lists the fields an `edit` decision accepts (`[]`: no edit).
 
 UI runs live in `.tfl_lab_runs/deep/<id>/`. Each start or resume is one `python -m tfl_deep_agent ... --no-dialog`
 subprocess, so a HITL stop survives a server restart. A mock child never receives `ANTHROPIC_API_KEY`.

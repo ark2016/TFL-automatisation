@@ -79,8 +79,8 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 
 # TFL Deep Agent: mock by default (needs --mock-script); exit 3 = waiting at a HITL point, continue with --resume
 .venv/Scripts/python -m tfl_deep_agent [TEXT | --file task.{txt,md,pdf,png,jpg,webp}] --mock-script tfl_deep_agent/examples/mock/<f>.json \
-    [--save RUN_DIR] [--template T] [--auto-approve] [--no-dialog] [--settings JSON]
-.venv/Scripts/python -m tfl_deep_agent --resume RUN_DIR --decision approve|edit|reject [--payload JSON|@file] [--comment TEXT]
+    [--save RUN_DIR] [--template T] [--review-mode all|formalization|auto] [--auto-approve] [--no-dialog] [--settings JSON]
+.venv/Scripts/python -m tfl_deep_agent --resume RUN_DIR --decision approve|edit|reject [--payload JSON|@file] [--comment TEXT] [--approve-rest]
 .venv/Scripts/python -m pytest -q tfl_deep_agent/tests
 
 # TFL Lab (no run timeout, manual cancel; runs persist in run.json; progress.jsonl / partial_result.json per run dir)

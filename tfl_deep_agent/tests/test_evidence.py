@@ -495,13 +495,15 @@ def test_cfl_report_is_rated_from_the_ledger(tmp_path):
 
 
 def test_a_fabricated_evidence_id_lowers_trust(tmp_path):
-    script = copy.deepcopy(_script("cfl_anbmcm.json"))
-    report = script["models"]["main"][-1]["tool_calls"][0]["args"]
-    report["steps"][2]["evidence_ids"] = ["ev-grammar-vs-ir", "ev-made-up"]
-    report["evidence_ids"] = ["ev-grammar-vs-ir", "ev-made-up"]
+    # submit_report itself refuses a report with ids that are not in the ledger
+    # (2026-11-08); the policy stays the second line of defence, so rate a
+    # fabricated copy of the honest report against the honest run's ledger
     led = EvidenceLedger.open(tmp_path)
-    _graph, state = _run(script, led)
-    sub = _report_of(state)
+    _graph, state = _run(_script("cfl_anbmcm.json"), led)
+    honest_report = _report_of(state)
+    sub = copy.deepcopy(honest_report)
+    sub["steps"][2]["evidence_ids"] = ["ev-grammar-vs-ir", "ev-made-up"]
+    sub["evidence_ids"] = ["ev-grammar-vs-ir", "ev-made-up"]
     ev = P.evaluate_report(sub, led)
     honest = P.evaluate_report({**sub, "steps": [{**s, "evidence_ids": [i for i in s["evidence_ids"]
                                                                        if i != "ev-made-up"]}

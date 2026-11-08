@@ -46,7 +46,7 @@ One deepagents (LangChain) agent for REG / CFL / DCFL / LL(k) tasks, next to the
 | ad-hoc subagents, workflows, model policy | `orchestration/` |
 | report templates and renderer | `skills/report-templates/*.md`, `reports/render.py`, `tools/report.py` |
 | Docker sandbox | `sandbox/` (image `tfl-sandbox:latest`; pinned deps in `Dockerfile.sandbox` must match the venv) |
-| TFL Lab tab | `ui_server/deep_routes.py`, the deep section of `ui_server/static/app.js`; events come from `progress.py` |
+| TFL Lab tab | `ui_server/deep_routes.py`, `ui_server/static/deep.js` (loaded after `app.js`, uses its helpers); events come from `progress.py` |
 | CLI | `cli.py` (`tfl-deep`, `python -m tfl_deep_agent`) |
 
 ## Tests

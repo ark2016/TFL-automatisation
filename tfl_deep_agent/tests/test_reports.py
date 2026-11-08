@@ -116,8 +116,12 @@ def test_selectable_templates_match_the_agent_and_the_skill():
     assert skill.startswith("---\nname: report-templates\n")
     for name in R.SELECTABLE_TEMPLATES:
         assert f"`{name}`" in skill
-    # the skill never tells the model to state trust itself
-    assert "Свидетельства, модели и расходы" in skill
+    # the skill tells the model that the appendix and the trust marks are code's
+    assert f"Do not write a section named «{R.EVIDENCE_BLOCK_TITLE}»" in skill
+    assert "Свидетельства, модели и расходы" not in skill  # the old block name is gone
+    # and that a step needs a real justification and the construction the actual object
+    assert "`justification`: the argument" in skill and "the actual object" in skill
+    assert "never cite a tool name" in skill.lower()
 
 
 def test_no_template_contains_the_evidence_block_or_a_trust_word():
@@ -145,13 +149,18 @@ def test_structure_follows_the_golden_examples():
     res = make_result(make_report(lean={"evidence_ids": ["ev-lean"], "proof_path": "proof.lean"}))
     res["evidence"].append(lean_entry)
     md = R.render_report(res).markdown
-    order = ["## Условие", "## Вердикт", "## Метод", "## Гипотеза", "## Используемые утверждения теории",
-             "## Ключевые утверждения", "## Доказательство", "## Заключение",
+    # a solution document: task, answer, solution, conclusion; the check appendix last
+    order = ["# Анализ регулярности языка", "## Условие", "## Ответ", "> [!theorem] Ответ: язык регулярен",
+             "## Решение", "**Идея.**", "**Метод.**", "### Используемые утверждения теории", "### Конструкция",
+             "### Ключевые утверждения", "### Шаги доказательства", "## Заключение",
              "## Lean 4 formalization (R-Lean)", f"## {R.EVIDENCE_BLOCK_TITLE}"]
     pos = [md.index(h) for h in order]
     assert pos == sorted(pos), list(zip(order, pos))
-    assert "> [!theorem] Вердикт: regular" in md
-    assert "**Шаг 1. Построение**" in md and "**Обоснование:** Томпсон + минимизация." in md
+    assert "> Класс: REG · Уверенность: 85% · одобрено автоматически, без проверки человеком" in md
+    assert "**Шаг 1. Построение**\n\nСтроим ДКА по (ab)*a|b.\n\n*Обоснование:* Томпсон + минимизация." in md
+    # no machine metadata before the answer
+    head = md[:md.index("## Ответ")]
+    assert "Прогон" not in head and "шаблон" not in head and "$" not in head
     tail = md[md.index(f"## {R.EVIDENCE_BLOCK_TITLE}"):]
     assert not re.search(r"^## ", tail.split("\n", 1)[1], flags=re.MULTILINE)  # the evidence block is last
 
@@ -167,8 +176,8 @@ def test_claim_marks_come_from_the_ledger():
     assert claims[1]["trust"] == "bounded_pass"
     # a fabricated id: the claim is not_verified and the id is listed
     assert claims[2]["trust"] == "not_verified" and claims[2]["unknown_ids"] == ["ev-fabricated"]
-    assert "id нет в журнале: `ev-fabricated`" in md
-    assert "`ev-fabricated` (утверждение 2)" in md
+    assert ("- id, которых нет в журнале (утверждения с ними не проверены, `not_verified`): "
+            "`ev-fabricated` (утверждение 2).") in md
     # no ids: model words only
     assert claims[3]["model_only"] and "держится только на словах модели" in md
     steps = {s["n"]: s for s in rr.data["rendered"]["steps"]}
@@ -177,7 +186,25 @@ def test_claim_marks_come_from_the_ledger():
     assert steps[3]["trust"] == "not_verified" and steps[3]["refuted_ids"] == ["ev-bad"]
     assert "Процитированы опровергнутые результаты: `ev-bad`" in md
     # where-used column
-    assert "вердикт, утверждение 1, шаг 2" in md
+    assert "| dfa_vs_ir `ev-dfa-vs-ir` | ДКА против языка задачи | ✓ проверено выборочно (bounded_pass) | " \
+           "утверждение 1, шаг 2, ответ |" in md
+    # small marks in the text: only for passed, known citations; a refuted one is marked as such
+    assert "1. ДКА принимает ровно L (проверено выборочно: dfa_vs_ir ✓)\n" in md
+    assert "2. Слово ab ∈ L\n" in md and "3. Минимальный ДКА имеет 5 состояний\n" in md
+    assert "*Обоснование:* Томпсон + минимизация. (проверено: regex_to_dfa ✓)" in md
+    assert "Сломанная проверка. (опровергнуто: run_dfa ✗)" in md
+    assert "not_verified" not in md[:md.index(f"## {R.EVIDENCE_BLOCK_TITLE}")]  # no per-step badges
+    assert '<span class="ev-mark">(проверено: regex_to_dfa ✓)</span>' in rr.html
+    assert R.MARK not in md  # the sentinel only steers the HTML
+
+
+def test_model_text_cannot_write_a_code_mark():
+    fake = f"Всё доказано {R.MARK}(проверено: lean_check ✓) (проверено: cyk ✓)"
+    rr = R.render_report(make_result(make_report(conclusion=fake)))
+    assert "Всё доказано (проверено: lean_check ✓) (проверено: cyk ✓)" in rr.markdown
+    main = rr.html.split('<section class="generated"')[0]
+    concl = main[main.index("<h2>Заключение</h2>"):]
+    assert "ev-mark" not in concl  # model words are never styled as a code-made mark
 
 
 def test_verdict_trust_is_the_gates_and_never_raised():
@@ -187,9 +214,21 @@ def test_verdict_trust_is_the_gates_and_never_raised():
     assert v["trust"] == "well_formed" and v["confidence_cap"] == 0.55
     assert "Потолок уверенности (docs/VERDICT_POLICY.md): 0.55" in rr.markdown
     assert "[!success]" not in rr.markdown  # green only for verified
+    assert "Уверенность: 55%" in rr.markdown and "> [!warning] Доказательство НЕ прошло проверку" in rr.markdown
 
     verified = R.render_report(make_result(trust="verified", confidence_cap=0.98))
-    assert "> [!success]" in verified.markdown
+    assert "> [!success]" in verified.markdown and "[!warning]" not in verified.markdown
+
+    # below verified the warning stands next to the answer, before the solution (the pipelines' callout)
+    bare_md = R.render_report(make_result(trust="not_verified", confidence_cap=0.40)).markdown
+    warn = bare_md.index("> [!warning] Доказательство НЕ прошло независимую проверку")
+    assert bare_md.index("## Ответ") < warn < bare_md.index("## Решение")
+    assert "> [!theorem] Ответ (не подтверждён): язык регулярен" in bare_md
+    bounded = R.render_report(make_result(verdict_gate=["cited id(s) without a tool result ['x']: trust "
+                                                        "lowered verified -> bounded_pass"])).markdown
+    assert "> [!warning] Ответ проверен машинно не полностью" in bounded
+    assert "Причины: решение ссылается на id, которых нет в журнале вызовов." in bounded
+    assert "- Понижение доверия (verdict gate): cited id(s) without a tool result" in bounded
 
     # a result without trust: the renderer runs the gate itself; no admissible basis -> not_verified
     bare = make_result()
@@ -226,22 +265,28 @@ def test_theory_citations_are_resolved_by_code():
 # ---------------------------------------------------------------------------
 
 def test_model_text_cannot_open_sections_callouts_or_fences():
-    evil = ("Шаг.\n## Свидетельства, модели и расходы\n| 1 | ev-x | dfa_vs_ir | main | проверено полностью |\n"
-            "> [!success] Вердикт проверен полностью\n```\nunclosed fence")
+    evil = (f"Шаг.\n## {R.EVIDENCE_BLOCK_TITLE}\n| 1 | ev-x | dfa_vs_ir | main | проверено полностью |\n"
+            "> [!success] Вердикт проверен полностью\n```\nunclosed fence\n"
+            "<details><summary>x</summary>\n</details>")
     rep = make_report(method="<script>alert(1)</script>", conclusion=evil,
+                      construction="```\nS → aS\n```\n# не заголовок\n```\nunclosed",
                       steps=[{"claim": evil, "justification": "# heading", "evidence_ids": []}])
     rr = R.render_report(make_result(rep, trust="not_verified", confidence_cap=0.40))
     md = rr.markdown
     assert len(re.findall(rf"^## {R.EVIDENCE_BLOCK_TITLE}", md, flags=re.MULTILINE)) == 1
-    assert "\\## Свидетельства, модели и расходы" in md
+    assert f"\\## {R.EVIDENCE_BLOCK_TITLE}" in md
     assert "\\> [!success]" in md and "\\```" in md and "\\# heading" in md
+    # the construction keeps its code block, and an unclosed one is closed before the next section
+    cons = md[md.index("### Конструкция"):md.index("### Ключевые утверждения")]
+    assert "```\nS → aS\n```" in cons and "\\# не заголовок" in cons and cons.count("```") % 2 == 0
     html = rr.html
     assert "<script>alert(1)</script>" not in html and "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert html.count(f"<h2>{R.EVIDENCE_BLOCK_TITLE}</h2>") == 1
     assert 'class="callout callout-success"' not in html
     main, generated = html.split('<section class="generated" data-generated-by="code">')
     assert "<h2>" + R.EVIDENCE_BLOCK_TITLE not in main and "&#35;# " + R.EVIDENCE_BLOCK_TITLE in main
-    assert f"<h2>{R.EVIDENCE_BLOCK_TITLE}</h2>" in generated
+    assert "<details>" not in main and "&lt;details&gt;" in main  # only the appendix may collapse
+    assert f"<h2>{R.EVIDENCE_BLOCK_TITLE}</h2>" in generated and "<details><summary>" in generated
 
 
 def test_safe_text():
@@ -280,7 +325,8 @@ def test_budget_exhausted_renders_the_partial_template():
     assert rr.data["rendered"]["template"] == R.PARTIAL_TEMPLATE
     assert rr.data["status"] == "budget_exhausted"
     assert "> [!warning] Бюджет исчерпан" in md
-    assert "**Не установлен.**" in md and "`not_verified`" in md
+    assert "> [!theorem] Ответ не установлен" in md and "`not_verified`" in md
+    assert md.index("> [!warning] Бюджет исчерпан") < md.index("## Что удалось установить")
     assert "`ev-ir` validate_ir: корректно оформлено" in md
     assert "`ev-r` pump_check_cfl: опровергнуто" in md and "`ev-f` cyk: ошибка" in md
     assert "\\# Доказано!" in md  # the subagent's words stay words
@@ -343,7 +389,11 @@ def test_budget_block_from_a_budget_ledger():
     assert "| claude-opus-5-5 | 1 | 1000/400 | 200/50 | $0.2500 |" in md
     assert "| critic | 1 | $0.0100 |" in md
     assert "Потрачено: $0.2600 из $5.0000 (лимит задачи)" in md
-    assert "**Прогон:** `task-test`" in md
+    assert "Прогон `task-test` · шаблон `full_proof` · статус: отчёт сдан (`submitted`) · " \
+           "потрачено $0.2600 из $5.0000" in md
+    # the full call log, models and costs sit in one collapsed block of the appendix
+    log = md[md.index("<details><summary>Журнал вызовов, модели и расходы</summary>"):]
+    assert "| claude-opus-5-5 |" in log and log.rstrip().endswith("</details>")
     # a summary dict without records still gives the cost by model
     summ = R.normalize_budget(led.summary())
     assert summ["by_model"]["claude-haiku-5-5"]["usd"] == pytest.approx(0.01)
@@ -429,7 +479,7 @@ def test_lean_status_comes_from_the_ledger_not_from_the_model():
     assert "**не подтверждён журналом**" in md and "id нет в журнале: `ev-lean-fake`" in md
     assert "**Примечание модели:** status: proved" in md
     assert rr.data["rendered"]["lean"]["trust"] == "not_verified"
-    assert "## Доказательство" in md  # lean_appendix = full_proof + the Lean section
+    assert "### Шаги доказательства" in md  # lean_appendix = full_proof + the Lean section
 
     res = make_result(make_report(template="short_verdict"))
     res["evidence"].append(entry("ev-lean", "lean_check", "verified", data={
@@ -451,17 +501,18 @@ def test_no_lean_section_without_lean_evidence_or_block():
 
 def test_exam_solution_is_compact():
     md = R.render_report(make_result(make_report(template="exam_solution"))).markdown
-    assert "## Ответ" in md and "## Решение" in md and "## Вывод" in md
-    assert "## Выбранное слово или конструкция\n\nДКА из 5 состояний" in md
-    assert "1. **Построение.** Строим ДКА по (ab)*a|b. — Томпсон + минимизация." in md
-    assert "## Доказательство" not in md and "## Гипотеза" not in md
+    assert "## Ответ" in md and "## Решение" in md and "## Заключение" in md
+    assert "### Конструкция\n\nДКА из 5 состояний" in md
+    assert "### Ключевые шаги\n\n1. **Построение.** Строим ДКА по (ab)*a|b. — Томпсон + минимизация." in md
+    assert "### Шаги доказательства" not in md and "**Шаг" not in md
 
 
 def test_short_verdict_still_accounts_for_every_citation():
     rr = R.render_report(make_result(make_report(template="short_verdict")))
     md = rr.markdown
-    assert "Регулярен: ДКА построен и сверен с IR." in md
-    assert "**Шаг" not in md and "## Доказательство" not in md
+    assert "## Решение\n\nРегулярен: ДКА построен и сверен с IR." in md
+    assert "### Ключевые шаги\n\n1. **Построение.**" in md  # the steps, as a short list
+    assert "**Шаг" not in md and "### Шаги доказательства" not in md
     assert "`ev-fabricated` (утверждение 2)" in md and "шаг 2" in md  # where-used from the steps
 
 
@@ -493,6 +544,82 @@ def test_katex_only_for_math_in_the_body():
     assert "katex" not in plain  # the $ of the cost table does not count
     math = R.render_report(make_result(make_report(method="лемма для $a^n b^n$"))).html
     assert "katex.min.js" in math and "document.querySelector('main')" in math
+    assert "katex@0.16.11" in math
+
+
+def test_markdown_to_html_marks_labels_details_and_display_math():
+    md = (f"*Обоснование:* $(ab)^*a$ и *не курсив* {R.MARK}(проверено: cyk ✓)\n\n$$\na^n\n$$\n\n"
+          "<details><summary>Журнал</summary>\n\n| a |\n|---|\n| 1 |\n\n</details>")
+    html = R.markdown_to_html(md, details=True)
+    assert '<em class="label">Обоснование:</em> $(ab)^*a$ и *не курсив*' in html  # math keeps its stars
+    assert '<span class="ev-mark">(проверено: cyk ✓)</span>' in html
+    assert "<p>$$ a^n $$</p>" in html  # display math is not split by <br>
+    assert "<details><summary>Журнал</summary>" in html and "</details>" in html
+    plain = R.markdown_to_html(md)  # model text: no collapsed blocks
+    assert "<details>" not in plain and "&lt;details&gt;" in plain
+
+
+def test_safe_block_keeps_code_blocks_and_closes_them():
+    assert R.safe_block("```\nS → aS\n```\n# x") == "```\nS → aS\n```\n\n\\# x"
+    out = R.safe_block('```lean" onload=x\nunclosed')
+    assert out == "```leanonloadx\nunclosed\n```"  # the language is sanitised, the fence closed
+    assert R.MARK not in R.safe_block(f"a {R.MARK}(проверено: x ✓)")
+
+
+def _dfa_entry(eid: str = "ev-dfa", **kw: Any) -> dict[str, Any]:
+    dfa = {"states": ["q0", "q1", "q2"], "alphabet": ["a", "b"], "start": "q0", "accept": ["q1"],
+           "transitions": {"q0": {"a": "q1", "b": "q2"}, "q1": {"a": "q2", "b": "q0"}, "q2": {"a": "q2"}}}
+    return entry(eid, "regex_to_dfa", "verified", data={"dfa": dfa}, **kw)
+
+
+def test_construction_shows_the_objects_of_the_cited_results():
+    res = make_result()
+    res["evidence"][0] = _dfa_entry()
+    md = R.render_report(res).markdown
+    cons = md[md.index("### Конструкция"):md.index("### Ключевые утверждения")]
+    assert cons.startswith("### Конструкция\n\nДКА из 5 состояний")  # the model's text first
+    assert "**Таблица переходов ДКА** (3 состояний, из результата regex_to_dfa (`ev-dfa`)):" in cons
+    assert "| состояние | a | b | принимающее |" in cons and "| → q0 | q1 | q2 |  |" in cons
+    assert "| q1 | q2 | q0 | да |" in cons and "| q2 | q2 | — |  |" in cons
+    assert "«—» — перехода нет." in cons
+    # an uncited or refuted result gives no object
+    res["evidence"][0] = _dfa_entry("ev-other")
+    assert "Таблица переходов ДКА" not in R.render_report(res).markdown
+    res["evidence"][0] = {**_dfa_entry(), "trust": "refuted"}
+    assert "Таблица переходов ДКА" not in R.render_report(res).markdown
+
+
+def test_construction_grammar_and_ll_table_from_the_ledger():
+    g = {"nonterminals": ["S", "A"], "terminals": ["a", "b"], "start": "S",
+         "rules": [{"lhs": "S", "rhs": ["a", "A"]}, {"lhs": "A", "rhs": ["b"]}, {"lhs": "A", "rhs": []}]}
+    ll = entry("ev-ll", "ll_table", "verified", args={"ir": {"grammar": g}, "k": 1},
+               data={"k": 1, "parse_table": {"A": {"b": ["b"], "": []}, "S": {"a": ["a", "A"]}}})
+    rep = make_report(language_class="ll", verdict="LL(1)", construction="", claims=[], lemmas=[],
+                      steps=[{"title": "Таблица", "claim": "Конфликтов нет.", "justification": "Множества "
+                              "выбора не пересекаются.", "evidence_ids": ["ev-ll"]}], evidence_ids=["ev-ll"])
+    res = make_result(rep, evidence=[ll], basis=["ev-ll"], verdict_token="ll", trust="verified",
+                      confidence_cap=0.98)
+    md = R.render_report(res).markdown
+    assert "**Грамматика** (из результата ll_table (`ev-ll`)):\n\n```\nS → aA\nA → b | ε\n```" in md
+    assert "**Таблица LL(1)-анализа**" in md and "| S | S → aA |" in md
+    assert md.index("| S | S → aA |") < md.index("| A |")  # rows in the grammar's order
+    # the same grammar written by the model is not printed twice
+    rep2 = {**rep, "construction": "```\nS → aA\nA → b | ε\n```"}
+    md2 = R.render_report({**res, "report": rep2}).markdown
+    assert "Грамматика выше совпадает с той, которую проверил ll_table (`ev-ll`)." in md2
+    assert md2.count("A → b | ε") == 1
+
+
+def test_review_short_line_in_the_answer_box():
+    def box(**kw: Any) -> str:
+        md = R.render_report(make_result(), **kw).markdown
+        return md[md.index("> [!theorem]"):md.index("## Решение")]
+
+    assert "одобрено автоматически, без проверки человеком" in box()
+    assert "отчёт проверил человек" in box(human_review={"decision": "approve"})
+    assert "с правками" in box(human_review={"decision": "edit", "edited_fields": ["verdict"]})
+    assert "черновик, ожидает проверки человеком" in box(status="awaiting_human",
+                                                         human_review={"decision": "pending"})
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +717,27 @@ def _run(script: dict[str, Any]) -> tuple[dict[str, Any], B.BudgetLedger]:
     return A.collect_result(state, ledger=ledger, human_review="auto-approved (--auto-approve)"), ledger
 
 
+def _run_with_pending(script: dict[str, Any]) -> dict[str, Any]:
+    """Run ``script`` without its final report and rate that report as a
+    pending one (main-thread evidence, the P2 rule): the path a report with
+    ids that are not in the ledger can no longer take through submit_report."""
+    pytest.importorskip("deepagents")
+    from tfl_deep_agent import agent as A
+
+    script = copy.deepcopy(script)
+    main = script["models"]["main"]
+    (call,) = [tc for tc in main[-1].get("tool_calls") or [] if tc["name"] == "submit_report"]
+    report = copy.deepcopy(call["args"])
+    main[-1] = {"content": "Готово."}
+    settings = json.loads((PKG / "settings.example.json").read_text(encoding="utf-8"))
+    ledger = B.BudgetLedger(5.0, reserve_for_report_usd=0.3, per_subagent_max_usd=2.0)
+    graph = A.create_tfl_agent(settings, model_factory=A.scripted_model_factory(script), budget=ledger)
+    state = A.run_task(graph, script["task"])
+    out = A.collect_result(state, ledger=ledger, pending_report=report,
+                           human_review="auto-approved (--auto-approve)")
+    return {**out, "status": "submitted"}
+
+
 def _load(name: str) -> dict[str, Any]:
     return json.loads((MOCK / name).read_text(encoding="utf-8"))
 
@@ -642,13 +790,16 @@ def test_fabricated_evidence_id_lowers_trust_end_to_end():
         args["steps"][1]["evidence_ids"] = ["ev-made-up"]
 
     honest, _ = _run(script)
-    faked, _ = _run(_patch_report(script, fabricate))
+    # submit_report refuses the fabricated report and the model resubmits the
+    # honest one (2026-11-08); the gate stays the second line of defence, so
+    # rate the fabricated copy as the HITL 2 draft would be rated
+    faked = _run_with_pending(_patch_report(script, fabricate))
     rank = {t: i for i, t in enumerate(base.TRUST_LEVELS)}
     assert rank[faked["trust"]] < rank[honest["trust"]]  # the gate lowers the verdict one level
     rr = R.render_report(faked)
     step2 = rr.data["rendered"]["steps"][1]
     assert step2["trust"] == "not_verified" and step2["unknown_ids"] == ["ev-made-up"]
-    assert "id нет в журнале: `ev-made-up`" in rr.markdown
+    assert "которых нет в журнале" in rr.markdown and "`ev-made-up` (шаг 2)" in rr.markdown
     assert rr.data["rendered"]["verdict"]["trust"] == faked["trust"]
 
 

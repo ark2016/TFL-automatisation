@@ -48,10 +48,20 @@ must survive the process boundary is stored in the run directory:
 ``result.*``          the rendered report (a draft while HITL 2 waits)
 ====================  =====================================================
 
-``auto_approve=True`` (``--auto-approve``, eval and tests) answers every stop
-with "approve" in the same process; the report is marked "без проверки
-человеком". A ``dialog`` callable (the CLI's TTY dialog) asks in the same
-process; ``None`` from it leaves the run awaiting.
+Review modes (``review_mode``, per run, stored in ``run.json``): ``all``
+(default) -- every enabled point waits for a human; ``formalization`` -- HITL
+1 (and ``execute``) wait, HITL 2 is auto-approved; ``auto`` -- every stop is
+answered with "approve" in the same process (``auto_approve=True`` /
+``--auto-approve`` is an alias). An auto-approved stop is recorded with source
+``auto`` and decision ``auto_approved``; an auto-approved report is marked
+"без проверки человеком", and an auto-approved formalization is not a human
+approval for the verdict gate (:func:`run_binding`). ``resume_run(...,
+approve_rest=True)`` approves the pending stop as the human's decision and
+switches the run to ``auto``. A ``dialog`` callable (the CLI's TTY dialog)
+asks in the same process; ``None`` from it leaves the run awaiting.
+
+While a run waits, ``run.json`` ``pending.card`` holds the short card of the
+stop (:func:`pending_card`; TFL Lab shows it as ``pending_point``).
 """
 
 from __future__ import annotations
@@ -101,6 +111,47 @@ EXIT_SUBMITTED, EXIT_NO_REPORT, EXIT_AWAITING = 0, 1, 3
 AUTO_APPROVED_LABEL = "auto-approved (--auto-approve): without human review"
 FORMALIZATION_EDIT_FIELDS = ("transcription", "ir", "class")
 _CLASSES = ("reg", "cfl", "dcfl", "ll")
+
+#: per-run review modes (user decision 2026-11-08): ``all`` every enabled
+#: point waits for a human; ``formalization`` HITL 1 (and ``execute``) wait,
+#: HITL 2 is auto-approved; ``auto`` every point is auto-approved (the old
+#: ``auto_approve``). An auto-approved stop is recorded with source ``auto``
+#: and decision ``auto_approved``, exactly like ``--auto-approve``.
+REVIEW_ALL, REVIEW_FORMALIZATION, REVIEW_AUTO = "all", "formalization", "auto"
+REVIEW_MODES = (REVIEW_ALL, REVIEW_FORMALIZATION, REVIEW_AUTO)
+
+
+def resolve_review_mode(review_mode: str | None = None, auto_approve: bool = False) -> str:
+    """The review mode of a new run: ``review_mode`` (one of :data:`REVIEW_MODES`),
+    ``auto_approve=True`` being an alias of ``auto``; default ``all``."""
+    if review_mode is None:
+        return REVIEW_AUTO if auto_approve else REVIEW_ALL
+    mode = str(review_mode).strip().lower()
+    if mode not in REVIEW_MODES:
+        raise RunError(f"unknown review mode {review_mode!r}; one of {list(REVIEW_MODES)}")
+    if auto_approve and mode != REVIEW_AUTO:
+        raise RunError(f"auto_approve is the review mode 'auto'; it conflicts with review mode {mode!r}")
+    return mode
+
+
+def review_mode_of(run: Mapping[str, Any]) -> str:
+    """The run's effective review mode (``run.json`` ``review_mode``; a run
+    written before it existed: ``auto`` when ``auto_approve``, else ``all``)."""
+    mode = run.get("review_mode")
+    if mode in REVIEW_MODES:
+        return str(mode)
+    return REVIEW_AUTO if run.get("auto_approve") else REVIEW_ALL
+
+
+def auto_approves(mode: str, point: str) -> bool:
+    """Whether a stop at ``point`` is approved without a human in ``mode``:
+    ``auto`` every point; ``formalization`` only the report (HITL 2), never
+    HITL 1 or ``execute``; ``all`` none."""
+    if mode == REVIEW_AUTO:
+        return True
+    if mode == REVIEW_FORMALIZATION:
+        return point == REPORT
+    return False
 
 
 class DecisionError(ValueError):
@@ -645,7 +696,7 @@ def formalization_note(binding: Mapping[str, Any] | None, report: Mapping[str, A
                 "IR was approved after it; the verdict is not_verified.")
     if status == "no_ir":
         return "Formalization (HITL 1): approved without an IR; no IR to bind the oracle results to: not_verified."
-    how = "auto-approved (--auto-approve)" if binding.get("auto") else str(binding.get("decision"))
+    how = "auto-approved (no human review)" if binding.get("auto") else str(binding.get("decision"))
     line = f"Formalization (HITL 1): {how}, IR {fp}; only oracle results for this IR count."
     rfp = (report or {}).get("ir_fingerprint")
     if rfp and rfp != fp:
@@ -699,13 +750,23 @@ def report_review_text(report: Mapping[str, Any], evidence: Any = None,
 
 def report_interrupt_config(evidence: Any = None, *, formalization_on: bool = False) -> dict[str, Any]:
     """``interrupt_on["submit_report"]``: approve / edit / reject, only for a
-    report whose fields validate (``when``), with the code-made review text
+    report whose fields validate and (with ``evidence``) whose evidence ids are
+    all in the ledger (``when``), with the code-made review text
     as the description (``formalization_on``: HITL 1 is on, the card states
     its decision or that none was held)."""
 
     def when(request: Any) -> bool:
         call = _get(request, "tool_call") or {}
-        return _valid_report(_get(call, "args")) is not None
+        report = _valid_report(_get(call, "args"))
+        if report is None:
+            return False
+        if evidence is not None:
+            from .tools.report import unknown_evidence_ids
+
+            # a report citing ids that are not in the ledger is refused by the tool itself
+            # (the model gets the list of valid ids): no stop for it
+            return not unknown_evidence_ids(report, evidence)
+        return True
 
     def describe(tool_call: Any, state: Any, runtime: Any) -> str:  # noqa: ARG001
         report = _valid_report(_get(tool_call, "args")) or dict(_get(tool_call, "args") or {})
@@ -789,16 +850,24 @@ def request_point(request: Any) -> str:
     return "other"
 
 
-def _edit_report(original: Mapping[str, Any], changes: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def _edit_report(original: Mapping[str, Any], changes: Mapping[str, Any],
+                 evidence: Any = None) -> tuple[dict[str, Any], list[str]]:
     from pydantic import ValidationError
 
-    from .tools.report import _error_text, validate_report
+    from .tools.report import _error_text, evidence_id_error, unknown_evidence_ids, validate_report
 
     merged = {**dict(original), **dict(changes)}
     try:
         report = validate_report(merged)
     except ValidationError as exc:
         raise DecisionError(f"the edited report does not validate: {_error_text(exc)[:1500]}") from None
+    if evidence is not None:
+        # submit_report refuses a report citing ids that are not in the ledger; say so now,
+        # before the edit is applied, instead of losing the human's edit to that refusal
+        unknown = unknown_evidence_ids(report, evidence)
+        if unknown:
+            raise DecisionError("the edited report " + evidence_id_error(unknown, evidence)["error"]
+                                .replace("report NOT accepted (nothing was recorded): ", "is not accepted: ", 1))
     base = _valid_report(original) or dict(original)
     fields = sorted(k for k in changes if base.get(k) != report.get(k))
     return report, fields
@@ -837,10 +906,12 @@ def _edit_formalization(original: Mapping[str, Any], changes: Mapping[str, Any])
     return out, fields
 
 
-def resume_value(request: Mapping[str, Any], decision: Decision) -> tuple[dict[str, Any], dict[str, Any]]:
+def resume_value(request: Mapping[str, Any], decision: Decision, *,
+                 evidence: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """``(HITLResponse, review record)`` for ``decision`` on ``request``.
     Raises :class:`DecisionError` before anything is resumed when the decision
-    does not fit (not allowed, an edit that does not validate)."""
+    does not fit (not allowed, an edit that does not validate; with
+    ``evidence``, the run's ledger, a report edit citing ids not in it)."""
     actions = list(_get(request, "action_requests") or [])
     if not actions:
         raise DecisionError("the pending interrupt has no action to decide on")
@@ -863,7 +934,7 @@ def resume_value(request: Mapping[str, Any], decision: Decision) -> tuple[dict[s
         else:
             orig = dict(_get(act, "args") or {})
             if point == REPORT:
-                new_args, fields = _edit_report(orig, decision.args or {})
+                new_args, fields = _edit_report(orig, decision.args or {}, evidence)
             elif point == FORMALIZATION:
                 new_args, fields = _edit_formalization(orig, decision.args or {})
             else:
@@ -991,6 +1062,136 @@ def describe_pending(run_dir: str | Path, interrupt_id: str, request: Mapping[st
     return PendingInfo(Path(run_dir), interrupt_id, point, dict(request), "\n\n".join(p for p in parts if p))
 
 
+# ---------------------------------------------------------------------------
+# The short stop card (TFL Lab: run.pending_point)
+# ---------------------------------------------------------------------------
+
+#: a card line is shorter than this
+CARD_LINE_MAX = 90
+CARD_TITLES = {FORMALIZATION: "HITL 1 · формализация: условие и IR",
+               REPORT: "HITL 2 · черновик отчёта",
+               EXECUTE: "Запуск кода в песочнице (execute)"}
+_CLASS_LABELS = {"reg": "REG", "cfl": "CFL", "dcfl": "DCFL", "ll": "LL(k)"}
+
+
+def _short(text: Any, limit: int = CARD_LINE_MAX - 1) -> str:
+    s = " ".join(str(text or "").split())
+    return s if len(s) <= limit else s[:limit - 1].rstrip() + "…"
+
+
+def _word_line(label: str, words: Sequence[str] | None, limit: int = CARD_LINE_MAX - 1,
+               most: int = 5) -> str | None:
+    """``label: w1, w2, ...`` with the shortest words first, at most ``most``
+    of them and as many as fit."""
+    if not words:
+        return None
+    ordered = sorted(dict.fromkeys(str(w) for w in words), key=lambda w: (len(w), w))
+    line = f"{label}:"
+    taken = 0
+    for w in ordered[:most]:
+        nxt = f"{line}{',' if taken else ''} {w or 'ε'}"
+        if len(nxt) > limit:
+            break
+        line, taken = nxt, taken + 1
+    return line if taken else _short(f"{label}: {ordered[0] or 'ε'}", limit)
+
+
+def _language_line(cls: str | None, ir: Any, restatement: str | None) -> str | None:
+    """``Язык: ...`` from the IR itself (a regex compactly), else from the
+    ``Язык по IR:`` line of the code-made restatement."""
+    if isinstance(ir, Mapping):
+        spec = ir.get("language_spec") if isinstance(ir.get("language_spec"), Mapping) else {}
+        if spec.get("kind") == "regex" and isinstance(spec.get("pattern"), str):
+            try:
+                from .tools.ir import alphabet_for
+
+                alphabet = alphabet_for(cls or "reg", ir)
+            except Exception:  # noqa: BLE001 - a card line, not a check
+                alphabet = []
+            over = f" над {{{', '.join(alphabet)}}}" if alphabet else ""
+            return _short(f"Язык: regex {spec['pattern']}{over}")
+    for line in str(restatement or "").splitlines():
+        if line.startswith("Язык по IR:"):
+            return _short("Язык: " + line[len("Язык по IR:"):].strip().rstrip("."))
+    return None
+
+
+def _formalization_summary(args: Mapping[str, Any]) -> list[str]:
+    cls = args.get("class")
+    out = [f"Класс: {_CLASS_LABELS.get(str(cls), cls or '?')}"]
+    if args.get("ir") is None:
+        out.append(_short(f"IR нет: {args.get('ir_error') or 'no IR'}"))
+        return out
+    if not args.get("valid"):
+        errs = args.get("errors") or []
+        out.append(_short("IR не проходит validate_ir: " + (str(errs[0]) if errs else "?")))
+    lang = _language_line(cls, args.get("ir"), args.get("restatement"))
+    if lang:
+        out.append(lang)
+    ex = args.get("examples") or {}
+    for label, key in (("в L", "in_language"), ("не в L", "not_in_language")):
+        line = _word_line(label, ex.get(key))
+        if line:
+            out.append(line)
+    return out[:4]
+
+
+def _report_summary(args: Mapping[str, Any], draft: Mapping[str, Any] | None) -> list[str]:
+    draft = draft or {}
+    out = [_short(f"Ответ: {args.get('verdict') or '?'}")]
+    if draft.get("trust"):
+        cap = draft.get("confidence_cap")
+        out.append(_short(f"Доверие: {draft['trust']} · потолок "
+                          + (f"{float(cap):.2f}" if isinstance(cap, (int, float)) else "?")))
+    out.append(f"Шагов: {len(args.get('steps') or [])} · утверждений: {len(args.get('claims') or [])}")
+    if draft.get("unknown_ids"):
+        out.append(_short(f"Ссылки без записи в журнале: {len(draft['unknown_ids'])}"))
+    return out[:4]
+
+
+def card_details(request: Mapping[str, Any], point: str | None = None) -> str:
+    """The full card of a stop in Markdown (the request's own sections, as in
+    ``hitl.md`` without the CLI resume commands)."""
+    point = point or request_point(request)
+    acts = list(_get(request, "action_requests") or [])
+    parts = [str(_get(a, "description") or "") for a in acts]
+    if point not in (FORMALIZATION, REPORT):
+        parts += [f"```json\n{json.dumps(_get(a, 'args'), ensure_ascii=False, indent=2, default=str)}\n```"
+                  for a in acts]
+    return "\n\n".join(p for p in parts if p)
+
+
+def pending_card(request: Mapping[str, Any], *, draft: Mapping[str, Any] | None = None,
+                 point: str | None = None) -> dict[str, Any]:
+    """The short card of a pending stop, built by code from the request (no
+    model call): ``{"point", "title", "summary": [<= 4 lines, each < 90 chars],
+    "details_md", "editable": [fields an edit decision accepts]}``. ``draft``:
+    the HITL 2 draft's code-computed rating (``run.json`` ``draft``);
+    ``point``: the stop's point when known (``run.json`` ``pending.point``)."""
+    point = point if point in CARD_TITLES else request_point(request)
+    acts = list(_get(request, "action_requests") or [])
+    first = dict(_get(acts[0], "args") or {}) if acts else {}
+    configs = {_get(c, "action_name"): c for c in _get(request, "review_configs") or []}
+    allowed = [d for d in DECISIONS
+               if all(d in list(_get(configs.get(_get(a, "name")), "allowed_decisions") or ["approve", "reject"])
+                      for a in acts)] if acts else []
+    if point == FORMALIZATION:
+        summary, editable = _formalization_summary(first), list(FORMALIZATION_EDIT_FIELDS)
+    elif point == REPORT:
+        from .tools.report import SubmitReportArgs
+
+        summary, editable = _report_summary(first, draft), list(SubmitReportArgs.model_fields)
+    else:
+        cmd = first.get("command") if isinstance(first.get("command"), str) else None
+        summary = [_short(f"Команда: {cmd}")] if cmd else [_short(f"Вызов: {_get(a, 'name')}") for a in acts][:4]
+        editable = sorted(first)
+    if "edit" not in allowed or len(acts) != 1:
+        editable = []
+    title = CARD_TITLES.get(point) or _short(f"Остановка: {', '.join(str(_get(a, 'name')) for a in acts)}")
+    return {"point": point, "title": title, "summary": [s for s in summary if s][:4],
+            "details_md": card_details(request, point), "editable": editable}
+
+
 def _task_message(task: Any) -> tuple[str, dict[str, Any] | None]:
     """The first message of the run and the state files for a file task."""
     if task.kind == "text":
@@ -1028,6 +1229,7 @@ def start_run(
     dialog: Dialog | None = None,
     hitl: Any = True,
     run_id: str | None = None,
+    review_mode: str | None = None,
 ) -> RunOutcome:
     """Start a run in ``run_dir`` (created; it must not hold a run yet).
 
@@ -1035,8 +1237,10 @@ def start_run(
     ``mock_script`` (mock mode, the default way), ``model_factory`` (a custom
     factory; pass it again to :func:`resume_run`) or ``live=True``
     (``agent.default_model_factory``; real API calls). ``hitl``: ``True`` =
-    ``settings.hitl``, a mapping of points, or ``False``. Returns at the end
-    of the run or at the first stop nobody answered here."""
+    ``settings.hitl``, a mapping of points, or ``False``. ``review_mode``
+    (:data:`REVIEW_MODES`; ``auto_approve=True`` is an alias of ``auto``):
+    which enabled points wait for a human. Returns at the end of the run or at
+    the first stop nobody answered here."""
     from . import agent as agent_mod
     from .intake import files as intake_files
 
@@ -1046,6 +1250,7 @@ def start_run(
     modes = [mock_script is not None, model_factory is not None, bool(live)]
     if sum(modes) != 1:
         raise RunError("give exactly one of mock_script, model_factory or live=True")
+    mode_of_review = resolve_review_mode(review_mode, auto_approve)
     task_input = task if hasattr(task, "kind") and hasattr(task, "input_path") else intake_files.from_text(str(task))
     cfg = agent_mod.settings_dict(settings)
     points = agent_mod.hitl_points(cfg, hitl)
@@ -1071,7 +1276,9 @@ def start_run(
         "mode": mode, "factory": "custom" if model_factory is not None else None,
         "mock_script": script_copy, "template": template,
         "task_text": task_input.text if task_input.kind == "text" else None,
-        "message": text, "input": source, "settings": cfg, "hitl": points, "auto_approve": bool(auto_approve),
+        "message": text, "input": source, "settings": cfg, "hitl": points,
+        "review_mode": mode_of_review, "initial_review_mode": mode_of_review,
+        "auto_approve": mode_of_review == REVIEW_AUTO,
         "reviews": [], "pending": None, "budget": {"spent_usd": 0.0, "records": []},
         "limits": {"model_calls": 0, "tool_calls": 0}, "segments": [], "result": None, "error": None,
     }
@@ -1091,14 +1298,22 @@ def resume_run(
     model_factory: Callable[[str, str], Any] | None = None,
     live: bool = False,
     dialog: Dialog | None = None,
+    approve_rest: bool = False,
 ) -> RunOutcome:
     """Resume a run waiting at a HITL stop with ``decision``
     (``Command(resume=...)``; usually in a new process). The decision is
     checked against the pending request first; a misfit raises
     :class:`DecisionError` and leaves the run as it was. A live run needs
-    ``live=True`` again (it spends money); a mock run refuses it."""
+    ``live=True`` again (it spends money); a mock run refuses it.
+
+    ``approve_rest`` (only with the decision ``approve``): this stop is approved
+    as the human's decision, and the run switches to review mode ``auto``, so
+    every later stop is auto-approved (recorded as ``auto``). It is stored in
+    ``run.json`` (``review_mode``, ``approve_rest``), so a later process keeps it."""
     from langgraph.types import Command
 
+    if approve_rest and decision.type != "approve":
+        raise DecisionError(f"approve_rest goes only with the decision 'approve', not {decision.type!r}")
     d = Path(run_dir)
     run = load_run(d)
     if run.get("status") != STATUS_AWAITING or not run.get("pending"):
@@ -1116,8 +1331,16 @@ def resume_run(
         if agent_mod.is_live_factory(model_factory):
             raise RunError(f"{d} is a {mode} run; a live model factory cannot resume it")
     pending = run["pending"]
-    value, review = resume_value(pending["request"], decision)
+    value, review = resume_value(pending["request"], decision, evidence=_run_evidence(d))
     review["interrupt_id"] = pending["interrupt_id"]
+    if approve_rest:
+        review["approve_rest"] = True
+        run.setdefault("initial_review_mode", review_mode_of(run))
+        run["review_mode"] = REVIEW_AUTO
+        run["auto_approve"] = True
+        run["approve_rest"] = {"at": review["at"], "point": review["point"],
+                               "interrupt_id": pending["interrupt_id"], "source": decision.source,
+                               "reviewer": decision.reviewer}
     run["reviews"].append(review)
     run["pending"] = None
     run["status"] = "running"
@@ -1265,15 +1488,16 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
             intr = interrupts[0]
             request = intr.value if isinstance(intr.value, Mapping) else {"value": intr.value}
             info = describe_pending(d, intr.id, request)
-            decision = Decision("approve", source="auto") if run.get("auto_approve") else None
+            auto = auto_approves(review_mode_of(run), info.point)
+            decision = Decision("approve", source="auto") if auto else None
             if decision is None:
                 _write_awaiting(d, run, info, graph, config, budget, evidence)
                 progress.hitl_awaiting(info, run)
-                decision = _ask(dialog, info)
+                decision = _ask(dialog, info, evidence=evidence)
                 if decision is None:
                     pending = info
                     break
-            resume, review = resume_value(request, decision)
+            resume, review = resume_value(request, decision, evidence=evidence)
             review["interrupt_id"] = intr.id
             run["reviews"].append(review)
             run["pending"] = None
@@ -1324,7 +1548,17 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
         conn.close()
 
 
-def _ask(dialog: Dialog | None, info: PendingInfo) -> Decision | None:
+def _run_evidence(d: Path) -> Any:
+    """The run's evidence ledger (``evidence.jsonl``; read, nothing written)."""
+    from .evidence.ledger import EvidenceLedger
+
+    try:
+        return EvidenceLedger.open(d)
+    except Exception:  # noqa: BLE001 - an unreadable ledger: ids are checked again by the tool
+        return None
+
+
+def _ask(dialog: Dialog | None, info: PendingInfo, *, evidence: Any = None) -> Decision | None:
     """Ask ``dialog`` until it gives a decision that fits (or ``None``)."""
     if dialog is None:
         return None
@@ -1333,7 +1567,7 @@ def _ask(dialog: Dialog | None, info: PendingInfo) -> Decision | None:
         if decision is None:
             return None
         try:
-            resume_value(info.request, decision)
+            resume_value(info.request, decision, evidence=evidence)
         except DecisionError as exc:
             notify = getattr(dialog, "notify", None)
             if callable(notify):
@@ -1365,9 +1599,23 @@ def review_summary(run: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def run_binding(run: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any] | None:
-    """:func:`formalization_binding` of a run (its points, its state records)."""
-    return formalization_binding(state.get(STATE_KEY), on=bool((run.get("hitl") or {}).get(FORMALIZATION)),
-                                 auto=bool(run.get("auto_approve")))
+    """:func:`formalization_binding` of a run (its points, its state records).
+
+    ``auto`` is set from the run's review history, not from the run's mode: an
+    approved IR counts as human-approved only when a human (source ``human`` /
+    ``dialog``) approved or edited that IR fingerprint at HITL 1. An
+    auto-approved formalization (review mode ``auto``, ``--auto-approve``) is
+    ``auto`` even after a later ``approve_rest``; a human approval stays human
+    in review mode ``formalization``."""
+    binding = formalization_binding(state.get(STATE_KEY), on=bool((run.get("hitl") or {}).get(FORMALIZATION)),
+                                    auto=review_mode_of(run) == REVIEW_AUTO)
+    if binding is not None and binding.get("status") == "approved":
+        fp = binding.get("ir_fingerprint")
+        human = any(r.get("point") == FORMALIZATION and r.get("source") != "auto"
+                    and r.get("decision") in ("approved", "edited") and r.get("ir_fingerprint") == fp
+                    for r in run.get("reviews") or [])
+        binding["auto"] = not human
+    return binding
 
 
 def _hitl_block(run: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
@@ -1377,6 +1625,9 @@ def _hitl_block(run: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
     return {
         "points": dict(run.get("hitl") or {}),
         "auto_approve": bool(run.get("auto_approve")),
+        "review_mode": review_mode_of(run),
+        "initial_review_mode": run.get("initial_review_mode") or review_mode_of(run),
+        "approve_rest": run.get("approve_rest"),
         "reviews": reviews,
         "formalization": (form[-1].get("decision") if form
                           else ("not held (no ir-builder answer or validate_ir reached HITL 1)"
@@ -1480,6 +1731,13 @@ def _write_awaiting(d: Path, run: dict[str, Any], info: PendingInfo, graph: Any,
                      human_review={"decision": "awaiting"}, status=STATUS_AWAITING)
         run["draft"] = {"verdict": (draft.get("report") or {}).get("verdict"), "trust": draft.get("trust"),
                         "confidence_cap": draft.get("confidence_cap"), "unknown_ids": draft.get("unknown_ids")}
+    try:
+        run["pending"]["card"] = pending_card(info.request, draft=run.get("draft") if info.point == REPORT else None,
+                                              point=info.point)
+    except Exception as exc:  # noqa: BLE001 - the long card (hitl.md) is still there
+        run["pending"]["card"] = {"point": info.point, "title": CARD_TITLES.get(info.point, info.point),
+                                  "summary": [_short(f"(card not built: {type(exc).__name__})")],
+                                  "details_md": card_details(info.request), "editable": []}
     save_run(d, run)
 
 
@@ -1564,7 +1822,9 @@ def copy_input(path: str | Path, run_dir: str | Path) -> Path:  # pragma: no cov
 
 __all__ = [
     "AUTO_APPROVED_LABEL", "CARD_FILE", "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_NO_REPORT",
-    "EXIT_SUBMITTED", "FORMALIZATION", "REPORT", "RUN_FILE", "STATUS_AWAITING",
+    "EXIT_SUBMITTED", "FORMALIZATION", "REPORT", "REVIEW_ALL", "REVIEW_AUTO", "REVIEW_FORMALIZATION",
+    "REVIEW_MODES", "RUN_FILE", "STATUS_AWAITING", "auto_approves", "card_details", "pending_card",
+    "resolve_review_mode", "review_mode_of",
     "Decision", "DecisionError", "FormalizationReviewMiddleware", "HitlState", "PendingInfo", "RunError",
     "RunOutcome", "TTYDialog", "describe_pending", "execute_interrupt_config", "final_result", "find_ir",
     "formalization_binding", "formalization_card", "formalization_note", "formalization_request", "ir_checks", "load_run", "merge_reviews", "parse_decision",

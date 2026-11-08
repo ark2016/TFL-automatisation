@@ -1,18 +1,16 @@
 # $title
 
-$header
-
-$partial_banner
-
 ## Условие
 
 $task
 
-## Вердикт
+## Ответ
+
+$partial_banner
 
 $verdict_block
 
-## Что установлено (по журналу свидетельств)
+## Что удалось установить (по журналу вызовов)
 
 $established
 

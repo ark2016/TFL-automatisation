@@ -16,15 +16,26 @@ renderer (``reports/render.py``) turns the accepted fields into
 The schema gives the model no channel for trust: ``SubmitReportArgs`` derives
 from ``ToolArgs`` (``extra="forbid"``), and no field is named ``trust`` /
 ``confidence`` / ``verified`` (checked by ``ToolArgs``' reserved names in the
-tests). Evidence ids are not checked against the ledger here: an id with no
-record behind it is accepted and then lowers trust in the renderer and the
-verdict gate (a fabricated id must cost trust, not just a retry). Theorem ids
-are checked against docs/THEORY.md, so a citation always resolves.
+tests). Theorem ids are checked against docs/THEORY.md, so a citation always
+resolves.
+
+Evidence ids (2026-11-08): when the tool has the run's evidence ledger
+(``make_submit_report_tool(evidence=...)``, the agent passes it), a report
+citing an id that is not in the ledger -- in ``evidence_ids``,
+``claims[].evidence_ids``, ``steps[].evidence_ids`` or ``lean.evidence_ids``
+-- is NOT accepted: the tool returns an error result (status ``error``, no
+artifact, so no report is recorded and HITL 2 does not stop for it) that lists
+the unknown ids and the valid ids grouped by tool name with their trust and IR
+fingerprint (:func:`evidence_id_error`), and asks for a resubmission with the
+exact ids. A tool name is never resolved to an id by code. The renderer and
+the verdict gate still lower trust for an id without a record (a run without a
+ledger, a report rated outside a run): that is the second line of defence.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -56,9 +67,12 @@ __all__ = [
     "SubmitReportArgs",
     "TemplateName",
     "TheoremId",
+    "cited_evidence_ids",
+    "evidence_id_error",
     "list_report_templates",
     "make_submit_report_tool",
     "report_args_models",
+    "unknown_evidence_ids",
     "validate_report",
 ]
 
@@ -70,9 +84,9 @@ TheoremId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1
                                              pattern=r"^(§\s*)?[A-Za-z0-9.]+$")]
 
 _EVIDENCE_IDS_DESC = (
-    "ids of the tool calls whose results support this (the tool_call_id of each call, as in the "
-    "evidence ledger). No id: the claim is printed as resting on the model's words only; an id with "
-    "no ledger record makes it not_verified.")
+    "ids of the tool calls whose results support this: the exact tool_call_id of each call (e.g. "
+    "toolu_...), as in the evidence ledger, never a tool name. No id: the claim is printed as resting "
+    "on the model's words only; an id with no ledger record makes the report be refused.")
 
 
 class _Strict(BaseModel):
@@ -200,18 +214,123 @@ def _error_text(exc: Exception) -> str:
     return str(exc)
 
 
-def make_submit_report_tool() -> Any:
+# ---------------------------------------------------------------------------
+# Evidence ids against the ledger
+# ---------------------------------------------------------------------------
+
+#: valid ids listed in an unknown-id error at most (the newest are kept)
+MAX_LISTED_IDS = 60
+
+
+def cited_evidence_ids(report: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """``[(id, where)]`` of every evidence id the report cites: ``evidence_ids``,
+    ``claims[i].evidence_ids``, ``steps[i].evidence_ids``, ``lean.evidence_ids``."""
+    out: list[tuple[str, str]] = []
+
+    def add(ids: Any, where: str) -> None:
+        for i in ids or []:
+            if isinstance(i, str) and i.strip():
+                out.append((i.strip(), where))
+
+    add(report.get("evidence_ids"), "evidence_ids")
+    for n, claim in enumerate(report.get("claims") or []):
+        if isinstance(claim, Mapping):
+            add(claim.get("evidence_ids"), f"claims[{n}]")
+    for n, step in enumerate(report.get("steps") or []):
+        if isinstance(step, Mapping):
+            add(step.get("evidence_ids"), f"steps[{n}]")
+    lean = report.get("lean")
+    if isinstance(lean, Mapping):
+        add(lean.get("evidence_ids"), "lean")
+    return out
+
+
+def unknown_evidence_ids(report: Mapping[str, Any], evidence: Any) -> dict[str, list[str]]:
+    """``{id: [where cited, ...]}`` of the cited ids that have no record in
+    ``evidence`` (an ``EvidenceLedger``, its records or a mapping; see
+    ``evidence.policy.as_records``). Empty: every id resolves."""
+    from ..evidence.policy import as_records
+
+    known = as_records(evidence)
+    out: dict[str, list[str]] = {}
+    for i, where in cited_evidence_ids(report):
+        if i not in known:
+            out.setdefault(i, [])
+            if where not in out[i]:
+                out[i].append(where)
+    return out
+
+
+def _valid_ids_by_tool(evidence: Any) -> tuple[dict[str, list[str]], int]:
+    """``({tool: ["<id> (<trust>[, <ir fingerprint>][, by <role>])", ...]}, ids left out)``
+    for the successful tool results of the ledger (what a claim can cite), newest last."""
+    from ..agent import ledger_evidence
+
+    entries = [e for e in ledger_evidence(evidence) if e.get("ok") and e.get("tool") != SUBMIT_REPORT]
+    dropped = max(0, len(entries) - MAX_LISTED_IDS)
+    grouped: dict[str, list[str]] = {}
+    for e in entries[dropped:]:
+        bits = [str(e.get("trust") or "not_verified")]
+        if e.get("ir_fingerprint"):
+            bits.append(str(e["ir_fingerprint"]))
+        if e.get("role") and e.get("role") != "main":
+            bits.append(f"by {e['role']}")
+        grouped.setdefault(str(e.get("tool")), []).append(f"{e['id']} ({', '.join(bits)})")
+    return grouped, dropped
+
+
+def evidence_id_error(unknown: Mapping[str, Sequence[str]], evidence: Any) -> dict[str, Any]:
+    """The error result for a report citing ``unknown`` ids: the unknown ids
+    (with where they are cited, and a hint when one is a tool name) and the
+    valid ids grouped by tool name, e.g. ``regex_to_dfa -> toolu_01Xb... (verified,
+    ir-86ca...)``. Code never maps a name to an id: the model resubmits."""
+    grouped, dropped = _valid_ids_by_tool(evidence)
+    parts = []
+    for i, where in unknown.items():
+        hint = " -- a tool NAME, not a call id" if i in grouped else ""
+        parts.append(f"'{i}' (in {', '.join(where)}){hint}")
+    lines = [f"{tool} -> " + "; ".join(ids) for tool, ids in grouped.items()]
+    if dropped:
+        lines.append(f"(+{dropped} older result(s) not listed)")
+    valid = "\n".join(lines) if lines else "(no successful tool result is recorded yet: run the checks first)"
+    text = ("report NOT accepted (nothing was recorded): every evidence id must be the exact tool_call id of a "
+            "tool call in the evidence ledger, not a tool name or a label of your own. Unknown id(s): "
+            + "; ".join(parts) + ".\nValid ids by tool (trust, IR fingerprint):\n" + valid
+            + "\nResubmit submit_report with exact ids from this list (copy them as they are); a claim no tool "
+              "result supports gets no id.")
+    return {"tool": SUBMIT_REPORT, "ok": False, "error_kind": "unknown_evidence_ids",
+            "unknown_ids": list(unknown), "valid_ids": grouped, "error": text}
+
+
+def make_submit_report_tool(evidence: Any = None) -> Any:
     """The ``submit_report`` LangChain tool.
 
     It validates the structured fields and returns them as the ToolMessage
     artifact ``{"tool": "submit_report", "ok": true, "report": {...}}``; the
     agent's report gate then ends the run (or HITL 2 interrupts first). An
     invalid report returns a JSON error as content, with no artifact, so the
-    model gets another turn."""
-    from langchain_core.tools import StructuredTool
+    model gets another turn.
+
+    ``evidence``: the run's ``EvidenceLedger`` (``None``: the ledger of an
+    enclosing ``use_evidence`` block at call time, if any). With a ledger, a
+    report citing an id that is not in it is refused the same way
+    (:func:`evidence_id_error`); without one, ids are not checked here."""
+    from langchain_core.tools import StructuredTool, ToolException
+
+    def _ledger() -> Any:
+        if evidence is not None:
+            return evidence
+        from ..evidence.ledger import current_evidence
+
+        return current_evidence()
 
     def _run(**kwargs: Any) -> tuple[str, dict[str, Any]]:
         report = validate_report(kwargs)
+        ledger = _ledger()
+        if ledger is not None:
+            unknown = unknown_evidence_ids(report, ledger)
+            if unknown:
+                raise ToolException(json.dumps(evidence_id_error(unknown, ledger), ensure_ascii=False))
         content = json.dumps({
             "tool": SUBMIT_REPORT, "ok": True, "status": "report_submitted",
             "template": report["template"],
@@ -224,10 +343,14 @@ def make_submit_report_tool() -> Any:
                            "error": f"report not accepted, fix and resubmit: {_error_text(exc)[:1500]}"},
                           ensure_ascii=False)
 
+    def _on_tool_error(exc: ToolException) -> str:
+        return str(exc)
+
     _run.__name__ = SUBMIT_REPORT
     return StructuredTool.from_function(
         func=_run, name=SUBMIT_REPORT, args_schema=SubmitReportArgs, infer_schema=False,
         response_format="content_and_artifact", handle_validation_error=_on_error,
+        handle_tool_error=_on_tool_error,
         description=(
             "Submit the final report and END the run. Give the verdict, the class, the method, the "
             "proof as steps (title, claim, justification, theorem_ids, evidence_ids), optionally the "
@@ -235,7 +358,9 @@ def make_submit_report_tool() -> Any:
             "construction, the conclusion and the Lean block. For every claim and step list the ids "
             "of the tool calls whose results support it. Do not claim that something is verified: "
             "trust labels, the confidence ceiling and the evidence block are generated by code from "
-            "the evidence ledger, and an id with no record behind it makes its claim not_verified. "
+            "the evidence ledger. An evidence id is the tool_call id of the call (e.g. toolu_...), "
+            "never the tool's name: a report citing an id that is not in the ledger is refused with "
+            "the list of valid ids. "
             "The report-templates skill describes the templates. Call it once, alone, as your last "
             "action."),
         metadata={"tfl_group": "report"},
@@ -256,7 +381,7 @@ def list_report_templates(args: ListReportTemplatesArgs) -> ToolResult:
     """List the report templates (full_proof, exam_solution, short_verdict, lean_appendix): what each
     is for and which submit_report fields it prints. With name, also return that template's Markdown
     text and placeholders. The report is rendered by code from your submit_report fields; the
-    evidence block "Свидетельства, модели и расходы" and every trust label are added by code to every
+    appendix "Проверка" and every trust label are added by code to every
     template. Formatting only: trust is always not_verified."""
     names = [args.name] if args.name else list(SELECTABLE_TEMPLATES)
     templates = []

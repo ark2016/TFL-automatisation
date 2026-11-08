@@ -178,9 +178,25 @@ that only the report reserve remains, stop working and call `submit_report` with
 ## Report
 
 `submit_report` fields: `verdict`, `answer`, `language_class` (reg / cfl / dcfl / ll), `method`,
-`steps` (each with `claim`, `justification`, `evidence_ids`), `evidence_ids` for the verdict as a
-whole, `template`, `summary`, `ir_fingerprint`. The structure of the templates is described in the
-`report-templates` skill. Do not paste tool JSON into the report; reference the tool calls by id.
+`hypothesis`, `construction`, `steps` (each with `title`, `claim`, `justification`, `theorem_ids`,
+`evidence_ids`), `conclusion`, `evidence_ids` for the verdict as a whole, `template`, `summary`,
+`ir_fingerprint`. The structure of the templates is described in the `report-templates` skill.
+
+The report is a solution a reader can follow, like the pipelines' result.md: the answer, then
+the idea (`hypothesis`: what you expect and why this method), the construction, the proof steps
+and the conclusion. Write it in Russian; formulas as `$...$` LaTeX.
+- Each step has a short `title`, a `claim` (one statement) and a `justification` that is a real
+  argument: why the claim holds (the derivation, the case split, the inequality), not "проверено
+  инструментом" or the tool's name alone.
+- `construction` holds the actual object: the DFA as a Markdown table (state | each letter |
+  accepting), the grammar in a ``` block, one rule per line, the LL table, or the word chosen for
+  a pumping lemma with its parameters. Never write "see the tool result".
+- Cite evidence by the exact tool-call ids of this run (the `id` of the call as the ledger shows
+  it, e.g. `toolu_01Xb...`), never by tool names: an id that is not in the ledger lowers the trust.
+- Code adds the trust marks, the answer box and the appendix «Проверка» (evidence table, gate
+  notes, run, costs). Do not write them, do not write trust words or a confidence number, and do
+  not paste tool JSON.
+
 Code, not you, rates the report (docs/VERDICT_POLICY.md). The verdict's trust and confidence
 ceiling come from the strongest result of this run that checks the verdict's side **against the
 task** (the IR). Only the check that belongs to the task's class counts. A constructive verdict

@@ -3077,3 +3077,125 @@ keys in them, REG billed a different organization. User decision: only the root 
 reads `<repo>/.env` (`parents[2]`); environment variables still win. This is the one edit to a pipeline package on
 this branch, made on the user's explicit request; it lands in main with the branch PR. `agent_system/.env` is no
 longer read and can be deleted by the user. `tfl-deep` and TFL Lab still read no `.env` at all.
+
+
+## 2026-11-08: review modes, evidence-id check, pending card
+
+User decisions, relayed by the lead agent; this round touched `tools/report.py`, `hitl.py`, `cli.py`, `agent.py`
+(two lines), `ui_server/deep_routes.py`, their tests and the docs.
+
+**Evidence ids in `submit_report`.** A Haiku run cited tool names (`regex_to_dfa`) as evidence ids. The tool used to
+accept them, and only the gate / renderer marked them unknown. Now `make_submit_report_tool(evidence)` checks every
+cited id: `evidence_ids`, `claims[].evidence_ids`, `steps[].evidence_ids` and `lean.evidence_ids`. The check runs
+against the run's ledger (`agent._build_agent` passes `evidence_ledger`; without one, the ledger of an enclosing
+`use_evidence` block is used). An id that is not in it makes the call a normal tool error: a `ToolException`
+through `handle_tool_error`, so the message has status `error` and no artifact. The report gate does not end the
+run, nothing is rendered, and `report_interrupt_config`'s `when` skips HITL 2 for such a report.
+
+The error JSON (`error_kind: unknown_evidence_ids`) lists:
+- the unknown ids, where each is cited, and a "tool NAME, not a call id" hint;
+- the valid ids grouped by tool, with trust, IR fingerprint and the subagent role, the newest 60 (`MAX_LISTED_IDS`).
+
+The model then resubmits. Code never maps a name to an id. Ordinary run limits bound a model that never fixes its
+ids: `submit_report` is exempt from the tool-call limit but not from the model-call limit, so such a run ends
+`incomplete` / `budget_exhausted` with a partial report. `test_a_model_that_keeps_citing_names_ends_with_a_partial_report`
+covers this. The gate's and the renderer's unknown-id handling stays as the second line of defence. The
+fabricated-id tests now rate or render a fabricated copy of an accepted report over the honest run's ledger
+(`test_hitl`, `test_evidence`, `test_reports`). A human edit at HITL 2 that cites an unknown id is refused as a
+`DecisionError` before resuming, by the CLI, the dialog and `/resume` (`_prevalidate` loads `evidence.jsonl`).
+Otherwise the edit would be lost to the tool's refusal.
+
+**Review modes.** `run.json` now has `review_mode` (`all` | `formalization` | `auto`) and `initial_review_mode`.
+`auto_approve` is kept as `review_mode == "auto"` for old readers, and `hitl.review_mode_of` reads runs written
+before the field existed. `_segment` auto-approves a stop when `auto_approves(mode, point)`:
+- `auto`: every point;
+- `formalization`: only `report`, never HITL 1 or `execute`;
+- `all`: none.
+
+An auto stop is the old `--auto-approve` path: `Decision("approve", source="auto")`, recorded as `auto_approved`.
+`run_binding` now takes `auto` from the review history, not from the run's mode. An approved IR is human-approved
+only if a non-`auto` review approved or edited that fingerprint, so a formalization approved by a human before
+`approve_rest` stays human. `formalization_note` says "auto-approved (no human review)". `AUTO_APPROVED_LABEL` is
+unchanged, because the renderer and the eval adapter match it.
+
+`resume_run(..., approve_rest=True)` (approve only) does three things:
+- marks the review `approve_rest: true`;
+- sets `review_mode: auto`;
+- stores `approve_rest: {at, point, interrupt_id, ...}` before the segment runs, so a later process keeps it.
+
+CLI changes:
+- new `--review-mode`;
+- `--auto-approve` stays its alias, and the two conflict when the modes differ;
+- `--resume ... --approve-rest`;
+- `--review-mode` is refused on `--resume`, since the run keeps its mode.
+
+Routes:
+- `review_mode` on create, allowed for live runs too, which still need `confirm_spend`;
+- `approve_rest` on resume;
+- `review_mode` in the summary and the detail view (the agent's value, else the lab record);
+- `review_mode` stored in `lab.json`.
+
+**Pending card.** `pending_point` was the bare point name, and only under `run` in the detail response. A client
+reading `data.pending_point` got `null` while the run was `awaiting_human`. In the code paths I tested, `run.pending_point` itself was
+never null for a waiting run, but a `run.json` read that fails (a Windows sharing violation, a partial read) would
+also have nulled it. Now `hitl._write_awaiting` stores `pending.card` (`hitl.pending_card`: point, title, up to 4
+summary lines under 90 characters, `details_md` = the request's sections without the CLI resume hint, `editable`).
+`deep_routes.pending_card` serves it in the summary, the runs list and at the top level of the detail response. Its
+fallbacks are: built from the request (old runs), then the card cached at settle time, then a minimal card from the
+`hitl_awaiting` event plus `hitl.md`. The formalization summary is made by code from `ir_checks`: class, language (a
+regex compactly, else the "Язык по IR" line), and the shortest 5 oracle-labelled words in and out of L. The report
+summary is the verdict, the draft's trust and cap, and the step / claim counts.
+
+Tests:
+- `test_hitl.py`: names refused then ids verified (reg (ab)*a|b, human-approved IR); fabricated ids refused without
+  a stop; the loop limit; the human edit with an unknown id; the gate still lowering made-up ids; review-mode
+  resolution; `formalization` mode; auto-approved formalization keeps `bounded_pass`; `approve_rest`; the CLI flags;
+  the cards.
+- `test_deep_routes.py`: `review_mode` on create; `approve_rest`; the card fallbacks; the card shape in the two
+  existing flows.
+
+Renderer-text assertions in `test_reports.py` / `test_hitl.py` depend on `reports/render.py`, which another agent
+was editing during this round.
+
+## 2026-11-08: report as a solution document
+
+The user: the report must read as a solution, like the pipelines' result.md (why and how), not "доказано, вот
+ссылка". `reports/render.py`, the templates, `SKILL.md`, the Report section of `prompts/main.md` and the three mock
+reports were rewritten; trust, caps and the gate are unchanged (the renderer still never raises trust).
+
+Layout (every template): `# title`, `## Условие`, `## Ответ`, `## Решение`, `## Заключение`, the Lean section, then
+the code-made appendix `## Проверка` (`EVIDENCE_BLOCK_TITLE`, was "Свидетельства, модели и расходы").
+- Answer box: `> [!theorem] Ответ: <token in words>` (LL: the model's verdict text; "Ответ (не подтверждён)" at
+  `not_verified`; "Ответ не установлен" plus the model's hypothesis when the published token is not decisive), then
+  `Класс · Уверенность: N% · <review in a few words>`. Below `verified` a warning callout stands next to the answer
+  (`bounded_pass`: "проверен машинно не полностью"; `well_formed`: "НЕ прошло проверку по существу"; lower: the
+  pipelines' "Доказательство НЕ прошло независимую проверку"), with the gate notes in short Russian (`_GATE_GIST`).
+  `verified` gets a small `[!success]`.
+- Решение: «Идея.» (hypothesis; the summary when a conclusion exists) and «Метод.», the THEORY.md citations, the
+  construction (the model's `construction` through `safe_block`, which keeps its ``` blocks and closes an unclosed
+  one, plus the objects of the cited ok, non-refuted results: the DFA transition table from `data.dfa`, the grammar
+  from the call's args / IR, the LL table from `data.parse_table`; a grammar the model already wrote is not printed
+  twice), the key claims, the steps `**Шаг k. title**` / claim / `*Обоснование:*`. `exam_solution` and
+  `short_verdict` print the steps as a numbered list (`short_verdict` now prints them too).
+- Marks: a step or claim whose cited results passed gets "(проверено: tool ✓)" / "(проверено выборочно: …)" /
+  "(корректно оформлено: …)"; a refuted citation "(опровергнуто: tool ✗)"; nothing otherwise. No per-step trust
+  badges in the text; the unmarked cases (model words only, unknown ids, refuted ids) are listed in «Проверка».
+  The marks carry the invisible sentinel `MARK` (U+2063) that `safe_text` strips from model text, so only code
+  marks get the `.ev-mark` style; the sentinel is removed from result.md.
+- Проверка: one intro line, the basis line (trust, cap, basis ids, token, direction, verdict text), one table
+  `инструмент | что проверено | результат | в решении` (bookkeeping calls are left out unless cited), the gate notes
+  as bullets, the IR / formalization / review lines, one run line (id, template, status, spend, hash chain), and in
+  `<details>` the full call log, the models and roles tables and the budget line. `<details>` is converted only in
+  the appendix (`markdown_to_html(details=True)`); in model text it stays escaped.
+- HTML: max-width 780px, 15px text, tables scroll inside their box, KaTeX 0.16.11 only when the body has math (the
+  `.katex-display` scroll rule ships with the KaTeX block), `*Label:*` at line start is the only italics (model math
+  such as `(ab)*a` keeps its stars), display math is not split by `<br>`. Light and dark via CSS variables.
+
+Guidance: steps need a title, a claim and a real justification; `construction` holds the actual object (DFA as a
+Markdown table, grammar in a ``` block); Russian text; cite the exact tool-call ids, never tool names (the live
+reg-04 run cited `regex_to_dfa` and lost a level). Not done here (owned by another agent): the docstring of
+`tools/report.py` `list_report_templates` still names the old block "Свидетельства, модели и расходы".
+
+Tests: `test_reports.py` pins the new order, the answer box, the callouts, the marks and their spoof-proofing, the
+construction objects, `safe_block`, `<details>` only in the appendix, KaTeX; `test_hitl.py` no longer needs the
+old "↳" step line.

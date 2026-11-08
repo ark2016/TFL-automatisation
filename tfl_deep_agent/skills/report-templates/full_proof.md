@@ -1,26 +1,24 @@
 # $title
 
-$header
-
 ## Условие
 
 $task
 
-## Вердикт
+## Ответ
 
 $verdict_block
 
-## Метод
+## Решение
 
-$method
-
-$hypothesis_section
+$idea_section
 
 $lemmas_section
 
+$construction_section
+
 $claims_section
 
-## Доказательство
+### Шаги доказательства
 
 $steps
 

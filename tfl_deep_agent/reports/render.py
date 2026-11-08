@@ -13,12 +13,22 @@ What is the model's and what is code's:
   :class:`string.Template`. Lines of model text that start with ``#``, ``>``
   or three backticks are escaped, so model text cannot open a section, a
   callout or a code block of its own;
-* every trust label, the confidence ceiling, the per-claim evidence marks
-  ("держится только на словах модели", "id нет в журнале"), the theory
-  citations (resolved against docs/THEORY.md by section id), the Lean status
-  (read from ``lean_check`` ledger entries) and the closing block
-  "Свидетельства, модели и расходы" are generated here from the ledgers. The
-  evidence block is appended after the template, so no template can drop it;
+* the document reads as a solution (2026-11-08, "report as a solution
+  document"): title, "Условие", the "Ответ" box (the published verdict in
+  words, the class, "Уверенность: N%" = the code-set ceiling, one line on
+  human review, and a warning callout whenever trust is below ``verified``),
+  "Решение" (idea and method, lemmas, the construction, the steps
+  "**Шаг k. title**" + claim + "*Обоснование:*"), "Заключение", the Lean
+  section, and the appendix "Проверка";
+* every trust label, the confidence ceiling, the small per-step marks
+  ("(проверено: regex_to_dfa ✓)", only for a step whose own trust is at least
+  ``well_formed``), the gate notes ("держится только на словах модели",
+  "id нет в журнале", refuted citations, budget refusals), the theory
+  citations (resolved against docs/THEORY.md by section id), the objects read
+  from tool results (a DFA transition table, a grammar, an LL table), the Lean
+  status (read from ``lean_check`` ledger entries) and the appendix
+  "Проверка" are generated here from the ledgers. The appendix is appended
+  after the template, so no template can drop it;
 * a run without an accepted report (``budget_exhausted``, ``incomplete``,
   ``error``) is rendered with the internal ``partial`` template from
   ``result["partial_report"]`` / the ledger: verdict "не установлен", trust
@@ -57,6 +67,7 @@ from agent_system.lib.renderer import _TRUST_LABELS_RU, _esc
 
 __all__ = [
     "EVIDENCE_BLOCK_TITLE",
+    "MARK",
     "NO_HUMAN_REVIEW_MARK",
     "PARTIAL_TEMPLATE",
     "PLACEHOLDERS",
@@ -71,6 +82,7 @@ __all__ = [
     "normalize_evidence",
     "normalize_review",
     "render_report",
+    "safe_block",
     "safe_text",
     "template_placeholders",
     "trust_label",
@@ -89,45 +101,53 @@ PARTIAL_TEMPLATE = "partial"
 TEMPLATE_INFO: Mapping[str, Mapping[str, Any]] = {
     "full_proof": {
         "title": "Полное доказательство",
-        "when": "the default: task, verdict, method, hypothesis, lemmas, key claims, every proof step "
-                "with its justification, conclusion (the structure of the golden result.md files)",
+        "when": "the default: task, answer, the solution (idea and method, lemmas, construction, key "
+                "claims, every proof step with its justification), conclusion, the check appendix "
+                "(the structure of the pipelines' result.md files)",
         "fields": ["verdict", "answer", "language_class", "method", "hypothesis", "lemmas", "claims",
-                   "steps", "conclusion", "evidence_ids", "ir_fingerprint", "lean"],
+                   "construction", "steps", "conclusion", "evidence_ids", "ir_fingerprint", "lean"],
     },
     "exam_solution": {
         "title": "Решение для сдачи",
-        "when": "a compact solution to hand in: answer, the chosen word or construction, the key steps "
-                "as a numbered list, conclusion",
+        "when": "a compact solution to hand in: answer, idea, the chosen word or construction, the key "
+                "steps as a numbered list, conclusion",
         "fields": ["verdict", "answer", "language_class", "method", "construction", "steps", "conclusion",
                    "evidence_ids", "ir_fingerprint", "lean"],
     },
     "short_verdict": {
         "title": "Краткий вердикт",
-        "when": "only the answer: verdict and one or two sentences (summary), plus the evidence block",
-        "fields": ["verdict", "answer", "language_class", "method", "summary", "evidence_ids",
-                   "ir_fingerprint"],
+        "when": "a short answer: verdict, one or two sentences (summary), the construction and the "
+                "steps as a short numbered list, plus the check appendix",
+        "fields": ["verdict", "answer", "language_class", "method", "summary", "construction", "steps",
+                   "evidence_ids", "ir_fingerprint"],
     },
     "lean_appendix": {
         "title": "Доказательство с Lean-приложением",
         "when": "full_proof plus the Lean section (status, axioms, statement, proof body, proof file). "
                 "The Lean section is also appended to any other template when the report has a lean "
                 "block or the run has a lean_check result",
-        "fields": ["verdict", "answer", "language_class", "method", "steps", "conclusion", "lean",
-                   "evidence_ids", "ir_fingerprint"],
+        "fields": ["verdict", "answer", "language_class", "method", "hypothesis", "lemmas", "construction",
+                   "steps", "conclusion", "lean", "evidence_ids", "ir_fingerprint"],
     },
 }
 
 #: Every placeholder a template may use (string.Template ``$name``).
 PLACEHOLDERS: frozenset[str] = frozenset({
-    "title", "header", "task", "verdict_block", "method", "hypothesis_section", "lemmas_section",
-    "claims_section", "steps", "key_steps", "construction_section", "conclusion", "summary",
-    "lean_section", "lean_status", "lean_statement", "lean_proof_body", "lean_note",
+    "title", "header", "task", "verdict_block", "idea_section", "method", "hypothesis_section",
+    "lemmas_section", "claims_section", "steps", "key_steps", "construction_section", "conclusion",
+    "summary", "lean_section", "lean_status", "lean_statement", "lean_proof_body", "lean_note",
     "partial_banner", "established", "refuted", "subagents_section", "todos_section",
     "last_message_section",
 })
 
-EVIDENCE_BLOCK_TITLE = "Свидетельства, модели и расходы"
+#: The heading of the code-generated appendix (evidence, gate notes, models, costs).
+EVIDENCE_BLOCK_TITLE = "Проверка"
 NO_HUMAN_REVIEW_MARK = "без проверки человеком"
+
+#: Prefix of a code-made evidence mark ("(проверено: regex_to_dfa ✓)"). An
+#: invisible character that :func:`safe_text` strips from model text, so the
+#: model cannot write a mark the HTML would style as a code-made one.
+MARK = "⁣"
 
 _TRUST_LEVELS = ("refuted", "not_verified", "well_formed", "bounded_pass", "verified")
 _TRUST_RANK = {t: i for i, t in enumerate(_TRUST_LEVELS)}
@@ -138,6 +158,75 @@ _TITLES = {
     "cfl": "Анализ КС-свойства",
     "dcfl": "Анализ ДКС-свойства (DCFL)",
     "ll": "Анализ LL(k)-свойства",
+}
+
+_CLASS_LABELS = {
+    "reg": "REG",
+    "cfl": "CFL (контекстно-свободные языки)",
+    "dcfl": "DCFL (детерминированные КС-языки)",
+    "ll": "LL(k)",
+}
+
+#: The published verdict token in words (``agent.VERDICT_TOKENS``). The LL
+#: verdict is printed in the model's words (they carry k and say whether the
+#: grammar or the language is meant).
+_TOKEN_WORDS = {
+    "regular": "язык регулярен",
+    "non_regular": "язык не регулярен",
+    "cfl": "язык контекстно-свободный",
+    "non_cfl": "язык не контекстно-свободный",
+    "dcfl": "язык детерминированный контекстно-свободный",
+    "non_dcfl": "язык не детерминированный контекстно-свободный",
+}
+_DECISIVE_TOKENS = frozenset({*_TOKEN_WORDS, "ll", "not_ll"})
+
+#: What a tool checks, in the appendix's words (fallback: the tool's trust reason).
+_TOOL_WHAT = {
+    "describe_ir_schema": "справка по схеме IR",
+    "validate_ir": "формализация задачи (IR): структура",
+    "ir_to_text": "пересказ IR",
+    "sample_words": "примеры слов языка задачи",
+    "check_membership": "принадлежность слов языку задачи",
+    "regex_to_dfa": "ДКА по выражению или грамматике",
+    "run_dfa": "прогон ДКА на словах",
+    "nerode_probe": "различимость слов (Майхилл–Нероуд)",
+    "dfa_vs_ir": "ДКА против языка задачи",
+    "pump_check_reg": "накачка (регулярные языки)",
+    "to_cnf": "приведение грамматики к НФХ",
+    "cyk": "разбор слов (CYK)",
+    "pda_run": "прогон МП-автомата",
+    "parikh": "образ Париха",
+    "pump_check_cfl": "накачка (КС-языки)",
+    "grammar_vs_ir": "грамматика против языка задачи",
+    "input_grammar_cfg": "грамматика из условия",
+    "dpda_run": "прогон ДМП-автомата",
+    "dpda_vs_ir": "ДМП-автомат против языка задачи",
+    "closure_lookup": "свойства замкнутости",
+    "pattern_match": "сопоставление с типовыми задачами",
+    "first_follow": "множества FIRST/FOLLOW",
+    "ll_table": "таблица LL(k) и конфликты",
+    "ll_parse": "разбор слова LL-анализатором",
+    "grammar_transform": "преобразование грамматики",
+    "list_theorems": "справка по docs/THEORY.md",
+    "get_theorem": "справка по docs/THEORY.md",
+    "lean_statement": "формулировка теоремы Lean",
+    "lean_check": "доказательство в Lean 4",
+    "list_report_templates": "шаблоны отчёта",
+    "submit_report": "сдача отчёта",
+    "task": "ответ субагента",
+    "write_todos": "план решения",
+}
+
+#: Bookkeeping calls left out of the check table (they stay in the full call
+#: log) unless the report cites them.
+_BOOKKEEPING_TOOLS = frozenset({"write_todos", "submit_report", "list_report_templates", "describe_ir_schema"})
+
+_RESULT_WORDS = {
+    "verified": "✓ проверено полностью",
+    "bounded_pass": "✓ проверено выборочно",
+    "well_formed": "корректно оформлено",
+    "not_verified": "не проверено",
+    "refuted": "✗ опровергнуто",
 }
 
 _STATUS_LABELS = {
@@ -200,15 +289,52 @@ def safe_text(text: Any, *, max_chars: int | None = None) -> str:
     """Model (or task) text made safe for the report's Markdown: a line that
     would open a heading, a callout / quote or a code fence is escaped with a
     backslash, so it stays a plain paragraph line."""
-    s = "" if text is None else str(text)
+    s = "" if text is None else str(text).replace(MARK, "")
     s = s.replace("\r\n", "\n").replace("\r", "\n").strip()
     if max_chars is not None and len(s) > max_chars:
         s = s[: max_chars - 1].rstrip() + "…"
     return "\n".join(_BLOCK_START_RE.sub(r"\1\\\2", line) for line in s.split("\n"))
 
 
+_FENCE_LANG_RE = re.compile(r"[^A-Za-z0-9_+-]")
+
+
+def safe_block(text: Any, *, max_chars: int | None = None) -> str:
+    """Like :func:`safe_text`, but a fenced code block of the model (three
+    backticks on a line of their own) stays a code block: the renderer closes
+    it itself, so an unclosed fence cannot swallow the rest of the report, and
+    the text outside the fences is escaped as by :func:`safe_text`. Used for
+    the ``construction`` field (an automaton, a grammar, a table)."""
+    s = "" if text is None else str(text).replace(MARK, "")
+    s = s.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if max_chars is not None and len(s) > max_chars:
+        s = s[: max_chars - 1].rstrip() + "…"
+    out: list[str] = []
+    prose: list[str] = []
+    code: list[str] | None = None
+    lang = ""
+    for line in s.split("\n"):
+        st = line.strip()
+        if st.startswith("```"):
+            if code is None:
+                if prose:
+                    out.append(safe_text("\n".join(prose)))
+                    prose = []
+                code, lang = [], _FENCE_LANG_RE.sub("", st[3:].strip())[:20]
+            else:
+                out.append(f"```{lang}\n" + "\n".join(code) + "\n```")
+                code = None
+            continue
+        (prose if code is None else code).append(line)
+    if code is not None:
+        out.append(f"```{lang}\n" + "\n".join(code) + "\n```")
+    if prose:
+        out.append(safe_text("\n".join(prose)))
+    return "\n\n".join(x for x in out if x.strip())
+
+
 def _one_line(text: Any, max_chars: int = 200) -> str:
-    s = " ".join(str(text or "").split())
+    s = " ".join(str(text or "").replace(MARK, "").split())
     return s if len(s) <= max_chars else s[: max_chars - 1] + "…"
 
 
@@ -534,19 +660,39 @@ def _judge(ids: Sequence[str], by_id: Mapping[str, Mapping[str, Any]]) -> dict[s
             "model_only": not ids}
 
 
+_MARK_WORDS = {"verified": "проверено", "bounded_pass": "проверено выборочно",
+               "well_formed": "корректно оформлено"}
+
+
 def _mark(j: Mapping[str, Any], by_id: Mapping[str, Mapping[str, Any]]) -> str:
-    """The code-made evidence line under a claim or step."""
-    parts: list[str] = [f"доверие: **{trust_label(j['trust'])}** ({_code(j['trust'])})"]
-    if j["model_only"]:
-        parts.append("держится только на словах модели (нет ссылок на журнал)")
-    supporting = [i for i in j["found"] if i not in j["refuted_ids"]]
-    if supporting:
-        parts.append("по " + ", ".join(f"{_code(i)} ({by_id[i].get('tool')})" for i in supporting))
+    """The small code-made mark at the end of a claim or step:
+    "(проверено: regex_to_dfa ✓)" when the step's own trust (``_judge``) is
+    at least ``well_formed``, "(опровергнуто: run_dfa ✗)" for a cited refuted
+    result, "" otherwise. A step without ids or with an id missing from the
+    ledger gets no mark here; the appendix "Проверка" lists it."""
+    out: list[str] = []
+    word = _MARK_WORDS.get(j["trust"])
+    if word:
+        tools = list(dict.fromkeys(str(by_id[i].get("tool")) for i in j["found"]
+                                   if i not in j["refuted_ids"] and by_id[i].get("ok")
+                                   and by_id[i].get("trust") in _MARK_WORDS))
+        tick = " ✓" if j["trust"] != "well_formed" else ""
+        out.append(f"{MARK}({word}: {', '.join(tools)}{tick})")
     if j["refuted_ids"]:
-        parts.append("опровергнуто: " + ", ".join(_code(i) for i in j["refuted_ids"]))
-    if j["unknown_ids"]:
-        parts.append("id нет в журнале: " + ", ".join(_code(i) for i in j["unknown_ids"]))
-    return "↳ " + " · ".join(parts)
+        tools = list(dict.fromkeys(str(by_id[i].get("tool")) for i in j["refuted_ids"]))
+        out.append(f"{MARK}(опровергнуто: {', '.join(tools)} ✗)")
+    return " ".join(out)
+
+
+def _with_mark(text: str, mark: str) -> str:
+    """``text`` with ``mark`` at the end of its last line, or on a line of its
+    own when the last line is a table row, a fence or display math."""
+    if not mark:
+        return text
+    last = text.rstrip().rsplit("\n", 1)[-1].strip()
+    if last.startswith(("|", "```", "$$")) or last.endswith("$$"):
+        return f"{text}\n\n{mark}"
+    return f"{text} {mark}"
 
 
 def _theory_ref(theorem_id: str) -> dict[str, Any]:
@@ -560,12 +706,13 @@ def _theory_ref(theorem_id: str) -> dict[str, Any]:
         return {"id": str(theorem_id), "found": False, "error": _one_line(exc, 200)}
     status = f" {s.status}" if s.status else ""
     return {"id": s.id, "found": True, "title": s.title, "status": s.status,
+            "short": f"{THEORY_REL_PATH} {s.label} «{s.title}»",
             "citation": f"{THEORY_REL_PATH} {s.label} «{s.title}»{status}, строки {s.line_start}–{s.line_end}"}
 
 
-def _theory_text(ref: Mapping[str, Any]) -> str:
+def _theory_text(ref: Mapping[str, Any], *, short: bool = False) -> str:
     if ref.get("found"):
-        return str(ref["citation"])
+        return str(ref["short" if short else "citation"])
     return f"{_code(ref['id'])}: раздела нет в docs/THEORY.md ({ref.get('error')})"
 
 
@@ -628,14 +775,32 @@ def _verdict_trust(ctx: _Ctx) -> dict[str, Any]:
             "source": "verdict_gate"}
 
 
-def _header(ctx: _Ctx) -> str:
-    status_label = _STATUS_LABELS.get(ctx.status, ctx.status)
-    lines = [f"**Статус прогона:** {status_label} ({_code(ctx.status)}) · **Шаблон:** {_code(ctx.template)}",
-             f"**Проверка человеком:** {ctx.review['label']}"]
-    task_id = (ctx.budget or {}).get("task_id")
-    if task_id:
-        lines.append(f"**Прогон:** {_code(task_id)}")
-    return "\n\n".join(lines)
+def _run_id(ctx: _Ctx) -> str | None:
+    rid = (ctx.budget or {}).get("task_id") or ctx.result.get("run_id")
+    return str(rid) if rid else None
+
+
+def _review_short(ctx: _Ctx) -> str:
+    """One line on who reviewed what, for the answer box (the full labels are
+    in the appendix)."""
+    dec = ctx.review["decision"]
+    form = ctx.result.get("formalization")
+    form = form if isinstance(form, Mapping) else None
+    if dec in ("approved", "edited"):
+        report_part = "отчёт утверждён человеком с правками" if dec == "edited" else "отчёт проверил человек"
+        if form is None:
+            return report_part
+        if form.get("status") == "approved" and not form.get("auto"):
+            return ("формализацию и отчёт проверил человек" if dec == "approved"
+                    else "формализацию проверил человек, " + report_part)
+        if form.get("status") == "approved":
+            return report_part + "; формализация одобрена автоматически"
+        return report_part + "; формализация не утверждена человеком"
+    return {
+        "auto_approved": "одобрено автоматически, без проверки человеком",
+        "awaiting": "черновик, ожидает проверки человеком",
+        "rejected": "черновик возвращён человеком на доработку",
+    }.get(dec, "без проверки человеком")
 
 
 def formalization_label(result: Mapping[str, Any]) -> str | None:
@@ -684,45 +849,127 @@ def _ir_line(ctx: _Ctx, basis: Sequence[str]) -> str:
             "который построил агент.")
 
 
+#: Russian gist of the verdict gate's notes (agent.verdict_gate), for the
+#: warning callout; the notes themselves are printed verbatim in the appendix.
+_GATE_GIST = (
+    ("without a tool result", "решение ссылается на id, которых нет в журнале вызовов"),
+    ("HITL 1", "формализацию задачи не утвердил человек"),
+    ("approved IR", "формализацию задачи не утвердил человек"),
+    ("formalization", "формализацию задачи не утвердил человек"),
+    ("regex_to_dfa(ir=", "построение по определению задачи засчитано как ограниченная проверка"),
+    ("R3", "свидетельства противоречат друг другу"),
+    ("refute", "процитированный результат опровергает ответ"),
+    ("another IR", "часть результатов относится к другому IR"),
+    ("different IRs", "результаты относятся к разным IR"),
+    ("inconclusive", "ответ не установлен"),
+)
+
+
+def _gate_gist(lines: Sequence[str]) -> list[str]:
+    out: list[str] = []
+    for g in lines:
+        for needle, words in _GATE_GIST:
+            if needle in g:
+                if words not in out:
+                    out.append(words)
+                break
+    return out
+
+
+def _published_token(ctx: _Ctx, vt: Mapping[str, Any]) -> str | None:
+    """The verdict token the result publishes, ``None`` when the answer is not
+    established (an inconclusive token, REG ``published_verdict: null``)."""
+    token = vt.get("verdict_token")
+    if vt.get("source") == "result" and "published_verdict" in ctx.result:
+        token = ctx.result.get("published_verdict")
+    return str(token) if token in _DECISIVE_TOKENS else None
+
+
 def _verdict_block(ctx: _Ctx, vt: Mapping[str, Any]) -> str:
+    """The "Ответ" box: the published verdict in words and the class, the
+    confidence ceiling as a percentage, who reviewed it, and a warning callout
+    whenever trust is below ``verified`` (VERDICT_POLICY §5: green only for
+    ``verified``)."""
     rep = ctx.report
     trust = vt["trust"]
-    lines = [f"> [!theorem] Вердикт: {_one_line(rep.get('verdict'), 200)}",
-             f"> Потолок уверенности (docs/VERDICT_POLICY.md): {vt['confidence_cap']:.2f}"]
+    lang = str(rep.get("language_class") or "")
+    verdict = _one_line(rep.get("verdict"), 200)
+    token = _published_token(ctx, vt)
+    if token is None:
+        head = "Ответ не установлен"
+        sub = (f"> Гипотеза решения: «{verdict}»; проверки этого прогона не дают основания опубликовать "
+               "ответ (docs/VERDICT_POLICY.md).") if verdict else ""
+    else:
+        words = _TOKEN_WORDS.get(token) or verdict
+        head = f"Ответ: {words}"
+        if trust == "not_verified":
+            head = f"Ответ (не подтверждён): {words}"
+        plain = verdict.isascii() and len(verdict) <= 24
+        sub = "" if plain or lang == "ll" else f"> Формулировка решения: {verdict}"
+    lines = [f"> [!theorem] {head}"]
+    if sub:
+        lines.append(sub)
+    cls = _CLASS_LABELS.get(lang)
+    lines.append(f"> {'Класс: ' + cls + ' · ' if cls else ''}Уверенность: {round(vt['confidence_cap'] * 100)}%"
+                 f" · {_review_short(ctx)}")
     out = ["\n".join(lines)]
+    gate = [g for g in vt.get("verdict_gate") or [] if g]
+    gist = _gate_gist(gate)
+    why = (" Причины: " + "; ".join(gist) + "." if gist else
+           " Подробности в разделе «Проверка»." if gate else "")
     if trust == "verified":
-        out.append("> [!success] Вердикт опирается на полную машинную проверку (`verified`)")
-    elif trust == "not_verified":
-        out.append("> [!warning] Вердикт не подтверждён машинной проверкой: доверие `not_verified`")
+        out.append("> [!success] Ответ подтверждён полной машинной проверкой (`verified`)")
+    elif trust == "bounded_pass" and gist:
+        out.append("> [!warning] Ответ проверен машинно не полностью\n"
+                   "> Доверие понижено до «проверено выборочно» (`bounded_pass`)." + why)
+    elif trust == "bounded_pass":
+        out.append("> [!warning] Ответ проверен машинно не полностью\n"
+                   "> Доверие: проверено выборочно (`bounded_pass`): проверка ограничена конечным набором слов, "
+                   "это не полное доказательство." + why)
+    elif trust == "well_formed":
+        out.append("> [!warning] Доказательство НЕ прошло проверку по существу\n"
+                   "> Доверие: корректно оформлено (`well_formed`): машинно проверена только форма; "
+                   "рассуждение ниже — аргумент модели. Требуется ручная проверка." + why)
+    else:
+        out.append("> [!warning] Доказательство НЕ прошло независимую проверку\n"
+                   f"> Доверие: {trust_label(trust)} (`{trust}`): у ответа нет машинного основания; ниже — "
+                   "аргумент модели, а не проверенная теорема. Требуется ручная проверка." + why)
+    return "\n\n".join(out)
+
+
+def _basis_line(ctx: _Ctx, vt: Mapping[str, Any]) -> str:
+    """The trust basis in one line (appendix)."""
+    trust = vt["trust"]
     basis = [str(b) for b in vt.get("basis") or []]
-    ctx.use(basis, "вердикт")
+    ctx.use(basis, "ответ")
     basis_txt = (", ".join(f"{_code(b)} ({ctx.by_id[b]['tool']})" if b in ctx.by_id else _code(b)
                            for b in basis) if basis else "нет допустимого основания")
-    out.append(f"**Доверие к вердикту:** {trust_label(trust)} ({_code(trust)}); основание: {basis_txt}.")
+    line = (f"**Основание ответа:** {trust_label(trust)} ({_code(trust)}); "
+            f"Потолок уверенности (docs/VERDICT_POLICY.md): {vt['confidence_cap']:.2f}; основание: {basis_txt}.")
+    extra = []
     if vt.get("verdict_token"):
-        out.append(f"**Токен вердикта по policy:** {_code(vt['verdict_token'])}")
-    if rep.get("answer"):
-        out.append(f"**Направление (answer):** {_code(rep.get('answer'))}")
-    out.append(_ir_line(ctx, basis))
-    gate = [g for g in vt.get("verdict_gate") or [] if g]
-    if gate:
-        out.append("\n".join(["**Понижения доверия (verdict gate):**", ""]
-                             + [f"- {_one_line(g, 400)}" for g in gate]))
-    return "\n\n".join(out)
+        extra.append(f"токен вердикта {_code(vt['verdict_token'])}")
+    if ctx.report.get("answer"):
+        extra.append(f"направление (answer) {_code(ctx.report.get('answer'))}")
+    if ctx.report.get("verdict"):
+        extra.append(f"вердикт в отчёте «{_one_line(ctx.report.get('verdict'), 200)}»")
+    if extra:
+        s = "; ".join(extra)
+        line += " " + s[0].upper() + s[1:] + "."
+    return line
 
 
 def _claims_section(ctx: _Ctx, claims_out: list[dict[str, Any]]) -> str:
     claims = list(ctx.report.get("claims") or [])
     if not claims:
         return ""
-    lines = ["## Ключевые утверждения", ""]
+    lines = ["### Ключевые утверждения", ""]
     for n, c in enumerate(claims, 1):
         ids = list(c.get("evidence_ids") or [])
         j = _judge(ids, ctx.by_id)
         ctx.use(j["evidence_ids"], f"утверждение {n}")
         claims_out.append({"n": n, "text": c.get("text"), **j})
-        lines.append(f"{n}. " + safe_text(c.get("text")).replace("\n", "\n   "))
-        lines.append(f"   {_mark(j, ctx.by_id)}")
+        lines.append(f"{n}. " + _with_mark(safe_text(c.get("text")).replace("\n", "\n   "), _mark(j, ctx.by_id)))
     return "\n".join(lines)
 
 
@@ -744,22 +991,24 @@ def _steps(ctx: _Ctx, steps_out: list[dict[str, Any]], *, compact: bool) -> str:
         title = _one_line(step.get("title"), 120) if step.get("title") else ""
         claim = safe_text(step.get("claim"))
         just = safe_text(step.get("justification"))
+        mark = _mark(j, ctx.by_id)
+        theory = "; ".join(_theory_text(r, short=True) for r in refs)
         if compact:
             head = f"{n}. " + (f"**{title}.** " if title else "") + claim.replace("\n", " ")
             if just:
                 head += " — " + just.replace("\n", " ")
-            lines = [head]
-            if refs:
-                lines.append("   Теория: " + "; ".join(_theory_text(r) for r in refs))
-            lines.append(f"   {_mark(j, ctx.by_id)}")
-            blocks.append("\n".join(lines))
+            if theory:
+                head += f" (теория: {theory})"
+            blocks.append(_with_mark(head, mark))
             continue
-        lines = [f"**Шаг {n}." + (f" {title}" if title else "") + "**", "", claim]
+        lines = [f"**Шаг {n}." + (f" {title}" if title else "") + "**", ""]
         if just:
-            lines += ["", f"**Обоснование:** {just}"]
-        if refs:
-            lines += ["", "**Теория:** " + "; ".join(_theory_text(r) for r in refs)]
-        lines += ["", _mark(j, ctx.by_id)]
+            lines += [claim, "", f"*Обоснование:* {just}"]
+        else:
+            lines += [claim]
+        if theory:
+            lines += ["", f"*Теория:* {theory}"]
+        lines[-1] = _with_mark(lines[-1], mark)
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -768,13 +1017,186 @@ def _lemmas_section(ctx: _Ctx, lemmas_out: list[dict[str, Any]]) -> str:
     lemmas = list(ctx.report.get("lemmas") or [])
     if not lemmas:
         return ""
-    lines = ["## Используемые утверждения теории", ""]
+    lines = ["### Используемые утверждения теории", ""]
     for lem in lemmas:
         ref = _theory_ref(str(lem.get("theorem_id") or ""))
         lemmas_out.append({**ref, "use": lem.get("use")})
         use = safe_text(lem.get("use")).replace("\n", " ")
         lines.append(f"- {_theory_text(ref)}" + (f": {use}" if use else ""))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# The construction: the model's text and the objects of the cited results
+# ---------------------------------------------------------------------------
+
+_DFA_TOOLS = ("regex_to_dfa", "dfa_vs_ir", "run_dfa", "nerode_probe")
+_GRAMMAR_TOOLS = ("grammar_vs_ir", "input_grammar_cfg", "cyk", "ll_table", "first_follow", "ll_parse")
+_MAX_TABLE_ROWS = 40
+
+
+def _cited_entries(ctx: _Ctx, vt: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Successful, non-refuted ledger entries the answer rests on or the
+    report cites: the verdict basis first, then the report's own ids."""
+    ids: list[str] = [str(b) for b in vt.get("basis") or []]
+    ids += [str(i) for i in ctx.report.get("evidence_ids") or []]
+    for item in [*(ctx.report.get("steps") or []), *(ctx.report.get("claims") or [])]:
+        ids += [str(i) for i in item.get("evidence_ids") or []]
+    out = []
+    for i in dict.fromkeys(ids):
+        e = ctx.by_id.get(i)
+        if e and e.get("ok") and e.get("trust") != "refuted":
+            out.append(e)
+    return out
+
+
+def _sym(x: Any) -> str:
+    return _cell(x, 40) if str(x) != "" else "ε"
+
+
+def _dfa_table(dfa: Mapping[str, Any]) -> str | None:
+    trans = dfa.get("transitions")
+    if not isinstance(trans, Mapping) or not trans:
+        return None
+    states = [str(s) for s in dfa.get("states") or trans.keys()]
+    if len(states) > _MAX_TABLE_ROWS:
+        return None
+    alphabet = [str(a) for a in dfa.get("alphabet") or []]
+    if not alphabet:
+        alphabet = sorted({str(a) for row in trans.values() if isinstance(row, Mapping) for a in row})
+    start = str(dfa.get("start"))
+    accept = {str(s) for s in dfa.get("accept") or dfa.get("accepting") or dfa.get("final") or []}
+    rows = ["| состояние | " + " | ".join(_sym(a) for a in alphabet) + " | принимающее |",
+            "|---|" + "---|" * len(alphabet) + "---|"]
+    missing = False
+    for s in states:
+        row = trans.get(s) if isinstance(trans.get(s), Mapping) else {}
+        name = ("→ " if s == start else "") + _cell(s, 40)
+        cells = [_cell(row.get(a), 40) if row.get(a) is not None else "—" for a in alphabet]
+        missing = missing or "—" in cells
+        rows.append(f"| {name} | " + " | ".join(cells) + f" | {'да' if s in accept else ''} |")
+    return "\n".join(rows) + "\n\n→ — начальное состояние" + ("; «—» — перехода нет." if missing else ".")
+
+
+def _rhs_text(rhs: Any) -> str:
+    if isinstance(rhs, str):
+        return rhs or "ε"
+    syms = [str(x) for x in rhs or []]
+    if not syms:
+        return "ε"
+    return ("" if all(len(x) == 1 for x in syms) else " ").join(syms)
+
+
+def _grammar_text(g: Any) -> str | None:
+    if isinstance(g, str):
+        return g.strip() or None
+    if not isinstance(g, Mapping):
+        return None
+    rules = g.get("rules") or g.get("productions")
+    by_lhs: dict[str, list[str]] = {}
+    if isinstance(rules, Mapping):
+        for lhs, alts in rules.items():
+            for alt in alts or [[]]:
+                by_lhs.setdefault(str(lhs), []).append(_rhs_text(alt))
+    elif isinstance(rules, Sequence):
+        for r in rules:
+            if isinstance(r, Mapping) and r.get("lhs") is not None:
+                by_lhs.setdefault(str(r["lhs"]), []).append(_rhs_text(r.get("rhs")))
+    if not by_lhs or len(by_lhs) > _MAX_TABLE_ROWS:
+        return None
+    start = str(g.get("start") or "")
+    order = sorted(by_lhs, key=lambda x: x != start)  # the start symbol first, else the given order
+    return "\n".join(f"{lhs} → {' | '.join(by_lhs[lhs])}" for lhs in order).replace("```", "'''")
+
+
+def _ll_table_md(table: Any, order: Sequence[str] = ()) -> str | None:
+    if not isinstance(table, Mapping) or not table or len(table) > _MAX_TABLE_ROWS:
+        return None
+    rank = {str(x): i for i, x in enumerate(order)}
+    table = dict(sorted(table.items(), key=lambda kv: rank.get(str(kv[0]), len(rank))))
+    looks: list[str] = []
+    for row in table.values():
+        if isinstance(row, Mapping):
+            looks += [str(k) for k in row if str(k) not in looks]
+    if not looks or len(looks) > 20:
+        return None
+    rows = ["| | " + " | ".join(_sym(x) if x else "$" for x in looks) + " |",
+            "|---|" + "---|" * len(looks)]
+    for nt, row in table.items():
+        row = row if isinstance(row, Mapping) else {}
+        cells = []
+        for la in looks:
+            rhs = row.get(la)
+            cells.append(_cell(f"{nt} → {_rhs_text(rhs)}", 60) if rhs is not None else "")
+        rows.append(f"| {_cell(nt, 40)} | " + " | ".join(cells) + " |")
+    return "\n".join(rows)
+
+
+def _same_lines(text: str, model_text: str) -> bool:
+    """Every rule line of ``text`` already stands in the model's construction
+    (spaces ignored): the code-made copy would only repeat it."""
+    have = {re.sub(r"\s+", "", ln) for ln in model_text.splitlines()}
+    return bool(model_text) and all(re.sub(r"\s+", "", ln) in have for ln in text.splitlines())
+
+
+def _ledger_objects(ctx: _Ctx, vt: Mapping[str, Any], model_text: str = "") -> list[str]:
+    """Blocks for the objects the cited tool results carry (code-made): the
+    DFA transition table, the grammar, the LL table."""
+    blocks: list[str] = []
+    seen: set[str] = set()
+    for e in _cited_entries(ctx, vt):
+        tool, data, args = str(e.get("tool")), e.get("data") or {}, e.get("args") or {}
+        src = f"из результата {tool} ({_code(e['id'])})"
+        if "dfa" not in seen and tool in _DFA_TOOLS:
+            dfa = data.get("dfa") if isinstance(data.get("dfa"), Mapping) else args.get("dfa")
+            table = _dfa_table(dfa) if isinstance(dfa, Mapping) else None
+            if table:
+                seen.add("dfa")
+                n = len(dfa.get("states") or dfa.get("transitions") or [])
+                blocks.append(f"**Таблица переходов ДКА** ({n} состояний, {src}):\n\n{table}")
+        g = args.get("grammar")
+        if g is None and isinstance(args.get("ir"), Mapping):
+            g = args["ir"].get("grammar")
+        if "grammar" not in seen and tool in _GRAMMAR_TOOLS:
+            text = _grammar_text(g)
+            if text:
+                seen.add("grammar")
+                if _same_lines(text, model_text):
+                    blocks.append(f"Грамматика выше совпадает с той, которую проверил {tool} ({_code(e['id'])}).")
+                else:
+                    blocks.append(f"**Грамматика** ({src}):\n\n```\n{text}\n```")
+        if "ll" not in seen and tool == "ll_table":
+            order = [str(x) for x in (g.get("nonterminals") or [])] if isinstance(g, Mapping) else []
+            table = _ll_table_md(data.get("parse_table"), order)
+            if table:
+                seen.add("ll")
+                k = data.get("k") or args.get("k")
+                blocks.append(f"**Таблица LL({k or 'k'})-анализа** ({src}):\n\n{table}")
+    return blocks
+
+
+def _construction_section(ctx: _Ctx, vt: Mapping[str, Any], *, heading: str = "### Конструкция") -> str:
+    model = safe_block(ctx.report.get("construction"))
+    objects = _ledger_objects(ctx, vt, model)
+    if not model and not objects:
+        return ""
+    return "\n\n".join([heading, *([model] if model else []), *objects])
+
+
+def _idea_section(ctx: _Ctx) -> str:
+    """The idea paragraph: the hypothesis (or the summary) and the method."""
+    rep = ctx.report
+    idea = safe_text(rep.get("hypothesis"))
+    if not idea and safe_text(rep.get("conclusion")):
+        idea = safe_text(rep.get("summary"))  # the summary is not printed as the conclusion then
+    method = safe_text(rep.get("method"))
+    method = method[:1].upper() + method[1:]
+    parts = []
+    if idea:
+        parts.append(f"**Идея.** {idea}")
+    if method:
+        parts.append(f"**Метод.** {method}")
+    return "\n\n".join(parts)
 
 
 def _lean_entries(ctx: _Ctx) -> list[dict[str, Any]]:
@@ -853,8 +1275,9 @@ def _partial_values(ctx: _Ctx) -> dict[str, str]:
         banner = "> [!warning] Прогон завершился без отчёта; отчёт собран кодом из журнала. Вердикт не установлен."
     if reason:
         banner += f"\n> Причина: {_one_line(reason, 400)}"
-    verdict = ("**Не установлен.** Доверие: не проверено (`not_verified`), потолок уверенности "
-               f"{_CAPS['not_verified']:.2f} (docs/VERDICT_POLICY.md).")
+    verdict = ("> [!theorem] Ответ не установлен\n"
+               f"> Уверенность: {round(_CAPS['not_verified'] * 100)}% · {_review_short(ctx)}\n"
+               "> Ниже — только то, что успели установить инструменты; доверие: не проверено (`not_verified`).")
     est = [e for e in ctx.evidence if e.get("ok") and e.get("trust") != "refuted"]
     ref = [e for e in ctx.evidence if e.get("trust") == "refuted"]
     failed = [e for e in ctx.evidence if not e.get("ok")]
@@ -893,48 +1316,53 @@ def _partial_values(ctx: _Ctx) -> dict[str, str]:
 # The code-generated evidence block
 # ---------------------------------------------------------------------------
 
+def _entry_note(e: Mapping[str, Any]) -> str:
+    if e.get("ok"):
+        return str(e.get("trust_reason") or "")
+    if e.get("error"):
+        return f"ошибка: {e.get('error')}"
+    if e.get("has_tool_result") is False:
+        return "без результата инструмента (ответ субагента или встроенный инструмент)"
+    return "неуспешный вызов"
+
+
+def _entry_result(e: Mapping[str, Any]) -> str:
+    """The "результат" cell of the check table: the trust in words, the bound
+    of a bounded check, or the error."""
+    if not e.get("ok"):
+        if e.get("error"):
+            return "✗ ошибка: " + _one_line(e.get("error"), 120)
+        return "— без результата" if e.get("has_tool_result") is False else "✗ неуспешный вызов"
+    words = _RESULT_WORDS.get(e["trust"], trust_label(e["trust"]))
+    bounds = e.get("bounds") if isinstance(e.get("bounds"), Mapping) else {}
+    n = bounds.get("max_len") or bounds.get("max_length")
+    if n is not None and e["trust"] == "bounded_pass":
+        words += f" (слова до длины {n})"
+    return f"{words} ({e['trust']})"
+
+
 def _evidence_block(ctx: _Ctx, claims_out: Sequence[Mapping[str, Any]],
-                    steps_out: Sequence[Mapping[str, Any]]) -> str:
+                    steps_out: Sequence[Mapping[str, Any]], vt: Mapping[str, Any] | None = None) -> str:
+    """The appendix "Проверка" (generated by code; the model never writes it):
+    the trust basis in one line, one table of the tool calls, the gate notes as
+    short bullets, the IR / review lines, one line on the run, and the full
+    call log with models and costs in a collapsed block."""
     out = [f"## {EVIDENCE_BLOCK_TITLE}", "",
-           ("Блок сгенерирован кодом из журнала свидетельств и журнала бюджета; модель его не пишет. "
-            "Уровни доверия: docs/VERDICT_POLICY.md."), "", "### Журнал свидетельств", ""]
+           ("Раздел сформирован кодом из журнала вызовов инструментов и журнала бюджета; модель его не пишет. "
+            "Уровни доверия: docs/VERDICT_POLICY.md."), ""]
+    if vt is not None:
+        out += [_basis_line(ctx, vt), ""]
     if ctx.evidence:
-        extra = any(e.get("model") or e.get("cost_usd") is not None or e.get("turn_usd") is not None
-                    for e in ctx.evidence)
-        head = "| # | id | инструмент | кто вызвал | доверие | где использовано | примечание |"
-        sep = "|---|---|---|---|---|---|---|"
-        if extra:
-            head = head[:-1] + " модель | стоимость |"
-            sep += "---|---|"
-        out += [head, sep]
-        for n, e in enumerate(ctx.evidence, 1):
-            if e.get("ok"):
-                note = e.get("trust_reason") or ""
-            elif e.get("error"):
-                note = f"ошибка: {e.get('error')}"
-            elif e.get("has_tool_result") is False:
-                note = "без результата инструмента (ответ субагента или встроенный инструмент)"
-            else:
-                note = "неуспешный вызов"
+        out += ["| инструмент | что проверено | результат | в решении |", "|---|---|---|---|"]
+        for e in ctx.evidence:
+            if str(e["tool"]) in _BOOKKEEPING_TOOLS and e["id"] not in ctx.usage:
+                continue
+            what = _TOOL_WHAT.get(str(e["tool"])) or _one_line(e.get("trust_reason") or "—", 120)
             where = ", ".join(ctx.usage.get(e["id"], [])) or "—"
-            who = e.get("role") or "main"
-            if e.get("scope") and e.get("scope") != who:
-                who = f"{who} ({e['scope']})"
-            row = (f"| {n} | {_cell(_code(e['id']), 80)} | {_cell(e['tool'], 60)} | "
-                   f"{_cell(who, 60)} | {trust_label(e['trust'])} ({e['trust']}) | "
-                   f"{_cell(where, 120)} | {_cell(note, 200)} |")
-            if extra:
-                cost = e.get("cost_usd")
-                cost_txt = _money(cost) if cost is not None else (
-                    f"ход {_money(e['turn_usd'])}" if e.get("turn_usd") is not None else "—")
-                row += f" {_cell(e.get('model') or '—', 40)} | {cost_txt} |"
-            out.append(row)
+            out.append(f"| {_cell(e['tool'], 60)} {_cell(_code(e['id']), 80)} | {_cell(what, 120)} | "
+                       f"{_cell(_entry_result(e), 160)} | {_cell(where, 120)} |")
     else:
         out.append("Журнал пуст: ни один инструмент не дал результата.")
-    if ctx.integrity is not None:
-        out += ["", "Целостность журнала (hash chain): " + (
-            "цела." if not ctx.integrity else
-            "**нарушена**: " + "; ".join(_one_line(p, 160) for p in ctx.integrity[:10]) + ".")]
 
     model_only = [f"шаг {s['n']}" for s in steps_out if s["model_only"]]
     model_only += [f"утверждение {c['n']}" for c in claims_out if c["model_only"]]
@@ -944,21 +1372,66 @@ def _evidence_block(ctx: _Ctx, claims_out: Sequence[Mapping[str, Any]],
             unknown.setdefault(i, []).append(f"{kind} {item['n']}")
     for i in (ctx.report.get("evidence_ids") if ctx.report else None) or []:
         if str(i) not in ctx.by_id:
-            unknown.setdefault(str(i), []).append("вердикт")
+            unknown.setdefault(str(i), []).append("ответ")
     refuted_cited = sorted({i for item in [*steps_out, *claims_out] for i in item["refuted_ids"]})
     notes: list[str] = []
+    for g in (vt or {}).get("verdict_gate") or []:
+        if g:
+            notes.append(f"- Понижение доверия (verdict gate): {_one_line(g, 400)}")
+    if (vt or {}).get("source") == "default" and ctx.report:
+        notes.append("- Доверие не вычислено гейтом (нет данных гейта): принят нижний уровень `not_verified`.")
     if model_only:
         notes.append("- Без ссылок на журнал (держится только на словах модели): " + ", ".join(model_only) + ".")
     if unknown:
-        notes.append("- id, которых нет в журнале (утверждения с ними не проверены): " + "; ".join(
+        notes.append("- id, которых нет в журнале (утверждения с ними не проверены, `not_verified`): " + "; ".join(
             f"{_code(i)} ({', '.join(w)})" for i, w in unknown.items()) + ".")
     if refuted_cited:
         notes.append("- Процитированы опровергнутые результаты: " + ", ".join(_code(i) for i in refuted_cited) + ".")
-    if notes:
-        out += [""] + notes
-
-    out += ["", "### Модели и расходы", ""]
     b = ctx.budget
+    refusals: list[dict[str, Any]] = list((b or {}).get("refusals") or [])
+    for r in ctx.result.get("budget_refusals") or []:
+        if isinstance(r, Mapping) and r.get("node") not in {x.get("node") for x in refusals}:
+            refusals.append(dict(r))
+    if refusals:
+        notes.append("- Отказы бюджета: " + ", ".join(
+            f"{_code(r.get('node'))} ({r.get('refusals')})" for r in refusals) + ".")
+    if (b or {}).get("exhausted") or ctx.status == "budget_exhausted":
+        notes.append("- Бюджет исчерпан: часть вызовов моделей была отклонена.")
+    if ctx.integrity:
+        notes.append("- Целостность журнала (hash chain): **нарушена**: "
+                     + "; ".join(_one_line(p, 160) for p in ctx.integrity[:10]) + ".")
+    if notes:
+        out += ["", "**Замечания проверки:**", ""] + notes
+
+    out += ["", _ir_line(ctx, [str(x) for x in (vt or {}).get("basis") or []]),
+            "", f"**Проверка человеком:** {ctx.review['label']}"]
+    if not ctx.review["reviewed"] and NO_HUMAN_REVIEW_MARK not in ctx.review["label"].lower():
+        out[-1] += f" Отметка: {NO_HUMAN_REVIEW_MARK}."
+    run = [f"Прогон {_code(_run_id(ctx))}" if _run_id(ctx) else "Прогон",
+           f"шаблон {_code(ctx.template)}",
+           f"статус: {_STATUS_LABELS.get(ctx.status, ctx.status)} ({_code(ctx.status)})"]
+    if b is not None:
+        limit = b.get("limit_usd")
+        run.append(f"потрачено {_money(b['spent_usd'])}" + (f" из {_money(limit)}" if limit is not None else ""))
+    if ctx.integrity is not None and not ctx.integrity:
+        run.append("Целостность журнала (hash chain): цела.")
+    out += ["", " · ".join(run) + ("" if run[-1].endswith(".") else ".")]
+
+    out += ["", "<details><summary>Журнал вызовов, модели и расходы</summary>", ""]
+    if ctx.evidence:
+        out += ["| # | id | инструмент | кто вызвал | доверие | модель | стоимость | примечание |",
+                "|---|---|---|---|---|---|---|---|"]
+        for n, e in enumerate(ctx.evidence, 1):
+            who = e.get("role") or "main"
+            if e.get("scope") and e.get("scope") != who:
+                who = f"{who} ({e['scope']})"
+            cost = e.get("cost_usd")
+            cost_txt = _money(cost) if cost is not None else (
+                f"ход {_money(e['turn_usd'])}" if e.get("turn_usd") is not None else "—")
+            out.append(f"| {n} | {_cell(_code(e['id']), 80)} | {_cell(e['tool'], 60)} | {_cell(who, 60)} | "
+                       f"{trust_label(e['trust'])} ({e['trust']}) | {_cell(e.get('model') or '—', 40)} | "
+                       f"{cost_txt} | {_cell(_entry_note(e), 240)} |")
+        out.append("")
     if b is None:
         out.append("Журнал бюджета не передан.")
     else:
@@ -980,24 +1453,10 @@ def _evidence_block(ctx: _Ctx, claims_out: Sequence[Mapping[str, Any]],
             out += [f"| {_cell(role, 40)} | {r.get('calls', '—')} | {_money(r['usd'])} |"
                     for role, r in sorted(b["by_role"].items())]
         limit = b.get("limit_usd")
-        out += ["", f"- Потрачено: {_money(b['spent_usd'])}"
+        out += ["", f"Потрачено: {_money(b['spent_usd'])}"
                 + (f" из {_money(limit)} (лимит задачи)" if limit is not None else "")
                 + (f"; состояние бюджета: {_code(b['state'])}" if b.get("state") else "") + "."]
-        refusals = list(b.get("refusals") or [])
-        for r in ctx.result.get("budget_refusals") or []:
-            if isinstance(r, Mapping) and r.get("node") not in {x.get("node") for x in refusals}:
-                refusals.append(dict(r))
-        if refusals:
-            out.append("- Отказы бюджета: " + ", ".join(
-                f"{_code(r.get('node'))} ({r.get('refusals')})" for r in refusals) + ".")
-        if b.get("exhausted") or ctx.status == "budget_exhausted":
-            out.append("- Бюджет исчерпан: часть вызовов моделей была отклонена.")
-    out += ["", f"- Статус прогона: {_code(ctx.status)}.", f"- Проверка человеком: {ctx.review['label']}"]
-    form_label = formalization_label(ctx.result)
-    if form_label:
-        out.append(f"- Формализация (HITL 1): {form_label}.")
-    if not ctx.review["reviewed"] and NO_HUMAN_REVIEW_MARK not in ctx.review["label"].lower():
-        out.append(f"- Отметка: {NO_HUMAN_REVIEW_MARK}.")
+    out += ["", "</details>"]
     return "\n".join(out)
 
 
@@ -1008,19 +1467,43 @@ def _evidence_block(ctx: _Ctx, claims_out: Sequence[Mapping[str, Any]],
 _INLINE_ESC_RE = re.compile(r"\\([`*#>])")
 _BOLD_RE = re.compile(r"\*\*(\S(?:.*?\S)?)\*\*")
 _CODE_RE = re.compile(r"(`[^`\n]+`)")
+#: "*Обоснование:*" at the start of a line: the only italics the converter
+#: knows (a bare "*" is too common in regexes and formulas).
+_LABEL_RE = re.compile(r"^\*([A-Za-zА-Яа-яЁё ]{1,40}:)\*")
+_MARK_RE = re.compile(MARK + r"\(([^()\n]*)\)")
 
 
 def _inline(text: str) -> str:
     out: list[str] = []
-    for part in _CODE_RE.split(text):
+    for n, part in enumerate(_CODE_RE.split(text)):
         if part.startswith("`") and part.endswith("`") and len(part) >= 2 and _CODE_RE.fullmatch(part):
             out.append(f"<code>{_esc(part[1:-1])}</code>")
             continue
         s = _html.escape(part, quote=False)
+        if n == 0:
+            s = _LABEL_RE.sub(r'<em class="label">\1</em>', s)
         s = _INLINE_ESC_RE.sub(lambda m: f"&#{ord(m.group(1))};", s)
         s = _BOLD_RE.sub(r"<strong>\1</strong>", s)
-        out.append(s)
+        s = _MARK_RE.sub(r'<span class="ev-mark">(\1)</span>', s)
+        out.append(s.replace(MARK, ""))
     return "".join(out)
+
+
+def _join_lines(lines: Sequence[str]) -> str:
+    """Paragraph lines joined with ``<br>``, except inside ``$$ … $$`` display
+    math, which KaTeX must see as one text run."""
+    parts: list[str] = []
+    in_math = False
+    for k, line in enumerate(lines):
+        if k:
+            parts.append(" " if in_math else "<br>")
+        parts.append(_inline(line))
+        if line.count("$$") % 2:
+            in_math = not in_math
+    return "".join(parts)
+
+
+_DETAILS_RE = re.compile(r"^<details><summary>(.*)</summary>$")
 
 
 def _split_row(row: str) -> list[str]:
@@ -1051,22 +1534,32 @@ _H_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _CALLOUT_RE = re.compile(r"^\[!(\w+)\]\s*(.*)$")
 
 
-def markdown_to_html(md: str) -> str:
+def markdown_to_html(md: str, *, details: bool = False) -> str:
     """The subset of Markdown the templates and the renderer produce:
     headings, paragraphs (line breaks kept), ``-`` / ``1.`` lists with
     indented continuation lines, tables, fenced code, ``>`` quotes and
-    ``> [!kind]`` callouts, ``**bold**``, ```code```, backslash escapes of
-    ``` ` * # > ```. Everything is HTML-escaped; ``$…$`` is left for KaTeX."""
+    ``> [!kind]`` callouts, ``**bold**``, ```code```, a leading
+    ``*Label:*``, the code-made evidence marks, backslash escapes of
+    ``` ` * # > ```. Everything is HTML-escaped; ``$…$`` is left for KaTeX.
+    With ``details`` (the code-made appendix only, never model text) the
+    lines ``<details><summary>…</summary>`` and ``</details>`` open and close
+    a collapsed block."""
     lines = md.replace("\r\n", "\n").split("\n")
     out: list[str] = []
     i, n = 0, len(lines)
 
     def is_block_start(s: str) -> bool:
-        return bool(s.startswith(("```", ">", "|")) or _H_RE.match(s) or _UL_RE.match(s) or _OL_RE.match(s))
+        return bool(s.startswith(("```", ">", "|")) or _H_RE.match(s) or _UL_RE.match(s) or _OL_RE.match(s)
+                    or (details and (s == "</details>" or _DETAILS_RE.match(s))))
 
     while i < n:
         s = lines[i].strip()
         if not s:
+            i += 1
+            continue
+        if details and (s == "</details>" or _DETAILS_RE.match(s)):
+            dm = _DETAILS_RE.match(s)
+            out.append(f"<details><summary>{_inline(dm.group(1))}</summary>" if dm else "</details>")
             i += 1
             continue
         if s.startswith("```"):
@@ -1143,31 +1636,42 @@ def markdown_to_html(md: str) -> str:
         while i < n and lines[i].strip() and (not buf or not is_block_start(lines[i].strip())):
             buf.append(lines[i].strip())
             i += 1
-        out.append("<p>" + "<br>".join(_inline(x) for x in buf) + "</p>")
+        out.append("<p>" + _join_lines(buf) + "</p>")
     return "\n".join(out)
 
 
 _CSS = """\
 :root{--fg:#1a1a1a;--muted:#666;--bg:#fff;--line:#e0e0e0;--soft:#f6f7f9;--accent:#1565c0;
---ok:#2e7d32;--ok-bg:#e8f5e9;--warn:#e65100;--warn-bg:#fff3e0;--thm-bg:#eef3fb}
+--ok:#2e7d32;--ok-bg:#e8f5e9;--warn:#e65100;--warn-bg:#fff3e0;--thm-bg:#eef3fb;--step:#fafbfc}
 @media (prefers-color-scheme:dark){:root{--fg:#e8e8e8;--muted:#a0a0a0;--bg:#16181c;--line:#33363c;
---soft:#1f2227;--accent:#8ab4f8;--ok:#81c995;--ok-bg:#1e3326;--warn:#fbbc6b;--warn-bg:#3a2c18;--thm-bg:#1c2638}}
-body{font-family:'Segoe UI',system-ui,sans-serif;max-width:860px;margin:2rem auto;padding:0 16px;
-line-height:1.6;color:var(--fg);background:var(--bg)}
-h1{font-size:1.6rem;margin:.2rem 0 1rem}h2{font-size:1.2rem;margin:1.6rem 0 .6rem;padding-top:.8rem;
-border-top:1px solid var(--line)}h3{font-size:1.02rem;margin:1.2rem 0 .4rem}
-p{margin:.5rem 0}code{font-family:Consolas,'Courier New',monospace;font-size:.88em;background:var(--soft);
-padding:1px 4px;border-radius:4px}pre{background:var(--soft);padding:12px;border-radius:6px;overflow-x:auto}
-pre code{background:none;padding:0}
-table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px;display:block;overflow-x:auto}
-th,td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}th{background:var(--soft)}
+--soft:#1f2227;--accent:#8ab4f8;--ok:#81c995;--ok-bg:#1e3326;--warn:#fbbc6b;--warn-bg:#3a2c18;--thm-bg:#1c2638;
+--step:#1b1e23}}
+*{box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;max-width:780px;margin:1.2rem auto;padding:0 16px;
+font-size:15px;line-height:1.65;color:var(--fg);background:var(--bg);overflow-wrap:anywhere}
+h1{font-size:1.45rem;line-height:1.3;margin:.2rem 0 1rem}
+h2{font-size:1.15rem;margin:1.6rem 0 .6rem;padding-top:.8rem;border-top:1px solid var(--line)}
+h3{font-size:1rem;margin:1.3rem 0 .45rem}
+p{margin:.5rem 0}ol,ul{padding-left:1.4rem}li{margin:.2rem 0}
+code{font-family:Consolas,'Courier New',monospace;font-size:.88em;background:var(--soft);padding:1px 4px;
+border-radius:4px;overflow-wrap:anywhere}
+pre{background:var(--soft);padding:10px 12px;border-radius:6px;overflow-x:auto;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+table{border-collapse:collapse;margin:8px 0;font-size:13.5px;display:block;max-width:100%;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:5px 9px;text-align:left;vertical-align:top}th{background:var(--soft)}
 blockquote{border-left:3px solid var(--line);margin:.6rem 0;padding:.2rem .8rem;color:var(--muted)}
 .callout{border-radius:6px;padding:10px 14px;margin:.7rem 0;background:var(--soft);border-left:4px solid var(--accent)}
-.callout-title{font-weight:600}.callout-theorem{background:var(--thm-bg)}
+.callout p{margin:.25rem 0}.callout-title{font-weight:600}
+.callout-theorem{background:var(--thm-bg)}.callout-theorem .callout-title{font-size:1.08rem}
 .callout-success{background:var(--ok-bg);border-left-color:var(--ok)}
 .callout-warning{background:var(--warn-bg);border-left-color:var(--warn)}
-.generated{margin-top:2rem;padding:4px 16px 12px;border:1px dashed var(--line);border-radius:8px}
-.generated h2{border-top:none;padding-top:0}
+em.label{color:var(--muted)}
+.ev-mark{font-size:.82em;color:var(--ok);white-space:nowrap}
+.generated{margin-top:2.2rem;padding:2px 14px 10px;border:1px dashed var(--line);border-radius:8px;
+font-size:13.5px;color:var(--fg)}
+.generated h2{border-top:none;padding-top:.4rem;font-size:1.05rem}
+.generated table{font-size:12.5px}
+details{margin:.8rem 0}summary{cursor:pointer;color:var(--muted)}
 """
 
 _KATEX = (
@@ -1181,13 +1685,15 @@ _KATEX = (
     "crossorigin=\"anonymous\" onload=\"renderMathInElement(document.querySelector('main'),{delimiters:["
     "{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false},"
     "{left:'\\\\(',right:'\\\\)',display:false}],throwOnError:false});\"></script>\n"
+    # long display formulas scroll inside a narrow panel instead of widening the page
+    "<style>.katex-display{overflow-x:auto;overflow-y:hidden;padding:2px 0}</style>\n"
 )
 _MATH_RE = re.compile(r"\$\$|\\\(|\$[^$\n]{1,200}\$")
 
 
 def _html_page(title: str, body_md: str, evidence_md: str) -> str:
     body = markdown_to_html(body_md)
-    ev = markdown_to_html(evidence_md)
+    ev = markdown_to_html(evidence_md, details=True)
     katex = _KATEX if _MATH_RE.search(body_md) else ""
     return (
         "<!DOCTYPE html>\n<html lang=\"ru\">\n<head>\n<meta charset=\"utf-8\">\n"
@@ -1280,8 +1786,7 @@ def render_report(
     lemmas_out: list[dict[str, Any]] = []
     lean_out: dict[str, Any] = {}
     values: dict[str, str] = dict.fromkeys(PLACEHOLDERS, "")
-    values.update(title=page_title.replace("\n", " "), header=_header(ctx),
-                  task=safe_text(task) or "—")
+    values.update(title=page_title.replace("\n", " "), task=safe_text(task) or "—")
     if report is None:
         vt = {"trust": "not_verified", "confidence_cap": _CAPS["not_verified"], "basis": [],
               "verdict_token": None, "verdict_gate": [], "source": "partial"}
@@ -1292,13 +1797,13 @@ def render_report(
         values["verdict_block"] = _verdict_block(ctx, vt)
         values["method"] = safe_text(report.get("method")) or "—"
         hyp = safe_text(report.get("hypothesis"))
-        values["hypothesis_section"] = f"## Гипотеза\n\n{hyp}" if hyp else ""
+        values["hypothesis_section"] = f"**Гипотеза.** {hyp}" if hyp else ""
+        values["idea_section"] = _idea_section(ctx)
         values["lemmas_section"] = _lemmas_section(ctx, lemmas_out)
         values["claims_section"] = _claims_section(ctx, claims_out)
-        compact = tpl == "exam_solution"
+        compact = tpl in ("exam_solution", "short_verdict")
         values["steps" if not compact else "key_steps"] = _steps(ctx, steps_out, compact=compact)
-        cons = safe_text(report.get("construction"))
-        values["construction_section"] = f"## Выбранное слово или конструкция\n\n{cons}" if cons else ""
+        values["construction_section"] = _construction_section(ctx, vt)
         summary = safe_text(report.get("summary"))
         conclusion = safe_text(report.get("conclusion")) or summary or safe_text(report.get("verdict"))
         values["conclusion"] = conclusion
@@ -1310,8 +1815,9 @@ def render_report(
         body_name = "full_proof" if tpl == "lean_appendix" else tpl
         body_tpl = load_template(body_name)
     body_md = _collapse(body_tpl.substitute(values))
-    evidence_md = _collapse(_evidence_block(ctx, claims_out, steps_out))
-    markdown = body_md + "\n" + evidence_md
+    evidence_md = _collapse(_evidence_block(ctx, claims_out, steps_out, vt))
+    # the marks' sentinel only steers the HTML; the Markdown file gets plain text
+    markdown = (body_md + "\n" + evidence_md).replace(MARK, "")
 
     data = {
         **_jsonable(dict(result)),

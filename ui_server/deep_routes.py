@@ -4,11 +4,13 @@
     POST /api/deep/runs                       -> {"run_id", "status", "detail_url"}
          {text | file_b64 + mime [+ name], template?, settings_override?,
           mock_script? (an examples/mock name or a script object; mock mode, the default),
-          live?, confirm_spend? (required with live), auto_approve?}
+          live?, confirm_spend? (required with live),
+          review_mode? ("all" (default) | "formalization" | "auto"; live runs too),
+          auto_approve? (mock only; an alias of review_mode "auto")}
     GET  /api/deep/runs/<id>[?after=N&limit=M]
-                                              -> {"run", "events", "next", "total", "usage",
-                                                  "todos", "tools", "subagents", "budget",
-                                                  "hitl", "result", "log_tail"}
+                                              -> {"run", "pending_point", "review_mode", "events",
+                                                  "next", "total", "usage", "todos", "tools",
+                                                  "subagents", "budget", "hitl", "result", "log_tail"}
          events are the progress.jsonl lines from index N (0-based) on (the same
          polling contract as /api/runs/<id>); the other keys are folded from the
          whole file / the run directory, so a client that starts polling late
@@ -16,7 +18,8 @@
     GET  /api/deep/runs/<id>/files/<path>     -> result.{json,md,html}, hitl.md, evidence.jsonl,
                                                  progress.jsonl, run.log, input/*, upload/*, views/*
     POST /api/deep/runs/<id>/resume           -> {decision: approve | edit | reject, payload?,
-                                                  comment?, confirm_spend? (live runs)}
+                                                  comment?, confirm_spend? (live runs),
+                                                  approve_rest? (only with approve)}
     POST /api/deep/runs/<id>/cancel           -> {"run_id", "status"}
     POST /api/deep/runs/<id>/render           -> {template}: the finished, accepted report rendered
                                                  with another template into views/<t>.{md,html}
@@ -26,6 +29,34 @@
                                                  measured cost of past live deep runs
     GET  /api/deep/settings, PUT /api/deep/settings (a partial object merged over the current)
     GET  /api/deep/mock-scripts               -> the replay scripts of tfl_deep_agent/examples/mock
+
+Review modes (per run; ``run.review_mode`` / ``review_mode`` is the effective
+one): ``all`` -- every enabled HITL point waits for a human; ``formalization``
+-- HITL 1 (and ``execute``) wait, HITL 2 is auto-approved; ``auto`` -- every
+stop is auto-approved. An auto-approved stop is recorded like
+``--auto-approve`` (source ``auto``, decision ``auto_approved``) and an
+auto-approved formalization is not a human approval for the verdict gate.
+``approve_rest: true`` on a resume approves this stop as the human's decision
+and switches the run to ``auto`` (stored in the agent's run.json, so it holds
+across processes); ``review_mode`` then reads ``auto``.
+
+``pending_point`` (in every run summary, and at the top level of the detail
+response) is ``null`` unless the run is ``awaiting_human``; then it is the
+short card of the stop, built by code (no model call)::
+
+    {"point": "formalization" | "report" | "execute",
+     "title": str,
+     "summary": [str, ...],      # at most 4 lines, each shorter than 90 chars
+     "details_md": str,          # the full hitl.md section of this stop
+     "editable": [str, ...]}     # the fields an "edit" decision accepts ([] = no edit)
+
+Formalization summary: ``["Класс: REG", "Язык: regex (ab)*a|b над {a, b}",
+"в L: a, b, aba, ababa", "не в L: ε, bb, ..."]``; report summary:
+``["Ответ: <verdict>", "Доверие: <trust> · потолок <cap>", "Шагов: N ·
+утверждений: M"]``. It comes from ``run.json`` ``pending.card``, else is built
+from the pending request, else from the card cached when the stop settled, so
+a waiting run never shows ``null`` (before 2026-11-08 it was the point name
+only, and only under ``run``: a client reading the top level saw ``null``).
 
 Runs execute in a subprocess, ``python -m tfl_deep_agent ... --save <run_dir>
 --no-dialog``, like the pipelines. A HITL stop ends that process with exit code
@@ -114,8 +145,10 @@ TERMINAL_STATUSES = {"completed", "error", "cancelled", "interrupted"}
 AGENT_FINAL = {"submitted", "incomplete", "budget_exhausted", "error"}
 
 CREATE_KEYS = {"text", "file_b64", "mime", "name", "template", "settings_override", "mock_script", "live",
-               "confirm_spend", "auto_approve"}
-RESUME_KEYS = {"decision", "payload", "comment", "confirm_spend", "reviewer"}
+               "confirm_spend", "auto_approve", "review_mode"}
+RESUME_KEYS = {"decision", "payload", "comment", "confirm_spend", "reviewer", "approve_rest"}
+#: per-run review modes (``tfl_deep_agent.hitl.REVIEW_MODES``; kept here: hitl is imported lazily)
+REVIEW_MODES = ("all", "formalization", "auto")
 _EXT_FOR_MIME = {"application/pdf": ".pdf", "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
                  "text/plain": ".txt"}
 
@@ -299,11 +332,11 @@ _live_active = 0
 
 _RECORD_KEYS = ("run_id", "status", "live", "mode", "template", "input", "created", "started", "finished",
                 "pid", "pid_identity", "server_pid", "server_identity", "error", "result_status", "segments",
-                "auto_approve", "resume_from", "report_template")
+                "auto_approve", "review_mode", "resume_from", "report_template")
 
 
 def _new_entry(run_id: str, run_dir: Path, *, live: bool, template: str | None, input_info: dict[str, Any],
-               auto_approve: bool) -> dict[str, Any]:
+               auto_approve: bool, review_mode: str | None = None) -> dict[str, Any]:
     lab = _lab()
     return {
         "run_id": run_id, "run_dir": str(run_dir), "status": "queued", "live": live,
@@ -311,6 +344,7 @@ def _new_entry(run_id: str, run_dir: Path, *, live: bool, template: str | None, 
         "created": _now(), "started": None, "finished": None, "pid": None, "pid_identity": None,
         "server_pid": os.getpid(), "server_identity": lab.process_identity(os.getpid()),
         "error": None, "result_status": None, "segments": [], "auto_approve": auto_approve,
+        "review_mode": review_mode or ("auto" if auto_approve else "all"),
         "lines": [], "proc": None, "cancel_requested": False, "orphan": False,
     }
 
@@ -373,6 +407,7 @@ def _settle_from_disk_locked(run: dict[str, Any], *, rc: int | None = None, tail
         # run.json at the same stop (resume_run sets "running" before the agent runs), so
         # the run stays resumable; the failure is shown in `error`
         run["status"] = WAITING_STATUS
+        run["pending_card"] = pending_card(run, agent)
         if rc in (None, EXIT_AWAITING):
             run["error"] = None
         else:
@@ -595,8 +630,10 @@ def _start_worker(run_id: str, cmd: list[str], live: bool, action: str) -> None:
 # ---------------------------------------------------------------------------
 
 def build_start_command(run_dir: Path, task_file: Path, *, settings_file: Path, template: str | None,
-                        mock_script: Path | None, live: bool, auto_approve: bool) -> list[str]:
-    """argv of ``python -m tfl_deep_agent --file ... --save RUN_DIR --no-dialog ...``."""
+                        mock_script: Path | None, live: bool, auto_approve: bool,
+                        review_mode: str | None = None) -> list[str]:
+    """argv of ``python -m tfl_deep_agent --file ... --save RUN_DIR --no-dialog ...``
+    (``review_mode`` -> ``--review-mode``; ``auto_approve`` -> ``--auto-approve``)."""
     cmd = [sys.executable, "-m", "tfl_deep_agent", "--file", str(task_file), "--save", str(run_dir),
            "--settings", str(settings_file), "--no-dialog"]
     if template:
@@ -607,15 +644,21 @@ def build_start_command(run_dir: Path, task_file: Path, *, settings_file: Path, 
         cmd += ["--mock-script", str(mock_script)]
     if auto_approve:
         cmd.append("--auto-approve")
+    elif review_mode and review_mode != "all":
+        cmd += ["--review-mode", review_mode]
     return cmd
 
 
-def build_resume_command(run_dir: Path, decision: str, payload_file: Path | None, *, live: bool) -> list[str]:
-    """argv of ``python -m tfl_deep_agent --resume RUN_DIR --decision D [--payload @file] --no-dialog``."""
+def build_resume_command(run_dir: Path, decision: str, payload_file: Path | None, *, live: bool,
+                         approve_rest: bool = False) -> list[str]:
+    """argv of ``python -m tfl_deep_agent --resume RUN_DIR --decision D [--payload @file]
+    [--approve-rest] --no-dialog``."""
     cmd = [sys.executable, "-m", "tfl_deep_agent", "--resume", str(run_dir), "--decision", decision,
            "--no-dialog"]
     if payload_file is not None:
         cmd += ["--payload", "@" + str(payload_file)]
+    if approve_rest:
+        cmd.append("--approve-rest")
     if live:
         cmd.append("--live")
     return cmd
@@ -724,7 +767,14 @@ def api_create(payload: Any) -> dict[str, Any]:
         raise BadRequest("auto_approve must be a boolean")
     if live and auto_approve:
         raise BadRequest("auto_approve is for mock runs (eval and tests): a paid live run keeps its human "
-                         "review points")
+                         "review points; a live run chooses review_mode explicitly")
+    review_mode = payload.get("review_mode")
+    if review_mode is not None and review_mode not in REVIEW_MODES:
+        raise BadRequest(f"review_mode must be one of {', '.join(REVIEW_MODES)}")
+    if auto_approve and review_mode not in (None, "auto"):
+        raise BadRequest(f"auto_approve is review_mode 'auto'; it conflicts with review_mode {review_mode!r}")
+    if auto_approve:
+        review_mode = "auto"
 
     mod = _settings_mod()
     saved = load_deep_settings()
@@ -764,14 +814,16 @@ def api_create(payload: Any) -> dict[str, Any]:
                   "size_bytes": len(task.data) if task.data is not None else None, "pages": task.pages,
                   "file": f"{UPLOAD_DIR}/{task_file.name}", "warnings": list(task.warnings)}
     cmd = build_start_command(run_dir, task_file, settings_file=settings_file, template=template,
-                              mock_script=mock_path, live=live, auto_approve=auto_approve)
+                              mock_script=mock_path, live=live, auto_approve=auto_approve,
+                              review_mode=review_mode)
     with _lock:
         run = _new_entry(run_id, run_dir, live=live, template=template, input_info=input_info,
-                         auto_approve=auto_approve)
+                         auto_approve=review_mode == "auto", review_mode=review_mode or "all")
         _runs[run_id] = run
         _persist_locked(run)
     _start_worker(run_id, cmd, live, "start")
     return {"run_id": run_id, "status": "queued", "mode": "live" if live else "mock",
+            "review_mode": review_mode or "all",
             "detail_url": f"{PREFIX}runs/{run_id}", "warnings": list(task.warnings)}
 
 
@@ -804,17 +856,26 @@ def _decision_file_payload(decision: str, payload: Any, comment: Any) -> Any:
     return {"comment": comment} if comment else None
 
 
-def _prevalidate(pending: dict[str, Any], decision: str, file_payload: Any) -> None:
+def _prevalidate(pending: dict[str, Any], decision: str, file_payload: Any, run_dir: Path | None = None) -> None:
     """Check the decision against the pending request in-process (the same
-    checks the resumed process makes), so a misfit is a 400 now and the run
+    checks the resumed process makes, including a report edit's evidence ids
+    against the run's ``evidence.jsonl``), so a misfit is a 400 now and the run
     keeps waiting. Skipped when tfl_deep_agent.hitl cannot be imported."""
     try:
         from tfl_deep_agent import hitl
     except Exception:  # noqa: BLE001 - the child process checks it as well
         return
+    evidence = None
+    if run_dir is not None and (run_dir / "evidence.jsonl").is_file():
+        try:
+            from tfl_deep_agent.evidence.ledger import EvidenceLedger
+
+            evidence = EvidenceLedger.load(run_dir)
+        except Exception:  # noqa: BLE001 - the child process checks the ids as well
+            evidence = None
     try:
         dec = hitl.parse_decision(decision, file_payload)
-        hitl.resume_value(pending.get("request") or {}, dec)
+        hitl.resume_value(pending.get("request") or {}, dec, evidence=evidence)
     except hitl.DecisionError as exc:
         raise BadRequest(str(exc)) from None
 
@@ -828,6 +889,11 @@ def api_resume(run_id: str, payload: Any) -> dict[str, Any]:
     decision = str(payload.get("decision") or "").strip().lower()
     if decision not in ("approve", "edit", "reject"):
         raise BadRequest("decision must be one of approve, edit, reject")
+    approve_rest = payload.get("approve_rest", False)
+    if not isinstance(approve_rest, bool):
+        raise BadRequest("approve_rest must be a boolean")
+    if approve_rest and decision != "approve":
+        raise BadRequest("approve_rest goes only with decision 'approve'")
     with _lock:
         run = _get_run(run_id)
         status = run["status"]
@@ -845,7 +911,7 @@ def api_resume(run_id: str, payload: Any) -> dict[str, Any]:
     file_payload = _decision_file_payload(decision, payload.get("payload"), payload.get("comment"))
     if decision == "reject" and not (isinstance(file_payload, dict) and str(file_payload.get("comment") or "").strip()):
         raise BadRequest("reject needs a comment for the agent (comment, or payload {\"comment\": ...})")
-    _prevalidate(pending, decision, file_payload)
+    _prevalidate(pending, decision, file_payload, run_dir)
 
     payload_file = None
     if file_payload is not None:
@@ -854,7 +920,7 @@ def api_resume(run_id: str, payload: Any) -> dict[str, Any]:
         n = len(list(ddir.glob("*.json"))) + 1
         payload_file = ddir / f"{n:03d}-{pending.get('point') or 'stop'}-{decision}.json"
         _atomic_write_json(payload_file, file_payload)
-    cmd = build_resume_command(run_dir, decision, payload_file, live=live)
+    cmd = build_resume_command(run_dir, decision, payload_file, live=live, approve_rest=approve_rest)
     with _lock:
         run = _get_run(run_id)
         if run["status"] != WAITING_STATUS:  # raced with another resume / cancel
@@ -863,11 +929,18 @@ def api_resume(run_id: str, payload: Any) -> dict[str, Any]:
         run["cancel_requested"] = False
         run["error"] = None
         run["resume_from"] = pending.get("interrupt_id")
+        if approve_rest:
+            run["review_mode"] = "auto"  # the child stores it in run.json as well
+            run["auto_approve"] = True
         run["server_pid"] = os.getpid()
         run["server_identity"] = _lab().process_identity(os.getpid())
         _persist_locked(run)
-    _start_worker(run_id, cmd, live, f"resume {pending.get('point')}: {decision}")
-    return {"run_id": run_id, "status": "queued", "point": pending.get("point"), "decision": decision}
+    _start_worker(run_id, cmd, live, f"resume {pending.get('point')}: {decision}"
+                  + (" (approve the rest)" if approve_rest else ""))
+    out = {"run_id": run_id, "status": "queued", "point": pending.get("point"), "decision": decision}
+    if approve_rest:
+        out["approve_rest"] = True
+    return out
 
 
 def api_cancel(run_id: str) -> dict[str, Any]:
@@ -1007,12 +1080,71 @@ def _file_url(run_id: str, rel: str) -> str:
     return f"{PREFIX}runs/{run_id}/files/{rel}"
 
 
+_CARD_TITLES = {"formalization": "HITL 1 · формализация: условие и IR", "report": "HITL 2 · черновик отчёта",
+                "execute": "Запуск кода в песочнице (execute)"}
+
+
+def pending_card(run: dict[str, Any], agent: dict[str, Any] | None,
+                 awaiting: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """``pending_point`` of a run waiting for a human: the short card
+    ``{"point", "title", "summary", "details_md", "editable"}``, else ``None``.
+
+    Source, in order: the card the agent stored in ``run.json``
+    (``pending.card``, written with the stop); one built now from the pending
+    request (``hitl.pending_card``, a run written before cards existed); the
+    card cached when the lab settled the stop (``run.json`` unreadable for a
+    moment); a minimal card from the last ``hitl_awaiting`` event and
+    ``hitl.md``. So a waiting run never shows ``pending_point: null``."""
+    if run.get("status") != WAITING_STATUS:
+        return None
+    agent = agent or {}
+    pending = agent.get("pending") if isinstance(agent.get("pending"), dict) else None
+    if pending is not None:
+        point = pending.get("point")
+        card = pending.get("card") if isinstance(pending.get("card"), dict) else None
+        if card is None:
+            try:
+                from tfl_deep_agent import hitl
+
+                card = hitl.pending_card(pending.get("request") or {}, point=point,
+                                         draft=agent.get("draft") if point == "report" else None)
+            except Exception:  # noqa: BLE001 - fall back to the minimal card below
+                card = None
+        if card is not None:
+            return {"point": point or card.get("point"), "title": card.get("title") or "",
+                    "summary": [str(s) for s in card.get("summary") or []][:4],
+                    "details_md": str(card.get("details_md") or ""),
+                    "editable": list(card.get("editable") or [])}
+    cached = run.get("pending_card")
+    if isinstance(cached, dict):
+        return cached
+    point = (pending or {}).get("point") or (awaiting or {}).get("point")
+    if not point:
+        return None
+    try:
+        details = (Path(run["run_dir"]) / "hitl.md").read_text(encoding="utf-8")
+    except OSError:
+        details = ""
+    return {"point": point, "title": _CARD_TITLES.get(point, str(point)), "summary": [],
+            "details_md": details, "editable": []}
+
+
+def _review_mode(run: dict[str, Any], agent: dict[str, Any] | None) -> str:
+    """The run's effective review mode: the agent's ``run.json`` (the
+    authority; ``auto`` after approve_rest), else the lab record."""
+    mode = (agent or {}).get("review_mode") or run.get("review_mode")
+    if mode in REVIEW_MODES:
+        return str(mode)
+    return "auto" if (agent or {}).get("auto_approve") or run.get("auto_approve") else "all"
+
+
 def _hitl_view(run: dict[str, Any], agent: dict[str, Any] | None) -> dict[str, Any]:
     """The pending HITL card (from the agent's run.json; the authority), the
     points and the review history."""
     run_dir = Path(run["run_dir"])
     agent = agent or {}
     out: dict[str, Any] = {"points": agent.get("hitl"), "auto_approve": agent.get("auto_approve"),
+                           "review_mode": _review_mode(run, agent), "approve_rest": agent.get("approve_rest"),
                            "reviews": agent.get("reviews") or [], "pending": None}
     pending = agent.get("pending")
     if run["status"] == WAITING_STATUS and isinstance(pending, dict):
@@ -1042,7 +1174,8 @@ def _hitl_view(run: dict[str, Any], agent: dict[str, Any] | None) -> dict[str, A
                 "asked_at": pending.get("asked_at"), "allowed_decisions": allowed,
                 "actions": actions, "action_count": len(actions),
                 "action": first.get("name"), "args": first.get("args"), "description": first.get("description"),
-                "card": card, "card_url": _file_url(run["run_id"], "hitl.md")}
+                "card": card, "card_url": _file_url(run["run_id"], "hitl.md"),
+                "summary_card": pending_card(run, agent)}
         src = agent.get("input") or {}
         if src.get("stored_as"):
             view["source_url"] = _file_url(run["run_id"], str(src["stored_as"]))
@@ -1145,11 +1278,11 @@ def api_render(run_id: str, payload: Any) -> dict[str, Any]:
             "note": "a view only: result.* keeps the template the report was approved with"}
 
 
-def _summary_locked(run: dict[str, Any], agent: dict[str, Any] | None = None) -> dict[str, Any]:
+def _summary_locked(run: dict[str, Any], agent: dict[str, Any] | None = None,
+                    awaiting: dict[str, Any] | None = None) -> dict[str, Any]:
     if agent is None:
         agent = _agent_run_if_idle(run) or {}
     budget = agent.get("budget") or {}
-    pending = agent.get("pending") if isinstance(agent.get("pending"), dict) else None
     result = agent.get("result") if isinstance(agent.get("result"), dict) else {}
     started = run.get("started") or run.get("created")
     end = run.get("finished") if run.get("finished") else (_now() if run["status"] in ACTIVE_STATUSES else None)
@@ -1162,7 +1295,8 @@ def _summary_locked(run: dict[str, Any], agent: dict[str, Any] | None = None) ->
         "finished": run.get("finished"), "elapsed": (end - started) if (end and started) else None,
         "error": run.get("error"), "agent_status": agent.get("status"),
         "result_status": run.get("result_status"),
-        "pending_point": pending.get("point") if pending and run["status"] == WAITING_STATUS else None,
+        "pending_point": pending_card(run, agent, awaiting),
+        "review_mode": _review_mode(run, agent),
         "verdict": result.get("verdict"), "trust": result.get("trust"),
         "confidence_cap": result.get("confidence_cap"),
         "spent_usd": budget.get("spent_usd"), "limit_usd": budget.get("limit_usd"),
@@ -1217,8 +1351,11 @@ def api_detail(run_id: str, after: Any = None, limit: Any = None) -> dict[str, A
     if not budget and agent and isinstance(agent.get("budget"), dict):
         budget = {"spent_usd": agent["budget"].get("spent_usd"), "limit_usd": agent["budget"].get("limit_usd")}
     budget["day"] = _day_view()
+    summary = _summary_locked(run, agent or {}, view.get("last_awaiting"))
     return {
-        "run": _summary_locked(run, agent or {}),
+        "run": summary,
+        "pending_point": summary["pending_point"],
+        "review_mode": summary["review_mode"],
         "events": progress["events"], "next": progress["next"], "total": progress["total"],
         "usage": view["usage"], "todos": view["todos"], "tools": view["tools"], "subagents": view["subagents"],
         "orchestration": view["orchestration"], "budget": budget, "budget_signals": view["budget_signals"],
