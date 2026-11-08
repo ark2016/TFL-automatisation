@@ -20,8 +20,11 @@ Russian), with the standard terms: лемма о накачке, лемма Ог
    this IR, so a wrong IR makes every green check meaningless. Note the IR fingerprint; the report
    cites it.
 3. **Hypothesis and method.** Read the skill for the class (see "Skills") and the theory you
-   need (`list_theorems`, `get_theorem`). Pick the method: a construction (regex / DFA / grammar /
-   PDA / LL table) for a positive answer, a lemma or a closure argument for a negative one.
+   need (`list_theorems`, `get_theorem`). Pick the method: for a positive answer a construction of
+   the class (regex / DFA for REG, a grammar for CFL, an explicit DPDA for DCFL, an LL table for
+   LL(k)); for a negative one a lemma or a closure argument. There is no PDA-against-IR check. A PDA
+   idea for CFL is checked as a grammar, and for DCFL only a DPDA counts (a CFG or a
+   nondeterministic PDA shows only CFL).
 4. **Prove and verify concrete steps.** Every concrete object in the proof goes through an oracle:
    a constructed automaton or grammar against the IR (`dfa_vs_ir`, `grammar_vs_ir`,
    `dpda_vs_ir`), the words you pick (`check_membership`, `cyk`, `run_dfa`), the pumped or
@@ -33,8 +36,11 @@ Russian), with the standard terms: лемма о накачке, лемма Ог
 6. **Report.** Call `submit_report` once, alone, as your last action. For every step list the ids
    of the tool calls (`tool_call_id`) whose results support it.
 
-Skip steps that the task does not need (a grammar that is given needs no IR-builder round trip
-for its LL(1) table), but never skip the oracle checks of the concrete objects you rely on.
+Skip steps that the task does not need (for a given grammar, Format 3 `ll_check_grammar` with a
+top-level `grammar`, you may build the IR yourself instead of the ir-builder round trip: call
+`validate_ir(cls="ll", ir=IR)`, which also reaches HITL 1, then `ll_table(ir=IR, ...)`. A table of a
+grammar passed as `grammar` is your own artifact and never makes the verdict `verified`), but never
+skip the oracle checks of the concrete objects you rely on.
 
 ## Roles (`task` tool)
 
@@ -133,13 +139,37 @@ whole, `template`, `summary`, `ir_fingerprint`. The structure of the templates i
 `report-templates` skill. Do not paste tool JSON into the report; reference the tool calls by id.
 Code, not you, rates the report (docs/VERDICT_POLICY.md). The verdict's trust and confidence
 ceiling come from the strongest result of this run that checks the verdict's side **against the
-task** (the IR): `dfa_vs_ir`, `grammar_vs_ir`, `dpda_vs_ir`, `input_grammar_cfg` for a constructive
-verdict (it needs at least `bounded_pass`); `nerode_probe`, `pump_check_cfl` (claim mode) for a
-destructive one (at least `well_formed`); for LL, `ll_table` run on the task's IR (a grammar you
-wrote yourself counts only with a `grammar_vs_ir` check). Exact results about your own artifact
+task** (the IR). Only the check that belongs to the task's class counts. A constructive verdict
+needs at least `bounded_pass` from:
+- reg: `dfa_vs_ir`;
+- cfl: `grammar_vs_ir`, or `input_grammar_cfg` when the task language is given by a grammar
+  (`kind: grammar`, not `grammar_filter`);
+- dcfl: `dpda_vs_ir` with an explicit DPDA (R2′). A grammar, a nondeterministic PDA or
+  `input_grammar_cfg` shows only CFL (THEORY.md §2.0: it «не устанавливает DCFL или LL(k)»). For a
+  regular language, submit the DFA to `dpda_vs_ir` as a DPDA that never touches the stack;
+  `dfa_vs_ir` does not count for a dcfl verdict;
+- ll: `ll_table` run on the task's IR. A grammar you wrote yourself counts only together with a
+  `grammar_vs_ir` check of that same grammar. A matching grammar that is not LL(k) says nothing
+  about LL(k).
+
+A destructive verdict needs at least `well_formed` from `nerode_probe` (reg; dcfl at most
+`well_formed`) or `pump_check_cfl` in claim mode (cfl, dcfl); for ll, from `ll_table` on the task's
+IR. For LL the destructive side has a basis only when the question is about the given grammar
+(Format 3: `ll_table` on the task's grammar, a conflict for the asked k, a left-recursion
+certificate, or "not LL(k) for k <= K"). When the question is about the language (Format 1/2), no
+result of this run is a destructive basis. A conflict or left-recursion certificate of a grammar is
+no evidence about the language (VERDICT_POLICY R5). A written proof by THEORY.md §3.3 (A)/(B)/(C) or
+§3.4, its witness words checked with `check_membership`, and a proved `lean_check` of a `non_dcfl`
+statement are supporting steps only. So a "not LL" verdict on a language publishes as `uncertain`,
+confidence <= 0.40 (R1). Write the proof into the steps if you have one, but do not spend budget
+trying to raise that verdict.
+
+Exact results about your own artifact
 (`regex_to_dfa`, `cyk`, `run_dfa`, `ll_parse`) support steps but never raise the verdict. Your
 citations can only lower the ceiling: a cited result that refutes the verdict's side blocks it, an id
 with no result behind it lowers the trust one level, evidence for the opposite verdict is a
-contradiction (at most 0.50 unless one side is `verified`), and results for another IR than
+contradiction (R3): if only your side is `verified`, the verdict stands with ceiling 0.85; if only
+the other side is `verified`, your verdict is blocked (`not_verified`, 0.40, inconclusive); otherwise
+(neither side or both sides `verified`) it becomes inconclusive with ceiling 0.50. Results for another IR than
 `ir_fingerprint` are left out. List in `evidence_ids` the results that support the verdict itself,
 not every call you made.

@@ -93,11 +93,16 @@ Verbatim, VERDICT_POLICY.md §3 R2-CFG:
 
 Look at the structure. `sample_words(cls="cfl", ir=...)` (reference only, `not_verified`) and the
 `ir_to_text` examples help. The tz_cfl §4.2 heuristics are hints, not evidence: a repeated subword
-with something else between the copies, crossed dependencies (w₁…w₂…w₁…w₂), or three or more
-coupled counters suggest `non_cfl`. Nested or mirrored structure, a single comparison of two
-counters, or a regular filter on a CFG suggest `cfl`. The traps in `traps.md` are exactly the cases
-where these hints mislead. A hypothesis never decides the verdict, and it must not stop you from
-checking the other side.
+w₁…w₁ with at least one other subword between the copies suggests `non_cfl`; crossed dependencies
+(w₁…w₂…w₁…w₂) are a strong `non_cfl` signal; vvᴿ (a palindrome) is CFL when it stands alone but
+needs analysis inside a composition; a grammar with a regular filter is CFL (intersection theorem),
+while a grammar with a non-regular filter needs analysis (§4.4); a bounded language
+(w₁^k₁…wₙ^kₙ) calls for the stratification test; parts over the same alphabet with no repeat
+suggest `cfl`. The spec gives no hint based on the number of counters, and none is reliable:
+{aⁱbʲcᵏ | i + j = k} (eval cfl-15) and {aⁱbʲcᵏ | i = j ∨ j = k} (cfl-02) are `cfl`, while the
+single two-counter filter #a = #b of cfl-07 gives `non_cfl` (THEORY.md §2.3). `traps.md` lists
+known cases where such hints mislead. A hypothesis never decides the verdict, and it must not stop
+you from checking the other side.
 
 When the class is unclear and the budget allows, run the two branches in parallel
 (`run_workflow` with a constructive branch and a destructive branch, or two `spawn_subagent`
@@ -125,8 +130,13 @@ calls). Opus needs a `reason`.
    grammar and use `grammar_vs_ir`. `push_order` matters: `top_first` is the prompt and textbook
    order, and misreading it changes the answers.
 5. **Decomposition (∪, ·, \*).** Give a grammar for each component and one grammar for the whole
-   language, then check the whole grammar with `grammar_vs_ir`. A component that is a copy language
-   is not CFL.
+   language, then check the whole grammar with `grammar_vs_ir`. The copy language
+   {ww | w ∈ {a,b}*} is not CFL (EVAL_SET cfl-03: pumping on aᵖbᵖaᵖbᵖ). The same holds over any
+   alphabet with at least two letters, because intersecting with a*b*a*b* gives {aⁱbʲaⁱbʲ}. A
+   decomposition that needs such a component proves nothing. A copy shape alone does not settle the
+   class: {ww | w ∈ a*} = (aa)* is regular, and {ww | w ∈ a*b} = {aⁿbaⁿb} is CFL
+   (S → Tb, T → aTa | b), so check each component with its own grammar. A failed decomposition, or
+   one with a non-CFL component, is not evidence that L is non-CFL (R1).
 
    Verbatim, tz_cfl §4.5.3:
    > **Важно:** НЕ все декомпозиции корректны. {ww} сам по себе НЕ КС.
@@ -152,17 +162,50 @@ rare cases of §4.5). Then:
    `a⁸b(ab)⁵a⁸` for p = 4, which is not in L (`traps.md`).
 3. `pump_check_cfl(ir=..., claim={...})` checks the structure. It also pumps every admissible
    split of each instance with i ∈ {0, 2, 3} against the IR's oracle.
-   - `refuted`: z ∉ L, or a word the argument declares ∉ L is in L (exact oracle). Fix the word or
-     the case analysis. Do not submit a refuted argument. In eval cfl-07 the gate refused every
-     such attempt (EVAL_RESULTS, "Live-перепроверка после C4").
-   - `well_formed`: the structure is complete and the finite checks found no contradiction. This is
-     the ceiling of a pumping or Ogden argument, cap 0.55, even when every split closed
-     (THEORY.md §2.0).
-   - `not_verified`: fields are missing, or the oracle could not decide. Read `data.issues`.
+   - `refuted`: a concrete chosen word is ∉ L by an exact oracle. This is a literal `word_chosen`
+     or a `word_instances` entry for p = 3 or 4. Fix the word. Do not submit a refuted argument. In
+     eval cfl-07 the gate refused every such attempt (EVAL_RESULTS, "Live-перепроверка после C4").
+   - Claim mode does not read the exit exponents your cases declare. It tries i = 0, 2, 3 on every
+     admissible split and counts the split as closed at the first i that leaves L, whichever i that
+     is. A case analysis with a wrong declared exit therefore still comes back `well_formed` with
+     every split closed. Check each case's declared exit in split mode (item 4): pick one
+     representative split per case and pass the exit that case declares as `claimed_exit_i`. A
+     `refuted` answer means the declared exit is wrong for that split, so fix the case analysis.
+     Example, eval cfl-05 {aⁱbʲcᵏ | i ≤ j ≤ k}, z = aaabbbccc: the claim "i = 0 exits for every
+     split" fails on u = "", v = "a", w = "", x = "", y = "aabbbccc", p = 3, claimed_exit_i = [0],
+     because uwy = aabbbccc ∈ L. Only pumping up (i = 2, 3) exits there (`traps.md`: different
+     cases need different i).
+   - `well_formed`: the structure is complete and no checked premise is false. This is the ceiling
+     of a pumping or Ogden argument, cap 0.55, even when every split closed (THEORY.md §2.0). The
+     label does not say whether the splits closed. Read `data.bounded_check.status`,
+     `bounds.unresolved_splits` and `bounds.n_unknown`. `closed_for_sampled_p` means that every
+     admissible split of each instance left L at some i ∈ {0, 2, 3}. `inconclusive` means that some
+     split stayed in L for every tried i, or that the oracle could not decide some word.
+   - `not_verified`: the structure is incomplete (no `cases`, a case without `case` or
+     `why_not_in_L`, or `all_cases_covered` not true), the oracle could not decide a literal
+     (non-parametric) `word_chosen`, or an approximate oracle contradicted a premise (this is not a
+     refutation). Read `data.issues` and the trust reason.
+   - An undecided instance does not lower the trust. This happens when an instance is longer than
+     the oracle's bound, as in cfl-11, or when the IR has no oracle. The result stays `well_formed`
+     (structure only), with an empty `bounds.p_values` and `bounds.n_unknown` > 0. Nothing was
+     pumped. Say in the report that the instances were not checked (traps.md cfl-11). An empty
+     `bounds.p_values` always means that no instance was checked.
 4. `pump_check_cfl(ir=..., split={u, v, w, x, y}, p=..., claimed_exit_i=[...])` checks one split.
    It is a diagnostic for one case of your analysis (`evidence_role: "diagnostic"`, at most
    `not_verified`). It is never a pumping argument. A split that survives the tried i is not a
    refutation: the exit may lie at a larger i.
+5. **Unresolved splits are open cases.** A split that stays in L for i ∈ {0, 2, 3} does not
+   refute the argument: the exit may lie at a larger i (THEORY.md §2.0). But your case analysis
+   must still name an exit for that split. For each unresolved split:
+   - Find the case that covers it.
+   - Run it in split mode: `pump_check_cfl(ir=..., split={u, v, w, x, y}, p=..., claimed_exit_i=[<the case's i>])`.
+     Exponents can go up to 10.
+   - `refuted` means the case is wrong, so the argument is refuted.
+
+   If the split stays in L for every i ≥ 0, the argument fails for this z, and you must change z
+   or the method (Ogden, ∩REG). Example: cfl-12 with z = abᵖcᵖdᵖ, where the splits that pump only
+   the leading a give aⁱbᵖcᵖdᵖ ∈ L for all i ≥ 0. In the report, list the unresolved splits and
+   how each was settled.
 
 Claim shape for `pump_check_cfl` (a pumping proof for eval cfl-01, IR
 `cfl_system/examples/task_anbncn.json`; the test runs this exact JSON and expects `well_formed`):
@@ -198,8 +241,11 @@ words while the correct Ogden argument said "not CFL", and the old gate gave the
 grammar. THEORY.md §2.5 shows that the language is not CFL. Resolve such a conflict with oracle
 checks (R3′):
 
-- (a) Run the destructive witnesses through the grammar. These are z for p = 3, 4 and the pumped
-  words the proof declares ∉ L (`data.destructive_witnesses` of `pump_check_cfl`). Call
+- (a) Run the destructive witnesses through the grammar. In claim mode `data.destructive_witnesses`
+  of `pump_check_cfl` holds the instances z for p = 3, 4 (`expected_in_l: true`) and, for each
+  closed split, the first pumped word the oracle found ∉ L (`expected_in_l: false`; deduplicated, at
+  most 30 words). These are oracle facts, not the exits your proof declares. Get the pumped words
+  for the declared exits from split mode with `claimed_exit_i`. Call
   `cyk(grammar=..., words=..., expected=<labels from check_membership on the task IR>)`. If the
   grammar accepts a word that is ∉ L by the oracle, or rejects a word ∈ L, the grammar is `refuted`.
 - (b) Run the words on which the grammar passed through the destructive claims. If the oracle says
@@ -271,10 +317,19 @@ Procedure with tools:
    most 200 characters.
 2. Describe L ∩ R as its own IR L′, preferably in exponent notation so that it gets an exact oracle.
    Run `validate_ir(cls="cfl", ir=L′, check_tools=True)`.
-3. **Check the description L ∩ R = L′.** This is where the eval trap cfl-06 fails. Take words of R
-   (confirmed with `run_dfa`), label them with `check_membership(cls="cfl", ir=<task IR>, words=...)`,
-   then call `check_membership(cls="cfl", ir=L′, words=..., expected=<those labels>)`. A
-   disagreement is `refuted`, which means the description is wrong. Do the same for words of L′.
+3. **Check the description L ∩ R = L′.** This is where the eval trap cfl-06 fails. The equality
+   needs two checks, and both must pass on the sample.
+   (a) Words of R: take words that `run_dfa` accepts on the DFA of R, and label them with
+   `check_membership(cls="cfl", ir=<task IR>, words=...)`. Then call
+   `check_membership(cls="cfl", ir=L′, words=..., expected=<those labels>)`. This checks
+   L′ ∩ R = L ∩ R.
+   (b) Words of L′: run them through `run_dfa` on the DFA of R, and require every one to be
+   accepted. This checks L′ ⊆ R. Then call
+   `check_membership(cls="cfl", ir=<task IR>, words=..., expected=<all true>)`.
+   Either failure means the description is wrong: a `refuted` result, or a word of L′ that the DFA
+   rejects. The L-label check alone is not enough for words of L′. It checks L′ ⊆ L, not L′ ⊆ R.
+   For cfl-06, an L′ written with n, m ≥ 0 contains bacbac. That word is in L (w₁ = ba, w₂ = c,
+   w₃ = c) but not in R = a⁺b⁺ac·a⁺b⁺ac, so only `run_dfa` catches it.
    The precedent: a closure_reduction claimed L ∩ a⁺b⁺ = {aⁿbⁿ} for a grammar that generates only
    {a²ᵐb²ᵐ | m ≥ 2} (THEORY.md Part II §5).
 4. Prove that L′ is not CFL (pumping or Ogden) and check it with `pump_check_cfl(ir=L′, claim=...)`.
@@ -307,10 +362,17 @@ Verbatim, THEORY.md §2.3:
 
 Read "только" as the list of the usual regular filter forms, not as a complete characterisation.
 EVAL_SET reg-03 ({#a ≡ #b (mod 2)}, a modular condition on two counters) is regular too. To use the
-closure argument, show that F is regular with a regex or DFA (`regex_to_dfa`), or show that it is one
-of the forms quoted above. A filter that compares two counters needs real analysis: L(G) ∩ F may be
-CFL or not. For eval cfl-07 it is not CFL (THEORY.md §2.3: intersect with b*a*b*a*, then Ogden;
-`get_theorem("2.3")`).
+closure argument, F must be regular, and `regex_to_dfa` alone does not show that: its `verified` is
+only for "this DFA recognises L(R)", never for L(R) = F. Write a regex R for F, get its DFA with
+`regex_to_dfa(regex=R, alphabet=Σ)`, put F in its own IR (a `reg` IR of kind `predicate` whose
+predicate is the filter) and run `dfa_vs_ir(cls="reg", ir=<IR of F>, dfa=...)`. A counterexample means
+L(R) ≠ F. For the filter #a = #b, R = (ab|ba)* is `verified` by `regex_to_dfa`, but `dfa_vs_ir`
+refutes it with aabb. A pass is only `bounded_pass` for L(R) = F. The claim that F is regular then
+rests on your argument that L(R) = F, or on F being one of the forms quoted above. Without either,
+"F is regular" is an unchecked claim. In every case the evidence for `cfl` is the grammar for
+L(G) ∩ F checked with `grammar_vs_ir` (Step 4.6). A filter that compares two counters needs real
+analysis: L(G) ∩ F may be CFL or not. For eval cfl-07 it is not CFL (THEORY.md §2.3: intersect with
+b*a*b*a*, then Ogden; `get_theorem("2.3")`).
 
 ### 4.5 Interchange lemma (rarely the right tool)
 
@@ -326,7 +388,8 @@ use Sokolowski's lemma: THEORY.md §2.4 removes it as unverifiable.
 
 ### 4.6 Homomorphisms
 
-THEORY.md has no section on this; the statement is from the spec only.
+THEORY.md has no section on homomorphisms; the statement is from the spec. §1.6 (no marker) has a
+worked example of the reduction, given below.
 
 Verbatim, tz_cfl §4.5.9:
 > Поскольку CFL замкнуты относительно гомоморфизмов, если h(L) не КС → L не КС
@@ -334,8 +397,34 @@ Verbatim, tz_cfl §4.5.9:
 Verbatim, tz_cfl §4.5.9:
 > Или найти обратный гомоморфизм h⁻¹ такой, что h⁻¹(L) не КС
 
-No tool checks the image language. Build an IR for h(L) or h⁻¹(L) and prove that one is not CFL with
-§4.1–4.3, checked against that IR.
+No tool computes h or checks the image language. Until it is checked, the description h(L) = L′ or
+h⁻¹(L) = L′ is an LLM claim. Pumping L′ proves nothing about L if the description is wrong; this is
+the cfl-06 failure of §4.3.
+
+1. Describe the image as its own IR L′, preferably in exponent notation so that it gets an exact
+   oracle. Run `validate_ir(cls="cfl", ir=L′, check_tools=True)`.
+2. **Check the description.** Compute h on each word yourself.
+   - h⁻¹(L), with h: Γ* → Σ*: a word w ∈ Γ* is in h⁻¹(L) exactly when h(w) ∈ L. Label the words
+     h(w) with `check_membership(cls="cfl", ir=<task IR>, words=...)`. Then call
+     `check_membership(cls="cfl", ir=L′, words=<the w>, expected=<those labels>)`. Take the w both
+     from words of L′ and from other words over Γ.
+   - h(L), with h: Σ* → Γ*: take words w of L (labelled by the task IR) and call
+     `check_membership(cls="cfl", ir=L′, words=<the h(w)>, expected=<True for each>)`. For the
+     other inclusion, give each sampled word u of L′ a preimage w with h(w) = u, and confirm w ∈ L
+     with `check_membership(cls="cfl", ir=<task IR>, words=..., expected=<True for each>)`. Failing
+     to find a preimage is not a refutation when h erases a letter. In that case, first restrict L
+     with ∩ R (§4.3) so that the split of each word is forced.
+   A disagreement is `refuted`: the description is wrong. Agreement is at most `bounded_pass`, and
+   it covers only the description.
+3. Prove that L′ is not CFL with §4.1–4.3, and check it with `pump_check_cfl(ir=L′, claim=...)`,
+   against L′, not the task IR.
+
+Verbatim, THEORY.md §1.6:
+> Тогда h⁻¹(K) ∩ A⁺EB⁺FC⁺GD⁺ = {AⁿEBⁿFCⁿGDⁿ | n ≥ 1}. Это равенство следует из уже доказанного разбора U по единственным разделяющим вхождениям aa и $, а не из предположения об инъективности h.
+
+The image of that language under A↦a, B↦b, C↦c, D,E,F,G↦ε is {aⁿbⁿcⁿ | n ≥ 1}. The example uses
+an inverse homomorphism, ∩ REG and an erasing homomorphism, and it proves the image equality rather
+than assuming it.
 
 ### 4.7 Parikh image
 
@@ -399,8 +488,10 @@ What each kind of CFL evidence is worth:
   needs an artifact with at least `bounded_pass`, otherwise the result is inconclusive.
 - **`non_cfl`, verified (0.98):** only Lean `proved` in direction `non_cfl`.
 - **`non_cfl`, well-formed (≤ 0.55):** `pump_check_cfl` claim mode with `word_instances` returned
-  `well_formed` (pumping or Ogden, on the task IR or on L′ = L ∩ R). Closing every split for p = 3, 4
-  does not raise it.
+  `well_formed` (pumping or Ogden, on the task IR or on L′ = L ∩ R). In addition, every unresolved
+  split (`bounds.unresolved_splits`) needs a named exit that split mode did not refute (Step 5,
+  item 5). Closing every split for p = 3, 4 does not raise the cap. A claim with an unresolved
+  split that stays in L for every i is not admissible.
 - **`non_cfl`, not admissible:** an argument with no tool check, a `refuted` argument, or only a
   failed construction (R1). The result is inconclusive, ≤ 0.40.
 - **Contradiction left open (R3):** inconclusive, ≤ 0.50.
@@ -438,7 +529,9 @@ patterns seen in live runs. The ones that cost the most:
 1. A loose regular language R in a closure argument gives a CFL intersection (cfl-06, THEORY.md §2).
 2. "A counter filter is regular" (cfl-07, THEORY.md §2.3).
 3. "L = Σ*" or an independent-copies grammar for wwvvᴿ (cfl-08, THEORY.md §2.5).
-4. Plain pumping where Ogden is needed (cfl-12, THEORY.md §2.0).
+4. Plain pumping where Ogden is needed (cfl-12, THEORY.md §2.0). Claim mode still returns
+   `well_formed`, but with `bounded_check.status: "inconclusive"` and 9 of 462 splits unresolved
+   for z = abᵖcᵖdᵖ: the leading a is pumped.
 5. A wrong concrete instance of a correct parametric word (ticket 50, p = 4).
 6. Checking the nested pumping of L ∩ R against the oracle of L.
 7. A failed grammar taken as a non-CFL proof (R1, the grammar_filter_49 precedent).

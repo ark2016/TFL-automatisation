@@ -25,8 +25,12 @@ lemma from memory, and never use a formulation from a paragraph marked **[оши
 - A construction (regex, DFA, grammar, PDA, DPDA): build or run it with the class tools and
   compare it with the IR (`dfa_vs_ir`, `grammar_vs_ir`, `dpda_vs_ir`).
 - An LL(k) claim: `first_follow`, `ll_table`, `ll_parse`.
-- A closure argument: name the regular language or the operation explicitly and check the
-  intersection or image on concrete words before you rely on it.
+- A closure argument: name the regular language or the operation explicitly, quote the closure
+  property you use with `get_theorem` and check that the class has it (LL is not closed under ∪ or
+  ∩ REG, §3.2; DCFL is not closed under ∪, ∩, concatenation, star, reversal or homomorphism, §1.4;
+  a reduction through a larger class, such as L ∩ R ∉ CFL ⇒ L ∉ DCFL, is fine). Prove the equality
+  L ∩ R = K (op(L) = K) in both directions, and check it with `check_membership` on concrete words
+  of R and of K before you rely on it; that check is diagnostics, not the proof of the equality.
 
 When an oracle disagrees with a step, the step is wrong: fix it or report that the method fails.
 An unknown (`null`) oracle answer is not a "no".

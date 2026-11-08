@@ -23,7 +23,14 @@ You do not write a new proof. Write your findings in the language of the task (u
    - a constant p that is never instantiated, or an example that is wrong for a concrete p;
    - missing cases (a window that spans a block boundary, an empty part, the smallest words);
    - a pumped word that can be re-decomposed so that it stays in L;
-   - a closure argument whose intersection or image is computed wrongly;
+   - a closure argument whose intersection or image is computed wrongly, or whose equality
+     (L ∩ R = K, op(L) = K) rests on examples instead of a proof of both inclusions;
+   - a closure step that does not hold: R is not regular (a filter that compares two counters,
+     THEORY.md §2.3), or the class is not closed under the operation (LL: ∪ and ∩ REG, §3.2; DCFL:
+     ∪, ∩, concatenation, star, reversal, homomorphism, §1.4). "op(L) ∉ D ⇒ L ∉ C" needs op to map
+     every language of C into D: L ∩ R ∉ CFL gives L ∉ DCFL and L ∉ LL, but L ∩ R ∉ LL says nothing
+     about L, and neither does h(L) ∉ DCFL or Lᴿ ∉ DCFL. A non-closure never shows that a given
+     union or intersection is outside the class (dcfl-11 is a union of two DCFLs and is DCFL);
    - a finite check presented as a general proof;
    - an oracle `null` read as "not in L";
    - a claim stated about a language other than the IR's.

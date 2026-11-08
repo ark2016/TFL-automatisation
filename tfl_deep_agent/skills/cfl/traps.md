@@ -14,7 +14,7 @@ and do not rebuild them from this list.
 | cfl-07 | S → aSbb \| ε \| bbSa \| aA, A → aA \| a; фильтр #a = #b | non_cfl | "A counter filter is regular, so CFL ∩ REG" is false: equality of two counters is not a regular filter. In the 2026-09-26 run, non_cfl 0.92 came after an inversion with no destructive proof (R1). | `get_theorem("2.3")`: intersect with b*a*b*a*, then Ogden with z = b²ᵖa³ᵖb²ᵖaᵖ, marking the first b-block. |
 | cfl-08 | {wwvvᴿ \| w,v ∈ {a,b}*} | non_cfl | "L = Σ* because w, v may be empty" is false (every word of L has even length). The grammar S → W W V with independent W generates w₁w₂vvᴿ, which is not L. A decomposition into {ww}·{vvᴿ} fails because {ww} is not CFL. | `get_theorem("2.5")`: R* = a(aa)*b·a(aa)*b·a(aa)*b·a(aa)*b, then pumping. If a grammar "passes" the sample, cross-check it (SKILL.md Step 6). |
 | cfl-11 | {a^{6n}b^{6n}c^{6n}} | non_cfl | The same as cfl-01, but the multiplier changes the instances: z must be in L. With z = a^{6p}b^{6p}c^{6p}, the p = 3 instance a¹⁸b¹⁸c¹⁸ has 54 letters, more than the exponent-notation oracle's `max_word_len` 40, so it is undecided and nothing is pumped. | Compute the instances. After `pump_check_cfl`, read `bounds.p_values` and `bounds.n_unknown`: an empty `p_values` means no instance was checked. Prefer a parametric word whose p = 3, 4 instances stay within the oracle bound, if your argument allows it; otherwise say in the report that the instances were not checked. |
-| cfl-12 | {aⁱbʲcᵏdˡ \| i = 0 ∨ j = k = l} | non_cfl | Plain pumping fails: the language satisfies the pumping condition with p = 1 (THEORY.md §2.0). Live runs spent most of the budget on grammars for a wrong `cfl` hypothesis. | Ogden: z = abᵖcᵖdᵖ, mark all b, i = 2 (`get_theorem("2.0")`). Pass `marked_positions` per p to `pump_check_cfl`. |
+| cfl-12 | {aⁱbʲcᵏdˡ \| i = 0 ∨ j = k = l} | non_cfl | Plain pumping fails: the language satisfies the pumping condition with p = 1 (THEORY.md §2.0). The live run after C2 spent most of its budget ($0.80 of $1.07) on grammars for a wrong `cfl` hypothesis. | Ogden: z = abᵖcᵖdᵖ, mark all b, i = 2 (`get_theorem("2.0")`). Pass `marked_positions` per p to `pump_check_cfl`. A plain-pumping claim on z = abᵖcᵖdᵖ also comes back `well_formed`, but with `bounds.unresolved_splits` = 9 (status `inconclusive`). Those splits pump only the leading a and stay in L for every i. The Ogden claim closes all 2232 splits (`closed_for_sampled_p`). |
 | cfl-17 | S → aSb \| ε с фильтром \|w\| ≡ 0 (mod 4) | cfl | Here the filter is regular (a length condition modulo 4). `input_grammar_cfg` does not apply, because the IR is a `grammar_filter`. | Build a grammar for L(G) ∩ F, for example S → aaSbb \| ε, and check it with `grammar_vs_ir` (expect `bounded_pass`). |
 | cfl-19 | {aⁿbᵐaⁿ \| n,m ≥ 0} | cfl | It looks like a copy language, but it is nested: S → aSa \| B, B → bB \| ε. | Constructive branch first; `input_grammar_cfg` if the IR is that grammar. |
 
@@ -59,8 +59,10 @@ Other CFL rows of EVAL_SET that are easy to get wrong:
 11. **Tool-level pitfalls.** Grammar terminals must be single characters (`cyk` returns `unsupported`
     otherwise). A PDA's `push` order is `top_first` by default; misreading it changes the answers.
     Undeclared or overlapping grammar symbols make the artifact `refuted` (`invalid_artifact`).
-12. **Budget burn on one side.** In eval cfl-12, the constructive builder was retried for a wrong
-    hypothesis, and its output was cut twice at `max_tokens` (EVAL_RESULTS). Time-box each branch and
+12. **Budget burn on one side.** Two live Haiku runs of eval cfl-12 show the cost (EVAL_RESULTS). After C2,
+    the constructive builder (`cfg_builder`) used 6 calls ($0.80 of the task's $1.07) on grammars for a wrong
+    `cfl` hypothesis, and the run ended `inconclusive 0.40`. After C4, the run reached the correct
+    `non_cfl 0.60`, but `cfg_builder` was cut twice at `max_tokens=64000` first. Time-box each branch and
     check `budget_status`.
 13. **A heuristic taken as a verdict.** The tz_cfl §4.2 hints and any classifier output are advisory.
     The verdict needs evidence from SKILL.md §6.

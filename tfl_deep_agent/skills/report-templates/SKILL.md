@@ -48,9 +48,11 @@ trust `not_verified`.
 - `method`: the method in one line ("лемма о накачке для КС-языков", "ДКА по выражению и сверка с IR").
 - `hypothesis` (optional): the hypothesis and why you chose the method.
 - `lemmas` (optional): `[{theorem_id, use}]`. `theorem_id` is a section id from `list_theorems`
-  (`"2.1"`, `"1.2"`, `"II.4"`); code prints the section title, its status marker and the line
-  range of docs/THEORY.md. `use` says how the lemma is applied. Do not restate the lemma from
-  memory; an unknown id is rejected.
+  (`"2.0"`: CFL pumping and Ogden quantifiers; `"1.1"`: Yu's pumping lemma for DCFL; `"1.2"`:
+  Shallit's theorem; `"3.3"`: how to prove "not LL(k) for any k"); code prints the section title,
+  its status marker and the line range of docs/THEORY.md. `use` says how the lemma is applied. Do
+  not restate the lemma from memory; an unknown id is rejected. Cite statements, not the repository
+  checklists (`"I.4"`, `"II.4"`) or the live-run log (`"5"`).
 - `claims` (optional): the key claims of the proof, `[{text, evidence_ids}]`
   ("a^(3i+2) b^i ∈ L for every i", "the DFA accepts exactly L").
 - `steps`: the proof, `[{title, claim, justification, theorem_ids, evidence_ids}]`. `title` is the

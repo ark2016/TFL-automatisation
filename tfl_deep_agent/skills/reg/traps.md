@@ -52,8 +52,9 @@ Source: `docs/EVAL_SET.md`
   with `b`.
 - Over {a,b}, #a + #b = |w| and −1 ≡ 1 (mod 2), so the language is "|w| even". Check it with
   `regex_to_dfa(regex="((a|b)(a|b))*")` and then `dfa_vs_ir`, which gives `bounded_pass`.
-- `docs/EVAL_RESULTS.md` (Haiku, 2026-09-27): the old pipeline answered regular at confidence 0.40, with no
-  oracle-checked artifact. Without `dfa_vs_ir` passing, "regular" stays at the `not_verified` / `well_formed` caps.
+- `docs/EVAL_RESULTS.md` (Haiku, 2026-09-27): the old pipeline answered regular at confidence 0.40; the file gives
+  no cause. Without a `dfa_vs_ir` `bounded_pass` (or a Lean `proved` result), "regular" is published as `partial`,
+  confidence ≤ 0.40 (VERDICT_POLICY R2).
 
 ### reg-09: i + j even over a*b* is regular
 
@@ -74,8 +75,9 @@ Source: `docs/EVAL_SET.md`
 
 - No oracle exists: the eval IR is `natural`. The predicate IR has no squares, `arithmetic_index` has no oracle, and the
   CFL exponent-notation oracle only takes linear conditions. So `nerode_probe`, `check_membership` and
-  `pump_check_cfl` return `unsupported`. Without a Lean proof the verdict is capped at `well_formed` (0.55). Sandbox
-  enumeration adds nothing above `well_formed`.
+  `pump_check_cfl` return `unsupported`. So no ledger record supports `non_regular`: for REG the gate counts only
+  oracle-backed `nerode_probe` pairs and `lean_check` `proved`. Without a Lean proof the report is published as
+  `partial`, confidence ≤ 0.40 (R1). Sandbox enumeration is never a basis for the verdict.
 - Pumping route (tz §1.5 quantifiers): for p, take z = a^{p²}. Every split has y = a^k with 1 ≤ k ≤ p, so
   xy²z = a^{p²+k} and p² < p²+k ≤ p²+p < (p+1)². So p²+k is not a square, and xy²z ∉ L.
 
@@ -89,8 +91,10 @@ Source: `docs/EVAL_SET.md`
 - **reg-10 {aⁱbʲ | i ≠ j}.** EVAL_SET: "дополнение ∩ a*b* = {aⁿbⁿ}". Both closure steps (complement, ∩ a*b*) must be
   named. A direct Nerode family also works: aⁱ, aʲ (i ≠ j) are separated by bⁱ.
 - **reg-02 {#a = #b}.** The tz §1.8 example: L ∩ a*b* = {aⁿbⁿ}. Prove both inclusions.
-- **reg-13 S → aSb | ab** is {aⁿbⁿ | n ≥ 1}. The family aⁿ / bⁿ gives `bounded_pass`. A DFA for `a+b+` is `refuted` by
-  `dfa_vs_ir` with the counterexample `aab`.
+- **reg-13 S → aSb | ab** is {aⁿbⁿ | n ≥ 1}. The family aⁿ / bⁿ gives `bounded_pass` with values ≥ 1 (e.g.
+  `"values": [1,2,3,4,5]`) or with `suffix_at: "larger"`. If the values include n = 0 and you keep the default
+  `suffix_at: "smaller"`, it is `refuted`: the pair ε, a gets the suffix b⁰ = ε, and ε ∉ L, a ∉ L. A DFA for `a+b+`
+  is `refuted` by `dfa_vs_ir` with the counterexample `aab`.
 
 ## C. Proof-method traps
 
@@ -109,8 +113,9 @@ Source: `docs/THEORY.md` §0
   **Do not pass `p`**: the tool would then check the CFL window |vwx| ≤ p, which here is |yz|, the wrong condition.
   Check |xy| ≤ p yourself. The result is at most `not_verified` (`evidence_role: "diagnostic"`). It is `refuted` only
   when z ∉ L or when a claimed exit is in L.
-- Pumping evidence is capped at `well_formed` (VERDICT_POLICY §4 reg/pumping). If an oracle exists, prefer a Nerode
-  family for the evidence and keep pumping as the written argument.
+- A pumping argument produces no gate record in the deep agent (VERDICT_POLICY §4 reg/pumping allows at most
+  `well_formed`, and no REG pumping tool exists). On its own it leaves the verdict `partial` (≤ 0.40). If an oracle
+  exists, prefer a Nerode family for the evidence and keep pumping as the written argument.
 
 ### Myhill–Nerode
 

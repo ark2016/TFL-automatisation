@@ -59,7 +59,7 @@ does **not** list the DCFL sections; ask for `cls="dcfl"` as well when you use r
 
 | Format | Question | What answers it | Best trust |
 |---|---|---|---|
-| 3 `ll_check_grammar` | is **this grammar** LL(k) / least k | `ll_table`, a complete decision procedure | `verified` |
+| 3 `ll_check_grammar` | is **this grammar** LL(k) / least k | `ll_table`: a complete test for each fixed k (THEORY §3.1; a budget overrun gives «не установлено»). With `max_k=12` it settles the least k only if that k is ≤ 12 or there is a left-recursion certificate; otherwise only «не LL(k) при k ≤ 12» | `verified` (fixed k, least k found, certificate); `bounded_pass` (nothing found for k ≤ 12, VERDICT_POLICY R5) |
 | 2 `ll_check_grammar_lang` | is **L(G)** LL | `ll_table` on G itself, or a transformed / new grammar plus an equivalence check, or a destructive proof | `verified` (G itself is LL(k)), otherwise `bounded_pass` / `well_formed` |
 | 1 `ll_check_language` | is the **set-builder language** LL | a new grammar plus `grammar_vs_ir`, or a destructive proof | `bounded_pass` (constructive), `well_formed` / `bounded_pass` (destructive) |
 
@@ -80,8 +80,11 @@ The spec routes Format 3 straight to the FIRST/FOLLOW oracle ("LLM не нуже
    **strong** ones, FIRST_k(α) ⊕_k FOLLOW_k(A) with the global FOLLOW_k. A conflict among them at
    k ≥ 2 does **not** refute LL(k). Only `ll_table` decides (traps ll-08, ll-09).
 5. Optional illustration: `ll_parse(ir=IR, k=K, word="...")` gives the leftmost derivation of a
-   word. On a grammar that is LL(k) but not SLL(k), the tool reports `unsupported`. Use a larger k
-   or `cyk` then.
+   word. On a grammar that is LL(k) but not SLL(k), the tool reports `unsupported`. A larger k need
+   not help: an LL(k) grammar is not always SLL(k') for some larger k' (THEORY §3.1 gives only one
+   example, S → aAaa | bAba, A → b | ε, which becomes strong at k = 3). Check
+   `ll_table(ir=IR, max_k=12)`: if `data.strong_k` is set, run `ll_parse` with that k. Otherwise
+   use `cyk` for membership.
 
 How to word each `ll_table` outcome (these are the tool's own claims, `data.scope = "grammar"`):
 
@@ -234,9 +237,12 @@ The three routes, verbatim:
 
 How to run it:
 
-1. Have the `prover` role write the proof. It quotes the statement it uses from `theory.md`, takes an
-   **arbitrary** k (the argument must hold for all k), and names every witness concretely
-   (branch words, the common form, the nonterminal X_{t*}, the pigeonhole pair (n, n′)).
+1. Have the `prover` role write the proof. It quotes the statement it uses from `theory.md` and takes an
+   **arbitrary** k **and an arbitrary** LL(k) grammar G for L (the argument must hold for every k and every
+   such G). It gives the branch words explicitly as words in n, with n chosen from k and G (n > k in §3.3 (C),
+   n > k + W_G in §3.4). The common form wδ (ℓ−k < |w| ≤ ℓ), the nonterminal X_{t*} and the pigeonhole pair
+   (n, n′) depend on the unknown G. The proof establishes that they exist (common-form, mixing and pigeonhole
+   arguments) and never fixes them as concrete values.
 2. Check the witnesses by machine. Instantiate the branch words at n = k + 2 for k ∈ {1, 2}
    (VERDICT_POLICY §4 ll/substitution) and call
    `check_membership(cls="ll", ir=IR, words=[...], expected={"aaabbb": true, ...})`. Do the same for the
@@ -247,10 +253,12 @@ How to run it:
 3. Have the `critic` role check the proof against the quoted statement: the quantifiers, the ℓ ≥ k
    condition, the independence of the subtrees, and the dead-class check for §1.2.
 4. Route (B): no tool here checks inherent ambiguity, and the ambiguity of one **grammar** says
-   nothing about the language (§1.5). Treat a hand proof as `well_formed`. `uncertain` is an
-   acceptable answer.
+   nothing about the language (§1.5). A hand proof is a supporting step. The gate gives the language
+   verdict no destructive basis, so the published verdict is `uncertain`.
 5. Route (A): when the not-DCFL step has a Lean statement (the `lean` skill, direction `non_dcfl`),
-   that step can reach `verified`. The step from not-DCFL to not-LL is §3.3 (A) itself.
+   the `lean_check` result is `verified` for the step 'L is not DCFL', but the gate does not count it
+   for an `ll` report. The published verdict stays `uncertain`. The step from not-DCFL to not-LL is
+   §3.3 (A) itself.
 
 ## 7. Evidence → trust
 
@@ -260,7 +268,9 @@ report are generated from the tool ledger. Your own confidence can only lower th
 
 | Claim | Evidence | Trust |
 |---|---|---|
-| G is LL(k) / not LL(k) for the given k / least k of G | `ll_table` | `verified` / `refuted` / `verified` |
+| G is LL(k) for the given k | `ll_table(k=K)` | `verified` if the test passes; `refuted` if the full test (local follow sets) finds a conflict |
+| G is not LL(k) for the given k | `ll_table(k=K)`, a conflict of the full test | settled completely for this k. The ledger records the result as `refuted` because it refutes the claim "G is LL(k)", not this claim (§3, VERDICT_POLICY §1). It supports the negative answer for this k, and says nothing about other k or about L(G) |
+| least k of G | `ll_table(max_k=…)`, `found` | `verified` |
 | G is not LL(k) for any k | `ll_table(max_k=…)` left-recursion certificate | `verified` |
 | G is not LL(k) for k ≤ K | `ll_table(max_k=K)` without a certificate | `bounded_pass` |
 | FIRST_k / FOLLOW_k sets of G | `first_follow` | `verified` |
@@ -269,7 +279,7 @@ report are generated from the tool ledger. Your own confidence can only lower th
 | L(G) = L for a constructed G | `grammar_vs_ir(cls="ll")` with an exact oracle | `bounded_pass`; inexact oracle `well_formed`; no oracle `not_verified` |
 | language of the given Format 2 grammar is LL(k) | `ll_table` on that grammar, `found` | `verified` |
 | language is LL(k) via a new or transformed grammar | the table + the equivalence check | `bounded_pass` |
-| language is not LL | a written proof (A)/(B)/(C) | `well_formed` at most on its own. VERDICT_POLICY §4 ll/substitution allows up to `bounded_pass` when the branch words are instantiated and checked by the oracle. The ledger code applies that, not you. |
+| language is not LL | a written proof (A)/(B)/(C) | supporting only; the gate publishes `uncertain` (no destructive LL basis for a language question) |
 | witness words, sample words | `check_membership` without `expected`, `sample_words` | `not_verified` (reference only) |
 
 Gate rules to keep in mind (VERDICT_POLICY §3): R1, a failed construction is not a destructive

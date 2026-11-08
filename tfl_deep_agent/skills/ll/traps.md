@@ -64,8 +64,10 @@ its place.
 - **A failed construction is not a proof of "not LL"** (VERDICT_POLICY R1). "I could not build an
   LL(1) grammar" is never evidence.
 - **The least k is part of the answer** (tz_ll §11.3). For a grammar, `ll_table(max_k=12)` decides it
-  (minimality is established only after a definite negative for every smaller k, THEORY §3.1). For a
-  language, the least k of your grammar is only an upper bound (SKILL.md §8).
+  only when the least k is ≤ 12 (minimality is established only after a definite negative for every
+  smaller k, THEORY §3.1) or when it returns a left-recursion certificate («не LL(k) ни при каком k»).
+  Otherwise the result is only «не LL(k) при k ≤ 12», `bounded_pass`, not conclusive (THEORY §3.1,
+  VERDICT_POLICY R5). For a language, the least k of your grammar is only an upper bound (SKILL.md §8).
 - **Dead class** (§1.2): Theorem 4.7.4 says nothing when D = {x | no z with xz ∈ L} is infinite, for
   example L ⊆ a*b*. A finite search for continuations does not establish x ∈ D.
 - **Grammar ambiguity** says nothing about the language (§1.5). Inherent ambiguity is a property of

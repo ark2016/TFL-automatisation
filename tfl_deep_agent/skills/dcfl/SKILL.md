@@ -132,11 +132,21 @@ catalog: THEORY §3.3 ("Известные факты о конкретных я
 
 **Step 3 — Constructive attempt (`dcfl`).** Build an explicit DPDA (`/skills/dcfl/dpda.md`), smoke-test it
 with `dpda_run` on hand-picked words, then run `dpda_vs_ir(dpda, ir)`. Fix every counterexample and rerun.
-`bounded_pass` is the target. If the language is regular, a DFA is enough: `regex_to_dfa` / `dfa_vs_ir
-(cls="dcfl")` plus the remark that a DFA that never touches the stack is a DPDA, and §3.2 above.
+`bounded_pass` is the target. The verdict gate counts only two things as the basis of a `dcfl` verdict:
+`dpda_vs_ir` at ≥ `bounded_pass`, or a `lean_check` result `proved` (step 7). `regex_to_dfa` and
+`dfa_vs_ir(cls="dcfl")` are supporting evidence only and are never the basis. If the language is regular
+(§3.2 above: REG ⊊ LL(1) ⊊ DCFL), turn the DFA into a DPDA that never changes the stack and run it through
+`dpda_vs_ir`. Use one stack symbol `Z0` and `initial_stack: ["Z0"]`, write every δ(q, a) = p as
+`{"from": q, "read": a, "top": "Z0", "to": p, "push": ["Z0"]}`, and keep the same accept states. On a unary
+alphabet `dpda_vs_ir` decides only 11 words and stays `well_formed` (dcfl-17). Without a Lean proof the gate
+then caps the result at `inconclusive` (≤ 0.40). Report that, cite the DFA check as support, and name the
+unary coverage limit as the reason. Treating `dfa_vs_ir(cls="dcfl")` as a DPDA certificate would be a
+VERDICT_POLICY change for the user to decide.
 
-**Step 4 — Destructive attempt (`non_dcfl`).** Try the methods in this order; the first ones end in a
-statement the oracle can test and that has a Lean route (section 6):
+**Step 4 — Destructive attempt (`non_dcfl`).** Try the methods in this order. The first two end in a
+non-CFL statement the oracle can test. Of these, only a closure reduction by complement and/or ∩ REG also
+has a Lean route (section 6): the `tfl-lean4` image has no DCFL closure lemma for inverse homomorphism,
+MIN / MAX, left quotient, haspref or L_$.
 
 1. closure reduction to a non-CFL language (4.2): complement, ∩ REG, inverse homomorphism, MIN / MAX,
    left quotient by a fixed word;
@@ -151,8 +161,11 @@ of THEORY §2.0 (section 4.7) and check it with `pump_check_cfl` on an IR of the
 **Step 5 — Both sides at once.** If a DPDA passes `dpda_vs_ir` and a destructive argument also stands, there
 is a contradiction (VERDICT_POLICY R3). Cross-check (R3'): run the destructive witnesses (w, w′ of Yu, the
 pairs u, v and suffixes of Shallit, the examples of the derived language) through `dpda_run` and through
-`check_membership`. A disagreement refutes one side. If both survive, report `inconclusive` with
-confidence ≤ 0.50 and both arguments.
+`check_membership`. A disagreement refutes one side. If both survive and one side is `verified` (a Lean
+`proved` result for this IR, step 7; the determinism check of `dpda_run` does not count), that side keeps
+the verdict with ceiling 0.85 (VERDICT_POLICY R3). If neither side is `verified`, report `inconclusive`
+with confidence ≤ 0.50 and both arguments: `bounded_pass` against `well_formed` does not settle the
+dispute.
 
 **Step 6 — Neither side.** Report `inconclusive` (confidence ≤ 0.40) and say what is missing. Do not turn
 "I could not build a DPDA" into `non_dcfl`, or "no counterexample found" into `dcfl`.
@@ -184,8 +197,11 @@ Constructive closure facts (complement of a DCFL, DCFL ∩ REG, inverse homomorp
 THEORY.md §1.4 is marked **[источники и границы указаны отдельно]**, not [проверено]: the closure list
 below is sourced per item in that section, and THEORY.md says the original [GG] has not been read in
 full ("Оригинал [GG] пока не прочитан целиком; его атрибуция не означает проверки исходного
-доказательства"). Cite it as §1.4 and prefer the operations whose argument §1.4 spells out (complement,
-∩ REG, inverse homomorphism, MIN, left quotient by a fixed word). `closure_lookup(operation=...)` returns
+доказательства"). Cite it as §1.4 and prefer complement and inverse homomorphism (confirmed by the [Sh, IV 30]
+table) and ∩ REG, MIN and left quotient by a fixed word (short arguments in §1.4: the DPDA × DFA
+product, the proper-accepted-prefix flag, the start from the configuration reached on the word).
+Right regular quotient and MAX rest on the longer configuration-test argument of §1.4.
+`closure_lookup(operation=...)` returns
 the same statements with the section text.
 
 THEORY.md §1.4 (verbatim):
@@ -279,8 +295,11 @@ THEORY.md §1.2 (verbatim):
 So: first prove D = ∅ (every word has a continuation into L) by an argument, then show that **every**
 Nerode class is finite. Separating arbitrary u ≠ v by a suffix w(u, v) (all classes are singletons, the
 standard way above) is sufficient but not necessary: it is enough that each class is finite, for example
-that equivalent words have the same length (THEORY §1.7, dcfl-09, where a suffix separates words of
-different lengths only). One infinite family of pairwise distinguishable words is not enough (traps.md T3).
+that equivalent words have the same length. THEORY §1.7 does this for L₂ = {u₃au₄ | |u₃| ≥ |u₄|} (eval
+dcfl-16): z = abᵐ⁺¹ separates any words of lengths m < n. This holds for L₂, not for dcfl-09's L: L has the
+infinite class {bᵖabᵖ | p ≥ 0}, so dcfl-09 is handled by the reduction L ∩ aΣ* = a·L₂ plus left quotient
+by a (§4.2, second pattern), not by Shallit on L itself. One infinite family of pairwise distinguishable
+words is not enough (traps.md T3).
 If D ≠ ∅ the method is `not_applicable`; stop and use another
 method (live run dcfl-21: the prover itself wrote "D is infinite" and still claimed non-DCFL, see
 `traps.md`). Tools: `nerode_probe(cls="dcfl", pairs=[...])` or `family=...` for concrete pairs and the
@@ -323,9 +342,10 @@ THEORY.md §1.5 (verbatim):
 > Неоднозначность **грамматики** не говорит ничего о языке (Format 2).
 
 Use it only for a language that is known to be inherently ambiguous (eval dcfl-06 is the textbook case);
-no tool checks inherent ambiguity. Before you use it, check with
-`check_membership` that the branches of the union really overlap: in dcfl-10 they are disjoint and the
-language is not inherently ambiguous (THEORY §1.8).
+no tool checks inherent ambiguity. If the branches of the union are unambiguous CFLs, check with
+`check_membership` before you use it that they really overlap: a disjoint union of two unambiguous CFLs is
+unambiguous. In dcfl-10 both branches are unambiguous (DCFL) and disjoint, so the language is not inherently
+ambiguous (THEORY §1.8).
 
 ### 4.7 The non-CFL sub-proof
 
@@ -353,7 +373,7 @@ Write an IR for the derived language (`cls="cfl"`) and check your pumping eviden
 | 2 | `pattern_match`, `closure_lookup` | advisory patterns, closure facts with §1.4 text | `not_verified` |
 | 3 | `dpda_run(dpda, words)` | normalization notes, determinism, runs on THIS automaton | `verified` (determinism) / `refuted` |
 | 3 | `dpda_vs_ir(dpda, ir)` | R2' check against the task language | `bounded_pass` / `refuted` / `well_formed` |
-| 3 | `regex_to_dfa`, `dfa_vs_ir(cls="dcfl")` | regular languages: DFA vs the task oracle | `bounded_pass` / `refuted` |
+| 3 | `regex_to_dfa`, `dfa_vs_ir(cls="dcfl")` | regular languages: DFA vs the task oracle (supporting evidence only; the gate does not count it for a `dcfl` verdict) | `bounded_pass` / `refuted` (not a verdict basis) |
 | 4 | `nerode_probe(cls="dcfl")` | separating suffixes for concrete pairs / a family | `bounded_pass` for those pairs / `refuted` |
 | 4 | `pump_check_cfl(cls="cfl", ir=<derived IR>)` | pumping / Ogden evidence for a non-CFL sub-claim | at most `well_formed` / `refuted` |
 | 4 | `cyk`, `to_cnf` | membership in a grammar you built (not the task language) | `verified` for that grammar |
@@ -368,16 +388,16 @@ Caps (VERDICT_POLICY §2): `verified` 0.98, `bounded_pass` 0.85, `well_formed` 0
 
 | Claim | Evidence | Trust (ceiling) |
 |---|---|---|
-| "this DPDA is deterministic" | `dpda_run` / `dpda_vs_ir`, no conflict after normalization | `verified` (property of the automaton only) |
+| "this DPDA is deterministic" | `dpda_run`, no conflict after normalization (a `dpda_vs_ir` record alone gives at most `bounded_pass`, and `refuted` if the DPDA disagrees with the oracle, so cite `dpda_run`) | `verified` (property of the automaton only) |
 | `dcfl` | `dpda_vs_ir` agrees on ≥ 30 decided words | `bounded_pass` (0.85) |
 | `dcfl` | DPDA agrees on fewer than 30 decided words (e.g. a unary alphabet), or no oracle | `well_formed` |
 | `dcfl` | stack strategy in words, closure argument, LR(1) sketch, no DPDA | ≤ `well_formed`; the verdict is not admissible (R2') |
 | `dcfl` | Lean `proved` for `is_DCF L` | `verified` (0.98) |
-| `non_dcfl` by closure / L_$ + non-CFL pumping | written proof + `pump_check_cfl` + equality examples by `check_membership` | `well_formed` (0.55) |
-| `non_dcfl` by Shallit | `nerode_probe` separates the checked pairs and a continuation into L is confirmed for each checked prefix | at most `bounded_pass`; `well_formed` while the dead-class premise is open |
-| `non_dcfl` by Yu | written proof + instances at p ∈ {2, 3} | `well_formed`; `not_verified` without instances |
-| `non_dcfl` by inherent ambiguity | written proof, overlap words checked | `well_formed` at best (only necessary conditions are checkable) |
-| `non_dcfl` | Lean `proved` for `¬ is_DCF L` (for example via DCFL ⊆ CFL and a proof of ¬ CF) | `verified` (0.98) |
+| `non_dcfl` by closure / L_$ + non-CFL pumping | written proof + `pump_check_cfl` (claim mode) on an IR of the derived language + equality examples by `check_membership` | `well_formed` (0.55) only when the verdict gate admits the derived-IR result, which today means HITL 1 off and no IR fingerprint in the report. With HITL 1 on (the default) the verdict is bound to the task IR approved there. The derived-IR result is then a result "for another IR" and is excluded, so the verdict is `inconclusive` (≤ 0.40) unless Lean proves `¬ is_DCF L` (last row). Do not send the derived IR to HITL 1 as the task's formalization: a main-thread `validate_ir` on it does that, and the verdict is about L, not op(L). |
+| `non_dcfl` by Shallit | `nerode_probe(cls="dcfl")` on the task IR separates the checked pairs, and a continuation into L is confirmed for each checked prefix | `well_formed` (0.55), never `bounded_pass`: the gate counts `nerode_probe(cls="dcfl")` as at most `well_formed` (finitely many pairs, not "every class finite"). |
+| `non_dcfl` by Yu | written proof + instances w, w′ at p ∈ {2, 3}, their membership checked by `check_membership` | No tool checks a Yu argument, and `check_membership` is not destructive evidence for the gate, so the verdict is `inconclusive` (`not_verified`, ≤ 0.40) unless Lean proves `¬ is_DCF L`. The instances are still required, and an instance the oracle refutes refutes the argument. |
+| `non_dcfl` by inherent ambiguity | written proof, overlap words checked by `check_membership` | No tool basis: `inconclusive` (≤ 0.40) unless Lean proves `¬ is_DCF L` (only necessary conditions are checkable). |
+| `non_dcfl` | Lean `proved` for `¬ is_DCF L`: complement and/or ∩ REG closure (`DCF_closedUnderComplement`, `DCF_inter_regular`), then DCFL ⊆ CFL (`TflLean.isContextFree_of_isDCF`) and a proof that the derived language is not CF (reference: `agent_system/docker/tfl_lean/TflLean/Examples/AiBjCkNeq_NotDCF.lean`). ¬ CF of L itself works only when L is not context-free, which is not the case for any `non_dcfl` task in docs/EVAL_SET.md | `verified` (0.98) |
 | anything | a counterexample from an exact oracle, a determinism conflict, a witness that is not in L, Shallit with a non-empty dead class claimed as success | `refuted` |
 
 Finite checks never prove the general statement: all splits closing at p = 2, 3, or ten separated Nerode
@@ -390,7 +410,7 @@ pairs, are necessary conditions, not proofs (THEORY §2.0: "Конечная п�
 - "Infinitely many Nerode classes" or one pairwise-distinguishable family: not an argument ({aⁿbⁿ} is DCFL).
 - Shallit with a non-empty dead class (dcfl-21, dcfl-08): the theorem gives nothing.
 - An ambiguous / non-LR(k) grammar (dcfl-17, dcfl-21): nothing follows about the language.
-- Disjoint union branches (dcfl-10): not inherently ambiguous.
+- Disjoint union of unambiguous CFL branches (dcfl-10): not inherently ambiguous.
 - "aa" as a phase separator (dcfl-08): it occurs inside w and v.
 - The pair dcfl-15 (DCFL) / dcfl-16 (not DCFL), and the suffix bᵗa that distinguishes nothing (THEORY §1.7).
 - DPDA bugs: one state for push and pop phases ("aababbc"), a stray transition accepting "b" (live dcfl-04),

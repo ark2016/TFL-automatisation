@@ -61,8 +61,11 @@ on which the DPDA and the exact oracle disagree → `refuted` with counterexampl
 words → `bounded_pass`; fewer decided words or an approximate oracle → `well_formed`.
 
 Coverage limit: on a **unary** alphabet the full enumeration stops at length 10, so only 11 words are
-decided and the result stays `well_formed` (measured on dcfl-17). For a regular language use the DFA route
-instead (`dfa_vs_ir(cls="dcfl")` enumerates up to length 40 on one letter).
+decided and the result stays `well_formed` (measured on dcfl-17). For a regular language, write the DFA as
+a DPDA that never changes the stack (SKILL.md step 3). It meets the same unary limit. `dfa_vs_ir(cls="dcfl")`
+enumerates up to length 40 on one letter and can reach `bounded_pass`, but it is supporting evidence only. For
+`dcfl` the gate counts only `dpda_vs_ir` ≥ `bounded_pass` or Lean `proved`, so a unary language without a Lean
+proof ends `inconclusive` (≤ 0.40).
 
 ## 3. Design rules (each one comes from a recorded bug)
 
