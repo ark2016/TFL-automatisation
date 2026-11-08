@@ -314,7 +314,24 @@ def test_new_task_must_fit_in_the_day(tmp_path):
     assert "$10.00" in str(exc.value)
     small = S.apply_overrides(st, {"budget": {"per_task_usd": 4.0}})
     led = B.BudgetLedger.for_task(small, spend_log=log, task_id="new")
-    assert led.root.limit == 4.0 and led.root.reserve == 0.3 and led.per_child_max_usd == 2.0
+    assert led.root.limit == 4.0 and led.root.reserve == 1.0 and led.per_child_max_usd == 2.0
+
+
+@pytest.mark.parametrize("per_task, reserve, kept", [
+    (10.0, 1.0, 1.0),     # the defaults: the full reserve
+    (4.0, 1.0, 1.0),      # a quarter of 4.00 is exactly the reserve
+    (1.0, 1.0, 0.25),     # a $1 live smoke run keeps a quarter, not the whole budget
+    (0.5, 0.3, 0.125),
+    (10.0, 12.0, 2.5),    # a reserve above the task budget is no longer an error
+])
+def test_the_task_ledger_keeps_at_most_a_quarter_of_the_task_as_reserve(tmp_path, per_task, reserve, kept):
+    """User decision 2026-11-08: the report reserve is min(reserve_for_report_usd, per_task_usd / 4),
+    the rule fixed subagents already follow, so a small task budget still has room to work."""
+    st = S.apply_overrides(S.default_settings(),
+                           {"budget": {"per_task_usd": per_task, "reserve_for_report_usd": reserve}})
+    assert st.budget.report_reserve_usd == pytest.approx(kept)
+    led = B.BudgetLedger.for_task(st, spend_log=B.DailySpendLog(tmp_path / B.SPEND_LOG_NAME, clock=Clock()))
+    assert led.root.reserve == pytest.approx(kept)
 
 
 def test_calls_are_logged_and_checked_against_the_day(tmp_path):

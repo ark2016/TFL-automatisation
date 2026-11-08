@@ -47,7 +47,7 @@ a report from a template that a human approves (HITL).
   LangGraph `StateGraph` with `Send` fan-out). The model for each is chosen by the agent from
   `models.allowed` in settings (haiku / sonnet / opus).
 - Money limits live in settings: `per_task_usd` 10.00 (user, 2026-11-08; was 5.00), `per_day_usd` 20.00,
-  `per_subagent_max_usd` 2.00, `reserve_for_report_usd` 0.30. The budget is hierarchical
+  `per_subagent_max_usd` 2.00, `reserve_for_report_usd` 1.00 (user, 2026-11-08; was 0.30). The budget is hierarchical
   (task → subagents → workflow branches) and checked before each model call (worst case: input
   tokens + `max_tokens` at config prices). `max_tokens` of every budgeted call is derived from the
   remaining budget of its scope (user, 2026-11-08): min(role ceiling from `config.py`,

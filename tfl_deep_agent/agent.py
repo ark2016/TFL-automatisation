@@ -55,6 +55,7 @@ from typing import Any
 from pydantic import BaseModel, Field, PrivateAttr
 
 from . import config
+from .settings import report_reserve
 from .roles import MAIN_TOOL_GROUPS, PKG_DIR, ROLES, SANDBOX_ONLY_TOOLS, load_prompt, role_model_request
 
 SKILLS_DIR = PKG_DIR / "skills"
@@ -768,7 +769,7 @@ def main_system_prompt(settings: Mapping[str, Any], *, template: str = "full_pro
         lines.append(
             "- Budget: per task ${:.2f}, per subagent at most ${:.2f}, reserve for the report ${:.2f}.".format(
                 float(budget.get("per_task_usd", 0)), float(budget.get("per_subagent_max_usd", 0)),
-                float(budget.get("reserve_for_report_usd", 0))))
+                report_reserve(float(budget.get("per_task_usd", 0)), float(budget.get("reserve_for_report_usd", 0)))))
     if models.get("allowed"):
         lines.append("- Allowed models: " + ", ".join(f"`{m}`" for m in models["allowed"]) + ".")
     if limits:
@@ -1022,7 +1023,8 @@ def _budget_scope(budget: Any, cfg: Mapping[str, Any],
             return budget_mod.use_budget(current, **opts), current
         b = _section(cfg, "budget")
         budget = budget_mod.BudgetLedger(
-            float(b["per_task_usd"]), reserve_for_report_usd=float(b.get("reserve_for_report_usd", 0.0)),
+            float(b["per_task_usd"]),
+            reserve_for_report_usd=report_reserve(float(b["per_task_usd"]), float(b.get("reserve_for_report_usd", 0.0))),
             per_subagent_max_usd=b.get("per_subagent_max_usd"), per_day_usd=None, spend_log=None)
     if isinstance(budget, budget_mod.BudgetLedger):
         node = budget.root

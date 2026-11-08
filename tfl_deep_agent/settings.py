@@ -57,7 +57,7 @@ DEFAULTS: dict[str, Any] = {
         "per_task_usd": 10.00,  # user decision 2026-11-08: one run is limited to ~$10
         "per_day_usd": 20.00,
         "per_subagent_max_usd": 2.00,
-        "reserve_for_report_usd": 0.30,
+        "reserve_for_report_usd": 1.00,  # user decision 2026-11-08 (was 0.30)
     },
     "models": {
         "allowed": [config.HAIKU, config.SONNET, config.OPUS],
@@ -116,10 +116,9 @@ class BudgetSettings(_Strict):
         if self.per_task_usd > self.per_day_usd:
             problems.append(
                 f"budget.per_task_usd ({self.per_task_usd}) is larger than budget.per_day_usd ({self.per_day_usd})")
-        if self.reserve_for_report_usd >= self.per_task_usd:
-            problems.append(
-                f"budget.reserve_for_report_usd ({self.reserve_for_report_usd}) must be smaller than "
-                f"budget.per_task_usd ({self.per_task_usd})")
+        # reserve_for_report_usd is not checked against per_task_usd: the ledger uses
+        # report_reserve_usd, which never exceeds a quarter of the task budget
+        # (user decision 2026-11-08, the rule fixed subagents already follow).
         # per_subagent_max_usd above per_task_usd is allowed (a UI override may lower
         # only the task budget): an allocation can never exceed the parent's
         # remainder anyway, so the cap is effectively min(cap, what is left).
@@ -128,6 +127,20 @@ class BudgetSettings(_Strict):
         if problems:
             raise ValueError("; ".join(problems))
         return self
+
+    @property
+    def report_reserve_usd(self) -> float:
+        """The reserve the task ledger keeps: see :func:`report_reserve`."""
+        return report_reserve(self.per_task_usd, self.reserve_for_report_usd)
+
+
+def report_reserve(per_task_usd: float, reserve_for_report_usd: float) -> float:
+    """The report reserve a task actually keeps: ``reserve_for_report_usd``, but at
+    most a quarter of ``per_task_usd``, so a small task budget (for example $1 with
+    the $1.00 default reserve, which leaves $0.25) still has room to work. This is
+    the rule fixed subagents already follow for their own reserve
+    (``SubagentBudgetMiddleware``). User decision 2026-11-08."""
+    return min(float(reserve_for_report_usd), float(per_task_usd) / 4.0)
 
 
 def _model_id(value: Any) -> str:

@@ -291,10 +291,10 @@ flowchart TB
   <p>Настройки лежат в <code>tfl_deep_agent/settings.json</code>. Файл в <code>.gitignore</code>, в репозитории только <code>settings.example.json</code>. CLI читает их сам, TFL Lab редактирует через модуль настроек пакета. Цифры ниже приведены для примера и правятся в UI.</p>
 <pre><code>{
   "budget": {
-    "per_task_usd": 5.00,            // жёсткий потолок на одну задачу
+    "per_task_usd": 10.00,           // жёсткий потолок на одну задачу
     "per_day_usd": 20.00,            // сумма по всем задачам за сутки
     "per_subagent_max_usd": 2.00,    // один субагент или ветка workflow
-    "reserve_for_report_usd": 0.30   // неприкосновенный остаток на отчёт
+    "reserve_for_report_usd": 1.00   // неприкосновенный остаток на отчёт
   },
   "models": {
     "allowed": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
@@ -510,7 +510,7 @@ ui_server/   + deep_routes.py, вкладка в static/app.js и lab.css</code>
   <p>По каждому указан вариант, который возьму, если не будет других указаний.</p>
   <ol class="qs">
     <li>Какой уровень доверия давать перебору в sandbox?<span class="def">Беру <code>well_formed</code>: произвольный код может проверять не то, что заявлено. <code>bounded_pass</code> оставляю только whitelisted-оракулам.</span></li>
-    <li>Значения бюджета по умолчанию.<span class="def">Беру $5 на задачу, $20 в день, $2 на субагента, $0.30 резерва. Всё правится в настройках.</span></li>
+    <li>Значения бюджета по умолчанию.<span class="def">Решение пользователя 2026-11-08: $10 на задачу, $20 в день, $2 на субагента, $1.00 резерва. Всё правится в настройках.</span></li>
     <li>Может ли агент выбирать Opus свободно?<span class="def">Да, если Opus в списке разрешённых, но с обязательной причиной в журнале (<code>opus_needs_reason</code>).</span></li>
   </ol>
 </section>

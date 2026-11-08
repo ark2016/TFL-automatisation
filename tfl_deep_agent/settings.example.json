@@ -3,7 +3,7 @@
     "per_task_usd": 10.00,
     "per_day_usd": 20.00,
     "per_subagent_max_usd": 2.00,
-    "reserve_for_report_usd": 0.30
+    "reserve_for_report_usd": 1.00
   },
   "models": {
     "allowed": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],

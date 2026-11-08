@@ -185,12 +185,14 @@ def test_default_report_call_fits_the_reserve_with_a_derived_cap():
     n = config.max_tokens_within(main, 30_000, reserve, ceiling)
     assert MIN_OUTPUT_TOKENS <= n < ceiling                           # ... the derived cap does
     assert config.worst_case_usd(main, 30_000, n) <= reserve
-    # The fixed reserve alone does NOT cover a long late-run prompt: at 80k tokens on Opus the
-    # prompt costs more than the reserve. The budget middleware therefore keeps a floor-sized
-    # call with the grown prompt payable (BudgetMiddleware._cap_leaving_next), whatever the
-    # reserve; tests/test_budget.py::test_a_long_prompt_still_leaves_the_report_call_payable.
+    # The $1.00 default (user, 2026-11-08; was 0.30) pays a floor-sized Opus report call with an
+    # 80k-token late-run prompt; 0.30 did not. A still longer prompt can outgrow any fixed reserve,
+    # so the budget middleware also keeps a floor-sized call with the grown prompt payable
+    # (BudgetMiddleware._cap_leaving_next);
+    # tests/test_budget.py::test_a_long_prompt_still_leaves_the_report_call_payable.
     if main == config.OPUS:
-        assert config.max_tokens_within(main, 80_000, reserve, ceiling) < MIN_OUTPUT_TOKENS
+        assert config.max_tokens_within(main, 80_000, reserve, ceiling) >= MIN_OUTPUT_TOKENS
+        assert config.max_tokens_within(main, 190_000, reserve, ceiling) < MIN_OUTPUT_TOKENS
 
 
 def test_default_lean_and_ad_hoc_calls_fit_one_subagent_allocation():

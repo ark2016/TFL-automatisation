@@ -588,7 +588,7 @@ class BudgetLedger:
             log.check_can_start(b.per_task_usd, b.per_day_usd)
         return cls(
             b.per_task_usd,
-            reserve_for_report_usd=b.reserve_for_report_usd,
+            reserve_for_report_usd=b.report_reserve_usd,  # at most a quarter of per_task_usd
             per_subagent_max_usd=b.per_subagent_max_usd,
             per_day_usd=b.per_day_usd,
             spend_log=log,

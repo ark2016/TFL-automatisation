@@ -193,7 +193,7 @@ tfl-deep --resume out/reg --decision reject --comment "step 3 uses an uninstanti
 
 | section | keys (defaults) |
 |---|---|
-| `budget` | `per_task_usd` 10.00, `per_day_usd` 20.00, `per_subagent_max_usd` 2.00, `reserve_for_report_usd` 0.30 |
+| `budget` | `per_task_usd` 10.00, `per_day_usd` 20.00, `per_subagent_max_usd` 2.00, `reserve_for_report_usd` 1.00 |
 | `models` | `allowed` (Haiku / Sonnet / Opus 5.5; aliases `haiku` / `sonnet` / `opus` are accepted), `roles` (model per fixed role), `opus_needs_reason` true |
 | `limits` | `max_model_calls` 80, `max_tool_calls` 300, `max_parallel` 4, `max_spawn_depth` 2 |
 | `hitl` | `formalization` true, `report` true, `execute` false |
@@ -237,14 +237,18 @@ Code: [`middleware/budget.py`](middleware/budget.py).
   - the agent is told to submit its report;
   - the spawning tools (`task`, `spawn_subagent`, `run_workflow`) are refused;
   - the calls may use the reserve. Their `max_tokens` is derived from the remainder with the reserve, so the
-    report call gets what the reserve pays for. With the default $0.30 on Opus that is
-    (0.30 − prompt tokens × $5/MTok) / $20/MTok, for example about 7500 tokens with a 30000-token prompt.
+    report call gets what the reserve pays for. With the default $1.00 on Opus that is
+    (1.00 − prompt tokens × $5/MTok) / $20/MTok, for example about 42500 tokens with a 30000-token prompt and
+    30000 tokens with an 80000-token prompt; the 4096-token floor stays payable up to a prompt of about 180000 tokens.
 - **Per day.** `<runs dir>/deep_spend_log.jsonl` holds one line per charged live call. A live task cannot start
   when its `per_task_usd` does not fit in what is left of the local calendar day, and every call is checked against
   that remainder as well. The CLI and TFL Lab share the log, and TFL Lab also allows only one live deep run at a time.
+- **Small task budgets.** The task keeps `min(reserve_for_report_usd, per_task_usd / 4)` as its reserve, the rule
+  fixed subagents follow too: a $1.00 live run keeps $0.25, the $10.00 default keeps the full $1.00. A reserve above
+  the task budget is therefore not an error.
 - **Defaults.** With $10.00 per task the main agent's first calls get the full 64000 tokens on Opus. A $2.00
-  allocation of a fixed subagent (a `task` call) keeps a $0.30 reserve for the subagent's answer. The $1.70 above
-  it pays for at most 85000 Opus output tokens per call, minus the prompt. For the `lean-formalizer` that is below
+  allocation of a fixed subagent (a `task` call) keeps a $0.50 reserve for the subagent's answer (a quarter of the allocation, below the $1.00 root reserve). The
+  $1.50 above it pays for at most 75000 Opus output tokens per call, minus the prompt. For the `lean-formalizer` that is below
   its 128000 ceiling. The cap shrinks as the subagent spends.
 
 ### Models

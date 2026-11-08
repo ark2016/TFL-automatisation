@@ -183,7 +183,7 @@ def test_bad_budget_argument_and_bad_settings_fail_closed():
         A.create_tfl_agent(example_settings(), model_factory=A.scripted_model_factory(MOCK / "ll_simple_ll1.json"),
                            budget=5.0)
     broken = example_settings()
-    broken["budget"]["reserve_for_report_usd"] = 11.0  # more than per_task_usd
+    broken["budget"]["reserve_for_report_usd"] = -1.0  # money must be >= 0
     with pytest.raises(SettingsError):
         A.create_tfl_agent(broken, model_factory=A.scripted_model_factory(MOCK / "ll_simple_ll1.json"))
 

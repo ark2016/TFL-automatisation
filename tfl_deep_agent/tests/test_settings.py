@@ -31,7 +31,7 @@ def test_defaults_are_the_plan_numbers():
     s = S.default_settings()
     # per_task_usd: PLAN.md had 5.00; user decision 2026-11-08 ("один прогон ограничен ~10$")
     assert s.budget.model_dump() == {"per_task_usd": 10.0, "per_day_usd": 20.0,
-                                     "per_subagent_max_usd": 2.0, "reserve_for_report_usd": 0.30}
+                                     "per_subagent_max_usd": 2.0, "reserve_for_report_usd": 1.00}
     assert s.models.allowed == ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
     assert s.models.roles == config.MODELS
     assert s.models.opus_needs_reason is True
@@ -106,7 +106,7 @@ def test_unreadable_file_raises_not_defaults(tmp_path, text):
     ({"budget": {"per_task_usd": -1}}, ">= 0"),
     ({"budget": {"per_task_usd": 0}}, "per_task_usd must be > 0"),
     ({"budget": {"per_task_usd": 30}}, "larger than budget.per_day_usd"),
-    ({"budget": {"reserve_for_report_usd": 10}}, "reserve_for_report_usd"),
+    ({"budget": {"reserve_for_report_usd": -1}}, "reserve_for_report_usd"),
     ({"budget": {"per_subagent_max_usd": 0}}, "per_subagent_max_usd must be > 0"),
     ({"limits": {"max_parallel": 0}}, "max_parallel"),
     ({"limits": {"max_parallel": True}}, "max_parallel"),

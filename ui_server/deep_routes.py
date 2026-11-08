@@ -1285,7 +1285,7 @@ def api_estimate(template: Any = None, override: Any = None) -> dict[str, Any]:
     b = settings.budget
     out: dict[str, Any] = {
         "template": template,
-        "cap_usd": b.per_task_usd, "reserve_for_report_usd": b.reserve_for_report_usd,
+        "cap_usd": b.per_task_usd, "reserve_for_report_usd": b.report_reserve_usd,
         "per_subagent_max_usd": b.per_subagent_max_usd, "per_day_usd": b.per_day_usd,
         "day": _day_view(settings),
         "run": {"n": len(costs),

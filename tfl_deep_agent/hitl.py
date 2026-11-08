@@ -1141,7 +1141,7 @@ def _budget_ledger(run: Mapping[str, Any], settings_obj: Any, factory: Any = Non
     else:
         b = settings_obj.budget
         led = budget_mod.BudgetLedger(
-            b.per_task_usd, reserve_for_report_usd=b.reserve_for_report_usd,
+            b.per_task_usd, reserve_for_report_usd=b.report_reserve_usd,
             per_subagent_max_usd=b.per_subagent_max_usd, spend_log=None, task_id=run["run_id"],
             already_spent_usd=float(prev.get("spent_usd") or 0.0))
     fields = {f.name for f in dataclasses.fields(budget_mod.CallRecord)}
@@ -1189,7 +1189,7 @@ def run_state(run_dir: str | Path) -> dict[str, Any]:
         return cls(model=model_id, role=role_key, replies=[], defs={})
 
     b = settings_obj.budget
-    budget = budget_mod.BudgetLedger(b.per_task_usd, reserve_for_report_usd=b.reserve_for_report_usd,
+    budget = budget_mod.BudgetLedger(b.per_task_usd, reserve_for_report_usd=b.report_reserve_usd,
                                      spend_log=None, task_id=run["run_id"])
     saver, conn = _open_checkpointer(d)
     try:

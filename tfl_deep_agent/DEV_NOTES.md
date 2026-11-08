@@ -3056,3 +3056,15 @@ exits and the (aaa)* policy-p case are now `refuted`; the existing refuted cases
 
 **Open point.** The changed pumping paragraphs in SKILL.md and traps.md are theory-adjacent text and need the Opus
 adversarial review before commit.
+
+## 2026-11-08: report reserve $1.00, at most a quarter of the task
+
+User decisions: `reserve_for_report_usd` 0.30 → 1.00 (0.30 could not pay a 4096-token Opus report call once the
+prompt passed ~56k tokens; 1.00 pays it up to ~180k). Because a $1 live run would then have had no room at all,
+the user chose to clamp: the task ledger keeps `settings.report_reserve(per_task, reserve)` =
+`min(reserve_for_report_usd, per_task_usd / 4)`, the rule `SubagentBudgetMiddleware` already uses for a child's
+reserve. `BudgetSettings.report_reserve_usd` feeds `BudgetLedger.for_task`, both ledgers in `hitl.py`, the dict path
+in `agent.py` (and the budget line of the main prompt) and `/api/deep/estimate`. The validator "reserve must be
+smaller than per_task_usd" is gone (the clamp makes any non-negative reserve safe). Tests:
+`test_budget.py::test_the_task_ledger_keeps_at_most_a_quarter_of_the_task_as_reserve`; `test_config.py` now asserts
+that the default reserve pays a floor-sized Opus call with an 80k-token prompt and not with a 190k one.

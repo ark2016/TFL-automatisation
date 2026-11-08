@@ -355,7 +355,7 @@ autonomous [deepagents](https://pypi.org/project/deepagents/) (LangChain) agent 
     their runs have no `coder` and no `execute`.
   - It spawns ad-hoc subagents (`spawn_subagent`) and parallel workflows (`run_workflow`), each picking a model
     from the allowed list.
-- **Money.** A hierarchical budget from the settings: $10.00 per task, $20.00 per day, $2.00 per subagent and $0.30
+- **Money.** A hierarchical budget from the settings: $10.00 per task, $20.00 per day, $2.00 per subagent and $1.00
   reserved for the report. It is checked before every model call at the worst case. Each call's `max_tokens` is
   derived from what its scope has left: the role's ceiling from `config.py` while the scope can pay for it, less
   later, and a refusal below a 4096-token floor. When only the reserve is left, the agent must submit its report,
