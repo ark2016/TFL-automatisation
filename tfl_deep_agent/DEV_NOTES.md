@@ -1627,3 +1627,462 @@ cases, parent_call). `tfl_deep_agent/tests`: 1188 passed, 1 xfailed.
   Fabricated evidence id lowers trust: `test_evidence.py::test_a_fabricated_evidence_id_lowers_trust`,
   `test_hitl.py::test_fabricated_evidence_id_lowers_trust`, `test_reports.py::test_fabricated_evidence_id_lowers_trust_end_to_end`.
   All pass, none skipped.
+
+## P6 lean — lean_statement / lean_check (2026-11-08)
+
+Files: `tools/lean.py`, `prompts/lean.md`, `tests/test_tools_lean.py` (38 tests, ~20 s with Docker, ~2 s without).
+Nothing in the four pipelines was changed; `agent.py` was not touched.
+
+### What is reused (not reimplemented)
+
+- Statement: the same `render_statement_verbose` the pipelines' `formalize.py` call, chosen by direction:
+  `agent_system.lib.lean_ir` (regular / non_regular), `cfl_system.lib.lean_ir` (cfl / non_cfl),
+  `dcfl_system.lib.lean_ir` (dcfl / non_dcfl). `ll` goes to `agent_system.lib.lean_ir`, which refuses it with
+  the R-Lean reason ("LL(k) — не формализуется"); the tool returns `unsupported`.
+- File: `type_check.compose_lean_file` (kernel replay + `#print axioms tfl_main` appended); check:
+  `type_check.check_lean_file(text, timeout, theorem_name=stmt.name)`; trust mapping:
+  `claim_verifier.compute_lean_proof_trust`; `type_check.ALLOWED_AXIOMS`; the comment stripper
+  `type_check._strip_lean_comments` (private, imported with a fallback).
+
+### API decisions
+
+- `lean_statement(ir, direction)` -> `statement_id` (`lean-` + 16 hex of sha256 over the direction and the
+  statement fields), `statement` (imports + declarations + bare `theorem tfl_main : ...`, the report format),
+  `template` (`LeanStatement.render("<PROOF>")`), the raw fields, `proof_body_rules`, `ir_fingerprint`, `cls`,
+  `side` (constructive / destructive), `claim`. The statement is kept in a process-local LRU store (128).
+- `lean_check(statement_id, proof_body, ir=None, direction=None)`. The model never sends a statement. The id is
+  deterministic, so after a resume in a new process the model passes `ir` + `direction`; the statement is
+  re-rendered and must give the same id (otherwise `invalid_input`, "cannot be changed"). An `ir` that renders a
+  different statement than the stored id is refused too. This is the task's `lean_check(proof_body,
+  statement_id)`; TOOL_INVENTORY §8 had `(ir, direction, proof_body)`. Both are covered.
+- **Deviation from TOOL_INVENTORY §8:** `lean_statement` is `not_verified` with `data.evidence_role =
+  "reference"`, not `well_formed`: a rendered statement checks no claim, and a `well_formed` record could prop a
+  claim up to 0.55 (same reasoning as `sample_words`, P1 fix F8).
+- Trust of `lean_check`: `verified` only for status `proved` AND axioms ⊆ ALLOWED_AXIOMS (re-checked here
+  although `check_lean_file` already enforces it) AND the composed file declares `tfl_main` exactly once.
+  `has_sorry` / `error` / `timeout` -> ok=True, `not_verified` (R1). Guard rejection -> failure `invalid_input`,
+  `data.status = "rejected"`, `data.violations`. Unavailable checker -> failure `unsupported`,
+  `data.status = "unavailable"`. `allow_refuted=False`.
+- `data` of `lean_check` carries what the P3 renderer reads from the ledger (`status`, `axioms`, `direction`,
+  `statement`, `proof_body`) plus `cls`, `side`, `claim`, `ir_fingerprint`, `statement_id`, trimmed `errors`
+  (≤ 10, each ≤ 2000 chars), `attempt` / `attempts_left`, `lean_file_sha256`, `daemon_retries`.
+  `evidence_role = "claim_check"`. A test renders a report from such an entry.
+
+### Guard (`guard_proof_body`)
+
+`scan_proof_body` (metaprogramming, `native_decide`, `#`-commands, a line at column 0) plus, on the
+comment-stripped body: `sorry`, `sorryAx`, `admit`, `ofReduceBool`, `axiom`, a declaration keyword at the start
+of any line (`import|theorem|lemma|def|abbrev|instance|inductive|structure|class|example|opaque|namespace|
+section|mutual|universe|variable|attribute|noncomputable|private|protected`, optionally after `@[...]`),
+`tfl_main`, a leading `by`, tab characters, an empty body, > 40000 chars. A rejected body never reaches Docker
+and does not count as an attempt. CRLF is normalized to LF before composing.
+
+### Limits
+
+- Lean timeout `config.LEAN_TIMEOUT` (180 s, = cfl_system); tool timeout 600 s (the registry maximum), thread mode
+  (the `docker run` has its own timeout).
+- At most 2 checks run at once (`MAX_PARALLEL_CHECKS`; each container gets 4 GB / 2 CPUs); a waiting call gives up
+  with `busy` when it could not finish in time.
+- At most 6 checks per statement per process (`MAX_CHECKS_PER_STATEMENT`), then `busy` "attempt limit".
+- Docker daemon flake (P0 note: `OCI runtime create failed ... read init-p`): `check_lean_file` reports it as
+  `error` with one position-less error. `_is_daemon_failure` recognizes it; the check is retried twice (2 s
+  apart) while time allows, and a persistent failure becomes `unavailable` (not an attempt), never a Lean error.
+
+### Acceptance
+
+`docs/examples/reg_grammar_SaSb_lean_proved/proof.lean` split at `theorem tfl_main : ¬ L.IsRegular := by\n  `
+and before the replay block: the stored statement + the body re-compose to the golden file **byte for byte**,
+and the real `lean_check` in `tfl-lean4` (image present, `sha256:f828d004…`, no build needed) returned
+`proved`, axioms `propext, Classical.choice, Quot.sound`, trust `verified` in ~14 s. With `docker` hidden from
+PATH the test skips with the reason; a runtime `unavailable` also skips.
+
+### Open (outside my files)
+
+- `agent._classify` / `verdict_gate` do not know `lean_check` yet, so a `verified` Lean result is not a verdict
+  basis. Suggested branch: `if tool == "lean_check" and data.get("cls") == lang and data.get("status") ==
+  "proved": return [(data["side"], trust)]` (the IR filter already reads `data.ir_fingerprint`).
+- `roles.py` still describes the lean role with "(the Lean tools arrive in phase P6)".
+- `skills/lean/` is empty; `prompts/lean.md` reads `/skills/lean/SKILL.md` only if it exists and carries a short
+  Lean API list copied verbatim from `agent_system/prompts/formalizer.md` (checked against the image there).
+- TOOL_INVENTORY §8 should be updated to the trust / argument decisions above.
+
+## P4 orchestration — spawn_subagent / run_workflow / budget_status (2026-11-08)
+
+Files: `orchestration/model_policy.py`, `orchestration/spawn.py`, `orchestration/workflow.py`,
+`tests/test_orchestration.py` (54 tests, scripted models only). `agent.py` is untouched; wiring is the
+integration step (below).
+
+**What was built**
+- `model_policy.resolve_model_choice(settings, pick, reason, what=...)`: tier name or full id; refused if
+  unknown, not in `settings.models.allowed` (compared by `pricing_key`, so dated ids match aliases), or
+  opus without a `reason` of >= 8 chars while `opus_needs_reason` is on. `TFL_MODEL_OVERRIDE` is applied
+  *after* the policy check (a plan refused in a real run is refused under the override too); the result
+  says `overridden`. An unpriced override is a `ModelPolicyError`, not an internal error.
+  `model_cost_table` gives per-tier worst case at full `max_tokens` and at the 4096-token floor.
+- `spawn.OrchestrationContext`: settings, model factory, budget node (default: the active `_CURRENT`
+  scope), evidence ledger (default: current), `RunLimits`, depth, listeners, event history. A live
+  factory without a budget is refused at `create`.
+- `spawn_subagent`: all problems collected into one model-readable refusal (name pattern, depth vs
+  `limits.max_spawn_depth`, model policy, tool whitelist, output schema, wrap-up, `per_subagent_max_usd`,
+  free remainder), then a floor check (one call at the 4096 floor + the child's reserve), then
+  `scope.allocate("spawn:<name>", kind="subagent")`. The child is a `create_agent` with middleware
+  call-limit -> `BudgetMiddleware(fit_max_tokens=True, min_output_tokens=4096)` -> concurrency ->
+  `EvidenceMiddleware(budget_node=child)`. The node is closed in `finally`; unspent money returns.
+  Result data: status (ok / budget_exhausted / call_limit / error), answer, structured (+ errors),
+  evidence ids of the child's oracle calls, budget (allocated/spent/returned/calls), model choice, depth.
+  Trust is `not_verified` — a subagent's answer is never evidence; its oracle calls are, by id.
+- Child tools: whitelist of groups ir, words, reg, cfl, dcfl, ll, theory, lean (`group:<g>` accepted)
+  plus `budget_status`. Orchestration tools are not given by default; `spawn_subagent`/`run_workflow`
+  may be granted only when the child itself could still spawn (`depth + 2 <= max_spawn_depth`).
+  Never given: `submit_report`, file / shell tools, `task`.
+- `output_schema`: must be an object schema (checked with jsonschema); passed as
+  `ToolStrategy(final_answer)`; the returned value is validated again and errors reported.
+- `run_workflow(steps, budget_usd, name, dry_run)`: validation collects everything at once — unique ids,
+  id pattern, unknown / self dependencies, cycle (printed as `a -> b -> a`), parallel width (longest-path
+  layers) <= `limits.max_parallel`, role, model (explicit or role default; role defaults need no opus
+  reason), tools (no spawning inside steps), schema, money (explicit step budgets <= cap, their sum <=
+  budget, an equal share for the rest, per-step floor incl. room for dependency answers, min total <=
+  budget, budget <= free). Compiled to a `StateGraph` (`dispatch` node + conditional edges returning
+  `Send("step", ...)` for every ready step, capped at `max_parallel`; `max_concurrency` too). Each step
+  runs in a `branch` allocation under `workflow:<name>`, gets its dependencies' answers / structured
+  output / evidence ids appended to its task, and is skipped when a dependency failed unless
+  `on_dependency_failure: "run"`. `dry_run` validates and returns the plan without spending.
+  Estimated cost = sum of step budgets (upper bound); returned with the actual spend per step.
+- `budget_status(detail)`: scope status, free money for a new child, cap, wrap-up, depth / can_spawn,
+  max_parallel, `RunLimits.status()`, cost table, opus_needs_reason.
+- Tools are `StructuredTool`s (`content_and_artifact`, `metadata.tfl_group="orchestration"`), invalid
+  args get a readable "refused: invalid arguments" message, async goes through `asyncio.to_thread`,
+  `GraphBubbleUp` (interrupts) is re-raised.
+
+**Decisions / deviations**
+- Ad-hoc children use `fit_max_tokens=True` with a 4096 floor: at the full 64k max_tokens one Opus call
+  reserves ~$1.28, which makes small child budgets unusable.
+- Child evidence is reported by id in the tool result, not merged into the parent's state through a
+  `Command`; the records themselves are in the shared `EvidenceLedger` with the child's scope and
+  `parent_call` = the spawning tool call id.
+- Workflow steps set only `_PARENT_CALL` explicitly; they do not copy the tool call's context (copying
+  made parallel child graphs inherit the parent's runnable config / checkpoint namespace).
+- Workflow steps using a role get the role's prompt and tools, but no `/skills/` file access (no file
+  tools in children); the step footer points them at `get_theorem`.
+- Line endings of the new files are CRLF (Windows host); ruff is clean on all four files.
+
+**Integration notes (for the step that edits agent.py)**
+- Build `ctx = OrchestrationContext.create(settings, model_factory=factory, budget=ledger)`, pass
+  `extra_tools=make_orchestration_tools(ctx)` to `create_tfl_agent`, then `ctx.limits = graph.tfl_limits`
+  so children count against the run's call limits (tested in
+  `test_tools_work_inside_create_tfl_agent_with_the_run_limits`).
+- Children are built with role keys `spawn:<name>` and `workflow:<step_id>`; `ScriptedModels` /
+  `load_mock_script` currently reject unknown role keys, so mock scripts need a prefix rule for them.
+- The evidence record of a spawning tool call has `cost_usd=None`; the spend is in the ToolResult data
+  (`budget.spent_usd`) and in the ledger's child nodes.
+- `ctx.listeners` / ledger `_emit({"event": "orchestration", ...})` carry spawn / workflow / step
+  start-end events for the TFL Lab live view.
+
+## P4-P6: P5 docker sandbox (2026-11-08)
+
+Files: `sandbox/docker_backend.py`, `sandbox/Dockerfile.sandbox`, `sandbox/build.ps1`, `sandbox/build.sh`,
+`tests/test_sandbox.py` (46 tests: 37 without Docker, 9 real-Docker ones that skip with a reason when the CLI, the
+daemon or the image is missing, or when the flaky daemon will not start a container). `agent.py` is untouched.
+
+### What it is
+
+- `DockerSandbox(BaseSandbox)` (deepagents 0.7.34): `execute`, `upload_files`, `download_files`, `id`. ls / read /
+  write / edit / grep / glob come from `BaseSandbox`, which runs `python3 -c ...` in the container and writes temp
+  files to `/tmp`. Checked against the real image: all of them work.
+- One container per run: `docker run -d --rm --name tfl-sbx-<run>-<hex8> --label tfl.sandbox=1 --network none
+  --read-only --tmpfs /workspace --tmpfs /tmp (+ /large_tool_results, /conversation_history) --memory 1g
+  --memory-swap 1g --cpus 1 --pids-limit 256 --user 1000:1000 --security-opt no-new-privileges --cap-drop ALL
+  -v ...:ro tfl-sandbox:latest sleep infinity`. The tmpfs mounts are `noexec,nosuid,nodev`, so run scripts as
+  `python x.py` / `sh x.sh`, not `./x`. `docker cp` cannot see tmpfs, so upload and download go through
+  `docker exec -i ... sh -c` with the path as a positional argument (no quoting of model input into the script).
+- `execute`: `docker exec -w /workspace <name> timeout -k 5 <T> sh -c <cmd>`. coreutils `timeout` kills the process
+  group inside the container, not only the host-side client. The host waits T + 20 s; if that expires it kills the
+  client and runs a python one-liner that SIGKILLs every process except PID 1. A timeout gives exit code 124 and a
+  `[timeout]` note. Output: stdout, then stderr lines as `[stderr] ...` (the `LocalShellBackend` convention), at most
+  `max_output_bytes` (64 KiB). Each stream is read in a thread and only the first limit+1 bytes are kept, so
+  `yes` for 60 s does not fill memory. Over the limit: `truncated=True` and `... [output truncated: N of M bytes
+  shown]`. The exit code is not appended, because deepagents' execute tool already adds
+  `[Command succeeded/failed with exit code N]`. `timeout <= 0`, a non-int or a value above `max_timeout` (600 s)
+  raises `ValueError`, which the execute tool turns into "Invalid parameter".
+- Cleanup: context manager, `close()` (idempotent), and `weakref.finalize`, which fires on garbage collection and at
+  interpreter exit. The finalizer is registered before `docker run`, so a crash in `start()` still removes the
+  container. A real test checks that a child process that never calls `close()` leaves no container behind.
+  `remove_stale_containers()` removes all `tfl.sandbox=1` containers after a hard kill (explicit call only: it
+  also hits live runs).
+- `sandbox_status(image)` returns `(ok, reason)`. `open_sandbox(run_id)` returns `(sandbox | None, reason)`, for
+  the integration ("Docker unavailable -> no `execute`, the report says so").
+- Flaky daemon (DEV_NOTES P0 "Docker"): about every second `docker run`/`docker exec` fails with `OCI runtime ...
+  read init-p: connection reset by peer` / `write init-p: broken pipe`. `start()` retries these up to 6 times with
+  backoff. A `docker exec` that failed before the command started (exit 126/127 plus `OCI runtime exec failed`, the
+  error text arrives on stdout) is retried up to 5 times. This cannot run the command twice. "executable file not
+  found" and the command's own 126/127 are not retried. Without the exec retry, about half of the real calls
+  failed during this phase.
+
+### Deviations
+
+- **The whole repo is not mounted.** By default only `agent_system`, `cfl_system`, `dcfl_system`, `ll_system` and
+  `docs` are mounted, each at `/opt/tfl/<name>:ro`. The root has `.env` with the API key, `.tfl_lab_runs/`, `.venv/`
+  and `tmp_*`. `agent_system/.env` is inside a mounted package, so every secret-looking file in a mount (`.env`,
+  `.env.*` except `.example/.sample/.template/.dist`, `*.pem`, `*.key`, `id_rsa|id_ed25519|id_ecdsa`) is covered
+  by an empty read-only file bind-mounted on top. A real test checks that a fake key is not readable and the masking
+  file is empty. `SandboxConfig(mounts=(".",))` mounts the whole repo at `/opt/tfl`, with secrets still masked.
+  `PYTHONPATH=/opt/tfl` is set, so `import cfl_system.lib.cyk` works with or without the coder prompt's
+  `sys.path.insert(0, "/opt/tfl")`. The coder prompt's description is still correct.
+- The image has no build context: `docker build -t tfl-sandbox:latest - < Dockerfile.sandbox`, so no repository
+  file can be copied into it. Runtime deps: the third-party imports of the four packages (an AST scan found
+  `anthropic`, `dotenv`, `httpx2`, `langgraph`), pinned to this venv (`anthropic==1.13.0 httpx2==2.13.1
+  python-dotenv==1.2.1 langgraph==1.2.20 langchain-core==1.7.6`). A test compares the pins with the installed
+  versions: after a venv upgrade, update the Dockerfile and rebuild. User `sandbox` uid/gid 1000, HOME=/workspace.
+  The image is 328 MB and was built on 2026-11-08 (first attempt failed on the flaky daemon; `build.sh` on retry).
+
+### For the integration step (agent.py, not done here)
+
+- **deepagents refuses `permissions=` next to an execution backend** unless every rule path starts with a
+  CompositeBackend route key (`FilesystemMiddleware._set_permissions` -> `_all_paths_scoped_to_routes`).
+  `agent.readonly_permissions()` lists `/skills`, `/skills/**`, `/input`, `/input/**`. The bare roots never
+  start with `/skills/` / `/input/`, and `/input/` is no route (input files live in the state). So
+  `create_tfl_agent(backend=make_backend(default=DockerSandbox()))` raises `NotImplementedError` today. The P5
+  acceptance test (`test_mock_coder_scenario_runs_cyk_in_the_sandbox`) monkeypatches `readonly_permissions` to
+  `["/skills/**", "/input/**"]` and adds an `/input/` route (`StateBackend`). agent.py needs the same, done
+  properly. A `StateBackend` routed at `/input/` sees `/task.pdf`, not `/input/task.pdf` (CompositeBackend strips
+  the prefix), so seeding `run_task(files=)` must follow.
+- With the sandbox as the default backend, every non-routed path goes to the container, whose root is read-only.
+  Only `/workspace`, `/tmp` and the two deepagents offload roots are writable, so main-agent scratch files must live
+  under `/workspace/`. The alternative is a composite whose default stays `StateBackend` with `/workspace/`
+  routed to the sandbox. But deepagents only offers `execute` when `CompositeBackend.default` is a sandbox, so that
+  needs a wrapper.
+- `interrupt_on["execute"]` (HITL, off by default) is wired in agent.py already. It has still not been exercised
+  with this backend.
+
+### Test runs
+
+- `pytest -q tfl_deep_agent/tests/test_sandbox.py`: 46 passed (about 25-40 s with Docker). With `docker` hidden from
+  PATH: 37 passed, 9 skipped ("Docker sandbox unavailable: the 'docker' executable is not on PATH").
+- `pytest -q -n 4 tfl_deep_agent/tests`: 1326 passed, 1 xfailed (79 s, Docker visible).
+- Seen once while another agent ran the same suite: two `tfl-sbx-*` containers listed from that concurrent run.
+  They were gone 20 s later, so no leak.
+
+## P4-P6: integration (2026-11-08)
+
+Scope: wire P4 (orchestration tools), P5 (Docker sandbox) and P6 (Lean tools, lean-formalizer role) into
+`create_tfl_agent` and the roles. Files: `agent.py`, `roles.py`, `prompts/main.md`, new `sandbox/workspace.py`,
+new `tests/test_integration_p4_p6.py`.
+
+### Decisions
+
+- **The `sandbox` parameter.** `create_tfl_agent(..., sandbox=None | False | "auto" | True | <SandboxBackendProtocol>)`
+  is resolved by `agent.resolve_sandbox` into `graph.tfl_sandbox` (a `SandboxInfo` with available, reason, sandbox,
+  owned, kind).
+  - The default `None` means no sandbox. Building an agent never touches Docker, so existing tests and library
+    callers are unchanged.
+  - `"auto"` checks `sandbox_status()` and builds a lazy `DockerSandbox(run_id=name)` that the graph owns.
+    `agent.close_sandbox(graph)` removes it; the `DockerSandbox` finalizer also removes it at garbage collection or
+    exit.
+  - A sandbox the caller passes stays the caller's to close.
+  - An explicit `backend=` decides by itself (`backend_can_execute`). Passing both `backend=` and `sandbox=` raises
+    `ValueError`.
+- **The backend shape.** `make_backend(sandbox=sb)` builds
+  `CompositeBackend(default=SandboxedStateBackend(sb), routes={"/skills/": read-only, "/workspace/": WorkspaceBackend(sb)})`.
+  - deepagents registers `execute` only when the composite's *default* is a `SandboxBackendProtocol`. It picks the
+    state schema (`files`) by `isinstance(default, StateBackend)`.
+  - So `SandboxedStateBackend` subclasses both. Files are plain state and `execute` goes to the sandbox, so the
+    main agent's scratch files stay in the checkpointed state, as without a sandbox.
+  - `WorkspaceBackend` puts the `/workspace` prefix back for the container. CompositeBackend strips the route
+    prefix, but the container's writable directory is `/workspace` itself. `WorkspaceBackend` strips the prefix again
+    from the paths it returns, so ls, glob, grep, upload and download paths come out as `/workspace/...`.
+- **Permissions.** deepagents refuses `FilesystemPermission` rules next to an execution backend unless every rule
+  path starts with a route prefix, and `/input/` is not a route. So `agent.permissions_for(backend)` works as follows:
+  - A backend without execution gets the old `readonly_permissions()`.
+  - A backend with execution gets only `<route>/**` for the read-only routes that are present.
+  - `/input/` is then protected by `SandboxedStateBackend` itself, which refuses write, edit, delete and upload
+    under `/input/`.
+  - The signature of `readonly_permissions` is unchanged. The P5 acceptance test still monkeypatches it. The patch
+    is no longer needed but does no harm: that test's backend executes, so `permissions_for` takes the route-scoped
+    branch.
+- **Only the coder gets execute.** The existing `exclude_tools_middleware(SANDBOX_ONLY_TOOLS)` stays on main and on
+  every role without `allow_sandbox`. It hides `execute` from requests and refuses it at dispatch.
+  - Without a sandbox, `execute` is not registered at all, and roles with `allow_sandbox` (the `coder`) are dropped
+    from the build. deepagents then refuses `task(coder)` as an unknown subagent.
+  - The HITL `execute` interrupt is added only when a sandbox is available.
+- **System prompt.** `main_system_prompt(..., sandbox=, orchestration=)` adds two lines to "This run":
+  - The sandbox line. When available: only the coder runs code under /workspace/, and its output is at most
+    well_formed and never the basis of the verdict. When not: "NOT available (<reason>)", with no execute tool, no
+    coder role, and the report must say that no code was run.
+  - An orchestration-tools line.
+- **`prompts/main.md` changes.**
+  - A new section "Ad-hoc agents and workflows".
+  - The Lean and coder role lines no longer carry phase notes. The coder line says the role exists only with a
+    sandbox.
+  - "Choosing models" names `spawn_subagent` and `run_workflow`.
+- **Orchestration (P4).** `create_tfl_agent(..., orchestration=True)` builds one `OrchestrationContext` inside the
+  run's budget and evidence scopes.
+  - The context is created with `budget=None` (the enclosing `use_budget` scope), so allocations are children of
+    the run's node. It uses the run's evidence ledger and the run's `RunLimits`, so children count against the same
+    call limits and depth.
+  - The tools go to main only. Spawned and workflow children never get file tools or `execute`, as in P4.
+  - Orchestration tools whose names are already in `extra_tools` are skipped, so the P4 test that passes its own
+    tools has no duplicates.
+  - The context is available as `graph.tfl_orchestration`. `orchestration=False` leaves the tools out.
+  - `create_tfl_agent` already refuses a live factory without a budget, so no extra guard is needed.
+- **Mock scripts.** `load_mock_script` accepts the P4 child keys `spawn:<name>` and `workflow:<step id>` (P4
+  `NAME_PATTERN` after the prefix). Other unknown keys are still errors.
+- **Lean (P6).** The `lean` group was already in `MAIN_TOOL_GROUPS` and in the lean-formalizer role.
+  - `_classify` now knows `lean_check` (R-Lean). For reg, cfl and dcfl, a result counts as `[(side, "verified")]`
+    when `data.cls == lang`, `status == "proved"`, the tool trust is `verified`, and the side is constructive or
+    destructive.
+  - The IR binding is the usual fingerprint rule of `verdict_gate`. `lean_check` data carries `ir_fingerprint`, so a
+    proof for another IR lands in `excluded_ir_mismatch`.
+  - `ll` has no Lean path and ignores the result.
+  - The role description and `main.md` no longer say "phase P6".
+
+### Tests
+
+`tests/test_integration_p4_p6.py` has 26 tests, all with scripted models.
+
+- **End to end, parametrised over fake and docker.**
+  - Main calls `run_workflow` with three parallel steps (prover/sonnet with a `cyk` oracle call, prover/haiku,
+    general/haiku) and a critic judge that depends on all three, budget 1.2. Then it calls `task(coder)`.
+  - The coder runs `write_file /workspace/brute.py`, then `execute python /workspace/brute.py`. The script is a CYK
+    brute force over {a,b}^<=6 that imports `cfl_system.lib.cyk`.
+  - Checked: the workflow layers; budget nodes closed and within budget; the branch's cyk record in the run ledger
+    under `task/workflow:anbn/cyk-check` with `parent_call`; the `execute` output; the execute record with
+    `role=coder` and trust at most well_formed; main has the orchestration, task and lean tools but never `execute`;
+    both prompt lines.
+  - The `fake` case uses `FakeSandbox`, a `FilesystemBackend` plus `SandboxBackendProtocol` that runs `python <file>`
+    locally with the repo on `PYTHONPATH`.
+  - The `docker` case uses the real `DockerSandbox` and also checks the `/opt/tfl/cfl_system/lib/cyk.py` path. It
+    skips when `sandbox_status()` fails. It passed here with Docker.
+- **No sandbox** (`None`, `False`, and `"auto"` with Docker reported missing):
+  - no coder model is built;
+  - there is no `execute` in main or prover;
+  - the prompt states the reason;
+  - `task(coder)` is refused.
+- **With a sandbox:**
+  - prover and main have no `execute`;
+  - an `execute` call from main (with strict_tools off) is refused at dispatch and runs nothing;
+  - `"auto"` is owned by the graph and closed by `close_sandbox`;
+  - the HITL execute interrupt is added only with a sandbox;
+  - passing both backend and sandbox raises;
+  - an explicit backend decides by itself.
+- **Adapters:**
+  - `/workspace` path mapping for write, read, ls, glob, grep, edit, upload, download and execute;
+  - `/input` is read-only, both in `SandboxedStateBackend` and through the agent;
+  - `/skills` writes are denied;
+  - scratch files stay in the state;
+  - the rule shapes `permissions_for` returns.
+- **Orchestration:**
+  - `orchestration=False` leaves the tools out;
+  - no duplicates with `extra_tools`;
+  - a child scripted as `spawn:helper` counts against the shared `RunLimits`;
+  - mock-script key validation.
+- **Lean:**
+  - a proved lean_check is a verified basis (reg destructive, cfl constructive);
+  - no basis from failed, non-verified, wrong-class, ll or side-less results;
+  - a proof for another IR is excluded;
+  - the lean-formalizer has the lean tools and no execute.
+
+### Test runs
+
+- `pytest -q tfl_deep_agent/tests/test_integration_p4_p6.py`: 26 passed. The real Docker e2e case passed.
+- `pytest -q -n 4 tfl_deep_agent/tests`: 1352 passed, 1 xfailed (70 s, Docker visible).
+- Full suite, `pytest -q -n 6`: 4982 passed, 78 skipped, 3 xfailed, 28 failed.
+  - None of the failures are in `tfl_deep_agent`. All 28 are Docker-Lean compile tests in
+    agent_system/cfl_system/dcfl_system: the same environment class as the 33 at the P3 gate.
+  - One of them, `test_phase3::TestMathlibImportCompiles::test_dfa_import_compiles`, passes when run alone, which
+    points to Lean containers under parallel load.
+
+### Open
+
+- `hitl.py` (`start_run`, `resume_run`, `_segment`), the CLI and TFL Lab still call `create_tfl_agent` without
+  `sandbox=`. Until the runner passes `sandbox="auto"` and calls `close_sandbox(graph)` at the end, a real run has
+  no coder. That change is outside this step's scope.
+- `settings.example.json` has no sandbox switch. A `sandbox.enabled` key would need validation in `settings.py`.
+- `/workspace` lives in the container. A HITL resume in a new process gets a fresh, empty `/workspace`; the state's
+  scratch files survive.
+- `execute` results carry no ToolResult, so the ledger stores them as `not_verified`. That stays within "sandbox
+  output is at most well_formed", but the report cannot cite them as `well_formed`.
+- `collect_result` takes only the state, so `graph.tfl_sandbox.to_dict()` is not yet copied into `result.json`.
+  The runner should add it.
+
+## P4-P6 FIX (2026-11-08)
+
+Review findings of P4-P6, checked against the code first. Phase tests: `pytest tfl_deep_agent/tests` 1362 passed,
+1 xfailed (the Docker sandbox and Lean tests ran against the real images).
+
+### Fixed
+
+- **lean: stale IR fingerprint (major).** The cache is keyed by `statement_id`. Two IRs that differ only outside
+  the language (`source_text`) render the same statement, so the second IR used to get the first IR's
+  `ir_fingerprint`, and `verdict_gate` put a verified proof into `excluded_ir_mismatch`. Now `lean_statement`
+  reports the fingerprint of the IR passed in that call. `lean_check` reports the fingerprint of its own `ir`, or,
+  without one, of the IR this run last rendered the statement from. Only when neither exists does it fall back to
+  the cache's most recent IR. `data.ir_fingerprint_source` = `call` / `run` / `cache` says which was used.
+  `_resolve` now re-renders every explicitly passed `ir` and compares ids; before, it skipped the check when the
+  fingerprints were equal.
+- **lean: per-run attempts (minor).** Attempt counters (`MAX_CHECKS_PER_STATEMENT`) and "the IR of this run" now
+  live in run scopes keyed by the LangGraph `thread_id` of the tool call (`langgraph.config.get_config()`; hitl
+  uses the run id as thread id). Subagents and workflow steps inherit it through the config context var. An
+  explicit `lean.lean_run(key)` block takes precedence; with neither, there is one `process` scope. There are at
+  most 256 scopes (LRU). The rendered statements stay in a process-wide cache. New helpers: `run_key()`,
+  `attempts_used(sid, key)`. `reset_store()` clears both.
+- **workflow: opus via role default (two findings, minor).** A step with a role and no model whose configured
+  role model is opus now needs `reason` (>= `MIN_REASON_CHARS`) when `opus_needs_reason` is on. The check looks
+  at the configured model, not the `TFL_MODEL_OVERRIDE` one, the same as for explicit picks. The given reason is
+  logged together with the note `role default: settings.models.roles.<role>`. The step and tool descriptions say
+  so. Test: three critic steps without a reason are refused.
+- **sandbox: docs mount (major).** `DEFAULT_MOUNTS` mounts the single file `docs/THEORY.md`, no longer `docs/`
+  (which holds `EVAL_SET.md`, `EVAL_RESULTS.md` and `docs/examples`). The same concern applies to the pipeline
+  packages, so their `tests/` and `examples/` (solved tasks with expected verdicts) are hidden as well, see the
+  next item. Checked in a real container: there is no `/opt/tfl/docs/EVAL_SET.md`, `cfl_system/tests` is empty and
+  read-only, and `import cfl_system.lib.cyk` still works.
+- **sandbox: masking gaps (minor).** `scan_mounts()` replaces the `_SKIP_DIRS` walk.
+  `SandboxConfig.hidden_dirs` (default `.git .venv venv .claude .tfl_lab_runs node_modules tmp_* tests
+  examples`) are covered by an empty read-only tmpfs (`HIDDEN_TMPFS_OPTS`) wherever they occur in a mount. Every
+  other mounted directory is walked, `__pycache__` / `.pytest_cache` / `.ruff_cache` included, for secret files
+  and for `hidden_files` (`EVAL_SET.md`, `EVAL_RESULTS.md`), which get the empty mask file. In whole-repo mode
+  (`mounts=(".",)`) this hides `.git`, `.venv`, `.claude`, `.tfl_lab_runs`, `tmp_*` and every tests / examples
+  directory. `build_run_args(hidden_dirs=...)`, `DockerSandbox.hidden_dirs`. The test that expected
+  `__pycache__/.env` to stay unmasked now expects it to be masked.
+- **agent: max_spawn_depth = 0 (minor).** Only `budget_status` is bound. The "This run" line then says that
+  `spawn_subagent` / `run_workflow` are not available, instead of advertising them.
+- **workflow ir_builder vs HITL 1 (minor).** I took the documentation route and kept `ir_builder` in
+  `WORKFLOW_ROLES`. The HITL 1 line of the system prompt and the `run_workflow` description now say that an IR
+  built in a step or by a spawned subagent is not reviewed: build it with `task(ir-builder)`, or run main's own
+  `validate_ir` on it, which HITL 1 does review. `prompts/main.md` (outside this fix's scope) still lists
+  `ir_builder` for `run_workflow` without that warning. The generated lines above cover it at run time.
+- Sandbox prompt line: "the pipeline packages read-only at /opt/tfl" (it was "the repository").
+
+### Not fixed here (outside this fix's scope: hitl.py, cli.py, settings.py, tools/base.py, middleware/)
+
+- **The runners do not open a sandbox (major, deferred).** This finding is correct: `hitl.start_run` /
+  `resume_run` / `_segment` and the CLI never pass `sandbox=`, so no real run has a coder. The fix belongs in
+  `hitl.py` / `cli.py` (pass `sandbox="auto"` or a validated `settings` key, call `agent.close_sandbox(graph)` in
+  a `finally`, and copy `graph.tfl_sandbox.to_dict()` into `result.json`). Turning a Docker container on in every
+  user run also changes behaviour, so the user should decide the default (on / off / a settings switch).
+- **execute output as well_formed (minor, deferred).** `EvidenceMiddleware.tool_result_of` admits only tools
+  registered in `tools.base.REGISTRY`, and `GROUPS` has no sandbox group. If `execute` were registered under an
+  existing group, it would leak into `main_tools()` and the role tool lists. The clean fix is a `sandbox` group
+  (ceiling `well_formed`) in `tools/base.py`, kept out of `MAIN_TOOL_GROUPS`, plus a coder-only wrapper. That
+  needs changes to tools/base.py and middleware/evidence.py.
+
+## P4-P6 — GATE (2026-11-08)
+
+No code changes in this step. Docker 27.5.1 is up, and the images `tfl-sandbox:latest` and `tfl-lean4:latest` are present.
+
+- `pytest -q -n 4 tfl_deep_agent/tests`: 1361 passed, 1 skipped, 1 xfailed (the known `test_default_ceilings_fit_the_example_budgets`).
+  The one skip is a real-Docker test that skipped itself after the flaky daemon would not start a container.
+  The four phase files run serially (`test_sandbox`, `test_tools_lean`, `test_integration_p4_p6`,
+  `test_orchestration`): 174 passed, 0 skipped. Every real-Docker case ran in that run.
+- Full suite, `pytest -q -n 6`: 4992 passed, 70 skipped, 3 xfailed, 36 failed. None of the failures are in tfl_deep_agent.
+  All 36 are Docker-Lean compile tests in agent_system / cfl_system / dcfl_system. Their errors are the daemon flake
+  (`OCI runtime create failed ... read init-p: connection reset by peer`, `runc ... exit status 139`), the same
+  environment class as the 28 at the integration step and the 33 at the P3 gate. Three samples pass when run serially.
+- Acceptance, each item met:
+  - P4: `test_orchestration::test_three_parallel_branches_and_a_judge_stay_in_budget`, the e2e workflow in
+    `test_integration_p4_p6`, and the refusal tests (disallowed model, opus without a reason, depth, cycle printed
+    as `a -> b -> a`).
+  - P5: `test_sandbox::test_mock_coder_scenario_runs_cyk_in_the_sandbox` and
+    `test_real_coder_style_script_imports_cyk_from_opt_tfl` (real container), and the docker case of the e2e
+    test.
+  - P6: `test_tools_lean::test_golden_reg_proof_verifies_through_the_tools` ran against the real `tfl-lean4`:
+    status proved, trust verified.

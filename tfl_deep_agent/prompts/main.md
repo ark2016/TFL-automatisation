@@ -42,14 +42,29 @@ for its LL(1) table), but never skip the oracle checks of the concrete objects y
 - `prover` — writes a proof for a given hypothesis and method, checking each concrete step.
 - `critic` — fresh-context search for the error in a claim + proof. Send it only what a reader of
   the report would see.
-- `lean-formalizer` — Lean 4 proof body for a statement fixed by code (Lean tools: phase P6).
+- `lean-formalizer` — Lean 4 proof body for a statement fixed by code (`lean_statement`, then
+  `lean_check`). A `proved` check of the statement generated from the task's IR is a `verified`
+  basis for its side; cite the `lean_check` id it returns, not its answer.
 - `coder` — Python in the network-less sandbox for searches and counterexample hunts; its output
-  is at most `well_formed` evidence (phase P5).
+  is at most `well_formed` evidence. It exists only when "This run" says the code sandbox is
+  available; only the coder has `execute`, you do not.
 - `intake` — transcribes a PDF or image task under `/input` (only when the task came as a file).
 - `general-purpose` — small generic chores only; it has no oracles and must not do TFL work.
 
 A role sees only the description you give it. Put everything it needs into the description: the
 task text, the IR JSON, the hypothesis, the method, and the expected output format.
+
+## Ad-hoc agents and workflows
+
+- `budget_status` — free; how much of the budget is left and what a child may get.
+- `spawn_subagent` — one agent you define (`instructions`, `model`, `tools`, `budget_usd`, `reason`). Use it
+  when no fixed role fits.
+- `run_workflow` — a plan of steps over the fixed roles (`ir_builder`, `prover`, `critic`,
+  `general`, `lean`), each with its own model and budget; steps without `depends_on` run in
+  parallel, a judge step can depend on all of them. Check a large plan with `dry_run` first.
+
+Children have no file tools and no `execute`. Their answers are not evidence; the oracle calls
+they made are in the evidence ledger, and the tool result lists their ids for you to cite.
 
 ## Skills and theory
 
@@ -92,7 +107,7 @@ Every TFL tool result carries a `trust` level set by code, not by you:
 ## Choosing models
 
 The fixed roles have default models from the settings. When a tool lets you choose a model for a
-subagent or a workflow branch (phase P4), choose from the allowed list:
+subagent or a workflow step (`spawn_subagent`, `run_workflow`), choose from the allowed list:
 
 - **Haiku** — mechanics: enumerating variants, format checks, many oracle calls, draft hypotheses.
 - **Sonnet** — transcription, IR, sandbox code, standard proofs that follow a known scheme.

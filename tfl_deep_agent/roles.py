@@ -11,8 +11,9 @@ its own subset of the P1 tool layer and its own model (``settings.json``
 | ir_builder   | ir-builder        | IR, words                                  |
 | prover       | prover            | theory, class oracles, words, IR           |
 | critic       | critic            | class oracles, theory, words, IR           |
-| lean         | lean-formalizer   | lean (P6), theory                          |
+| lean         | lean-formalizer   | lean, theory                               |
 | coder        | coder             | built-in ``execute`` + /workspace files    |
+|              |                   | (only with a sandbox; else not built, P5)  |
 | general      | general-purpose   | theory only (replaces deepagents' default) |
 
 ``general`` exists only because deepagents adds a ``general-purpose`` subagent
@@ -124,8 +125,9 @@ ROLES: dict[str, Role] = {
         key="lean", name="lean-formalizer",
         description=(
             "Writes the Lean 4 proof body for a theorem statement fixed by lean_statement and "
-            "retries with lean_check until it type-checks or the attempt limit is reached "
-            "(the Lean tools arrive in phase P6)."),
+            "retries with lean_check until it type-checks or the attempt limit is reached. "
+            "Returns the lean_check evidence id; a proved check for the task's IR is a verified "
+            "basis for its side of the verdict."),
         prompt="lean", tool_groups=("lean", "theory"),
     ),
     "coder": Role(

@@ -47,6 +47,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -219,15 +220,27 @@ def __getattr__(name: str) -> Any:  # lazy: deepagents / langchain are the optio
 
 
 def make_backend(*, default: Any = None, routes: Mapping[str, Any] | None = None,
-                 skills_dir: Path | str | None = None) -> Any:
+                 skills_dir: Path | str | None = None, sandbox: Any = None) -> Any:
     """``CompositeBackend``: ``/skills/`` -> the package's skills directory,
     read-only; everything else -> ``default`` (a ``StateBackend``: scratch
-    files in the graph state). ``routes`` adds more prefixes (P3 ``/input/``,
-    P5 the sandbox's ``/workspace/``)."""
+    files in the graph state). ``routes`` adds more prefixes.
+
+    ``sandbox`` (P5, a ``DockerSandbox`` or any deepagents
+    ``SandboxBackendProtocol``): ``/workspace/`` is routed into the container
+    (``sandbox.workspace.WorkspaceBackend``) and the default becomes
+    ``SandboxedStateBackend`` -- still the state for files, the sandbox for
+    ``execute`` -- so deepagents registers ``execute``; the task file under
+    ``/input/`` stays read-only through that default."""
     from deepagents.backends import CompositeBackend, StateBackend
 
     ro = _readonly_backend_class()(root_dir=str(skills_dir or SKILLS_DIR), virtual_mode=True)
     all_routes: dict[str, Any] = {SKILLS_ROUTE: ro}
+    if sandbox is not None:
+        from .sandbox.workspace import WORKSPACE_ROUTE, SandboxedStateBackend, WorkspaceBackend
+
+        all_routes[WORKSPACE_ROUTE] = WorkspaceBackend(sandbox)
+        if default is None:
+            default = SandboxedStateBackend(sandbox)
     all_routes.update(routes or {})
     return CompositeBackend(default=default if default is not None else StateBackend(), routes=all_routes)
 
@@ -242,6 +255,125 @@ def readonly_permissions(prefixes: Iterable[str] = (SKILLS_ROUTE, INPUT_ROUTE)) 
         root = p.rstrip("/")
         paths += [root, f"{root}/**"]
     return [FilesystemPermission(operations=["write"], paths=paths, mode="deny")]
+
+
+def backend_can_execute(backend: Any) -> bool:
+    """deepagents would register a working ``execute`` for ``backend``
+    (``middleware.filesystem.supports_execution``)."""
+    from deepagents.middleware.filesystem import supports_execution
+
+    return bool(supports_execution(backend))
+
+
+def permissions_for(backend: Any) -> list[Any]:
+    """The write-deny rules that fit ``backend``.
+
+    Without execution: :func:`readonly_permissions` (``/skills`` and
+    ``/input``, roots and contents). deepagents refuses rules next to an
+    execution backend unless every rule path starts with a route prefix of the
+    ``CompositeBackend`` (``FilesystemMiddleware._set_permissions``), so then
+    only ``<route>/**`` for the read-only routes the backend has
+    (``/skills/``, and ``/input/`` when routed); ``/input/`` in the state is
+    protected by ``SandboxedStateBackend`` itself, and both routed backends
+    refuse writes on their own."""
+    if not backend_can_execute(backend):
+        return readonly_permissions()
+    from deepagents.middleware.filesystem import FilesystemPermission
+
+    routes = getattr(backend, "routes", None) or {}
+    paths = [f"{p.rstrip('/')}/**" for p in (SKILLS_ROUTE, INPUT_ROUTE) if p in routes]
+    return [FilesystemPermission(operations=["write"], paths=paths, mode="deny")] if paths else []
+
+
+# ---------------------------------------------------------------------------
+# Sandbox (P5): which run has ``execute``
+# ---------------------------------------------------------------------------
+
+#: ``create_tfl_agent(sandbox=...)`` value that opens a Docker sandbox when
+#: Docker and the ``tfl-sandbox`` image are there (the container starts lazily,
+#: on the first file or execute call)
+SANDBOX_AUTO = "auto"
+
+
+@dataclasses.dataclass
+class SandboxInfo:
+    """The code sandbox of one agent build (``graph.tfl_sandbox``).
+
+    ``available`` False: deepagents gets no execution backend, so ``execute``
+    is not registered; the ``coder`` role is left out and the system prompt
+    says why (``reason``). ``owned``: :func:`create_tfl_agent` opened the
+    sandbox (``sandbox="auto"``) and :meth:`close` removes its container
+    (the ``DockerSandbox`` finalizer also does at garbage collection / exit).
+    A sandbox the caller passed is the caller's to close."""
+
+    available: bool
+    reason: str = ""
+    sandbox: Any = None
+    owned: bool = False
+    kind: str | None = None
+
+    @property
+    def id(self) -> str | None:
+        return str(getattr(self.sandbox, "id", "")) or None if self.sandbox is not None else None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"available": self.available, "reason": self.reason, "id": self.id, "kind": self.kind,
+                "owned": self.owned}
+
+    def close(self) -> None:
+        if self.owned and self.sandbox is not None:
+            close = getattr(self.sandbox, "close", None)
+            if callable(close):
+                close()
+
+
+def resolve_sandbox(sandbox: Any, *, backend: Any = None, run_id: str | None = None) -> SandboxInfo:
+    """What :func:`create_tfl_agent`'s ``sandbox`` means.
+
+    * ``None`` -- no sandbox configured (the library default: building an
+      agent never touches Docker);
+    * ``False`` -- switched off;
+    * ``"auto"`` / ``True`` -- a ``DockerSandbox`` when
+      ``sandbox_status()`` says Docker, the daemon and the image are there
+      (not started yet), else unavailable with that reason;
+    * a ``SandboxBackendProtocol`` instance (a started ``DockerSandbox``, a
+      test double) -- used as is.
+
+    An explicit ``backend`` decides by itself (``backend_can_execute``);
+    passing both is an error."""
+    if backend is not None:
+        if sandbox not in (None, False):
+            raise ValueError("pass either backend= (a complete backend) or sandbox=, not both")
+        if backend_can_execute(backend):
+            return SandboxInfo(True, sandbox=getattr(backend, "default", backend), kind="backend")
+        return SandboxInfo(False, "the backend given to create_tfl_agent cannot execute commands")
+    if sandbox is None:
+        return SandboxInfo(False, "no code sandbox was configured for this run")
+    if sandbox is False:
+        return SandboxInfo(False, "the code sandbox is switched off for this run")
+    if sandbox is True or sandbox == SANDBOX_AUTO:
+        from .sandbox import docker_backend
+
+        ok, why = docker_backend.sandbox_status()
+        if not ok:
+            return SandboxInfo(False, f"Docker sandbox unavailable: {why}")
+        sb = docker_backend.DockerSandbox(run_id=run_id, auto_start=True)
+        return SandboxInfo(True, sandbox=sb, owned=True, kind="docker")
+    from .sandbox.workspace import is_sandbox
+
+    if is_sandbox(sandbox):
+        kind = "docker" if type(sandbox).__name__ == "DockerSandbox" else type(sandbox).__name__
+        return SandboxInfo(True, sandbox=sandbox, kind=kind)
+    raise TypeError(f"sandbox must be None, False, True, {SANDBOX_AUTO!r} or a SandboxBackendProtocol, "
+                    f"not {type(sandbox).__name__}")
+
+
+def close_sandbox(graph: Any) -> None:
+    """Remove the container of a sandbox :func:`create_tfl_agent` opened
+    itself (``sandbox="auto"``); a no-op otherwise."""
+    info = getattr(graph, "tfl_sandbox", None)
+    if isinstance(info, SandboxInfo):
+        info.close()
 
 
 # ---------------------------------------------------------------------------
@@ -584,11 +716,25 @@ def make_submit_report_tool() -> Any:
 # The agent
 # ---------------------------------------------------------------------------
 
+def sandbox_prompt_line(info: SandboxInfo | Mapping[str, Any]) -> str:
+    """The "This run" line about the code sandbox."""
+    available = info.available if isinstance(info, SandboxInfo) else bool(info.get("available"))
+    reason = info.reason if isinstance(info, SandboxInfo) else str(info.get("reason") or "")
+    if available:
+        return ("- Code sandbox: available (Docker, no network, the pipeline packages read-only at /opt/tfl). "
+                "Only the `coder` role runs code (`execute`, files under /workspace/); you have no `execute`. Sandbox "
+                "output is at most `well_formed` evidence and never the basis of the verdict.")
+    return (f"- Code sandbox: NOT available in this run ({reason}). There is no `execute` tool and no `coder` "
+            "role: do not plan code runs; use the oracle tools, and say in the report that no code was run.")
+
+
 def main_system_prompt(settings: Mapping[str, Any], *, template: str = "full_proof",
-                       hitl: Mapping[str, bool] | None = None) -> str:
+                       hitl: Mapping[str, bool] | None = None,
+                       sandbox: SandboxInfo | Mapping[str, Any] | None = None,
+                       orchestration: bool = False) -> str:
     """``prompts/main.md`` plus the run's own parameters (template, budget,
-    allowed models, HITL points). Static per run, so prompt caching keeps
-    working."""
+    allowed models, HITL points, the sandbox, the orchestration tools).
+    Static per run, so prompt caching keeps working."""
     budget = _section(settings, "budget")
     models = _section(settings, "models")
     limits = _section(settings, "limits")
@@ -607,7 +753,9 @@ def main_system_prompt(settings: Mapping[str, Any], *, template: str = "full_pro
             "edited text / IR; on rejection fix the formalization (intake / ir-builder again, with "
             "the comment) before any proof. An IR you validate yourself with validate_ir is reviewed "
             "the same way. Only oracle results for the IR approved at HITL 1 count for the verdict "
-            "(checked by code): after an edit re-run the checks you rely on against the new IR.")
+            "(checked by code): after an edit re-run the checks you rely on against the new IR. An IR "
+            "built in a workflow step or by a spawned subagent is NOT reviewed: build the IR with the "
+            "ir-builder role (task), or call validate_ir on such an IR yourself before any proof.")
     if points.get("report"):
         lines.append(
             "- HITL 2 is on: a human reviews submit_report before it is accepted. They may approve "
@@ -631,6 +779,18 @@ def main_system_prompt(settings: Mapping[str, Any], *, template: str = "full_pro
                 limits.get("max_model_calls"), limits.get("max_tool_calls"), limits.get("max_parallel"),
                 "; subagents are disabled (max_spawn_depth = 0)" if int(limits.get("max_spawn_depth", 1)) < 1
                 else ""))
+    if orchestration and int(limits.get("max_spawn_depth", 1)) < 1:
+        lines.append(
+            "- Orchestration tools: only `budget_status` (free). `spawn_subagent` and `run_workflow` are "
+            "not available in this run (max_spawn_depth = 0).")
+    elif orchestration:
+        lines.append(
+            "- Orchestration tools: `budget_status` (free), `spawn_subagent` (one ad-hoc agent with the "
+            "model, tools and budget you choose), `run_workflow` (a plan of steps, independent ones in "
+            "parallel, each step with its own model and budget; `dry_run` checks a plan first). Their "
+            "answers are not evidence: cite the evidence ids of the oracle calls they return.")
+    if sandbox is not None:
+        lines.append(sandbox_prompt_line(sandbox))
     return "\n".join(lines) + "\n"
 
 
@@ -666,8 +826,35 @@ def create_tfl_agent(
     evidence: Any = None,
     hitl: Any = None,
     task_source: Mapping[str, Any] | None = None,
+    sandbox: Any = None,
+    orchestration: bool = True,
 ) -> Any:
     """Build the TFL Deep Agent graph.
+
+    Orchestration (P4, ``orchestration=True``): the main agent gets
+    ``spawn_subagent``, ``run_workflow`` and ``budget_status``
+    (``orchestration/spawn.py``) over one ``OrchestrationContext`` with the
+    run's settings, model factory, budget scope, evidence ledger and
+    ``RunLimits`` (children count against the run's call limits and charge
+    allocations under the run's budget). Tools of the same name in
+    ``extra_tools`` replace them. The context is ``graph.tfl_orchestration``.
+
+    Sandbox (P5, ``sandbox=``; :func:`resolve_sandbox`): ``None`` (default)
+    or ``False`` -- no sandbox; ``"auto"`` / ``True`` -- a ``DockerSandbox``
+    if Docker and the image are there; or a ``SandboxBackendProtocol``
+    instance. With a sandbox, :func:`make_backend` routes ``/workspace/`` into
+    it and ``execute`` is registered; only the ``coder`` role keeps it (every
+    other agent has it filtered out of its requests and refused at dispatch).
+    Without one, ``execute`` is not registered, the ``coder`` role is left out
+    and the system prompt says that no sandbox is available and why. An
+    explicit ``backend=`` decides by itself whether it executes.
+    ``graph.tfl_sandbox`` is the :class:`SandboxInfo`; :func:`close_sandbox`
+    removes a container opened by ``"auto"``.
+
+    Lean (P6): the ``lean`` tool group (``lean_statement``, ``lean_check``)
+    is part of the main agent's tools and of the ``lean-formalizer`` role; a
+    ``lean_check`` with status ``proved`` for the task's IR is a ``verified``
+    basis for its side of the verdict (R-Lean, :func:`verdict_gate`).
 
     Evidence (``evidence=``): an ``evidence.ledger.EvidenceLedger`` makes every
     stack (main and each role) record its tool calls into it
@@ -760,13 +947,20 @@ def create_tfl_agent(
                          "pass checkpointer=..., or hitl=False")
     scope_cm, node = _budget_scope(budget, cfg, budget_options)
     evidence_cm, ledger = _evidence_scope(evidence)
-    with scope_cm, evidence_cm:
-        graph = _build_agent(
-            cfg, model_factory=model_factory, checkpointer=checkpointer, middleware=middleware,
-            subagent_middleware=subagent_middleware, interrupt_on=interrupt_on, backend=backend,
-            template=template, roles=roles, extra_tools=extra_tools, store=store, name=name, debug=debug,
-            hitl=points, evidence_ledger=ledger, task_source=task_source)
-    for attr, value in (("tfl_budget", node), ("tfl_evidence", ledger), ("tfl_hitl", points)):
+    sandbox_info = resolve_sandbox(sandbox, backend=backend, run_id=name)
+    try:
+        with scope_cm, evidence_cm:
+            graph = _build_agent(
+                cfg, model_factory=model_factory, checkpointer=checkpointer, middleware=middleware,
+                subagent_middleware=subagent_middleware, interrupt_on=interrupt_on, backend=backend,
+                template=template, roles=roles, extra_tools=extra_tools, store=store, name=name, debug=debug,
+                hitl=points, evidence_ledger=ledger, task_source=task_source, sandbox=sandbox_info,
+                orchestration=orchestration)
+    except BaseException:
+        sandbox_info.close()  # a container opened for a build that failed
+        raise
+    for attr, value in (("tfl_budget", node), ("tfl_evidence", ledger), ("tfl_hitl", points),
+                        ("tfl_sandbox", sandbox_info)):
         try:
             setattr(graph, attr, value)
         except (AttributeError, TypeError):  # pragma: no cover - a graph class without __dict__
@@ -860,7 +1054,8 @@ def _build_agent(
     interrupt_on: Mapping[str, Any] | None, backend: Any, template: str, roles: Sequence[str] | None,
     extra_tools: Sequence[Any], store: Any, name: str, debug: bool,
     hitl: Mapping[str, bool] | None = None, evidence_ledger: Any = None,
-    task_source: Mapping[str, Any] | None = None,
+    task_source: Mapping[str, Any] | None = None, sandbox: SandboxInfo | None = None,
+    orchestration: bool = True,
 ) -> Any:
     from deepagents import create_deep_agent
     from langchain.agents.middleware import TodoListMiddleware
@@ -873,8 +1068,13 @@ def _build_agent(
     if "general" not in role_keys:
         role_keys.append("general")  # always replace deepagents' default general-purpose agent
 
+    sandbox = sandbox if sandbox is not None else resolve_sandbox(None, backend=backend)
+    if not sandbox.available:
+        # no execution backend: no execute, and no role that exists only to run code
+        role_keys = [r for r in role_keys if not ROLES[r].allow_sandbox]
     limits = RunLimits.from_settings(cfg)
-    backend = backend if backend is not None else make_backend()
+    if backend is None:
+        backend = make_backend(sandbox=sandbox.sandbox if sandbox.available else None)
     models: dict[str, Any] = {}
 
     def model_for(role_key: str) -> Any:
@@ -917,22 +1117,28 @@ def _build_agent(
         if points.get("report"):
             all_interrupts[SUBMIT_REPORT] = hitl_mod.report_interrupt_config(
                 evidence_ledger, formalization_on=bool(points.get("formalization")))
-        if points.get("execute"):
+        if points.get("execute") and sandbox.available:
             # inherited by every declarative subagent; only the coder has execute
+            # (no sandbox: execute is not registered, nothing to interrupt)
             all_interrupts["execute"] = hitl_mod.execute_interrupt_config()
     all_interrupts.update(interrupt_on or {})
     main_mw = [TodoListMiddleware(), call_limit_middleware(limits, role="main"), *main_mw,
                exclude_tools_middleware(SANDBOX_ONLY_TOOLS), *hitl_mw, report_gate_middleware()]
     main_mw = _with_budgeted_summarization(main_mw, model_for("main"), backend)
 
+    extra = list(extra_tools)
+    orch_ctx, orch_tools = _orchestration_tools(cfg, factory, limits, evidence_ledger, enabled=orchestration,
+                                                taken={getattr(t, "name", None) for t in extra})
     graph = create_deep_agent(
         model=model_for("main"),
-        tools=[*main_tools(), *extra_tools],
-        system_prompt=main_system_prompt(cfg, template=template, hitl=points),
+        tools=[*main_tools(), *orch_tools, *extra],
+        system_prompt=main_system_prompt(cfg, template=template, hitl=points, sandbox=sandbox,
+                                         orchestration=bool(orch_tools) or any(
+                                             getattr(t, "name", None) in _orchestration_names() for t in extra)),
         middleware=main_mw,
         subagents=subagents,
         skills=skills_sources,
-        permissions=readonly_permissions(),
+        permissions=permissions_for(backend),
         backend=backend,
         interrupt_on=all_interrupts or None,
         checkpointer=checkpointer,
@@ -940,11 +1146,42 @@ def _build_agent(
         name=name,
         debug=debug,
     )
-    try:
-        graph.tfl_limits = limits
-    except (AttributeError, TypeError):  # pragma: no cover
-        pass
+    for attr, value in (("tfl_limits", limits), ("tfl_orchestration", orch_ctx)):
+        try:
+            setattr(graph, attr, value)
+        except (AttributeError, TypeError):  # pragma: no cover
+            pass
     return graph
+
+
+def _orchestration_names() -> tuple[str, ...]:
+    from .orchestration.spawn import ORCHESTRATION_TOOLS
+
+    return tuple(ORCHESTRATION_TOOLS)
+
+
+def _orchestration_tools(cfg: Mapping[str, Any], factory: Any, limits: RunLimits, evidence_ledger: Any, *,
+                         enabled: bool, taken: set[Any]) -> tuple[Any, list[Any]]:
+    """``(OrchestrationContext | None, tools)`` for the main agent (P4).
+
+    The context shares the run's ``RunLimits`` (children count against the
+    same call limits and depth) and evidence ledger, and takes the budget of
+    the enclosing ``use_budget`` scope -- :func:`create_tfl_agent` builds inside
+    it, so allocations are children of the run's budget node (a live factory
+    without a budget is refused before this, by :func:`create_tfl_agent`).
+    Names already in ``taken`` (the caller's ``extra_tools``) are left to the
+    caller's tools. With ``limits.max_spawn_depth`` < 1 only ``budget_status``
+    is bound: every ``spawn_subagent`` / ``run_workflow`` call would be refused."""
+    if not enabled:
+        return None, []
+    from .orchestration.spawn import STATUS_TOOL, OrchestrationContext, make_orchestration_tools
+
+    ctx = OrchestrationContext.create(cfg, model_factory=factory, budget=None,
+                                      evidence=evidence_ledger if evidence_ledger is not None else False,
+                                      limits=limits)
+    names = [n for n in _orchestration_names() if n not in taken
+             and (limits.max_spawn_depth >= 1 or n == STATUS_TOOL)]
+    return ctx, make_orchestration_tools(ctx, names=names) if names else []
 
 
 def _with_budgeted_summarization(mw: list[Any], model: Any, backend: Any) -> list[Any]:
@@ -1084,6 +1321,15 @@ def _classify(entry: Mapping[str, Any], lang: str, verdict_k: int | None,
     tool, trust = entry.get("tool"), entry.get("trust")
     data = entry.get("data") or {}
     args = entry.get("args") or {}
+    if tool == "lean_check":
+        # R-Lean (docs/VERDICT_POLICY.md): a kernel-checked proof of the statement
+        # code generated from this task's IR (lean_statement) is a verified basis
+        # for its side; the tool already gives "verified" only for status proved
+        # with standard axioms. The IR binding is the fingerprint rule of verdict_gate.
+        if (lang in ("reg", "cfl", "dcfl") and data.get("cls") == lang and data.get("status") == "proved"
+                and trust == "verified" and data.get("side") in ("constructive", "destructive")):
+            return [(str(data["side"]), "verified")]
+        return []
     if lang == "reg":
         if tool == "dfa_vs_ir":
             return [("constructive", trust)]
@@ -1735,6 +1981,10 @@ def scripted_model_class() -> type:
     return _SCRIPTED_CLASS
 
 
+#: mock-script keys of P4 children (orchestration/spawn.py NAME_PATTERN after the prefix)
+_SCRIPT_CHILD_KEY = re.compile(r"^(spawn|workflow):[a-z0-9][a-z0-9_-]{0,47}$")
+
+
 def load_mock_script(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     """Read and check a mock script: ``{"models": {role_key: [reply, ...]},
     "defs"?: {...}, "task"?: str, "template"?: str, "description"?: str}``."""
@@ -1753,9 +2003,11 @@ def load_mock_script(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict) or not isinstance(data.get("models"), dict) or not data["models"]:
         raise ScriptError(f"mock script {where}: needs a non-empty 'models' object {{role: [replies]}}")
     known = set(ROLES) | {"main"}
-    bad = sorted(set(data["models"]) - known)
+    # P4: an ad-hoc agent is scripted as "spawn:<name>", a workflow step as "workflow:<step id>"
+    bad = sorted(k for k in data["models"] if k not in known and not _SCRIPT_CHILD_KEY.match(str(k)))
     if bad:
-        raise ScriptError(f"mock script {where}: unknown role(s) {bad}; known: {sorted(known)}")
+        raise ScriptError(f"mock script {where}: unknown role(s) {bad}; known: {sorted(known)} "
+                          "and spawn:<name> / workflow:<step id>")
     for role, replies in data["models"].items():
         if not isinstance(replies, list) or not all(isinstance(r, dict) for r in replies):
             raise ScriptError(f"mock script {where}: models.{role} must be a list of reply objects")
