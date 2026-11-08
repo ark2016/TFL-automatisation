@@ -606,6 +606,32 @@ def _task_definition(ir_in: dict[str, Any]) -> tuple[dict[str, Any], str | None,
 _ARROWS = ("::=", "->", "=>", "→", "⟶", "⇒")
 
 
+def _strip_outer_parens(pattern: str) -> str:
+    """Drop parentheses that enclose the whole pattern, ``((ab)*a|b)`` ->
+    ``(ab)*a|b``: they group the whole expression and change no word, and the
+    ir-builder often adds them to a regex the task writes without them. A pair
+    is outer only if the ``(`` at 0 closes at the last character; escaped
+    ``\\(`` / ``\\)`` are not grouping."""
+    while len(pattern) >= 2 and pattern[0] == "(" and pattern[-1] == ")" and not pattern.startswith("(?"):
+        depth, i = 0, 0
+        while i < len(pattern):
+            c = pattern[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0 and i != len(pattern) - 1:
+                    return pattern
+            i += 1
+        if depth != 0 or pattern[-2] == "\\":
+            return pattern
+        pattern = pattern[1:-1]
+    return pattern
+
+
 def _definition_in_source_text(ir: Mapping[str, Any], regex: str | None,
                                grammar: Mapping[str, Any] | None) -> bool:
     """Whether the IR's definition occurs in its ``source_text`` (whitespace
@@ -619,7 +645,7 @@ def _definition_in_source_text(ir: Mapping[str, Any], regex: str | None,
         return False
     norm = re.sub(r"\s+", "", text)
     if regex is not None:
-        pattern = re.sub(r"\s+", "", regex)
+        pattern = _strip_outer_parens(re.sub(r"\s+", "", regex))
         return bool(pattern) and pattern in norm
     if grammar is None:
         return False

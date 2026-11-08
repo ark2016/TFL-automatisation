@@ -3199,3 +3199,16 @@ reg-04 run cited `regex_to_dfa` and lost a level). Not done here (owned by anoth
 Tests: `test_reports.py` pins the new order, the answer box, the callouts, the marks and their spoof-proofing, the
 construction objects, `safe_block`, `<details>` only in the appendix, KaTeX; `test_hitl.py` no longer needs the
 old "↳" step line.
+
+## 2026-11-08: second live smoke run (df4a3b9626cb, Haiku, $0.0106)
+
+- Evidence ids: the report cited `toolu_...` ids only, no unknown ids, so the evidence-id check works.
+- Trust was still `bounded_pass`. The ir-builder wrote the task's regex as `((ab)*a|b)`, the task text has
+  `(ab)*a | b`, and `tools/reg._definition_in_source_text` needed the pattern as a substring with whitespace
+  dropped, so `definition_in_source_text` was false. Fix: `_strip_outer_parens` drops parentheses that enclose the
+  whole pattern (one group closing at the last character, not `(?`, escapes skipped) before the substring check.
+  They change no word, so the binding rule (the definition is the task's own) is unchanged. Tests in
+  `test_tools_reg.py`. The run's own record stays as it was.
+- With review mode `formalization` the report is auto-approved, and the label said `--auto-approve`, which the user
+  did not pass. `hitl.AUTO_APPROVED_LABEL`, the renderer's label and the gate note now say "review mode or
+  `--auto-approve`".

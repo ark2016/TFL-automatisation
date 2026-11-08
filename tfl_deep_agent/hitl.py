@@ -108,7 +108,7 @@ RUN_SCHEMA = 1
 #: report, 3 waiting for a human decision (2 is the CLI's usage error)
 EXIT_SUBMITTED, EXIT_NO_REPORT, EXIT_AWAITING = 0, 1, 3
 
-AUTO_APPROVED_LABEL = "auto-approved (--auto-approve): without human review"
+AUTO_APPROVED_LABEL = "auto-approved (review mode or --auto-approve): without human review"
 FORMALIZATION_EDIT_FIELDS = ("transcription", "ir", "class")
 _CLASSES = ("reg", "cfl", "dcfl", "ll")
 

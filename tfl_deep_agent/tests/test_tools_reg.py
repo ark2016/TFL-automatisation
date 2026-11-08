@@ -436,3 +436,16 @@ def test_pattern_instantiation():
     assert reg._instantiate(blocks, "n", 3, 100) == "aaabbb"
     with pytest.raises(ToolInputError):
         reg._parse_pattern("a^n+1", ["a"])
+
+
+@pytest.mark.parametrize(("regex", "text", "found"), [
+    ("((ab)*a|b)", "задан регулярным выражением (ab)*a | b.", True),   # live run df4a3b9626cb
+    ("(ab)*a|b", "задан регулярным выражением ((ab)*a | b).", True),
+    ("(((a|b)))", "выражение a|b", True),
+    ("(a)(b)", "выражение a)(b", False),         # the outer pair is not one group
+    ("(a|b)*", "выражение a|b", False),          # a starred group is not outer parentheses
+    ("(a\)", "выражение a\\", False),           # an escaped ) does not close the group
+    ("((ab)*a|b)", "язык слов с равным числом a и b", False),
+])
+def test_definition_in_source_text_ignores_outer_parentheses(regex: str, text: str, found: bool) -> None:
+    assert reg._definition_in_source_text({"source_text": text}, regex, None) is found

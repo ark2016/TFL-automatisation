@@ -363,7 +363,7 @@ def test_review_marks(value, decision, reviewed):
 
 def test_review_marks_in_the_report():
     md = R.render_report(make_result()).markdown
-    assert "**Без проверки человеком** (утверждено автоматически, `--auto-approve`)." in md
+    assert "**Без проверки человеком** (утверждено автоматически: режим подтверждений или `--auto-approve`)." in md
     edited = R.render_report(make_result(), human_review={"decision": "edit", "edited_fields": ["verdict"]})
     assert "утверждён с правками; изменённые поля: `verdict`" in edited.markdown
     assert R.NO_HUMAN_REVIEW_MARK not in edited.markdown.lower()

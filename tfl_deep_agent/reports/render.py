@@ -629,7 +629,7 @@ def normalize_review(value: Any, *, status: str | None = None) -> dict[str, Any]
         "approved": f"Проверено человеком{who}{when}: отчёт утверждён.",
         "edited": (f"Проверено человеком{who}{when}: отчёт утверждён с правками; изменённые поля: "
                    + (", ".join(_code(f) for f in edited) if edited else "не указаны") + "."),
-        "auto_approved": "**Без проверки человеком** (утверждено автоматически, `--auto-approve`).",
+        "auto_approved": "**Без проверки человеком** (утверждено автоматически: режим подтверждений или `--auto-approve`).",
         "rejected": ("**Без проверки человеком**: черновик возвращён на доработку"
                      + (f" с замечанием: {_one_line(comment, 300)}" if comment else "") + "."),
         "awaiting": "**Без проверки человеком**: черновик ожидает решения человека (HITL 2).",

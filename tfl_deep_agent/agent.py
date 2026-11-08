@@ -1542,7 +1542,7 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
                if not _task_definition_dfa_is_bound(e, ir_named=ir_named, ir_human_approved=ir_human)]
     if unbound:
         why = ("HITL 1 is off" if formalization is None else
-               "the IR was auto-approved (--auto-approve)" if formalization.get("auto") else
+               "the IR was auto-approved (review mode or --auto-approve)" if formalization.get("auto") else
                "its definition does not occur in the IR's source_text" if ir_named else "no IR is named")
         gate.append(f"regex_to_dfa(ir=...) {unbound} is a verified basis only for the task's own definition: a "
                     "human-approved IR at HITL 1 whose source text holds the regex / grammar; here "
