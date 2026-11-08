@@ -46,8 +46,9 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
   use scripted / fake chat models only. `tfl-deep` never loads `.env`.
 - TFL Deep Agent settings and budget: `tfl_deep_agent/settings.json` (gitignored; defaults = `settings.example.json`;
   `$TFL_DEEP_SETTINGS` or `--settings` point elsewhere; TFL Lab edits it via `/api/deep/settings`). Budget defaults:
-  `per_task_usd` 5.00, `per_day_usd` 20.00, `per_subagent_max_usd` 2.00, `reserve_for_report_usd` 0.30, checked before
-  every model call (`tfl_deep_agent/middleware/budget.py`). The day's spend log is
+  `per_task_usd` 10.00 (user, 2026-11-08), `per_day_usd` 20.00, `per_subagent_max_usd` 2.00, `reserve_for_report_usd`
+  0.30, checked before every model call (`tfl_deep_agent/middleware/budget.py`); each call's `max_tokens` is derived
+  from what its scope has left (capped by the role ceiling, refused below 4096 tokens). The day's spend log is
   `.tfl_lab_runs/deep_spend_log.jsonl` (`$TFL_DEEP_RUNS_DIR` moves the runs dir), shared by the CLI and TFL Lab.
   Changing the money limits or turning a HITL point off is the user's decision.
 - `TFL_FORMALIZATION=1` (also `true`/`yes`/`on`) enables the Lean formalization step (`agent_system` builds a fixed theorem statement from the IR and asks its formalizer for only the proof body; `cfl_system`/`dcfl_system` run `lean_formalize_node`; `ll_system` has no Lean path) by default for every
