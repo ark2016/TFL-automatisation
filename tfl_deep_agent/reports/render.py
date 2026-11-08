@@ -65,6 +65,8 @@ from typing import Any
 
 from agent_system.lib.renderer import _TRUST_LABELS_RU, _esc
 
+from . import diagrams as _diagrams
+
 __all__ = [
     "EVIDENCE_BLOCK_TITLE",
     "MARK",
@@ -733,6 +735,16 @@ class _Ctx:
     task: str
     integrity: list[str] | None = None
     usage: dict[str, list[str]] = dataclasses.field(default_factory=dict)
+    # code-made DOT source -> inline SVG ("" when dot is unavailable): only these fences become pictures
+    diagrams: dict[str, str] = dataclasses.field(default_factory=dict)
+
+    def diagram(self, dot: str | None, caption: str) -> str | None:
+        """A ```` ```dot ```` block for a code-made automaton, registered so the HTML draws it."""
+        if not dot:
+            return None
+        if dot not in self.diagrams:
+            self.diagrams[dot] = _diagrams.dot_to_svg(dot) or ""
+        return f"**{caption}:**\n\n```dot\n{dot}\n```"
 
     def use(self, ids: Iterable[str], where: str) -> None:
         for i in ids:
@@ -1031,6 +1043,7 @@ def _lemmas_section(ctx: _Ctx, lemmas_out: list[dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 
 _DFA_TOOLS = ("regex_to_dfa", "dfa_vs_ir", "run_dfa", "nerode_probe")
+_DPDA_TOOLS = ("dpda_vs_ir", "dpda_run")
 _GRAMMAR_TOOLS = ("grammar_vs_ir", "input_grammar_cfg", "cyk", "ll_table", "first_follow", "ll_parse")
 _MAX_TABLE_ROWS = 40
 
@@ -1154,6 +1167,15 @@ def _ledger_objects(ctx: _Ctx, vt: Mapping[str, Any], model_text: str = "") -> l
                 seen.add("dfa")
                 n = len(dfa.get("states") or dfa.get("transitions") or [])
                 blocks.append(f"**Таблица переходов ДКА** ({n} состояний, {src}):\n\n{table}")
+                pic = ctx.diagram(_diagrams.dfa_to_dot(dfa), "Диаграмма состояний ДКА")
+                if pic:
+                    blocks.append(pic)
+        if "dpda" not in seen and tool in _DPDA_TOOLS and isinstance(args.get("dpda"), Mapping):
+            pic = ctx.diagram(_diagrams.dpda_to_dot(args["dpda"]),
+                              f"Диаграмма ДМП-автомата ({src}; на дуге: буква, вершина стека / что кладётся)")
+            if pic:
+                seen.add("dpda")
+                blocks.append(pic)
         g = args.get("grammar")
         if g is None and isinstance(args.get("ir"), Mapping):
             g = args["ir"].get("grammar")
@@ -1534,7 +1556,7 @@ _H_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _CALLOUT_RE = re.compile(r"^\[!(\w+)\]\s*(.*)$")
 
 
-def markdown_to_html(md: str, *, details: bool = False) -> str:
+def markdown_to_html(md: str, *, details: bool = False, diagrams: Mapping[str, str] | None = None) -> str:
     """The subset of Markdown the templates and the renderer produce:
     headings, paragraphs (line breaks kept), ``-`` / ``1.`` lists with
     indented continuation lines, tables, fenced code, ``>`` quotes and
@@ -1543,7 +1565,9 @@ def markdown_to_html(md: str, *, details: bool = False) -> str:
     ``` ` * # > ```. Everything is HTML-escaped; ``$…$`` is left for KaTeX.
     With ``details`` (the code-made appendix only, never model text) the
     lines ``<details><summary>…</summary>`` and ``</details>`` open and close
-    a collapsed block."""
+    a collapsed block. A ```` ```dot ```` fence whose text is a key of
+    ``diagrams`` (code-made DOT, see :mod:`.diagrams`) becomes its inline SVG;
+    any other ``dot`` fence stays code."""
     lines = md.replace("\r\n", "\n").split("\n")
     out: list[str] = []
     i, n = 0, len(lines)
@@ -1570,6 +1594,10 @@ def markdown_to_html(md: str, *, details: bool = False) -> str:
                 buf.append(lines[i])
                 i += 1
             i += 1
+            svg = (diagrams or {}).get(chr(10).join(buf)) if lang == "dot" else None
+            if svg:
+                out.append(f'<figure class="diagram">{svg}</figure>')
+                continue
             cls = f' class="language-{_esc(lang)}"' if lang else ""
             out.append(f"<pre><code{cls}>{_esc(chr(10).join(buf))}</code></pre>")
             continue
@@ -1672,6 +1700,8 @@ font-size:13.5px;color:var(--fg)}
 .generated h2{border-top:none;padding-top:.4rem;font-size:1.05rem}
 .generated table{font-size:12.5px}
 details{margin:.8rem 0}summary{cursor:pointer;color:var(--muted)}
+figure.diagram{margin:.6rem 0 1rem;overflow-x:auto;color:var(--fg)}
+figure.diagram svg{max-width:100%;height:auto}figure.diagram svg text{fill:currentColor}
 """
 
 _KATEX = (
@@ -1691,8 +1721,8 @@ _KATEX = (
 _MATH_RE = re.compile(r"\$\$|\\\(|\$[^$\n]{1,200}\$")
 
 
-def _html_page(title: str, body_md: str, evidence_md: str) -> str:
-    body = markdown_to_html(body_md)
+def _html_page(title: str, body_md: str, evidence_md: str, diagrams: Mapping[str, str] | None = None) -> str:
+    body = markdown_to_html(body_md, diagrams=diagrams)
     ev = markdown_to_html(evidence_md, details=True)
     katex = _KATEX if _MATH_RE.search(body_md) else ""
     return (
@@ -1841,7 +1871,7 @@ def render_report(
             "budget": _jsonable(ctx.budget),
         },
     }
-    return RenderedReport(markdown=markdown, html=_html_page(page_title, body_md, evidence_md), data=data)
+    return RenderedReport(markdown=markdown, html=_html_page(page_title, body_md, evidence_md, ctx.diagrams), data=data)
 
 
 def write_report(run_dir: str | os.PathLike[str], result: Mapping[str, Any], **kwargs: Any) -> dict[str, Path]:

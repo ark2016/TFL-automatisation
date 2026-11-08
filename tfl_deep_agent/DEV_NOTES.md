@@ -3212,3 +3212,16 @@ old "↳" step line.
 - With review mode `formalization` the report is auto-approved, and the label said `--auto-approve`, which the user
   did not pass. `hitl.AUTO_APPROVED_LABEL`, the renderer's label and the gate note now say "review mode or
   `--auto-approve`".
+
+## 2026-11-08: state diagrams in the report (user request)
+
+- `reports/diagrams.py`: code builds Graphviz DOT for the automata the cited tool results carry (the DFA of
+  `regex_to_dfa` / `dfa_vs_ir` / `run_dfa` / `nerode_probe`, the DPDA of `dpda_vs_ir` / `dpda_run`) and renders it
+  with the local `dot -Tsvg` (Graphviz on PATH; checked once per process, 15 s timeout). Start arrow, double circles
+  for accepting states, a dashed trap, parallel edges merged (`a, b`; DPDA `a, Z / AZ`). Up to 30 states / 120
+  edges, else only the table.
+- The Markdown gets a ```` ```dot ```` block under the transition table; the HTML draws it as inline SVG only when
+  the fence text is a DOT source the renderer itself made (`_Ctx.diagrams`), so a `dot` fence in model text stays
+  code (Graphviz HTML labels can read local files). The SVG is rejected if it holds script / foreignObject / image /
+  on* / javascript:, and black / white become `currentColor` / none, so it reads in light and dark pages.
+- Without `dot` the HTML shows the DOT source as code; nothing else changes. Tests: `tests/test_diagrams.py`.
