@@ -269,7 +269,7 @@ report are generated from the tool ledger. Your own confidence can only lower th
 | Claim | Evidence | Trust |
 |---|---|---|
 | G is LL(k) for the given k | `ll_table(k=K)` | `verified` if the test passes; `refuted` if the full test (local follow sets) finds a conflict |
-| G is not LL(k) for the given k | `ll_table(k=K)`, a conflict of the full test | settled completely for this k. The ledger records the result as `refuted` because it refutes the claim "G is LL(k)", not this claim (§3, VERDICT_POLICY §1). It supports the negative answer for this k, and says nothing about other k or about L(G) |
+| G is not LL(k) for the given k | `ll_table(k=K)`, a conflict of the full test | settled completely for this k. The ledger records the result as `refuted` because it refutes the claim "G is LL(k)", not this claim (§3, VERDICT_POLICY §1). It supports the negative answer for this k and for every smaller k (an LL(k′) grammar with k′ ≤ k is also LL(k), §3.1), and says nothing about larger k or about L(G) |
 | least k of G | `ll_table(max_k=…)`, `found` | `verified` |
 | G is not LL(k) for any k | `ll_table(max_k=…)` left-recursion certificate | `verified` |
 | G is not LL(k) for k ≤ K | `ll_table(max_k=K)` without a certificate | `bounded_pass` |

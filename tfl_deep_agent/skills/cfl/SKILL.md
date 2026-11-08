@@ -402,7 +402,13 @@ h⁻¹(L) = L′ is an LLM claim. Pumping L′ proves nothing about L if the des
 the cfl-06 failure of §4.3.
 
 1. Describe the image as its own IR L′, preferably in exponent notation so that it gets an exact
-   oracle. Run `validate_ir(cls="cfl", ir=L′, check_tools=True)`.
+   oracle. Do NOT run a main-thread `validate_ir` on L′: every accepted main-thread `validate_ir`
+   goes to HITL 1 as the task's formalization, and the verdict is about L, not about L′. Check L′
+   inside an ir-builder subagent (started with the `task` tool) instead.
+   With HITL 1 on (the default), the verdict gate binds the verdict to the IR approved there, so
+   results computed on L′ count as "another IR" and are excluded. This route then gives `non_cfl`
+   no tool basis: the verdict stays `inconclusive` (≤ 0.40) unless Lean proves it. Use it as an
+   argument for the written proof, and prefer §4.3 (∩ R on the task IR itself) when it applies.
 2. **Check the description.** Compute h on each word yourself.
    - h⁻¹(L), with h: Γ* → Σ*: a word w ∈ Γ* is in h⁻¹(L) exactly when h(w) ∈ L. Label the words
      h(w) with `check_membership(cls="cfl", ir=<task IR>, words=...)`. Then call
@@ -410,11 +416,15 @@ the cfl-06 failure of §4.3.
      from words of L′ and from other words over Γ.
    - h(L), with h: Σ* → Γ*: take words w of L (labelled by the task IR) and call
      `check_membership(cls="cfl", ir=L′, words=<the h(w)>, expected=<True for each>)`. For the
-     other inclusion, give each sampled word u of L′ a preimage w with h(w) = u, and confirm w ∈ L
-     with `check_membership(cls="cfl", ir=<task IR>, words=..., expected=<True for each>)`. Failing
-     to find a preimage is not a refutation when h erases a letter. In that case, first restrict L
-     with ∩ R (§4.3) so that the split of each word is forced.
-   A disagreement is `refuted`: the description is wrong. Agreement is at most `bounded_pass`, and
+     other inclusion, u ∈ h(L) needs only that SOME preimage of u lies in L. Give each sampled word
+     u of L′ a preimage w with h(w) = u and check w ∈ L with
+     `check_membership(cls="cfl", ir=<task IR>, words=...)`. One preimage outside L refutes nothing
+     unless h is injective. For a non-erasing h the preimages of u are finitely many: u ∉ h(L)
+     follows only when ALL of them are outside L. When h erases a letter, the preimages are
+     infinitely many and a failed search is never a refutation. In that case, first restrict L with
+     ∩ R (§4.3) so that the split of each word is forced.
+   A disagreement on the first inclusion (some h(w) with w ∈ L not in L′), or a u all of whose
+   preimages are outside L, is `refuted`: the description is wrong. Agreement is at most `bounded_pass`, and
    it covers only the description.
 3. Prove that L′ is not CFL with §4.1–4.3, and check it with `pump_check_cfl(ir=L′, claim=...)`,
    against L′, not the task IR.
@@ -488,10 +498,13 @@ What each kind of CFL evidence is worth:
   needs an artifact with at least `bounded_pass`, otherwise the result is inconclusive.
 - **`non_cfl`, verified (0.98):** only Lean `proved` in direction `non_cfl`.
 - **`non_cfl`, well-formed (≤ 0.55):** `pump_check_cfl` claim mode with `word_instances` returned
-  `well_formed` (pumping or Ogden, on the task IR or on L′ = L ∩ R). In addition, every unresolved
-  split (`bounds.unresolved_splits`) needs a named exit that split mode did not refute (Step 5,
-  item 5). Closing every split for p = 3, 4 does not raise the cap. A claim with an unresolved
-  split that stays in L for every i is not admissible.
+  `well_formed` (pumping or Ogden, on the task IR or on L′ = L ∩ R). Closing every split for
+  p = 3, 4 does not raise the cap. Note: the gate does NOT read `bounds.unresolved_splits`. It
+  admits a claim-mode `well_formed` result even when some splits stay in L for every i (cfl-12 with
+  plain pumping: 9 of 462 unresolved). That rule is yours to keep, not the gate's: before you submit
+  a `non_cfl` report, every unresolved split must have a named exit that split mode did not refute
+  (Step 5, item 5). If a split stays in L for every i, the argument is wrong for that z. Switch to
+  Ogden or another z, and do not submit.
 - **`non_cfl`, not admissible:** an argument with no tool check, a `refuted` argument, or only a
   failed construction (R1). The result is inconclusive, ≤ 0.40.
 - **Contradiction left open (R3):** inconclusive, ≤ 0.50.
