@@ -140,17 +140,24 @@ gate counts the result against a 'regular' verdict (R3). A `well_formed` `pump_c
    task IR itself (traps.md C, "Transfer").
 3. **Pumping lemma** (§4.1). Write it with the exact quantifiers, and handle **every** split with |xy| ≤ p,
    |y| ≥ 1. Then check it with `pump_check_reg(ir, word="a^p b^p", exit_i=[0, 2])`: `word` is your w(p) as a
-   pattern in p, `exit_i` the exponents your argument uses to leave L. The tool always checks p = 2, 3, 4
-   (VERDICT_POLICY §4); `p_values` only adds larger p. For each p it checks |w(p)| ≥ p and, with an oracle,
-   w(p) ∈ L. Then it pumps **every** split with |xy| ≤ p, |y| ≥ 1 at i = 0, 2..6. The result is at most
-   `well_formed`, so `non_regular` at confidence ≤ 0.55 (VERDICT_POLICY §4 reg/pumping, R6): finitely many p and i
-   never prove the claim for all p. It is `refuted` only when |w(p)| < p or when w(p) ∉ L (exact oracle). A split
-   that keeps x yⁱ z in L for every i in `exit_i` is an **unclosed split**: the result is `not_verified` (no basis),
-   not `refuted`, because the tried i are not all i. Read `data.per_p`: each unclosed split lists `exits_at`, the
-   exponents at which it does leave L; fix the argument and check it again. `exit_i` is the same for every p and
-   every |y|. An argument whose exit depends on p or |y| (reg-10: w = aᵖbᵖ⁺ᵖ!, i = p!/|y| + 1) cannot be checked
-   here and stays unclosed. For such a task re-encode the IR as a predicate and use a Nerode family (method 1). If
-   your argument needs p ≥ p₀, pass `p_min=p₀` (the tool then checks p₀, p₀+1, p₀+2) and say so in the proof.
+   pattern in p, `exit_i` the exponents your argument uses to leave L. The checked p (`data.p_values`) are
+   p = 2, 3, 4 (VERDICT_POLICY §4) when `p_min` ≤ 2, or p_min, p_min+1, p_min+2 when `p_min` > 2, plus every p in
+   `p_values` that is ≥ `p_min`. `p_values` takes 1..12, so with the default `p_min` = 1 it can also add p = 1.
+   For each p it checks |w(p)| ≥ p and, with an oracle, w(p) ∈ L. Then it pumps **every** split with |xy| ≤ p,
+   |y| ≥ 1 at i = 0, 2..6. The result is at most `well_formed`, so `non_regular` at confidence ≤ 0.55
+   (VERDICT_POLICY §4 reg/pumping, R6): finitely many p never prove the claim for all p. `exit_i` is your
+   argument's own claim: on every split some i in `exit_i` gives x yⁱ z ∉ L. The result is `refuted` (exact
+   oracle only) when a stated premise is false at a checked p: |w(p)| < p, w(p) ∉ L, or a split on which x yⁱ z ∈ L
+   for **every** i in `exit_i` (`data.exit_failures`). A refuted claim is no basis, and a cited one blocks the
+   `non_regular` verdict (R2). An "unknown" oracle answer and an approximate oracle never refute. Read
+   `data.per_p`: each split that is not closed lists `exits_at`, the exponents at which it does leave L; fix the
+   argument and check it again. `exit_i` is the same for every p and every |y|. An argument whose exit depends on
+   p or |y| (reg-10: w = aᵖbᵖ⁺ᵖ!, i = p!/|y| + 1) cannot be stated in `exit_i`: given fixed exits instead, the tool
+   checks the claim you stated, and that claim is refuted. For such a task pick a word with a fixed exit where
+   one exists; otherwise accept that `pump_check_reg` cannot check the argument (it gives no basis), re-encode the
+   IR as a predicate and use a Nerode family (method 1). If your argument needs p ≥ p₀, pass `p_min=p₀` (the tool
+   then checks p₀, p₀+1, p₀+2) and say so in the proof; this is sound because every p larger than a pumping length
+   is also a pumping length. Without `p_min`, a split at p = 2 that your argument does not handle can refute it.
    Closing every split is not a sign that L is non-regular: a regular L whose period or pumping length exceeds the
    largest p tried closes them too (`(a⁵)*` with w = a⁵ᵖ and exit 0 closes all of them at p = 2, 3, 4; THEORY §2.0
    has the same point for {a¹⁰}). So before you rely on `pump_check_reg`, try a DFA (`dfa_vs_ir`) on any language
@@ -244,8 +251,9 @@ Source: `agent_system/tz_tfl_agent_system.md` §1.8
 | Lean proof of the IR-generated statement (lean skill; P6 tools) | `lean_check` status `proved` | `verified` | 0.98 |
 | your DFA or regex recognises the task language | `dfa_vs_ir` agreement on ≥ 30 decided words, all words up to `max_len` | `bounded_pass` | 0.85 |
 | the family's sampled pairs are Nerode-distinguishable | `nerode_probe`, every pair separated | `bounded_pass` | 0.85 for non_regular |
-| a pumping argument: w(p) and its exit exponents, checked at p = 2, 3, 4 (with an oracle: w(p) ∈ L and every split; without one: structure only) | `pump_check_reg` | `well_formed` | 0.55 for non_regular |
-| a pumping argument with an unclosed split (stays in L at every claimed exit) | `pump_check_reg` | `not_verified` | no basis; not a refutation |
+| a pumping argument: w(p) and its exit exponents, checked at the p in `data.p_values` (with an oracle: w(p) ∈ L and every split; without one: structure only; when the oracle answers "unknown" for w(p) at every p, e.g. a word longer than the exponent oracle's limit, no split is checked and the result is still `well_formed`, VERDICT_POLICY §4) | `pump_check_reg` | `well_formed` | 0.55 for non_regular |
+| a pumping argument with a split that stays in L at every claimed exit (exact oracle) | `pump_check_reg` | `refuted` | no basis; blocks non_regular when cited (R2) |
+| the same split under an approximate oracle | `pump_check_reg` | `not_verified` | no basis; not a refutation |
 | claimed members / non-members (intersection examples, witness words) | `check_membership` with `expected` | `bounded_pass` / `refuted` | claim check only |
 | a closure argument in prose, with no oracle check | none: the gate has no record for it | no basis: `non_regular` is published as `partial` (R1) | 0.40 |
 | the output of code you ran in the sandbox | `execute` | at most `well_formed`, never a basis for the verdict | supports steps only |
@@ -326,8 +334,9 @@ Source: `agent_system/tz_tfl_agent_system.md` §1.8
 - **reg-05.** Nerode suffixes must be instantiated at the right index (`suffix_at: "larger"`).
 - **Pumping.** Do not choose the split, do not use |vwx| ≤ p, do not use i = 1, and do not treat a finite p or i
   check as proof. `pump_check_reg` checks finitely many p and i, so its result stays `well_formed`; a regular L
-  with a long period ((a⁵)*) closes every split at p = 2, 3, 4 too. An unclosed split is `not_verified`, not
-  `refuted`; an exit that depends on p or |y| (reg-10) cannot be stated, so use a Nerode family on a predicate IR.
+  with a long period ((a⁵)*) closes every split at p = 2, 3, 4 too. A split that stays in L at every claimed exit
+  is `refuted` (exact oracle; approximate: `not_verified`); an exit that depends on p or |y| (reg-10) cannot be
+  stated, so use a fixed-exit word or a Nerode family on a predicate IR.
 - **Closure.** A non-regular subset is not enough. Prove both inclusions, and remember Boolean combinations of
   non-regular parts can be regular.
 - **Artifacts.** Complement only complete DFAs. Tool regex syntax differs from the IR's Python regex

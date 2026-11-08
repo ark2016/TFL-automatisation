@@ -293,7 +293,8 @@ shape of `AnthropicClient.build_request_kwargs` (adaptive thinking plus effort, 
   that IR at HITL 1 and its `source_text` holds the definition; with HITL 1 off or auto-approved (every eval run) it
   counts like `dfa_vs_ir` (`bounded_pass`, 0.85), since the IR may be the model's own formalization.
   `regex_to_dfa` on a regex the model wrote is never a basis. A `pump_check_reg` claim is a destructive basis of at
-  most `well_formed` (`non_regular` ≤ 0.55, R6); an unclosed split makes it `not_verified`, not `refuted`.
+  most `well_formed` (`non_regular` ≤ 0.55, R6); a split that stays in L at every claimed exit (exact oracle)
+  makes it `refuted`, and a cited refuted claim blocks `non_regular`.
   `reg_regex_regular.json` takes the first route (HITL 1 off there, so 0.85).
 - **Templates** (`skills/report-templates/`): `full_proof`, `exam_solution`, `short_verdict` and `lean_appendix`.
   Their structure follows the golden reports in `docs/examples/reg_grammar_SaSb_lean_proved/` and

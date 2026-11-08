@@ -26,11 +26,13 @@ from what the lib returned (docs/VERDICT_POLICY.md):
   it is a bounded check like ``dfa_vs_ir`` (an IR the model wrote may encode a
   natural-language task as a regex of its own).
 * ``pump_check_reg`` -- reg/pumping (§4, R6): a pumping argument for
-  non-regularity instantiated at p = 2, 3, 4 (plus extra p) and checked split by
-  split with the IR's oracle: at most ``well_formed``; ``refuted`` only for a
-  concrete false premise (|w(p)| < p, or w(p) ∉ L by an exact oracle). A split
-  that stays in L at every claimed exit is an unclosed split (``not_verified``,
-  no basis), not a refutation: the argument's exit may depend on p or |y|.
+  non-regularity instantiated at p = 2, 3, 4 (p_min..p_min+2 when p_min > 2) plus
+  the extra p_values >= p_min, and checked split by split with the IR's oracle:
+  at most ``well_formed``; ``refuted`` for a concrete false premise by an exact
+  oracle: |w(p)| < p, w(p) ∉ L, or a split on which x y^i z ∈ L for EVERY i in
+  ``exit_i`` (the argument's own claim "some i in exit_i leaves L" is false at
+  that p). Unknown answers and approximate oracles never refute. ``exit_i`` is
+  fixed for every p and |y|: an exit that depends on them cannot be stated.
 
 The oracle of the IR comes from the shared dispatch
 :func:`tfl_deep_agent.tools.words.oracle_for` (inventory §0, §10), which also
@@ -1238,13 +1240,17 @@ class PumpCheckRegArgs(ToolArgs):
                      "i)."))
     p_values: list[int] = Field(
         default_factory=list, max_length=6,
-        description=(f"EXTRA pumping lengths to try (1..{MAX_PUMP_P}). The tool always checks p = 2, 3, 4 "
-                     "(VERDICT_POLICY §4); larger p find more splits, so add them freely."))
+        description=(f"EXTRA pumping lengths to try (1..{MAX_PUMP_P}). The checked p are p = 2, 3, 4 "
+                     "(VERDICT_POLICY §4) when p_min <= 2, or p_min, p_min+1, p_min+2 when p_min > 2, plus "
+                     "every p here that is >= p_min (with the default p_min = 1 that includes p = 1); a p "
+                     "below p_min is skipped. Larger p find more splits, and every p you add is part of "
+                     "your claim."))
     p_min: int = Field(
         default=1, ge=1, le=MAX_PUMP_P - 2,
-        description=("The least pumping length your argument covers (wlog p >= p0; say so in the proof). "
-                     "With p_min > 2 the tool checks p_min, p_min+1, p_min+2 instead of 2, 3, 4, and skips "
-                     "every p below p_min."))
+        description=("The least pumping length your argument covers (wlog p >= p0; say so in the proof: a "
+                     "larger p is also a pumping length). With p_min > 2 the tool checks p_min, p_min+1, "
+                     "p_min+2 instead of 2, 3, 4, and skips every p below p_min. Without it, a split at "
+                     "p = 2 that your argument does not cover refutes the claim as stated."))
 
     @model_validator(mode="after")
     def _ranges(self) -> PumpCheckRegArgs:
@@ -1381,23 +1387,25 @@ def pump_check_reg(args: PumpCheckRegArgs) -> ToolResult:
     """Check a pumping-lemma argument for NON-regularity (tz §1.5) against the task IR, split by split.
 
     You give the word family w(p) your argument picks, the exit exponents it uses and, if needed,
-    extra pumping lengths or the least p your argument covers (p_min). For p = 2, 3, 4 (always;
-    p_min..p_min+2 when p_min > 2) plus your extra p the tool instantiates w(p), checks
+    extra pumping lengths or the least p your argument covers (p_min). For p = 2, 3, 4
+    (p_min..p_min+2 when p_min > 2) plus every extra p >= p_min the tool instantiates w(p), checks
     |w(p)| >= p and, with the IR's membership oracle, w(p) in L; then it takes EVERY split
     w = xyz with |xy| <= p, |y| >= 1 and pumps x y^i z for i = 0, 2..6. A split is closed when one of
     your exit_i gives a word not in L; data.per_p lists the splits that are not closed, with the
     exponents at which they do leave L (exits_at), so you can fix the argument. exit_i is the same
     at every p and every |y|: an argument whose exit depends on p or |y| (i = p!/|y| + 1) cannot
-    be stated here.
+    be stated here; give a word with a fixed exit where you can, or accept that this tool cannot
+    check the argument.
 
     Trust (VERDICT_POLICY §4 reg/pumping, R6): at most well_formed, which is what the verdict gate
-    needs for a destructive basis: non_regular at confidence <= 0.55. Finitely many p and i never
-    prove the claim for all p and all splits; a regular language whose period exceeds the largest p
-    tried ((a^5)* with w = a^(5p), exit 0) closes every split too. refuted only when a concrete
-    premise is false: |w(p)| < p, or w(p) not in L (exact oracle); a refuted claim is no basis. A
-    split that stays in L at every claimed exit is unclosed: not_verified (no basis), not refuted,
-    since the tried i are not all i. A split on which one of your exit_i is undecided (unknown
-    oracle answer) is neither. Without an
+    needs for a destructive basis: non_regular at confidence <= 0.55. Finitely many p never prove
+    the claim for all p; a regular language whose period exceeds the largest p tried ((a^5)* with
+    w = a^(5p), exit 0) closes every split too. refuted when a concrete premise is false by an exact
+    oracle: |w(p)| < p, w(p) not in L, or a split on which x y^i z is in L for EVERY i in exit_i --
+    your claim says one of them leaves L, and the oracle shows none does at that p. A refuted claim
+    is no basis, and a cited one blocks the non_regular verdict (R2). A split on which one of your
+    exit_i is undecided (unknown oracle answer) is not closed and never refuted, and an
+    approximate oracle never refutes (not_verified). Without an
     oracle for the IR (e.g. a natural description that is not exponent notation, such as
     reg-07's {a^(n^2)}) only the structure is checked (w(p) instantiates and |w(p)| >= p; data.
     semantic_check false): still well_formed, and the membership claims are yours to prove.
@@ -1427,7 +1435,7 @@ def pump_check_reg(args: PumpCheckRegArgs) -> ToolResult:
             witnesses.append({"word": w, "in_L": in_l, "source": source})
 
     refutations: list[str] = []
-    unclosed: list[str] = []
+    exit_failures: list[str] = []
     per_p: list[dict[str, Any]] = []
     for p in p_values:
         word = _instantiate(blocks, var, p, DEFAULT_LIMITS.max_word_len)
@@ -1441,11 +1449,16 @@ def pump_check_reg(args: PumpCheckRegArgs) -> ToolResult:
             refutations.append(f"w(p) = {word!r} at p = {p} is NOT in L (oracle): the chosen word is invalid")
         ex = rec.get("first_failure")
         if ex is not None:
-            unclosed.append(
-                f"at p = {p}, {rec['claimed_exit_fails']} split(s) keep x y^i z in L for every claimed exit "
-                f"i in {exits} (oracle), e.g. x = {ex['x']!r}, y = {ex['y']!r}, z = {ex['z']!r}"
-                + (f"; that split does leave L at i = {ex['exits_at']}" if ex["exits_at"] else
-                   f"; that split stays in L at every tried i {searched}"))
+            # The claim is "every split leaves L at some i in exit_i"; a split on which the
+            # oracle puts x y^i z in L for every i in exit_i is a concrete false premise at this p
+            # (as pump_check_cfl claim mode: a word declared outside L is in L).
+            msg = (f"at p = {p}, {rec['claimed_exit_fails']} split(s) keep x y^i z in L for EVERY claimed "
+                   f"exit i in {exits} (oracle), e.g. x = {ex['x']!r}, y = {ex['y']!r}, z = {ex['z']!r}: "
+                   "the claim that each split leaves L at one of exit_i is false at this p"
+                   + (f"; that split does leave L at i = {ex['exits_at']}" if ex["exits_at"] else
+                      f"; that split stays in L at every tried i {searched}"))
+            exit_failures.append(msg)
+            refutations.append(msg)
 
     decisive, unknown, longest = oracle.stats() if oracle is not None else (0, 0, 0)
     n_splits = sum(r.get("splits", 0) for r in per_p)
@@ -1461,10 +1474,11 @@ def pump_check_reg(args: PumpCheckRegArgs) -> ToolResult:
         "word_pattern": args.word, "variable": var, "exit_i": exits, "p_values": p_values,
         "p_min": args.p_min, "extra_p_values": sorted(set(args.p_values)),
         "searched_i": searched, "split_condition": "|xy| <= p, |y| >= 1",
-        "per_p": per_p, "refutations": refutations, "unclosed_splits": unclosed, "witnesses": witnesses,
-        "scope": ("finite p and i only: closing every split at these p does not prove the claim for all p (a "
-                  "regular language whose period exceeds the largest p tried closes them too), and a split "
-                  "that survives the tried i may leave L at a larger i (VERDICT_POLICY §4)"),
+        "per_p": per_p, "refutations": refutations, "exit_failures": exit_failures, "witnesses": witnesses,
+        "scope": ("finite p only: closing every split at these p does not prove the claim for all p (a "
+                  "regular language whose period exceeds the largest p tried closes them too; VERDICT_POLICY "
+                  "§4). exit_i is checked as stated: a split that stays in L at every claimed exit refutes "
+                  "the claim at that p (exact oracle only); exit_i cannot depend on p or |y|"),
     }
     if oracle is not None and oracle.notes:
         data["unknown_reasons"] = oracle.notes
@@ -1474,23 +1488,19 @@ def pump_check_reg(args: PumpCheckRegArgs) -> ToolResult:
 
     exact = class_oracle is not None and class_oracle.exact
     structural = [r for r in refutations if r.startswith("|w(p)|")]
+    hint = (" -- fix the word or the exits (data.per_p[*].examples: exits_at); exit_i is the same for every "
+            "p and |y|, so an exit that depends on them cannot be checked here" if exit_failures else "")
     if structural or (refutations and exact):
-        return ToolResult.success(data, trust="refuted", bounds=bounds, reason="; ".join(refutations)[:900])
+        if not exact:  # an approximate oracle's answers never refute; only |w(p)| < p does
+            hint = ""
+        shown = refutations if exact else structural
+        return ToolResult.success(data, trust="refuted", bounds=bounds,
+                                  reason="; ".join(shown)[:900 - len(hint)] + hint)
     if refutations:
         return ToolResult.success(
             data, trust="not_verified", bounds=bounds,
             reason=(f"the approximate oracle ({class_oracle.note}) contradicts the argument: "
                     + "; ".join(refutations)[:600] + " -- not a refutation; the argument is not verified"))
-    if unclosed:
-        # VERDICT_POLICY §4 reg/pumping: survival at the tried i does not refute (∀i is not
-        # checked), and the argument's real exit may depend on p or |y|, which exit_i cannot
-        # state. An unclosed split is no refutation, but the argument has no basis either.
-        return ToolResult.success(
-            data, trust="not_verified", bounds=bounds,
-            reason=("unclosed split(s): " + "; ".join(unclosed)[:700]
-                    + " -- not a refutation (VERDICT_POLICY §4: survival at the tried i proves nothing for all "
-                    "i), but the argument as stated does not close them: not verified. Fix the word or the "
-                    "exits; an exit that depends on p or |y| cannot be checked here (use a Nerode family)"))
     if class_oracle is None:
         return ToolResult.success(
             data, trust="well_formed", bounds=bounds,

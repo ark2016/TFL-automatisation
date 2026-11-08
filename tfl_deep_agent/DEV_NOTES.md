@@ -3021,3 +3021,38 @@ live runners read it there. Making the CLI restore it would be a behaviour chang
   `tfl_deep_agent` + `tfl_eval` + `ui_server` with `-n 4`: 1806 passed, 8 skipped.
 - `python -m tfl_eval.cli --systems deep` (mock): 5 scripted tasks ran (cfl-04, dcfl-04, ll-17, reg-04, reg-13) and
   69 were skipped (no mock script), with 0 errors. All 5 are correct, Brier 0.0137, no confident wrong answers.
+
+## Decisions 2026-11-08 — pump_check_reg refutation fix
+
+**A split in L at every claimed exit is `refuted`** (supersedes the F7 decision above). `exit_i` is the argument's
+own claim: on every split of w(p) with |xy| ≤ p, |y| ≥ 1 some i in `exit_i` gives x yⁱ z ∉ L. When an exact oracle
+puts x yⁱ z in L for every i in `exit_i` on one split, that stated claim is false at that p: a concrete false
+premise (VERDICT_POLICY §1 `refuted`, "детерминированное свидетельство против"; §4 reg/pumping "конкретного нарушения
+заявленной предпосылки"). This matches `pump_check_cfl` claim mode (a word the argument declares outside L is in L,
+exact oracle only → `refuted`). Every i in `exit_i` is among the tried i, so the old reason ("the tried i are not all
+i", §4 survival) did not apply to the stated claim; it was removed from the module and tool docstrings, the result
+reason, SKILL.md, traps.md, README and TOOL_INVENTORY. Unknown answers leave the split undecided and an approximate
+oracle gives `not_verified`; neither refutes. `data.unclosed_splits` is replaced by `data.exit_failures` (also in
+`refutations`). An exit that depends on p or |y| (reg-10, i = p!/|y| + 1) cannot be stated in `exit_i`; fixed exits
+for such an argument are now refuted, and the skill says to use a fixed-exit word or accept that the tool cannot
+check the argument (Nerode family on a predicate IR). Gate: `_classify` already passes `refuted` through
+`clamp_trust`, so a cited refuted `pump_check_reg` blocks `non_regular` by R2 like any cited result of the verdict's
+own side; no gate code changed (new test `test_a_cited_exit_refutation_blocks_non_regular_like_r2`).
+
+**`checked_p` described exactly.** SKILL.md, traps.md, the `p_values` / `p_min` field descriptions and
+TOOL_INVENTORY now say: p = 2, 3, 4 when `p_min` ≤ 2, or p_min..p_min+2 when `p_min` > 2, plus every `p_values`
+entry ≥ `p_min` (so p = 1 with the default `p_min` = 1). The VERDICT_POLICY §4 citation stays only on the default
+{2, 3, 4}; shifting up is justified by "a larger p is also a pumping length". A p the argument does not cover can
+now refute it, so the docs tell the model to pass `p_min`.
+
+**SKILL.md §5 row.** When the oracle answers "unknown" for w(p) at every p (e.g. beyond the exponent oracle's length
+limit), no split is checked and the result is still `well_formed` (VERDICT_POLICY §4: unknown words are skipped).
+Two rows replace the old "unclosed split" row: exact oracle → `refuted`, approximate → `not_verified`.
+
+**Tests** (`test_tools_pump_reg.py`): a* with a^p and exit [2] → `refuted`; the same with an approximate oracle →
+`not_verified`, with unknown answers at the claimed exit → `well_formed`; reg-04 `(ab)^p a` exit [0], reg-10 fixed
+exits and the (aaa)* policy-p case are now `refuted`; the existing refuted cases and reg-07 / reg-13 / reg-01 at
+`non_regular` ≤ 0.55 through the gate are unchanged.
+
+**Open point.** The changed pumping paragraphs in SKILL.md and traps.md are theory-adjacent text and need the Opus
+adversarial review before commit.

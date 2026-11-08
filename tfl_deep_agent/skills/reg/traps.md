@@ -111,20 +111,26 @@ Source: `docs/THEORY.md` §0
   `agent_system/prompts/pumping_agent.md`.
 - The word must be in L and have length ≥ n for every n, so give it as a family in n.
 - Check the argument with `pump_check_reg(ir, word=..., exit_i=[...])`. It uses the REG condition |xy| ≤ p,
-  |y| ≥ 1 and pumps every such split of w(p) at i = 0, 2..6, always for p = 2, 3, 4 (`p_values` only adds p). Use
-  it for REG, not `pump_check_cfl`: that tool's window is the CFL condition |vwx| ≤ p.
-- `exit_i` is what your argument claims: every split leaves L at one of these i. Only |w(p)| < p and w(p) ∉ L
-  (exact oracle) make the result `refuted`. VERDICT_POLICY §4 says survival at several i does not prove survival at
-  all i, so a split on which every claimed exit stays in L is an unclosed split, not a refutation: the result is
-  `not_verified` and gives no basis. A split that survives the tried i only because an answer is unknown is not a
-  refutation either. `data.per_p[*].examples` lists the unclosed splits with `exits_at`, the exponents that do
-  leave L.
+  |y| ≥ 1 and pumps every such split of w(p) at i = 0, 2..6. The checked p (`data.p_values`) are p = 2, 3, 4
+  (VERDICT_POLICY §4) when `p_min` ≤ 2, or p_min, p_min+1, p_min+2 when `p_min` > 2, plus every p in `p_values`
+  (1..12) that is ≥ `p_min`; with the default `p_min` = 1 that can add p = 1. Use it for REG, not
+  `pump_check_cfl`: that tool's window is the CFL condition |vwx| ≤ p.
+- `exit_i` is what your argument claims: every split leaves L at one of these i. With an exact oracle the result
+  is `refuted` when a stated premise is false at a checked p: |w(p)| < p, w(p) ∉ L, or a split on which x yⁱ z ∈ L
+  for **every** i in `exit_i` (`data.exit_failures`; the same rule as `pump_check_cfl` claim mode, where a word the
+  argument declares outside L is in L). A refuted claim gives no basis, and a cited one blocks `non_regular` (R2).
+  An "unknown" oracle answer never refutes: a split whose claimed exit is unknown is only undecided. An
+  approximate oracle never refutes either (`not_verified`). `data.per_p[*].examples` lists the splits that are
+  not closed, with `exits_at`, the exponents that do leave L.
 - `exit_i` is the same at every p and every |y|. A correct argument whose exit depends on p or |y| (reg-10
-  {aⁱbʲ | i ≠ j}: w = aᵖbᵖ⁺ᵖ!, i = p!/|y| + 1) cannot be stated, and its check stays unclosed. For such a task
-  re-encode the IR as a predicate and prove it with a Nerode family instead.
+  {aⁱbʲ | i ≠ j}: w = aᵖbᵖ⁺ᵖ!, i = p!/|y| + 1) cannot be stated. Given fixed exits instead, the tool checks the
+  claim as stated, and on reg-10 that claim is refuted (on w = aᵖbᵖ⁺⁶ with `exit_i=[0, 2, 3, 4, 5, 6]` the split
+  y = a stays in L at every one of them). Pick a word
+  with a fixed exit where one exists; otherwise accept that `pump_check_reg` cannot check the argument, re-encode
+  the IR as a predicate and prove it with a Nerode family instead.
 - If the argument needs p ≥ p₀ (for example, a case split that assumes p ≥ 3), pass `p_min=p₀` (the tool checks
   p₀, p₀+1, p₀+2) and state the assumption in the proof. The lemma allows it: if a pumping length p works, so does
-  every larger one.
+  every larger one. Without `p_min`, a split at p = 2 that the argument does not handle can refute it.
 - Closing every split is no sign of non-regularity. A regular L whose period or pumping length exceeds the largest
   p tried closes them too: (a⁵)* with w = a⁵ᵖ and exit 0 closes all of them at p = 2, 3, 4 (THEORY §2.0 makes the
   same point with {a¹⁰}). Before you rely on `pump_check_reg`, try a DFA (`dfa_vs_ir`).

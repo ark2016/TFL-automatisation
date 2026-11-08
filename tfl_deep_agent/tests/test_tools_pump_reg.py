@@ -118,23 +118,65 @@ def test_a_word_outside_L_is_refuted(task: str, word: str, exits: list[int]) -> 
     assert any("NOT in L" in x for x in r["data"]["refutations"]), r["data"]["refutations"]
 
 
-def test_an_unclosed_split_is_not_verified_and_names_where_it_does_leave_L() -> None:
+def test_a_split_in_L_at_every_claimed_exit_refutes_the_claim() -> None:
     # reg-04 is regular: on w = (ab)^p a the split y = ab stays in L at i = 0, the claimed exit.
-    # §4: survival at the tried i is no refutation, but the argument has no basis either.
+    # exit_i is the argument's own claim (some i in exit_i leaves L on every split); the exact
+    # regex oracle shows it false at that p: refuted, as pump_check_cfl claim mode (§1 refuted).
     r = call("pump_check_reg", ir=load("reg-04"), word="(ab)^p a", exit_i=[0])
-    assert r["ok"] and r["trust"] == "not_verified"
-    assert r["data"]["refutations"] == [] and r["data"]["unclosed_splits"]
-    assert "not a refutation" in r["trust_reason"]
+    assert r["ok"] and r["trust"] == "refuted", r["trust_reason"]
+    assert r["data"]["exit_failures"] and r["data"]["exit_failures"][0] in r["data"]["refutations"]
+    assert "EVERY claimed exit" in r["trust_reason"] and "exits_at" in r["trust_reason"]
+    assert "not all i" not in r["trust_reason"] and "proves nothing for all" not in r["trust_reason"]
     ex = [e for x in r["data"]["per_p"] for e in x.get("examples", []) if e["status"] == "claimed_exit_fails"]
     assert ex and all(0 in e["in_L_at"] for e in ex)
 
 
-def test_a_correct_proof_with_a_p_dependent_exit_is_not_refuted() -> None:
-    # reg-10 {a^i b^j | i != j}: the textbook proof w = a^p b^(p+p!), i = p!/|y| + 1 has an exit
-    # that depends on p and |y|, which exit_i cannot state; the split y = a stays in L for i <= 6.
-    r = call("pump_check_reg", ir=load("reg-10"), word="a^p b^(p+6)", exit_i=[0, 2, 3, 4, 5, 6])
+def a_star_ir() -> dict[str, Any]:
+    return regex_ir("a*", ["a"])
+
+
+def test_a_star_with_exit_2_is_refuted() -> None:
+    # L = a*: every x y^2 z of a^p is in L, so "every split leaves L at i = 2" is false.
+    r = call("pump_check_reg", ir=a_star_ir(), word="a^p", exit_i=[2])
+    assert r["ok"] and r["trust"] == "refuted", r["trust_reason"]
+    assert r["data"]["oracle"]["exact"] is True
+    assert len(r["data"]["exit_failures"]) == len(r["data"]["p_values"]) == 3
+    assert r["bounds"]["splits_closed"] == 0
+
+
+def test_a_star_with_an_approximate_oracle_is_not_refuted(monkeypatch: pytest.MonkeyPatch) -> None:
+    approx = R.ClassOracle("reg", ("a",), "test (approximate)", False, lambda w: set(w) <= {"a"},
+                           note="APPROXIMATE test oracle")
+    monkeypatch.setattr(R, "_pump_oracle", lambda ir: (approx, []))
+    r = call("pump_check_reg", ir=a_star_ir(), word="a^p", exit_i=[2])
     assert r["ok"] and r["trust"] == "not_verified", r["trust_reason"]
-    assert r["data"]["refutations"] == [] and r["data"]["unclosed_splits"]
+    assert r["data"]["exit_failures"] and "not a refutation" in r["trust_reason"]
+
+
+def test_a_star_with_unknown_answers_is_not_refuted(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The oracle decides w(p) = a^(10p) (lengths 20, 30, 40) and nothing else: every pumped word
+    # at the claimed exit is unknown, which is never "in L" nor "not in L".
+    lengths = {20, 30, 40}
+    unknown = R.ClassOracle("reg", ("a",), "test (bounded)", True,
+                            lambda w: (set(w) <= {"a"}) if len(w) in lengths else None)
+    monkeypatch.setattr(R, "_pump_oracle", lambda ir: (unknown, []))
+    r = call("pump_check_reg", ir=a_star_ir(), word="a^(10p)", exit_i=[2])
+    assert r["ok"] and r["trust"] == "well_formed", r["trust_reason"]
+    assert r["data"]["refutations"] == [] and r["data"]["exit_failures"] == []
+    assert r["bounds"]["splits_closed"] == 0 and r["bounds"]["unresolved_splits"] == r["bounds"]["n_splits"] > 0
+    assert "undecided" in r["trust_reason"]
+
+
+def test_a_p_dependent_exit_cannot_be_stated_and_its_fixed_exits_are_refuted() -> None:
+    # reg-10 {a^i b^j | i != j}: the textbook proof w = a^p b^(p+p!), i = p!/|y| + 1 has an exit
+    # that depends on p and |y|, which exit_i cannot state. Stated with the fixed exits 0, 2..6
+    # on a^p b^(p+6), the split y = a stays in L at every one of them (p = 4: a^(3+i) b^10, i <= 6),
+    # so the claim as stated is false: refuted. The skill says so (an argument of this kind needs a
+    # fixed-exit word or another method).
+    r = call("pump_check_reg", ir=load("reg-10"), word="a^p b^(p+6)", exit_i=[0, 2, 3, 4, 5, 6])
+    assert r["ok"] and r["trust"] == "refuted", r["trust_reason"]
+    assert r["data"]["exit_failures"]
+    assert "cannot be checked here" in r["trust_reason"]
 
 
 def test_the_policy_p_values_are_always_checked() -> None:
@@ -143,7 +185,8 @@ def test_the_policy_p_values_are_always_checked() -> None:
     ir = regex_ir("(aaa)*", ["a"])
     r = call("pump_check_reg", ir=ir, word="a^(3p)", exit_i=[2], p_values=[1, 2])
     assert r["data"]["p_values"] == [1, 2, 3, 4]
-    assert r["ok"] and r["trust"] == "not_verified" and r["data"]["unclosed_splits"]
+    assert r["ok"] and r["trust"] == "refuted" and r["data"]["exit_failures"]
+    assert all("at p = 1," not in x and "at p = 2," not in x for x in r["data"]["exit_failures"])
 
 
 def test_p_min_shifts_the_policy_p_values_up() -> None:
@@ -240,6 +283,25 @@ def test_a_refuted_pumping_claim_is_no_basis_and_blocks_when_cited() -> None:
     assert g["trust"] == "not_verified" and g["verdict_token"] == "partial"
     g = gate("not regular", [e], fp=ir_fingerprint(ir), cited=["ev-bad"])
     assert g["trust"] == "not_verified" and any("R2" in x for x in g["verdict_gate"])
+
+
+def test_a_cited_exit_refutation_blocks_non_regular_like_r2() -> None:
+    # reg-01 {a^n b^n | n >= 0}: a correct claim is a well_formed basis; a second claim whose
+    # stated exit fails (w = a^(p-1) b^(p-1), exit 0: at p = 2 the split y = ab gives
+    # x y^0 z = ε ∈ L) is refuted. Cited, it blocks the verdict exactly as R2 blocks a cited
+    # refuted result of the verdict's own side; uncited, the correct claim stays the basis.
+    ir = load("reg-01")
+    fp = ir_fingerprint(ir)
+    good = entry("ev-good", "pump_check_reg", ir=ir, word="a^p b^p", exit_i=[0, 2])
+    bad = entry("ev-bad", "pump_check_reg", ir=ir, word="a^(p-1) b^(p-1)", exit_i=[0])
+    assert good["trust"] == "well_formed"
+    assert bad["trust"] == "refuted" and bad["data"]["exit_failures"], bad["trust_reason"]
+    assert A._classify(bad, "reg", None, [bad]) == [("destructive", "refuted")]
+    g = gate("not regular", [good, bad], fp=fp, cited=["ev-good", "ev-bad"])
+    assert g["trust"] == "not_verified" and g["verdict_token"] == "partial"
+    assert any("R2" in x and "ev-bad" in x for x in g["verdict_gate"]), g["verdict_gate"]
+    g = gate("not regular", [good, bad], fp=fp, cited=["ev-good"])
+    assert g["trust"] == "well_formed" and g["confidence_cap"] == 0.55 and g["basis"] == ["ev-good"]
 
 
 def test_the_gate_clamps_pumping_to_well_formed_whatever_the_record_says() -> None:
