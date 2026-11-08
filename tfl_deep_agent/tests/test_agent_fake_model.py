@@ -93,11 +93,16 @@ def test_reg_script_reaches_submit_report_with_real_tool_evidence():
     ev = evidence_by_id(result)
     assert ev["ev-dfa"]["tool"] == "regex_to_dfa" and ev["ev-dfa"]["trust"] == "verified"
     assert ev["ev-dfa-vs-ir"]["tool"] == "dfa_vs_ir" and ev["ev-dfa-vs-ir"]["trust"] == "bounded_pass"
-    # VERDICT_POLICY R2/R6: the basis is the check of the DFA against the task
-    # (dfa_vs_ir, bounded_pass), not the exact but task-free regex -> DFA
+    # VERDICT_POLICY §1 "регулярность заданного regex/DFA": regex_to_dfa(ir=...) read
+    # the task's own regex from the IR, but HITL 1 is off here, so no human approved that IR
+    # (the ir-builder may have encoded the task itself): it counts as a bounded check against
+    # the IR, like dfa_vs_ir; with a human-approved IR it is the verified basis
+    # (test_tools_pump_reg.py::test_reg04_reaches_regular_at_verified_through_the_task_regex).
+    assert ev["ev-dfa"]["ir_fingerprint"] == result["report"]["ir_fingerprint"] == "ir-a8bf22e6dd74"
     assert result["trust"] == "bounded_pass" and result["confidence_cap"] == 0.85
-    assert result["basis"] == ["ev-dfa-vs-ir"] and result["verdict_token"] == "regular"
-    assert result["verdict_gate"] == [] and result["contradiction"] is False
+    assert result["basis"] == ["ev-dfa", "ev-dfa-vs-ir"] and result["verdict_token"] == "regular"
+    assert len(result["verdict_gate"]) == 1 and "HITL 1 is off" in result["verdict_gate"][0]
+    assert result["contradiction"] is False
     assert result["unknown_ids"] == [] and result["refuted_evidence"] == []
     assert [s["trust"] for s in result["steps"]] == ["not_verified", "verified", "bounded_pass"]
 

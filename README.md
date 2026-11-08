@@ -355,11 +355,12 @@ autonomous [deepagents](https://pypi.org/project/deepagents/) (LangChain) agent 
     their runs have no `coder` and no `execute`.
   - It spawns ad-hoc subagents (`spawn_subagent`) and parallel workflows (`run_workflow`), each picking a model
     from the allowed list.
-- **Money.** A hierarchical budget from the settings: $5.00 per task, $20.00 per day, $2.00 per subagent and $0.30
-  reserved for the report. It is checked before every model call at the worst case; when only the reserve is
-  left, the agent must submit its report. Known gap: the main agent keeps `MAX_TOKENS` 64000, a worst case of
-  $1.28 per Opus call, more than the reserve, so a report call late in a run can be refused and the run ends
-  `budget_exhausted` (see [`tfl_deep_agent/README.md`](tfl_deep_agent/README.md) "Budget semantics").
+- **Money.** A hierarchical budget from the settings: $10.00 per task, $20.00 per day, $2.00 per subagent and $0.30
+  reserved for the report. It is checked before every model call at the worst case. Each call's `max_tokens` is
+  derived from what its scope has left: the role's ceiling from `config.py` while the scope can pay for it, less
+  later, and a refusal below a 4096-token floor. When only the reserve is left, the agent must submit its report,
+  and that call's `max_tokens` comes from the reserve (see [`tfl_deep_agent/README.md`](tfl_deep_agent/README.md)
+  "Budget semantics").
 - **Human review.** HITL 1 checks the transcription and the IR, HITL 2 approves the report. A stopped run is resumed
   in a new process.
 - **Report.** The report comes from a template (`full_proof`, `exam_solution`, `short_verdict`, `lean_appendix`).
@@ -646,7 +647,7 @@ expected one.
 tfl-eval --systems cfl,ll                       # mock mode (default): free, no API calls
 tfl-eval --systems cfl,ll --ids cfl-01,cfl-02    # narrow to specific eval-set ids
 tfl-eval --live                                  # real API calls — only on request; forces Haiku unless overridden
-tfl-eval --systems deep                          # the TFL Deep Agent (opt-in): source_text only, HITL auto-approved
+tfl-eval --systems deep                          # the TFL Deep Agent (opt-in): source_text + a class question, HITL auto-approved
 ```
 
 `--systems deep` gives the deep agent every selected entry, whatever its class. In mock mode it replays

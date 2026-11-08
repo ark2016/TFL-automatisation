@@ -1305,17 +1305,45 @@ def _entry_fingerprint(entry: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _is_task_definition_dfa(entry: Mapping[str, Any]) -> bool:
+    """A ``regex_to_dfa`` result built from the IR's own regex / linear grammar
+    (``regex_to_dfa(ir=...)``): the tool, not the model, read the definition."""
+    data = entry.get("data") or {}
+    return (entry.get("tool") == "regex_to_dfa" and entry.get("trust") == "verified"
+            and data.get("task_definition") is True and data.get("source") == "ir.language_spec"
+            and data.get("cls") == "reg" and isinstance(data.get("ir_fingerprint"), str))
+
+
+def _task_definition_dfa_is_bound(entry: Mapping[str, Any], *, ir_named: bool, ir_human_approved: bool) -> bool:
+    """Whether a task-definition ``regex_to_dfa`` record is the task's OWN
+    definition, not one the model encoded: the verdict names the IR, a human
+    approved that IR at HITL 1 (not ``--auto-approve``, not HITL 1 off: an IR
+    the ir-builder wrote may re-encode a natural-language task as a regex), and
+    the regex / grammar occurs in the IR's source text."""
+    data = entry.get("data") or {}
+    return ir_named and ir_human_approved and data.get("definition_in_source_text") is True
+
+
 def _classify(entry: Mapping[str, Any], lang: str, verdict_k: int | None,
-              entries: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
+              entries: Sequence[Mapping[str, Any]], *, ir_named: bool = False,
+              ir_human_approved: bool = False) -> list[tuple[str, str]]:
     """``[(side, trust)]``: what one tool result says about the task's verdict.
 
     Only checks against the task (the IR) count: ``dfa_vs_ir`` /
     ``grammar_vs_ir`` / ``dpda_vs_ir`` / ``input_grammar_cfg`` for the
-    constructive side, ``nerode_probe`` / ``pump_check_cfl`` (claim mode) for
-    the destructive side, and for LL the ``ll_table`` result by what its
-    grammar is (``data.grammar_source``). Everything else (``regex_to_dfa``,
-    ``cyk``, ``run_dfa``, the words and theory tools, ...) is supporting
-    evidence about its own input, never the basis of the verdict."""
+    constructive side, ``nerode_probe`` / ``pump_check_reg`` /
+    ``pump_check_cfl`` (claim mode) for the destructive side, and for LL the
+    ``ll_table`` result by what its grammar is (``data.grammar_source``).
+    ``regex_to_dfa`` counts only in its IR mode (the task's own regex or
+    linear grammar, read from the IR by the tool, cross-checked with the IR's
+    oracle): ``verified`` (VERDICT_POLICY §1) only when it is bound to the
+    task (:func:`_task_definition_dfa_is_bound`: a named IR a human approved
+    at HITL 1, whose source text holds the definition), else ``bounded_pass``
+    like ``dfa_vs_ir`` (the same bounded comparison with the IR's oracle,
+    whose IR may be the model's own formalization). Everything else
+    (``regex_to_dfa`` on an expression the model wrote, ``cyk``,
+    ``run_dfa``, the words and theory tools, ...) is supporting evidence about
+    its own input, never the basis of the verdict."""
     from .tools.base import clamp_trust
 
     tool, trust = entry.get("tool"), entry.get("trust")
@@ -1333,8 +1361,22 @@ def _classify(entry: Mapping[str, Any], lang: str, verdict_k: int | None,
     if lang == "reg":
         if tool == "dfa_vs_ir":
             return [("constructive", trust)]
+        if tool == "regex_to_dfa":
+            # VERDICT_POLICY §1 "регулярность заданного regex/DFA": verified, but only for
+            # the task's own definition (human-approved IR, definition in the source text);
+            # never for a regex the model passed. An IR-mode record otherwise is the bounded
+            # comparison of the compiled DFA with the IR's oracle, as dfa_vs_ir.
+            if not _is_task_definition_dfa(entry):
+                return []
+            if _task_definition_dfa_is_bound(entry, ir_named=ir_named, ir_human_approved=ir_human_approved):
+                return [("constructive", "verified")]
+            cross = data.get("oracle_cross_check") or {}
+            return [("constructive", "bounded_pass")] if (cross.get("n_words") or 0) > 0 else []
         if tool == "nerode_probe" and data.get("cls", "reg") == "reg" and data.get("pairs_checked"):
             return [("destructive", trust)]
+        if tool == "pump_check_reg" and data.get("cls") == "reg" and data.get("mode") == "claim":
+            # R6: a pumping argument checked by the tool is at most well_formed (<= 0.55).
+            return [("destructive", clamp_trust(trust, "well_formed"))]
         return []
     if lang in ("cfl", "dcfl"):
         if tool == "pump_check_cfl" and data.get("mode") == "claim":
@@ -1410,6 +1452,10 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
       an uncited one drops the artifact it refutes;
     * a constructive verdict needs a basis >= bounded_pass (R2), a destructive
       one >= well_formed (R1); an inconclusive verdict is capped at 0.40;
+      for REG, ``regex_to_dfa(ir=...)`` on the task's own regex / linear grammar
+      is a ``verified`` constructive basis (§1) when a human approved the IR at
+      HITL 1 and its source text holds the definition, else ``bounded_pass``; a
+      ``pump_check_reg`` claim a destructive one of at most ``well_formed`` (R6);
     * the other side's admissible evidence is a contradiction (R3): the
       verdict keeps only a ``verified`` basis against a non-verified side,
       with the ceiling 0.85; otherwise it is inconclusive, <= 0.50;
@@ -1485,8 +1531,22 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
         return finish("not_verified", CONFIDENCE_CAPS["not_verified"])
 
     verdict_k = _ll_verdict_k(str(report.get("verdict") or "")) if lang == "ll" else None
+    ir_named = bool(report_fp)
+    ir_human = (formalization is not None and formalization.get("status") == "approved"
+                and not formalization.get("auto"))
+    task_dfas = [e for e in usable if lang == "reg" and _is_task_definition_dfa(e)]
+    unbound = [e["id"] for e in task_dfas
+               if not _task_definition_dfa_is_bound(e, ir_named=ir_named, ir_human_approved=ir_human)]
+    if unbound:
+        why = ("HITL 1 is off" if formalization is None else
+               "the IR was auto-approved (--auto-approve)" if formalization.get("auto") else
+               "its definition does not occur in the IR's source_text" if ir_named else "no IR is named")
+        gate.append(f"regex_to_dfa(ir=...) {unbound} is a verified basis only for the task's own definition: a "
+                    "human-approved IR at HITL 1 whose source text holds the regex / grammar; here "
+                    f"{why}, so it counts as a bounded check against the IR (bounded_pass, as dfa_vs_ir)")
     sides: list[tuple[Mapping[str, Any], str, str]] = [
-        (e, side, t) for e in usable for side, t in _classify(e, lang, verdict_k, usable)]
+        (e, side, t) for e in usable
+        for side, t in _classify(e, lang, verdict_k, usable, ir_named=ir_named, ir_human_approved=ir_human)]
     opposite = "destructive" if direction == "constructive" else "constructive"
     same = [(e, t) for e, side, t in sides if side == direction]
     other = [(e, t) for e, side, t in sides if side == opposite]

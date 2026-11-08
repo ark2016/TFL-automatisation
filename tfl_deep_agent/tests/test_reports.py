@@ -603,9 +603,27 @@ def _patch_report(script: dict[str, Any], fn) -> dict[str, Any]:
     return script
 
 
-def test_cfl_mock_run_renders_end_to_end(tmp_path):
+def test_cfl_mock_run_renders_end_to_end(tmp_path, monkeypatch):
+    # This test checks the rendering of a real run, not the tool timeouts (test_tools_base
+    # covers those). Thread-mode tools run directly here: under full parallel load the
+    # thread runner's wall clock, or ToolBusy from threads other tests in this worker left
+    # running (MAX_ABANDONED_THREADS), could fail grammar_vs_ir / cyk (0.04 s of work) and
+    # lower the step trust. Each tool's own Deadline still bounds its work.
+    real_run = base.run_with_timeout
+    direct_calls: list[str] = []
+
+    def direct(fn, /, *args, timeout_s, mode="thread", **kwargs):
+        if mode == "thread":
+            direct_calls.append(getattr(fn, "__name__", "?"))
+            return fn(*args, **kwargs)
+        return real_run(fn, *args, timeout_s=timeout_s, mode=mode, **kwargs)
+
+    monkeypatch.setattr(base, "run_with_timeout", direct)
     script = _load("cfl_anbmcm.json")
     result, ledger = _run(script)
+    failed = {e["id"]: e.get("error") for e in result["evidence"] if not e.get("ok")}
+    assert failed == {}, f"tool calls failed: {failed}"
+    assert "grammar_vs_ir" in direct_calls and "cyk" in direct_calls
     paths = R.write_report(tmp_path, result, budget=ledger, task_text=script["task"])
     data = json.loads(paths["json"].read_text(encoding="utf-8"))
     assert data["status"] == "submitted"

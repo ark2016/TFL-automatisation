@@ -2678,3 +2678,346 @@ No code or doc changes in this step: it re-checks the P8 FIX state. Mock only; n
   None of them is in `tfl_deep_agent/`, `ui_server/` or `tfl_eval/`, and no file there was touched by P8.
 - No failure in `tfl_deep_agent/tests`, `ui_server/tests`, `tfl_eval/tests` or `tests/test_tfl_eval.py` in that run;
   the xdist `ScriptError` flake did not recur.
+
+## Decisions 2026-11-08 — Track C: class ladder + eval questions
+
+User decision (4): class determination goes from the narrowest class to the widest, and the deep eval input names
+the class being scored. Files: `prompts/main.md` (new section «Определение класса»), `tfl_eval/runners.py`,
+`tfl_eval/cli.py` (docstring + one call), `tfl_eval/tests/test_deep_adapter.py`, `examples/mock/eval/*.json` (the
+`task` field only), `tests/test_class_ladder.py` (new), one line each in `README.md` and `tfl_deep_agent/README.md`.
+Mock only; no API call, no `.env`, no key.
+
+### main.md: «Определение класса»
+
+- Placed between "Workflow" and "Roles". It applies when the task asks which class the language belongs to, or
+  names no class at all. When the task names one class, the single-question workflow is unchanged.
+  The "names no class at all" case is my reading. Without it, a bare language would make the agent guess the class.
+- Chain, only as THEORY.md states it: REG ⊊ LL(1) (§3.2), LL(k) ⊊ LL(k+1) as languages (§3.2, with its caveat that
+  the proof was not read), ⋃ₖ LL(k) ⊊ DCFL (§3.2), DCFL ⊆ CFL (part II §1.6). THEORY.md never states DCFL ⊊ CFL, so
+  the prompt says so and tells the agent not to cite properness as a theorem: "CFL but not DCFL" needs both proofs.
+  The examples come from §3.2, §3.3 (C) and part II §3.4. `tests/test_class_ladder.py` checks that each one is in
+  THEORY.md, and that neither file contains `DCFL ⊊/⊂ CFL`.
+- Procedure:
+  1. Try REG, then LL(k) with the smallest k first, then DCFL, then CFL.
+  2. Formalize per class, and stop at the first class whose membership a tool result supports (the constructive
+     basis listed under "Report").
+  3. Prove non-membership for every narrower class. A class that is neither proved nor excluded stays open.
+  4. If no class has a positive proof, try a non-CFL proof. Otherwise the verdict is `unknown`.
+  5. `language_class` is the positive class. The narrower negative proofs are steps, and their ids are not in the
+     verdict's `evidence_ids`.
+- Step 6 comes from the code, not from theory. `hitl.formalization_binding` binds the verdict to the **last**
+  non-superseded HITL 1 record. So a ladder that formalizes REG, then LL, then goes back to a REG proof would have
+  its LL verdict judged against the REG IR, and the LL basis would be excluded. The prompt therefore says: call
+  `validate_ir` on the verdict's IR again before `submit_report`. An already approved fingerprint gets an
+  `unchanged` record without a stop (`FormalizationReviewMiddleware.before_model`; also
+  `test_hitl.py::test_hitl1_already_approved_ir_is_not_asked_again`), and that record becomes the last one. The
+  binding side is pinned in `test_class_ladder.py`.
+- The "Report" section is unchanged here. Track A changes its REG basis. The ladder refers to it ("the constructive
+  basis of the class listed under Report") and does not repeat it, so the two edits do not conflict.
+- Not done: a code-level ladder (for example, a gate that checks the narrower negative steps). The gate still rates
+  only `language_class`, as the prompt says.
+
+### Eval: one question line per class (system deep only)
+
+- `runners.deep_task_text(ir, task_class)` returns `source_text.strip() + "\n" + deep_class_question(task_class,
+  ir)`. `task_class` is now required. An unknown class is a `DeepAdapterError`, which becomes an error record.
+  Questions:
+  - reg: «Вопрос: является ли язык регулярным?»
+  - cfl: «Вопрос: является ли язык контекстно-свободным?»
+  - dcfl: «Вопрос: является ли язык детерминированным контекстно-свободным (DCFL)?»
+  - ll, `task_type: ll_check_grammar` (Format 3): «Вопрос: является ли данная грамматика LL(k) для некоторого k, и
+    если да, то каково наименьшее такое k?»
+  - every other ll task (`ll_check_language`, `ll_check_grammar_lang`): the same question about the language,
+    «является ли язык LL(k)-языком …» (the term of THEORY.md §3.1).
+- Why "the smallest k": that is what the manifest's `expected.k` holds. I checked all 18 ll entries. For example,
+  ll-09 asks «LL(2)? LL(3)?» and expects 3, and ll-18 expects 2 with `is_ll_k {1: false, 2: true}`. The question
+  does not take k from the IR's `k` field, which for ll-09 / ll-15 is the expected answer.
+- The line is always appended, even when `source_text` already asks a question (reg-14, dcfl-08..10, ll-02,
+  ll-08..18). A repeated question is harmless, and a single rule is easier to check than a heuristic that detects
+  questions.
+- The four pipelines are unchanged: they run on the IR and never call `deep_task_text`.
+- Mock replays: the replay is keyed by role, not by the task text. Each script's `task` field is updated anyway,
+  because `test_every_deep_script_belongs_to_a_manifest_task` pins `task == deep_task_text(ir, class)`. `defs.ir` is
+  still the manifest IR (its `source_text` without the question).
+- Tests: the question for every manifest entry (parametrized over all 74), the reg-01 / dcfl-01 / ll-01 case,
+  the live fake's task texts, and the e2e check that `result.json["task"]` is the text with the question.
+- `PLAN.md` P8 still says "source_text only". That is the old contract, now superseded by this decision. PLAN.md is
+  outside this track, so it was not edited.
+
+### Test runs
+
+- `tfl-eval --systems deep` (mock, `python -m tfl_eval.cli`): 74 tasks, ran 5, skipped 69, errors 0, accuracy 1.0,
+  exit 0.
+- `pytest tfl_eval/tests tests/test_tfl_eval.py tfl_deep_agent/tests/{test_class_ladder,test_docs,test_p2_core_fix,
+  test_agent_fake_model,test_network_guard,test_skeleton}.py`: 369 passed, 8 skipped, 5 failed. All 5 failures come
+  from the concurrent budget track and are outside these files: `test_docs` expects per_task 10.00 in the READMEs
+  and still reads `FIT_MAX_TOKENS_ROLES`; `test_p2_core_fix` has two max_tokens / wrap-up tests.
+
+## Decisions 2026-11-08 — Track B: budget-derived max_tokens
+
+User decision (2): `max_tokens` of every budgeted call comes from the remaining budget, and the default
+`per_task_usd` is 10.00 ("один прогон ограничен ~10$"). This closes the open "P0 fix" question (option (b)).
+
+### Behaviour (`middleware/budget.py`, `config.py`)
+
+- `config.max_tokens_within(model, input_tokens, budget_usd, ceiling)` is the pure arithmetic:
+  `min(ceiling, floor((budget − worst-case input cost) / output price))`, 0 when the prompt alone does not fit, never
+  a value whose `worst_case_usd` is above the budget (float residue is corrected downwards).
+- `BudgetMiddleware(fit_max_tokens=True)` is now the default for every instance, so it covers the main agent, the
+  fixed subagents, deepagents' `general`, `spawn_subagent` children, `run_workflow` branches (`orchestration/spawn.py`
+  already passed `fit_max_tokens=True`; no change there) and the budgeted summarizer (ceiling 8192).
+  `FIT_MAX_TOKENS_ROLES` is removed; `make_middleware` no longer special-cases `lean`.
+- Ceiling = what the request would send anyway: `model_settings["max_tokens"]` > the chat model's `max_tokens`
+  (`make_chat_model` sets the role ceiling from `config.MAX_TOKENS` / `MAX_TOKENS_PER_ROLE`, clamped) > the
+  middleware's fallback > `config.resolve_max_tokens(role)`. The derived cap is sent through
+  `request.model_settings["max_tokens"]` only when it is below the ceiling.
+- Room: the scope's `available − reserve` in normal mode. When not even the floor fits there, the cap is derived from
+  `available` (reserve included) and `admit` enters wrap-up; that is the report call ("the report call may use the
+  reserve"). When the floor does not fit `available` either, the call is refused with the existing `REFUSAL_TEXT`; the
+  numbers then show `max_tokens` = the floor.
+- Subagent / branch scopes: the middleware charges the active scope (`enter_scope`), and `_available` of a child is its
+  own allocation bounded by its ancestors, so a child's cap comes from its allocation, never from the task's remainder.
+- The cap and the reservation are taken under one ledger lock (`BudgetNode._admit_locked`), so a parallel sibling
+  cannot take the money between the two; listener events (`wrap_up`, `refused`) are emitted after the lock is
+  released (`_emit_admission`), so a progress listener never runs under the ledger lock.
+- Floor `MIN_OUTPUT_TOKENS = 4096` (or the ceiling when that is lower; a request whose own ceiling is below 4096 is
+  never lowered further). Why 4096: adaptive thinking (`thinking: {"type": "adaptive"}`, every 5.x model) has no
+  `budget_tokens` and no API minimum besides `max_tokens >= 1` (anthropic SDK `ThinkingConfigAdaptiveParam`); the
+  manual-thinking minimum `budget_tokens >= 1024 < max_tokens` (`ThinkingConfigEnabledParam`) is the least reasoning
+  the API accepts, and thinking counts toward `max_tokens`, so 4096 leaves ~1k-3k thinking plus a tool call. It
+  equals `orchestration/spawn.MIN_OUTPUT_TOKENS` (a test pins that).
+- `fit_max_tokens=False` stays as an option (fixed ceiling, refused when it does not fit); only a test pinning the old
+  arithmetic uses it.
+
+### Settings
+
+- `per_task_usd` 5.00 → 10.00 (`settings.DEFAULTS`, `settings.example.json`, PLAN.md money line, both READMEs).
+  `per_day_usd` 20.00, `per_subagent_max_usd` 2.00 and `reserve_for_report_usd` 0.30 are unchanged: the derived cap
+  does not force a change. With a derived cap the reserve is no longer required to hold a full 64000-token call.
+- Open point for the user (not changed): the report call gets what the reserve pays for, `(0.30 − prompt × $5/MTok)
+  / $20/MTok` on Opus, e.g. ~7500 tokens with a 30k-token prompt; with a prompt of 60k+ tokens the reserve alone
+  cannot pay for the 4096 floor and the report call is refused (`budget_exhausted`, partial report). A larger
+  `reserve_for_report_usd` (e.g. $0.60-1.00 out of $10) would make long runs safer; that is a money setting, so it is
+  left to the user. Also: a lowered cap can end a call at `stop_reason: max_tokens`; the partial answer is charged and
+  handled like any other reply.
+- `docs/architecture.html` still says $5 per task; PLAN.md wins over it (not edited).
+
+### Tests
+
+- `test_config.py`: the strict xfail `test_default_ceilings_fit_the_example_budgets` is replaced by
+  `test_max_tokens_within_is_the_largest_cap_that_fits`, `test_default_report_call_fits_the_reserve_with_a_derived_cap`,
+  `test_default_lean_and_ad_hoc_calls_fit_one_subagent_allocation`, `test_default_task_budget_gives_the_full_ceiling_at_the_start`.
+- `test_budget.py`: `test_opus_main_in_a_1_50_task_is_not_exhausted_after_two_calls` (5 Opus calls in $1.50, never
+  into the reserve, the cap shrinks), `test_call_that_cannot_get_the_floor_is_refused_without_calling_the_model`
+  (message + numbers with `max_tokens 4096`), `test_the_reserve_stays_for_the_report_call` (call 1 capped by
+  `available − reserve`, call 2 enters wrap-up and is capped by `available`, the report tool runs),
+  `test_child_scope_caps_come_from_its_own_allocation`, `test_parallel_branches_get_caps_from_their_own_allocations`
+  (3 threads), `test_every_hooked_role_derives_max_tokens`, `test_fixed_ceiling_is_refused_when_deriving_is_off`, and
+  `test_derived_max_tokens_reaches_the_wire_with_adaptive_thinking` (the `wire` mock: body `max_tokens` = the derived
+  cap, `thinking: adaptive`, effort, fallback unchanged). Wrap-up tests now use a reserve that leaves less than the
+  Haiku floor above it.
+- Tests outside the scope list that pinned the old arithmetic or the $5 default, changed minimally with the same
+  intent: `test_agent_integration.py` (over-budget refusal, subagent refusal x2, wrap-up at the reserve, CLI partial
+  report, bad-settings reserve 9 → 11), `test_p2_core_fix.py` (prover now derives; wrap-up text test),
+  `test_skeleton.py` (example budget), `test_docs.py` (the gap test became `test_docs_state_the_derived_max_tokens`),
+  `ui_server/tests/test_deep_routes.py` (four `per_task_usd == 5.0` defaults → 10.0; fixture data left as is).
+  `tfl_eval/tests/test_deep_adapter.py` has a comment `min(74 x 5.00, 20.00)`; the value is still $20, not edited
+  (another track owns `tfl_eval`).
+- `test_models_request_shape.py` passes unchanged (64000 when no budget middleware is in the stack).
+
+## Decisions 2026-11-08 — Track A: REG gate parity
+
+User decision 1 (relayed): the REG skill states the new behaviour in clear text, not as workaround notes.
+
+- **`pump_check_reg` (tools/reg.py, group reg, `max_trust="well_formed"`, 30 s).** Claim mode only: `ir`, `word`
+  (w(p) as a pattern in one variable, which is p: `a^p b^p`, `a^(p^2)`), `exit_i` (the exponents the argument
+  claims as exits, from 0, 2..6; i = 1 is rejected), `p_values` (default 2, 3, 4 as in VERDICT_POLICY §4
+  reg/pumping; 2..6 distinct values in 1..12, for an argument that needs p >= p0). For each p: |w(p)| >= p, then,
+  with an oracle, w(p) in L and every split x y z with |xy| <= p, |y| >= 1 pumped at i = 0, 2..6 (pumped words over
+  100 characters count as unknown).
+- **Trust.** `refuted` for |w(p)| < p (structural, no oracle needed), for w(p) not in L, and for a split on which
+  every claimed exit stays in L (exact oracle). Otherwise `well_formed`, never higher: finite p and i are diagnostics
+  (§4, R6). An unknown oracle answer never refutes (§4: None is neither membership nor non-membership). A
+  refutation from an inexact oracle is `not_verified`. No oracle (reg-07): structure only, `semantic_check: false`,
+  `well_formed`, the same as `agent_system.lib.claim_verifier.verify_pumping_claim` without an oracle.
+- **Deviation from the computed task text.** The task said "any split that stays in L for all checked i -> refuted".
+  VERDICT_POLICY §4 says survival at several i does not prove survival at all i, and `refuted` needs a concrete
+  violated premise. So the tool asks for the claimed exits and refutes only the concrete false claim "this split
+  leaves L at one of these i". A split that survives every tried i while no exit was claimed for it is impossible
+  here, because the claim covers every split.
+- **Oracle.** `oracle_for("reg", ir)`; for kind `natural` with no REG oracle, the exponent-notation oracle of
+  `cfl_system.lib.exponent_pattern` (reg-01, reg-05, reg-10 parse; reg-07, reg-02, reg-06, reg-11 do not). This
+  fallback lives in `pump_check_reg` only, not in `tools/words.oracle_for`, so no other tool changes. It can never
+  raise the trust above `well_formed`.
+- **`_eval_exponent`** takes a constant power 0..3 (`n^2`, `n**2`), so `a^(p^2)` instantiates; `n**9**9` is still
+  `invalid_input`. Used by `nerode_probe` families too.
+- **`regex_to_dfa(ir=...)`.** New third source: the tool reads the regex (back-references -> `unsupported`) or the
+  right-/left-linear grammar from the validated IR, builds the DFA and compares it with the IR oracle on all words up
+  to a length bound (2000 words; a disagreement -> `unsupported`, a tool/dialect mismatch, never evidence). Data:
+  `source: "ir.language_spec"`, `task_definition: true`, `cls: "reg"`, `ir_fingerprint`, `oracle_cross_check`. With
+  `regex`/`grammar` the data say `task_definition: false`.
+- **Gate (agent.py `_classify`, REG branch).** `regex_to_dfa` counts as constructive `verified` (§1 "регулярность
+  заданного regex/DFA", cap 0.98) only for the tool's own IR-mode record and only when the verdict is bound to a
+  named IR (`ir_named`: the HITL 1-approved fingerprint, or the report's `ir_fingerprint`); the usual fingerprint
+  filter then excludes another IR's record. Without a named IR the gate writes a note and does not count it. This is
+  stricter than `lean_check`, which counts without a named IR (open point). `pump_check_reg` with `cls: "reg"` and
+  `mode: "claim"` counts as destructive, clamped to `well_formed`.
+- **Skills.** skills/reg/SKILL.md and traps.md now describe both tools; the reg-07 route reaches `non_regular` at
+  <= 0.55 through `pump_check_reg`. The §4 quotes in theory.md are unchanged. prompts/main.md belongs to another track:
+  its REG basis lines still name only `dfa_vs_ir` / `nerode_probe` and say `regex_to_dfa` never raises the verdict;
+  the replacement wording is in this track's open issues.
+- **Tests.** New `tests/test_tools_pump_reg.py` (35 tests on the eval IRs: reg-07 / reg-13 / reg-01 reach
+  `non_regular` at 0.55 through the gate and through `evaluate_report`; wrong claims refuted; reg-04 reaches
+  `regular` at `verified` 0.98; a model-written regex and forged records give no basis). `tests/test_skill_reg.py`:
+  the "never called" test replaced by tests of the new text and of the reg-07 call.
+- **Run.** `pytest -n 4 tfl_deep_agent/tests ui_server/tests/test_deep_routes.py tfl_eval/tests`: 1657 passed,
+  8 skipped.
+
+## Decisions 2026-11-08 — Integration of tracks A, B, C
+
+Mock only; no API call, no `.env`, no key; nothing committed.
+
+- **prompts/main.md (REG basis, Track A's wording).** The constructive list now reads "reg: `dfa_vs_ir`, or
+  `regex_to_dfa` with `ir` (the task's own regex or right-/left-linear grammar, read from the IR by the tool:
+  `verified`, counted only when the verdict names the IR, i.e. the one approved at HITL 1 or the report's
+  `ir_fingerprint`)". The destructive sentence names `nerode_probe` or `pump_check_reg` for reg (a `pump_check_reg`
+  claim at most `well_formed`, non_regular <= 0.55), `nerode_probe` for dcfl (at most `well_formed`), `pump_check_cfl`
+  in claim mode for cfl/dcfl. The artifact sentence now says "`regex_to_dfa` with `regex` or `grammar`". Workflow
+  step 4 lists `pump_check_reg` for REG pumped words. These match `agent._classify` (REG branch) and
+  skills/reg/SKILL.md §5 (the evidence table) exactly. prompts/critic.md: "for REG, check a pumping argument with `pump_check_reg`
+  (|xy| <= p), not `pump_check_cfl`" (the critic has the reg group through `_ORACLE_GROUPS`).
+- **Mock scripts.** `examples/mock/reg_regex_regular.json` and `examples/mock/eval/reg-04.json` now follow the skill's
+  route for a task given by its own regex: `regex_to_dfa(ir={"$def": "ir"})` instead of `regex_to_dfa(regex=...)`
+  (a model-written copy of the pattern, which the gate never counts), and the report carries
+  `ir_fingerprint: ir-a8bf22e6dd74` (both scripts use the same IR). The verdict is now `verified`, cap 0.98, basis
+  `ev-dfa`; `dfa_vs_ir` stays as the weaker check of the same side. Pinned in
+  `test_agent_fake_model.py::test_reg_script_reaches_submit_report_with_real_tool_evidence` (was `bounded_pass` /
+  0.85 / basis `ev-dfa-vs-ir`) and `tfl_eval/tests/test_deep_adapter.py` (reg-04 `verified` 0.98, basis `ev-dfa`).
+  The descriptions of both scripts say so. reg-13 (`nerode_probe`, 0.85) is unchanged: it is already the
+  strongest destructive route. `tests/hitl_scripts.py` is LL-only and needs no change. No script pins a budget
+  number, so Track B's derived `max_tokens` needs no script change (the suite is green with it).
+- **Load-sensitive test.** `test_reports.py::test_cfl_mock_run_renders_end_to_end`: `grammar_vs_ir` on this IR takes
+  0.04 s (1093 words), so its internal 40 s `Deadline` cannot be the cause, and a deadline stop would keep
+  `bounded_pass` anyway. What can lower step 3 under full parallel load is the thread runner: its wall clock under
+  contention, or `ToolBusy` when other tests in the same xdist worker left more than `MAX_ABANDONED_THREADS` (8)
+  timed-out threads running. Neither is what the test checks, so the test runs thread-mode tools directly
+  (`monkeypatch` of `base.run_with_timeout`, process mode untouched; each tool's own `Deadline` still applies),
+  asserts that `grammar_vs_ir` and `cyk` went through that path, and asserts that no tool call failed, with the
+  errors in the message. Every trust assertion is unchanged. Not reproduced locally: the reason is inferred from the
+  code.
+- **Stale text.** `test_skill_ll.py::test_skill_does_not_recommend_unimplemented_tools` no longer lists
+  `pump_check_reg` as unimplemented; it now asserts that no LL file sends a task to that REG tool. PLAN.md P8 says
+  "source_text plus one question line for the entry's class" (decision 4). Root `CLAUDE.md`: `per_task_usd` 10.00 and
+  the derived `max_tokens`. `tfl_deep_agent/README.md` "Verdict basis" states the REG rules and that
+  `reg_regex_regular.json` takes the `regex_to_dfa(ir=...)` route. `docs/TOOL_INVENTORY.md` was already updated by
+  Track A.
+- **Still open (not changed here):** the adversarial Opus review of the new theory-adjacent text (skills/reg,
+  main.md «Определение класса» and its REG basis lines) before commit; the `natural`-IR exponent oracle living only in
+  `pump_check_reg`; `regex_to_dfa(ir)` needing a named IR while `lean_check` does not; the reserve size
+  (`reserve_for_report_usd` 0.30 cannot pay the 4096 floor on Opus with a prompt of ~56k+ tokens);
+  `docs/architecture.html` still says $5.
+
+## Decisions 2026-11-08 — FIX: REG gate binding, pump semantics, budget wrap-up
+
+Fix stage over the ten review findings of tracks A, B and C. Scope: `tools/reg.py`, `agent.py` (REG branch of
+`_classify` / `verdict_gate`), `middleware/budget.py`, the REG skill / traps / main prompt / README / inventory
+text, and their tests. No pipeline package, `hitl.py` or `evidence/` file was touched.
+
+**F1/F4 (major), `regex_to_dfa(ir=...)` as a `verified` basis was circular.** The model writes the IR. When it encodes a
+natural-language task as a regex of its own, the "task's definition" DFA is the model's answer. Decision:
+`verified` (cap 0.98) only when both of these hold:
+- a human approved that IR at HITL 1 (`formalization.status == "approved"` and not `auto`);
+- the definition occurs in the IR's `source_text`. The new data field `definition_in_source_text` holds this. It
+  is computed by the tool with whitespace stripped: the regex, or every grammar rule with arrows normalised, must be
+  a substring.
+
+Otherwise the record counts like `dfa_vs_ir`: `bounded_pass` (0.85), and only when its oracle cross-check ran on at
+least one word. The gate states which condition failed: HITL 1 off, auto-approved, definition not in the source
+text, or no IR named. Rejected alternative: matching against the run's raw task text. It needs plumbing through
+`hitl.py`, `render.py` and `policy.py`, which are out of scope. A substring check against the raw task is also fooled
+by tasks like "L1 = a*b*, L2 = {aⁿbⁿ}". The human approval is the real binding; the source-text check only filters
+out an IR whose regex the model invented.
+
+**F7 (major), unclosed pumping split reported as `refuted`.** VERDICT_POLICY §4 says that survival at several i
+proves nothing for all i, and that `refuted` needs a concrete violation of a stated premise. A split on which every
+claimed exit stays in L may have an exit that depends on p or |y|, as in reg-10 (w = aᵖbᵖ⁺ᵖ!, i = p!/|y|+1).
+`pump_check_reg` now returns `refuted` only for |w(p)| < p or w(p) ∉ L with an exact oracle. Unclosed splits are
+`not_verified` (no basis), listed in `unclosed_splits`, and the reason says "not a refutation".
+
+**F5, `p_values` could skip the policy p.** p = 2, 3, 4 are now always checked. `p_values` only adds extra p.
+`p_min` shifts the base set to p_min..p_min+2 for arguments stated only for large p.
+
+**F9, the exponent oracle misparses comma lists.** `cfl_system.lib.exponent_pattern` reads `n,m ≥ 1` wrongly.
+That package is read-only, so this is to report to its owner. `_exponent_oracle_doubt` marks the fallback oracle
+approximate (`exact=False`, refutations become `not_verified`) in two cases:
+- the condition contains a comma-separated list;
+- the parse accepts no word up to length 8.
+
+**F2, F8, F10:** fixed as text and test changes (SKILL.md, traps.md, main.md, README, TOOL_INVENTORY, the reg mock
+descriptions, the fake-model, adapter and skill tests). reg-04 and the reg mock now end `bounded_pass` 0.85,
+because HITL 1 is off in mock runs.
+
+**F3/F6 (budget), the fixed reserve did not cover a long report prompt, and the first wrap-up call could spend
+everything.** `BudgetMiddleware.derive` now returns `(estimate, enter_wrap_up)`:
+- **Normal mode.** The cap is the lower of two limits:
+  - what is free above the reserve;
+  - `_cap_leaving_next`: the largest c such that this call plus one more call at the floor, with a prompt grown
+    by c + `NEXT_CALL_MARGIN_TOKENS` (2048), fit in the remainder. It is found by bisection, because
+    `worst_case_usd` steps up for long prompts.
+
+  When that cap is below the floor, the call enters wrap-up through the new `_admit_locked(enter_wrap_up=True)`.
+- **Wrap-up.** Each call is capped by `_cap_leaving_next` again. Only when not even that leaves the floor does the
+  call get everything left.
+
+New tests:
+- `test_two_wrap_up_turns_still_reach_the_report`: the first wrap-up turn is not the report and uses its whole cap,
+  and the report is still admitted.
+- `test_a_long_prompt_still_leaves_the_report_call_payable`: an 80k-token prompt on Opus.
+
+`test_config.py` now records that the $0.30 reserve alone does not pay an 80k-token Opus prompt. The pinned caps in
+`test_budget.py` use the helpers `normal_cap` / `leave_next`. Normal calls get slightly lower caps than before
+(about 8k instead of 12k on a $0.25 branch). This is the price of keeping the report payable.
+
+**Open points**
+- `hitl.report_review_text` builds its binding without `auto`. In an `--auto-approve` run the HITL 2 card text may
+  show the REG task-definition record as `verified` while the final result shows `bounded_pass`. The final result
+  and the draft use `run_binding` and are correct. The fix belongs in `hitl.py` (another scope).
+- The CFL analogue is still open: cfl-04 reaches `verified` 0.98 under `--auto-approve` through the task's own
+  grammar. This is the same circularity, out of this scope; it needs the same human-approval and source-text rule.
+- The `cfl_system.lib.exponent_pattern` comma-list bug should go to the pipeline owner. Here it is only guarded
+  against.
+- The new theory-adjacent text needs the Opus adversarial review before commit:
+  - the pumping paragraphs in `skills/reg/SKILL.md` and `traps.md`;
+  - the reg-10 and (a⁵)* examples (THEORY §2.0).
+
+## Decisions 2026-11-08 — GATE: full suite after tracks A–C and FIX
+
+**Fix (tests only): `TFL_MODEL_OVERRIDE` leaked between tests.**
+`test_reports.py::test_cfl_mock_run_renders_end_to_end` failed in 2 of 3 full `-n 4` runs. The report it renders
+had no `claude-opus-5-5` row, but the test passed when run alone. The cause was in `tfl_eval/tests/test_deep_adapter.py`.
+Its `--live` tests (fake `run_deep`) call `monkeypatch.delenv("TFL_MODEL_OVERRIDE", raising=False)` and then
+`cli.main([... "--live"])`. The CLI's `set_live_model_env` then writes `claude-haiku-5-5` into `os.environ`. When the
+variable was absent beforehand, pytest's `delitem` records no undo, so the write outlived the test. Every later
+deep-agent test in that xdist worker then ran on Haiku. To reproduce: run
+`test_live_deep_within_the_cap_runs` and then the report test in one process.
+
+The fix is an autouse fixture `_undo_live_model_override` in `test_deep_adapter.py`. It calls `setenv` and then
+`delenv`, the same pattern the older `test_live_runs_every_entry_...` used inline, so teardown removes the variable.
+No assertion was changed. `cli.main` itself still sets the variable for the process, because the four pipelines'
+live runners read it there. Making the CLI restore it would be a behaviour change and is not done here.
+
+**Test runs.**
+- Before the fix (full suite, `-n 4`): 25 failed / 5286 passed, then 43 failed. After the fix: 35 failed / 5278
+  passed / 73 skipped.
+- Every remaining failure is a Docker-Lean test in agent_system, cfl_system or dcfl_system: `test_lean_ir`,
+  `test_lean_examples`, `test_lean_formalize`, `test_phase3`, `test_type_check_security`, and
+  `test_constraint_semantics`, which evaluates through Lean. The errors are
+  `OCI runtime create/start failed: runc did not terminate successfully: exit status 139` and
+  `read init-p: connection reset by peer`. A container that dies early gives an empty result, so the test reports a
+  missing `sorry` warning or `len({}) == 0`. The set of failing tests changes from run to run. A serial run of the
+  Lean files fails too. Each failure passes when retried alone, at most 8 tries. No pipeline file was changed.
+  ll_system and every non-Docker test in the four pipelines are green.
+- `tfl_eval/tests` and `tfl_deep_agent/tests/test_reports.py` serially: 211 passed, 8 skipped.
+  `tfl_deep_agent` + `tfl_eval` + `ui_server` with `-n 4`: 1806 passed, 8 skipped.
+- `python -m tfl_eval.cli --systems deep` (mock): 5 scripted tasks ran (cfl-04, dcfl-04, ll-17, reg-04, reg-13) and
+  69 were skipped (no mock script), with 0 errors. All 5 are correct, Brier 0.0137, no confident wrong answers.

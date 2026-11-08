@@ -12,6 +12,7 @@ code defaults those settings fall back to.
 
 from __future__ import annotations
 
+import math
 import os
 
 # Prices are NOT copied here: the single pricing table for every project is
@@ -86,12 +87,11 @@ REFUSAL_FALLBACK = True
 # Max tokens per call. Thinking tokens count toward this limit, so it must
 # cover reasoning + the answer. Calls are streamed (models.make_chat_model sets
 # streaming=True), so a large ceiling does not hit the SDK's non-streaming
-# guard; you pay only for tokens actually generated. NOTE for P2: the
-# BudgetMiddleware worst-case check counts max_tokens in full, so a 64000
-# ceiling on Opus reserves $1.28 per call before the call is made -- more than
-# settings.example.json's reserve_for_report_usd, and the lean role's 128000
-# ($2.56) is more than per_subagent_max_usd. OPEN user decision before P2
-# (DEV_NOTES.md, "P0 fix"); tests/test_config.py pins the conflict (xfail).
+# guard; you pay only for tokens actually generated. These values are
+# CEILINGS: a budgeted call gets min(ceiling, what its scope can still pay for)
+# (max_tokens_within below; middleware/budget.py, user decision 2026-11-08),
+# so a 64000 ceiling on Opus ($1.28 worst case) no longer has to fit in the
+# report reserve or a subagent allocation in full.
 MAX_TOKENS = 64000
 
 # Per-role overrides (128000 is the API maximum for Opus / Sonnet 5.5, the
@@ -184,6 +184,28 @@ def worst_case_usd(model: str, input_tokens: int, max_tokens: int) -> float:
         raise UnknownModelError(f"model {model!r} has an incomplete price card: {card}")
     in_rate = max(card["input"], card["cache_write"])
     return (input_tokens * in_rate + max_tokens * card["output"]) / 1_000_000
+
+
+def max_tokens_within(model: str, input_tokens: int, budget_usd: float, ceiling: int) -> int:
+    """The largest ``max_tokens`` (at most ``ceiling``) whose
+    :func:`worst_case_usd` fits in ``budget_usd``:
+    ``min(ceiling, floor((budget_usd - worst-case input cost) / output price))``.
+    ``0`` when not even the prompt fits. Raises :class:`UnknownModelError` for
+    an unpriced model. The caller decides whether the result is enough for a
+    useful call (``middleware/budget.py`` refuses below its floor)."""
+    if ceiling < 0:
+        raise ValueError("ceiling must be non-negative")
+    input_cost = worst_case_usd(model, input_tokens, 0)
+    per_token = (worst_case_usd(model, input_tokens, 1_000_000) - input_cost) / 1_000_000
+    room = float(budget_usd) - input_cost
+    if per_token <= 0 or not math.isfinite(room) or room <= 0:
+        return 0
+    n = min(int(ceiling), math.floor(room / per_token + 1e-6))
+    # float residue: never return a value whose worst case is above the budget
+    # (by more than the 1e-9 the ledger tolerates in BudgetNode.admit)
+    while n > 0 and worst_case_usd(model, input_tokens, n) > budget_usd + 1e-9:
+        n -= 1
+    return max(0, n)
 
 
 def resolve_effort(role: str | None = None, requested: str | None = None) -> str:

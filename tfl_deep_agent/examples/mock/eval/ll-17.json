@@ -1,6 +1,6 @@
 {
  "description": "tfl-eval deep replay, ll-17: S -> aSb | eps is LL(1). ir-builder validates the IR, main builds the LL(1) table of the task's grammar (ll_table), then submits.",
- "task": "Format 3: S -> aSb | eps. Is this grammar LL(1)?",
+ "task": "Format 3: S -> aSb | eps. Is this grammar LL(1)?\nВопрос: является ли данная грамматика LL(k) для некоторого k, и если да, то каково наименьшее такое k?",
  "template": "short_verdict",
  "defs": {
   "ir": {

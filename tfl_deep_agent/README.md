@@ -193,7 +193,7 @@ tfl-deep --resume out/reg --decision reject --comment "step 3 uses an uninstanti
 
 | section | keys (defaults) |
 |---|---|
-| `budget` | `per_task_usd` 5.00, `per_day_usd` 20.00, `per_subagent_max_usd` 2.00, `reserve_for_report_usd` 0.30 |
+| `budget` | `per_task_usd` 10.00, `per_day_usd` 20.00, `per_subagent_max_usd` 2.00, `reserve_for_report_usd` 0.30 |
 | `models` | `allowed` (Haiku / Sonnet / Opus 5.5; aliases `haiku` / `sonnet` / `opus` are accepted), `roles` (model per fixed role), `opus_needs_reason` true |
 | `limits` | `max_model_calls` 80, `max_tool_calls` 300, `max_parallel` 4, `max_spawn_depth` 2 |
 | `hitl` | `formalization` true, `report` true, `execute` false |
@@ -214,23 +214,38 @@ Code: [`middleware/budget.py`](middleware/budget.py).
 
   A child cannot spend more than its allocation, nor more than any ancestor still has. Money a child did not spend
   goes back to the parent.
+- **`max_tokens` comes from the remaining budget.** Every budgeted model call (the main agent, the fixed subagents,
+  `spawn_subagent` children, workflow branches and the summarization call) gets
+  `max_tokens = min(ceiling, floor((room − worst-case input cost) / output price))`.
+  - The ceiling is the role's value in `config.py` (`MAX_TOKENS` 64000, `lean` 128000), clamped to the model's
+    output cap, or a lower value the request sets itself (the summary call: 8192).
+  - The room is what the call's own scope has free above its reserve. A subagent or a branch counts only its own
+    allocation.
+  - The 4096-token floor (or the ceiling, when that is lower) is the least a call gets. A call that cannot get
+    the floor is refused. Adaptive thinking has no thinking budget to satisfy, but thinking tokens count toward
+    `max_tokens`, and 4096 leaves room for some reasoning plus a tool call or a short answer.
+
+  So a call with the full ceiling is made while the scope can pay for it, and later calls get smaller caps instead
+  of being refused. A call with a small cap can stop at `max_tokens`. Its partial answer is charged like any other.
 - **Check before each call.** The worst case of a call is reserved while the call runs, so parallel branches cannot
   over-commit. The worst case is every prompt token at the dearer of the input and cache-write rates, plus
-  `max_tokens` output tokens, at the prices in `llm_client.py`. When the call returns, the actual cost from the
-  usage metadata replaces the reservation, with cache tokens priced at their own rates.
-- **Refusal.** A call whose worst case does not fit is not made. The agent loop ends, and the renderer writes a
+  `max_tokens` output tokens (the derived cap), at the prices in `llm_client.py`. When the call returns, the actual
+  cost from the usage metadata replaces the reservation, with cache tokens priced at their own rates.
+- **Refusal.** A call that does not fit even at the floor is not made. The agent loop ends, and the renderer writes a
   partial report with status `budget_exhausted`.
-- **Wrap-up.** When the next call fits only by touching the reserve:
+- **Wrap-up.** When the next call cannot get the floor above the reserve:
   - the agent is told to submit its report;
   - the spawning tools (`task`, `spawn_subagent`, `run_workflow`) are refused;
-  - the calls may use the reserve.
+  - the calls may use the reserve. Their `max_tokens` is derived from the remainder with the reserve, so the
+    report call gets what the reserve pays for. With the default $0.30 on Opus that is
+    (0.30 − prompt tokens × $5/MTok) / $20/MTok, for example about 7500 tokens with a 30000-token prompt.
 - **Per day.** `<runs dir>/deep_spend_log.jsonl` holds one line per charged live call. A live task cannot start
   when its `per_task_usd` does not fit in what is left of the local calendar day, and every call is checked against
   that remainder as well. The CLI and TFL Lab share the log, and TFL Lab also allows only one live deep run at a time.
-- **Ad-hoc children.** Subagents from `spawn_subagent` and workflow branches lower `max_tokens` to what fits, with a
-  4096-token floor. The `lean-formalizer` role does the same. The main agent and the other fixed roles keep
-  `MAX_TOKENS` = 64000. That is $1.28 worst case per Opus call, so a $5 task has room for only a few worst-case main
-  calls. The choice is still open (`DEV_NOTES.md` "P0 fix").
+- **Defaults.** With $10.00 per task the main agent's first calls get the full 64000 tokens on Opus. A $2.00
+  allocation of a fixed subagent (a `task` call) keeps a $0.30 reserve for the subagent's answer. The $1.70 above
+  it pays for at most 85000 Opus output tokens per call, minus the prompt. For the `lean-formalizer` that is below
+  its 128000 ceiling. The cap shrinks as the subagent spends.
 
 ### Models
 
@@ -273,7 +288,13 @@ shape of `AnthropicClient.build_request_kwargs` (adaptive thinking plus effort, 
   - an id that is not in the ledger makes its step `not_verified`;
   - an unknown id at the verdict level lowers the verdict one level.
 - **Verdict basis.** The basis is derived by code from oracle results for the IR approved at HITL 1. The model's
-  self-assessment never raises the confidence.
+  self-assessment never raises the confidence. For REG, `regex_to_dfa(ir=...)` on the task's own regex or right- /
+  left-linear grammar is a `verified` basis for `regular` (cap 0.98, VERDICT_POLICY §1) only when a human approved
+  that IR at HITL 1 and its `source_text` holds the definition; with HITL 1 off or auto-approved (every eval run) it
+  counts like `dfa_vs_ir` (`bounded_pass`, 0.85), since the IR may be the model's own formalization.
+  `regex_to_dfa` on a regex the model wrote is never a basis. A `pump_check_reg` claim is a destructive basis of at
+  most `well_formed` (`non_regular` ≤ 0.55, R6); an unclosed split makes it `not_verified`, not `refuted`.
+  `reg_regex_regular.json` takes the first route (HITL 1 off there, so 0.85).
 - **Templates** (`skills/report-templates/`): `full_proof`, `exam_solution`, `short_verdict` and `lean_appendix`.
   Their structure follows the golden reports in `docs/examples/reg_grammar_SaSb_lean_proved/` and
   `docs/examples/cfl_ticket50_w1bw2w3_lean_proved/`. The evidence block "Свидетельства, модели и расходы" and the
@@ -364,7 +385,11 @@ tfl-eval --systems deep --deep-settings my_settings.json   # another settings fi
 ```
 
 - `deep` is opt-in; it is not in the default system set.
-- The agent runs on every selected entry, whatever its class. It gets only the entry's `source_text`, never the IR.
+- The agent runs on every selected entry, whatever its class. It gets only the entry's `source_text`, never the IR,
+  followed by one question line for the entry's class: «Вопрос: является ли язык регулярным?» (reg),
+  «... контекстно-свободным?» (cfl), «... детерминированным контекстно-свободным (DCFL)?» (dcfl), and for ll the
+  smallest k for which the given grammar (Format 3) or the language is LL(k). The same language is asked under
+  several classes ({a^n b^n} is reg-01, dcfl-01 and ll-01), so the question names the one being scored.
 - Every HITL stop is auto-approved.
 - The verdict comes from the run's `result.json`. A report for another class than the entry's is scored wrong.
 - Mock mode replays `examples/mock/eval/<id>.json`; an entry without a script is reported `skipped`.
@@ -372,7 +397,7 @@ tfl-eval --systems deep --deep-settings my_settings.json   # another settings fi
   `--out`), the next free `<id>-2`, `<id>-3`, ... is taken.
 - `--live` only on the user's explicit request, with an agreed budget, on Haiku. Before the first call the eval
   prints the deep entries' worst case, min(entries x `per_task_usd`, `per_day_usd`), and refuses to start (exit 2)
-  when it is above `--deep-max-usd` (default $1.00). With the default $5.00 per task even one entry is above it:
+  when it is above `--deep-max-usd` (default $1.00). With the default $10.00 per task even one entry is above it:
   narrow the set with `--ids`, lower `budget.per_task_usd` in `--deep-settings`, or pass the agreed budget as
   `--deep-max-usd`.
 - In a mixed live run (`--systems reg,deep --live`) the pipelines' live runners load `.env`. The eval restores

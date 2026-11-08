@@ -137,19 +137,79 @@ def test_worst_case_usd():
         config.worst_case_usd(config.OPUS, -1, 1)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "OPEN user decision before P2 (DEV_NOTES.md, P0 fix): with MAX_TOKENS 64000 / lean 128000 "
-    "the worst case of one main call exceeds reserve_for_report_usd and of one lean call "
-    "exceeds per_subagent_max_usd. Remove this xfail when per-role ceilings are decided."))
-def test_default_ceilings_fit_the_example_budgets():
+# ---------------------------------------------------------------------------
+# max_tokens derived from the remaining budget (user decision 2026-11-08).
+# The fixed ceilings (64000 / lean 128000) do not fit the report reserve or a
+# subagent allocation in full; the cap a budgeted call actually gets does.
+# ---------------------------------------------------------------------------
+
+def _example_budget():
     import json
     from pathlib import Path
 
-    budget = json.loads((Path(config.__file__).parent / "settings.example.json")
-                        .read_text(encoding="utf-8"))["budget"]
+    return json.loads((Path(config.__file__).parent / "settings.example.json")
+                      .read_text(encoding="utf-8"))["budget"]
+
+
+def test_max_tokens_within_is_the_largest_cap_that_fits():
+    # Opus: input at the cache-write rate $5/MTok, output $20/MTok
+    assert config.max_tokens_within(config.OPUS, 0, 0.30, 64000) == 15000
+    assert config.max_tokens_within(config.OPUS, 10_000, 0.30, 64000) == 12500   # 0.05 for the prompt
+    assert config.max_tokens_within(config.OPUS, 0, 100.0, 64000) == 64000        # capped by the ceiling
+    assert config.max_tokens_within(config.OPUS, 60_000, 0.30, 64000) == 0        # the prompt alone fills it
+    assert config.max_tokens_within(config.OPUS, 0, -1.0, 64000) == 0
+    for model in (config.OPUS, config.SONNET, config.HAIKU):
+        for inp, usd in ((0, 0.3), (1234, 0.0777), (50_000, 1.0), (250_000, 2.0)):
+            n = config.max_tokens_within(model, inp, usd, 128_000)
+            assert 0 <= n <= 128_000
+            if n:
+                assert config.worst_case_usd(model, inp, n) <= usd
+            if n < 128_000:  # one more token would not fit
+                assert config.worst_case_usd(model, inp, n + 1) > usd or n == 0
+    with pytest.raises(config.UnknownModelError):
+        config.max_tokens_within("claude-opus-4-1", 0, 1.0, 1000)
+    with pytest.raises(ValueError):
+        config.max_tokens_within(config.OPUS, 0, 1.0, -1)
+
+
+def test_default_report_call_fits_the_reserve_with_a_derived_cap():
+    """The report call (main, in wrap-up) may use only the reserve: its cap is
+    derived from it and stays above the budget middleware's 4096 floor for a
+    prompt of the size a late main call has (system prompt + tools + history)."""
+    from tfl_deep_agent.middleware.budget import MIN_OUTPUT_TOKENS
+
+    reserve = _example_budget()["reserve_for_report_usd"]
     main = config.resolve_model("main")
+    ceiling = config.resolve_max_tokens("main", main)
+    assert config.worst_case_usd(main, 0, ceiling) > reserve          # the fixed ceiling does not fit ...
+    n = config.max_tokens_within(main, 30_000, reserve, ceiling)
+    assert MIN_OUTPUT_TOKENS <= n < ceiling                           # ... the derived cap does
+    assert config.worst_case_usd(main, 30_000, n) <= reserve
+    # The fixed reserve alone does NOT cover a long late-run prompt: at 80k tokens on Opus the
+    # prompt costs more than the reserve. The budget middleware therefore keeps a floor-sized
+    # call with the grown prompt payable (BudgetMiddleware._cap_leaving_next), whatever the
+    # reserve; tests/test_budget.py::test_a_long_prompt_still_leaves_the_report_call_payable.
+    if main == config.OPUS:
+        assert config.max_tokens_within(main, 80_000, reserve, ceiling) < MIN_OUTPUT_TOKENS
+
+
+def test_default_lean_and_ad_hoc_calls_fit_one_subagent_allocation():
+    from tfl_deep_agent.middleware.budget import MIN_OUTPUT_TOKENS
+
+    b = _example_budget()
     lean = config.resolve_model("lean")
-    report_call = config.worst_case_usd(main, 0, config.resolve_max_tokens("main", main))
-    lean_call = config.worst_case_usd(lean, 0, config.resolve_max_tokens("lean", lean))
-    assert report_call <= budget["reserve_for_report_usd"], report_call
-    assert lean_call <= budget["per_subagent_max_usd"], lean_call
+    ceiling = config.resolve_max_tokens("lean", lean)
+    assert config.worst_case_usd(lean, 0, ceiling) > b["per_subagent_max_usd"]
+    n = config.max_tokens_within(lean, 20_000, b["per_subagent_max_usd"], ceiling)
+    assert MIN_OUTPUT_TOKENS <= n < ceiling
+    # a small spawn_subagent budget on Sonnet ($0.40) still gets a useful cap
+    sonnet_cap = config.max_tokens_within(config.SONNET, 10_000, 0.40, config.MAX_TOKENS)
+    assert MIN_OUTPUT_TOKENS <= sonnet_cap < config.MAX_TOKENS
+
+
+def test_default_task_budget_gives_the_full_ceiling_at_the_start():
+    b = _example_budget()
+    main = config.resolve_model("main")
+    room = b["per_task_usd"] - b["reserve_for_report_usd"]
+    ceiling = config.resolve_max_tokens("main", main)
+    assert config.max_tokens_within(main, 20_000, room, ceiling) == ceiling

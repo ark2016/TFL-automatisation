@@ -11,7 +11,8 @@ reported as `skipped` rather than guessed at (TODO.md §7 / root CLAUDE.md:
 
 `--systems deep` (opt-in, not in the default set) runs `tfl_deep_agent` on
 every selected manifest entry, whatever its class: the agent gets only the
-entry's `source_text`, every HITL stop is auto-approved, and the verdict is the
+entry's `source_text` plus one question line for the entry's class
+(`runners.deep_task_text`), every HITL stop is auto-approved, and the verdict is the
 policy token from its `result.json` (`runners.extract_deep`). Mock mode uses
 the replay `tfl_deep_agent/examples/mock/eval/<id>.json`; entries without one
 are skipped. Run directories go to `<out>/deep_runs/<id>/` (`<id>-2`, ... when
@@ -231,7 +232,7 @@ def _run_deep_entry(entry: dict, live: bool, runs_dir: Path, settings: Any = Non
 
     try:
         ir = _load_ir(entry)
-        task_text = deep_task_text(ir)
+        task_text = deep_task_text(ir, entry["system"])
     except (OSError, json.JSONDecodeError) as exc:
         record.update(status="error", error=f"could not load IR: {exc}")
         return record

@@ -261,16 +261,33 @@ def test_every_called_tool_exists() -> None:
     unknown = called - registered - planned - DEEPAGENTS_BUILTINS
     assert not unknown, f"skill calls tools that do not exist: {sorted(unknown)}"
     core = {"regex_to_dfa", "run_dfa", "nerode_probe", "dfa_vs_ir", "check_membership",
-            "sample_words", "validate_ir", "describe_ir_schema", "get_theorem", "pump_check_cfl"}
+            "sample_words", "validate_ir", "describe_ir_schema", "get_theorem", "pump_check_reg"}
     assert core <= called | set(re.findall(r"`([a-z_][a-z0-9_]*)`", _all_text()))
     assert core <= registered
 
 
-def test_deferred_pump_check_reg_is_never_called() -> None:
-    text = _all_text()
-    assert "pump_check_reg(" not in text
-    assert "pump_check_reg" not in REGISTRY.names()
-    assert "no `pump_check_reg` tool" in text.replace("There is no", "no")
+def test_pump_check_reg_is_registered_and_the_skill_states_its_cap() -> None:
+    text = _norm(_all_text())
+    assert "pump_check_reg" in REGISTRY.names("reg")
+    assert "pump_check_reg(ir, word=" in text
+    assert "no `pump_check_reg`" not in text and "no REG pumping tool" not in text
+    # The pumping row of the evidence table: well_formed, 0.55 for non_regular (R6).
+    table = _text("SKILL.md").split("## 5.", 1)[1].split("## 6.", 1)[0]
+    row = next(r for r in table.splitlines() if "| `pump_check_reg` |" in r)
+    assert "`well_formed`" in row and "0.55 for non_regular" in row
+
+
+def test_skill_states_the_task_definition_dfa_basis() -> None:
+    text = _norm(_text("SKILL.md"))
+    assert "regex_to_dfa(ir=ir)" in text
+    assert "never counts `regex_to_dfa`" not in text
+    table = _text("SKILL.md").split("## 5.", 1)[1].split("## 6.", 1)[0]
+    row = next(r for r in table.splitlines() if "`regex_to_dfa(ir=ir)`" in r)
+    assert "`verified`" in row and "0.98 for regular" in row and "a human approved at HITL 1" in row
+    assert "source_text" in row
+    # without a human approval the same record is only a bounded check
+    weak = next(r for r in table.splitlines() if "counts like `dfa_vs_ir`" in r)
+    assert "`bounded_pass`" in weak and "0.85 for regular" in weak and "auto-approved" in weak
 
 
 def test_confidence_caps_match_policy() -> None:
@@ -369,6 +386,11 @@ def test_step2_task_regex_is_verified_and_backrefs_refused() -> None:
     ir = load(REG04)
     r = call("regex_to_dfa", regex=ir["language_spec"]["pattern"], alphabet=["a", "b"])
     assert r["ok"] and r["trust"] == "verified"
+    assert r["data"]["task_definition"] is False and r["data"]["source"] == "regex"
+    r = call("regex_to_dfa", ir=ir)
+    assert r["ok"] and r["trust"] == "verified"
+    assert r["data"]["task_definition"] is True and r["data"]["source"] == "ir.language_spec"
+    assert r["data"]["oracle_cross_check"]["n_words"] > 0
     for rx in (r"(a)\1*", r"((a*)b?(\2)+)*"):
         r = call("regex_to_dfa", regex=rx)
         assert not r["ok"] and r["error_kind"] == "invalid_input"
@@ -429,6 +451,13 @@ def test_reg07_no_oracle_means_unsupported() -> None:
     assert not r["ok"] and r["error_kind"] == "unsupported"
 
 
+def test_reg07_pumping_check_is_structure_only_well_formed() -> None:
+    # SKILL.md §7 / traps.md reg-07: pump_check_reg(ir, word="a^(p^2)", exit_i=[2]).
+    r = call("pump_check_reg", ir=load(REG07), word="a^(p^2)", exit_i=[2])
+    assert r["ok"] and r["trust"] == "well_formed"
+    assert r["data"]["semantic_check"] is False
+
+
 def test_reg_split_through_pump_check_cfl_is_a_diagnostic_and_p_is_the_cfl_window() -> None:
     ir = load(REG13)
     # z = a^4 b^4 with p = 4: x = a, y = aa, z' = ab^4 (|xy| = 3 <= 4), mapped as u, v, w.
@@ -437,7 +466,23 @@ def test_reg_split_through_pump_check_cfl_is_a_diagnostic_and_p_is_the_cfl_windo
     assert r["ok"] and r["trust"] == "not_verified"
     assert r["data"]["evidence_role"] == "diagnostic"
     # Passing p checks the CFL window |vwx| = |y z'| = 7 > 4 and rejects a valid REG split:
-    # this is why the skill says "do not pass p".
+    # this is why the skill sends REG pumping to pump_check_reg (traps.md C).
     r = call("pump_check_cfl", ir=ir, cls="reg", split=split, p=4, i_values=[0, 2])
     assert not r["ok"] and r["error_kind"] == "invalid_input"
     assert "|vwx|" in r["error"]
+
+
+def test_main_and_critic_prompts_state_the_reg_gate_rules() -> None:
+    # prompts/main.md "Report" and prompts/critic.md agree with agent._classify (REG branch)
+    # and with SKILL.md §5: regex_to_dfa counts only with ir (verified only for a human-approved IR); pump_check_reg
+    # is a destructive basis of at most well_formed; regex_to_dfa(regex/grammar) is an artifact.
+    prompts = ROOT / "tfl_deep_agent" / "prompts"
+    main = " ".join((prompts / "main.md").read_text(encoding="utf-8").split())
+    critic = " ".join((prompts / "critic.md").read_text(encoding="utf-8").split())
+    assert "- reg: `dfa_vs_ir`, or `regex_to_dfa` with `ir` (the task's own regex or right-/left-linear" in main
+    assert ("`verified` only when a human approved that IR at HITL 1 and its `source_text` holds the definition; "
+            "with HITL 1 off or auto-approved it counts like `dfa_vs_ir`, `bounded_pass`") in main
+    assert "from `nerode_probe` or `pump_check_reg` (reg; a `pump_check_reg` claim is at most `well_formed`, so non_regular <= 0.55)" in main
+    assert "(`regex_to_dfa` with `regex` or `grammar`, `cyk`, `run_dfa`, `ll_parse`) support steps but never raise the verdict" in main
+    assert "(`regex_to_dfa`, `cyk`" not in main
+    assert "for REG, check a pumping argument with `pump_check_reg` (|xy| <= p), not `pump_check_cfl`" in critic

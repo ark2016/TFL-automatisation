@@ -16,6 +16,21 @@ from what the lib returned (docs/VERDICT_POLICY.md):
   prove an infinite index.
 * ``dfa_vs_ir`` -- R6: agreement with the IR oracle on every word up to a length
   is ``bounded_pass`` (bounds recorded); a decisive disagreement is ``refuted``.
+* ``regex_to_dfa(ir=...)`` -- the task's OWN regex or right-/left-linear grammar,
+  read from the IR by the tool: ``verified`` for "the task language is regular"
+  (VERDICT_POLICY §1 "регулярность заданного regex/DFA"); ``data.task_definition``
+  and ``data.ir_fingerprint`` bind it to that IR, and
+  ``data.definition_in_source_text`` says whether the definition occurs in the
+  IR's ``source_text``. The verdict gate counts it as ``verified`` only for an IR
+  a human approved at HITL 1 whose source text holds the definition; otherwise
+  it is a bounded check like ``dfa_vs_ir`` (an IR the model wrote may encode a
+  natural-language task as a regex of its own).
+* ``pump_check_reg`` -- reg/pumping (§4, R6): a pumping argument for
+  non-regularity instantiated at p = 2, 3, 4 (plus extra p) and checked split by
+  split with the IR's oracle: at most ``well_formed``; ``refuted`` only for a
+  concrete false premise (|w(p)| < p, or w(p) ∉ L by an exact oracle). A split
+  that stays in L at every claimed exit is an unclosed split (``not_verified``,
+  no basis), not a refutation: the argument's exit may depend on p or |y|.
 
 The oracle of the IR comes from the shared dispatch
 :func:`tfl_deep_agent.tools.words.oracle_for` (inventory §0, §10), which also
@@ -30,7 +45,7 @@ from __future__ import annotations
 import ast
 import re
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from itertools import product
 from typing import Any, Literal
 
@@ -40,6 +55,7 @@ from agent_system.lib import congruence, dfa_builder, dfa_runner, grammar_utils
 from agent_system.lib.word_generator import generate_exhaustive
 
 from .base import (
+    DEFAULT_LIMITS,
     Alphabet,
     Deadline,
     InputTooLarge,
@@ -57,11 +73,12 @@ from .base import (
     max_len_within,
     tfl_tool,
 )
-from .ir import CLASS_DESCRIPTION, IR_DESCRIPTION, TFLClass, ir_fingerprint
-from .words import ClassOracle, oracle_for
+from .ir import CLASS_DESCRIPTION, IR_DESCRIPTION, TFLClass, alphabet_for, ir_fingerprint, require_valid
+from .words import ClassOracle, oracle_for, word_alphabet
 
 __all__ = [
     "MAX_DFA_STATES",
+    "MAX_PUMP_I",
     "MAX_REGEX_LEN",
     "MIN_DECISIVE_WORDS",
     "DfaSpec",
@@ -71,10 +88,12 @@ __all__ = [
     "NerodeFamily",
     "NerodePair",
     "NerodeProbeArgs",
+    "PumpCheckRegArgs",
     "RegexToDfaArgs",
     "RunDfaArgs",
     "dfa_vs_ir",
     "nerode_probe",
+    "pump_check_reg",
     "regex_to_dfa",
     "run_dfa",
 ]
@@ -155,6 +174,14 @@ class RegexToDfaArgs(ToolArgs):
     grammar: GrammarSpec | None = Field(
         default=None,
         description="A right-linear or left-linear grammar instead of a regex.")
+    ir: dict[str, Any] | None = Field(
+        default=None,
+        description=("The task IR (class reg) when the task language IS a regex "
+                     "(language_spec.kind 'regex') or a right-/left-linear grammar (kind "
+                     "'grammar'). The tool reads that definition from the IR itself, so the result "
+                     "is about the task language: data.task_definition is true and "
+                     "data.ir_fingerprint names the IR. Pass the IR unchanged. Default alphabet: "
+                     "the IR's alphabet."))
     alphabet: Alphabet | None = Field(
         default=None,
         description=("Alphabet to build the DFA over (default: the symbols that occur). "
@@ -163,8 +190,8 @@ class RegexToDfaArgs(ToolArgs):
 
     @model_validator(mode="after")
     def _one_source(self) -> RegexToDfaArgs:
-        if (self.regex is None) == (self.grammar is None):
-            raise ValueError("give exactly one of regex or grammar")
+        if sum(x is not None for x in (self.regex, self.grammar, self.ir)) != 1:
+            raise ValueError("give exactly one of regex, grammar or ir")
         return self
 
 
@@ -188,7 +215,8 @@ class NerodeFamily(ToolArgs):
         description=("Word pattern of the family w_n, e.g. 'a^n', 'a^(2n+1) b', '(ab)^n c'. "
                      "Blocks: a symbol or a parenthesised group of symbols, optionally "
                      "'^' exponent; an exponent is an integer formula in ONE variable with "
-                     "+, -, * and implicit multiplication ('a^2n', 'b^(n+1)', 'c^{3n-1}')."))
+                     "+, -, *, implicit multiplication and a constant power ('a^2n', 'b^(n+1)', "
+                     "'c^{3n-1}', 'a^(n^2)')."))
     suffix: str | None = Field(
         default=None, max_length=80,
         description=("Pattern of the claimed separating suffix z_n in the same variable, "
@@ -417,35 +445,67 @@ def _regex_literals(regex: str) -> list[str]:
 def regex_to_dfa(args: RegexToDfaArgs) -> ToolResult:
     """Build the minimal complete DFA of a regular expression, or of a right-/left-linear grammar.
 
-    Use it to get an exact automaton for a regex or linear grammar you wrote (or that the task
-    gives), then check it against the task with dfa_vs_ir, or run words with run_dfa. The DFA is
-    returned in the format the other REG tools take; every symbol is one character.
+    Use it to get an exact automaton for a regex or linear grammar you wrote, then check it
+    against the task with dfa_vs_ir, or run words with run_dfa. When the task language IS a
+    regex or a right-/left-linear grammar, pass the task IR as `ir` instead: the tool then
+    compiles the IR's own definition. The DFA is returned in the format the other REG tools
+    take; every symbol is one character.
 
     Trust: verified for "this DFA recognises exactly L(regex) / L(grammar)" (a complete
-    construction: Thompson, subset construction, Hopcroft minimisation). That says nothing about
-    the TASK language unless the regex/grammar is the task's own definition; to tie it to the
-    task, use dfa_vs_ir. n_states is the number of states of the minimal complete DFA over the
-    alphabet used. Limits: regex <= 200 chars, result <= 500 states, 30 s.
+    construction: Thompson, subset construction, Hopcroft minimisation). With `regex` or
+    `grammar` that is a statement about the expression you passed, not about the task language:
+    tie it to the task with dfa_vs_ir. With `ir` the expression is the task's own definition,
+    so the result says the task language is regular (VERDICT_POLICY §1 "регулярность заданного
+    regex/DFA"): data.task_definition is true, data.ir_fingerprint names the IR, and
+    data.definition_in_source_text says whether the regex / the grammar's rules occur in the IR's
+    source_text. The verdict gate counts it as the verified basis of "regular" only when a human
+    approved that IR at HITL 1 and the source text holds the definition; otherwise (HITL 1 off or
+    auto-approved, or a natural-language task re-encoded as a regex) it counts like dfa_vs_ir,
+    bounded_pass. Before answering, the tool
+    also compares the DFA with the IR's oracle on all short words (data.oracle_cross_check); a
+    disagreement is an error, not a result. A regex IR with back-references or syntax the
+    construction does not take, and a grammar that is neither right- nor left-linear, are
+    `unsupported` (that alone does not make the language non-regular). n_states is the number
+    of states of the minimal complete DFA over the alphabet used. Limits: regex <= 200 chars,
+    result <= 500 states, 30 s.
     """
-    if args.regex is not None:
-        literals = _regex_literals(args.regex)
-        if args.alphabet is not None:
-            outside = sorted(set(literals) - set(args.alphabet))
+    task_ir: dict[str, Any] | None = None
+    regex, grammar = args.regex, args.grammar.model_dump(exclude_none=True) if args.grammar else None
+    requested_alphabet = list(args.alphabet) if args.alphabet is not None else None
+    if args.ir is not None:
+        task_ir, regex, grammar, ir_alphabet = _task_definition(args.ir)
+        if requested_alphabet is None:
+            requested_alphabet = ir_alphabet
+    if regex is not None:
+        try:
+            literals = _regex_literals(regex)
+        except ToolInputError as exc:
+            if task_ir is None:
+                raise
+            raise ToolUnsupported(
+                f"the task's regex uses syntax the DFA construction does not take ({exc}); write an "
+                "equivalent regex in the tool syntax and check it against the IR with dfa_vs_ir "
+                "(that alone does not make the language non-regular)") from None
+        if requested_alphabet is not None:
+            outside = sorted(set(literals) - set(requested_alphabet))
             if outside:
                 raise ToolInputError(f"regex uses symbols outside the alphabet: {outside}")
         try:
-            raw = dfa_builder.build_dfa_from_regex(args.regex)
+            raw = dfa_builder.build_dfa_from_regex(regex)
         except ValueError as exc:
+            if task_ir is not None:
+                raise ToolUnsupported(f"the task's regex does not parse in the tool syntax: {exc}") from None
             raise ToolInputError(f"regex does not parse: {exc}") from None
-        source = {"regex": args.regex}
+        source = {"regex": regex}
     else:
-        g = args.grammar.model_dump(exclude_none=True)
+        assert grammar is not None
+        g = dict(grammar)
         g.pop("kind", None)
         g["rules"] = [{"lhs": r["lhs"], "rhs": list(r["rhs"])} for r in g["rules"]]
         check_grammar_size(g)
         _check_grammar_symbols(g)
-        if args.alphabet is not None:
-            outside = sorted(set(g["terminals"]) - set(args.alphabet))
+        if requested_alphabet is not None:
+            outside = sorted(set(g["terminals"]) - set(requested_alphabet))
             if outside:
                 raise ToolInputError(f"grammar terminals outside the alphabet: {outside}")
         right = grammar_utils.is_right_linear(g)
@@ -460,7 +520,7 @@ def regex_to_dfa(args: RegexToDfaArgs) -> ToolResult:
             raise ToolUnsupported("grammar_to_dfa could not build a DFA for this grammar")
         source = {"grammar": "right-linear" if right else "left-linear"}
 
-    alphabet = list(args.alphabet) if args.alphabet is not None else list(raw.get("alphabet") or [])
+    alphabet = requested_alphabet if requested_alphabet is not None else list(raw.get("alphabet") or [])
     if not alphabet:
         # The regex has no literal (ε or ∅ only): there is no alphabet to complete over.
         dfa = raw
@@ -474,6 +534,8 @@ def regex_to_dfa(args: RegexToDfaArgs) -> ToolResult:
     shortest = _shortest_accepted(dfa)
     data = {
         **source,
+        "source": "ir.language_spec" if task_ir is not None else ("regex" if regex is not None else "grammar"),
+        "task_definition": task_ir is not None,
         "dfa": dfa,
         "n_states": n_states,
         "alphabet": dfa["alphabet"],
@@ -482,11 +544,114 @@ def regex_to_dfa(args: RegexToDfaArgs) -> ToolResult:
         "language_is_empty": shortest is None,
         "shortest_accepted": shortest,
     }
-    what = "L(regex)" if args.regex is not None else "L(grammar)"
+    what = "L(regex)" if regex is not None else "L(grammar)"
+    if task_ir is None:
+        return ToolResult.success(
+            data, trust="verified",
+            reason=(f"exact construction: the DFA recognises exactly {what}; this is about the "
+                    "given expression, not the task language (use dfa_vs_ir for that)"))
+    fp = ir_fingerprint(task_ir)
+    data["ir_fingerprint"] = fp
+    data["cls"] = "reg"
+    data["oracle_cross_check"] = _cross_check_with_ir(dfa, task_ir)
+    data["definition_in_source_text"] = _definition_in_source_text(task_ir, regex, grammar)
+    kind = "regex" if regex is not None else f"{source['grammar']} grammar"
     return ToolResult.success(
         data, trust="verified",
-        reason=(f"exact construction: the DFA recognises exactly {what}; this is about the "
-                "given expression, not the task language (use dfa_vs_ir for that)"))
+        reason=(f"exact construction from the task's own definition (IR {fp}, {kind}): the DFA "
+                "recognises exactly the task language, so the task language is regular "
+                "(VERDICT_POLICY §1: регулярность заданного regex/DFA)"))
+
+
+#: regex_to_dfa(ir=...): words compared with the IR's oracle before answering.
+TASK_DFA_CROSS_CHECK_WORDS = 2000
+
+
+def _task_definition(ir_in: dict[str, Any]) -> tuple[dict[str, Any], str | None, dict[str, Any] | None,
+                                                      list[str] | None]:
+    """``(ir, regex, grammar, alphabet)`` of a reg IR whose language_spec IS a
+    regular definition: a regex without back-references, or a grammar (the
+    caller checks that it is right- or left-linear)."""
+    ir = require_valid("reg", ir_in)
+    spec = ir.get("language_spec")
+    if not isinstance(spec, dict):
+        raise ToolUnsupported("the IR has no language_spec, so there is no definition to compile")
+    kind = spec.get("kind")
+    declared = alphabet_for("reg", ir) or None
+    if kind == "regex":
+        if spec.get("has_backreferences"):
+            raise ToolUnsupported(
+                "the task's regex is declared with back-references: it is not regular syntax, and that "
+                "alone decides nothing ((a)\\1* = aa*); re-encode the language or argue by hand")
+        pattern = spec.get("pattern")
+        if not isinstance(pattern, str):
+            raise ToolInputError("language_spec.pattern must be a string")
+        if len(pattern) > MAX_REGEX_LEN:
+            raise InputTooLarge(f"the task's regex has {len(pattern)} characters, limit {MAX_REGEX_LEN}")
+        return ir, pattern, None, declared
+    if kind == "grammar":
+        grammar = {k: spec.get(k) for k in ("terminals", "nonterminals", "start", "rules")}
+        try:
+            grammar = GrammarSpec.model_validate(grammar).model_dump(exclude_none=True)
+        except ValueError as exc:
+            raise ToolInputError(f"the IR's grammar does not fit the tool's grammar format: {exc}") from None
+        return ir, None, grammar, declared
+    raise ToolUnsupported(
+        f"the IR's language_spec.kind is {kind!r}; only a regex (kind 'regex') or a right-/left-linear "
+        "grammar (kind 'grammar') is a regular definition this tool can compile")
+
+
+_ARROWS = ("::=", "->", "=>", "→", "⟶", "⇒")
+
+
+def _definition_in_source_text(ir: Mapping[str, Any], regex: str | None,
+                               grammar: Mapping[str, Any] | None) -> bool:
+    """Whether the IR's definition occurs in its ``source_text`` (whitespace
+    ignored): the whole regex as one substring, or, for a grammar, every rule's
+    left side and every non-empty right side. A regex the model wrote for a
+    natural-language task ({w | #a(w) = #b(w)} encoded as (a|b)*) fails this.
+    It is a necessary condition only; the verdict gate also needs a human
+    approval at HITL 1 (``agent._classify``)."""
+    text = ir.get("source_text")
+    if not isinstance(text, str) or not text.strip():
+        return False
+    norm = re.sub(r"\s+", "", text)
+    if regex is not None:
+        pattern = re.sub(r"\s+", "", regex)
+        return bool(pattern) and pattern in norm
+    if grammar is None:
+        return False
+    for arrow in _ARROWS:
+        norm = norm.replace(arrow, "→")
+    for rule in grammar.get("rules") or []:
+        lhs, rhs = str(rule.get("lhs")), "".join(str(s) for s in rule.get("rhs") or [])
+        if lhs not in norm or (rhs and rhs not in norm):
+            return False
+    return True
+
+
+def _cross_check_with_ir(dfa: dict[str, Any], ir: dict[str, Any]) -> dict[str, Any]:
+    """Compare the DFA with the IR's own oracle on every word up to a length.
+
+    The regex oracle is a Python full match and the DFA comes from
+    dfa_builder's own parser; a disagreement means the two read the pattern
+    differently, so no ``verified`` result is given."""
+    class_oracle = oracle_for("reg", ir, validated=True)
+    alphabet = list(class_oracle.alphabet)
+    max_len = max_len_within(len(alphabet), TASK_DFA_CROSS_CHECK_WORDS, 10 if len(alphabet) > 1 else 30)
+    decisive = unknown = 0
+    for w in generate_exhaustive(alphabet, max_len):
+        says, _note = class_oracle.query(w)
+        if says is None:
+            unknown += 1
+            continue
+        decisive += 1
+        if dfa_runner.run_dfa(dfa, w) != says:
+            raise ToolUnsupported(
+                f"the DFA built from the task's definition and the IR's oracle ({class_oracle.source}) "
+                f"disagree on {w!r} (oracle: {'in' if says else 'not in'} L): they read the definition "
+                "differently, so no result is given; write the regex in the tool syntax and use dfa_vs_ir")
+    return {"max_len": max_len, "n_words": decisive, "n_unknown": unknown, "oracle": class_oracle.source}
 
 
 def _check_grammar_symbols(g: dict[str, Any]) -> None:
@@ -581,10 +746,12 @@ def _exponent_vars(expr: str) -> set[str]:
 
 
 def _eval_exponent(expr: str, var: str | None, value: int) -> int:
-    """Evaluate +, -, *, integers and the one variable -- no '**', no names
+    """Evaluate +, -, *, integers, the one variable and a power with a constant
+    exponent 0..3 ('n^2' or 'n**2', e.g. a^(p^2)) -- no other powers, no names
     other than *var*, every intermediate value bounded (no eval())."""
     src = re.sub(r"(\d)([A-Za-z(])", r"\1*\2", expr.strip())
     src = re.sub(r"\)\s*([A-Za-z0-9(])", r")*\1", src)
+    src = src.replace("**", "^").replace("^", "**")
     try:
         tree = ast.parse(src, mode="eval")
     except SyntaxError:
@@ -609,7 +776,17 @@ def _eval_exponent(expr: str, var: str | None, value: int) -> int:
             if abs(out) > 1_000_000:
                 raise InputTooLarge(f"exponent {expr!r} grows too large")
             return out
-        raise ToolInputError(f"exponent {expr!r}: only +, -, *, integers and one variable are allowed")
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            power = node.right
+            if not (isinstance(power, ast.Constant) and type(power.value) is int and 0 <= power.value <= 3):
+                raise ToolInputError(f"exponent {expr!r}: a power needs a constant exponent 0..3, "
+                                     "e.g. n^2")
+            out = ev(node.left) ** power.value
+            if abs(out) > 1_000_000:
+                raise InputTooLarge(f"exponent {expr!r} grows too large")
+            return out
+        raise ToolInputError(f"exponent {expr!r}: only +, -, *, a constant power (n^2), integers and "
+                             "one variable are allowed")
 
     return ev(tree)
 
@@ -1026,3 +1203,309 @@ def dfa_vs_ir(args: DfaVsIrArgs) -> ToolResult:
     return ToolResult.success(
         data, trust="not_verified", bounds=bounds,
         reason="the oracle decided no word; nothing was compared")
+
+
+# ---------------------------------------------------------------------------
+# pump_check_reg (VERDICT_POLICY §4 reg/pumping, R6)
+# ---------------------------------------------------------------------------
+
+#: Largest exponent i tried; i = 1 is never an exit (x y^1 z = w).
+MAX_PUMP_I = 6
+#: Pumping lengths a claim may be instantiated at (VERDICT_POLICY §4: p ∈ {2, 3, 4} by default).
+MAX_PUMP_P = 12
+PUMP_DEFAULT_P = (2, 3, 4)
+PUMP_TIMEOUT_S = 30.0
+#: Problem splits listed per p (all are counted).
+_PUMP_EXAMPLES = 5
+_PUMP_WITNESSES = 30
+
+
+class PumpCheckRegArgs(ToolArgs):
+    ir: dict[str, Any] = Field(description=_IR_DESCRIPTION.replace(
+        "Results are", "Class reg. Its membership oracle is the reference. Results are"))
+    word: str = Field(
+        min_length=1, max_length=80,
+        description=("The word w(p) your argument picks for the pumping length p, as a pattern in ONE "
+                     "variable (any letter; it stands for p): blocks of a symbol or a parenthesised "
+                     "group, optionally '^' with an integer exponent formula using +, -, *, implicit "
+                     "multiplication and a constant power, e.g. 'a^p b^p', 'a^(p^2)', 'a^p b a^p', "
+                     "'(ab)^p c^(p+1)'."))
+    exit_i: list[int] = Field(
+        min_length=1, max_length=MAX_PUMP_I,
+        description=(f"The exponents i (0 or 2..{MAX_PUMP_I}) your argument uses to leave L: the argument "
+                     "claims that for EVERY split w = xyz with |xy| <= p and |y| >= 1, x y^i z is not in "
+                     "L for at least one of these i (e.g. [2], or [0, 2] when the cases use different "
+                     "i)."))
+    p_values: list[int] = Field(
+        default_factory=list, max_length=6,
+        description=(f"EXTRA pumping lengths to try (1..{MAX_PUMP_P}). The tool always checks p = 2, 3, 4 "
+                     "(VERDICT_POLICY §4); larger p find more splits, so add them freely."))
+    p_min: int = Field(
+        default=1, ge=1, le=MAX_PUMP_P - 2,
+        description=("The least pumping length your argument covers (wlog p >= p0; say so in the proof). "
+                     "With p_min > 2 the tool checks p_min, p_min+1, p_min+2 instead of 2, 3, 4, and skips "
+                     "every p below p_min."))
+
+    @model_validator(mode="after")
+    def _ranges(self) -> PumpCheckRegArgs:
+        for i in self.exit_i:
+            if i == 1:
+                raise ValueError("exit_i: i = 1 is never an exit, x y^1 z = w is in L")
+            if not 0 <= i <= MAX_PUMP_I:
+                raise ValueError(f"exit_i: exponents must be 0 or 2..{MAX_PUMP_I}, got {i}")
+        for p in self.p_values:
+            if not 1 <= p <= MAX_PUMP_P:
+                raise ValueError(f"p_values must be in 1..{MAX_PUMP_P}, got {p}")
+        return self
+
+    def checked_p(self) -> list[int]:
+        """The policy p (2, 3, 4, or p_min..p_min+2 when p_min > 2) plus the extra
+        p_values >= p_min: the model can add p, never drop a policy one."""
+        base = list(PUMP_DEFAULT_P) if self.p_min <= PUMP_DEFAULT_P[0] else \
+            [self.p_min, self.p_min + 1, self.p_min + 2]
+        return sorted(set(base) | {p for p in self.p_values if p >= self.p_min})
+
+
+def _pump_oracle(ir: dict[str, Any]) -> tuple[ClassOracle | None, list[str]]:
+    """The reg oracle of the IR (``words.oracle_for``); for a ``natural`` IR
+    whose description is exponent notation, the exponent-notation oracle
+    (``cfl_system.lib.exponent_pattern``, VERDICT_POLICY §4 "оракул
+    экспоненциальной нотации": exact within its bounds, None beyond them).
+    ``(None, notes)`` when there is none."""
+    notes: list[str] = []
+    try:
+        return oracle_for("reg", ir, validated=True), notes
+    except ToolUnsupported as exc:
+        notes.append(str(exc))
+    spec = ir.get("language_spec") if isinstance(ir.get("language_spec"), dict) else {}
+    text = spec.get("description")
+    if spec.get("kind") == "natural" and isinstance(text, str) and text.strip():
+        from cfl_system.lib.exponent_pattern import parse_exponent_pattern
+
+        fn = parse_exponent_pattern(text)
+        if fn is not None:
+            alphabet = word_alphabet("reg", ir)
+            doubt = _exponent_oracle_doubt(text, fn, alphabet)
+            if doubt:
+                notes.append(doubt)
+            note = ("exponent notation parsed from the description text; unknown beyond its length bound or "
+                    "step budget")
+            return ClassOracle(
+                "reg", alphabet, "cfl_system.lib.exponent_pattern (language_spec.description)",
+                doubt is None, fn, note=(note if doubt is None else f"{note}; APPROXIMATE: {doubt}"),
+                max_word_len=getattr(fn, "max_word_len", None)), notes
+        notes.append("the description is not exponent notation cfl_system.lib.exponent_pattern can "
+                     "evaluate (e.g. a non-linear condition such as n^2, or prose)")
+    return None, notes
+
+
+#: words up to this length must contain one the fallback oracle accepts
+_EXPONENT_SANITY_LEN = 8
+
+
+def _exponent_oracle_doubt(text: str, fn: Any, alphabet: Iterable[str]) -> str | None:
+    """Why the exponent-notation oracle's answers are not trusted as exact, or None.
+
+    ``cfl_system.lib.exponent_pattern`` misreads a comma-separated list of
+    conditions ("n != m, n >= 0, m >= 0" gives the empty language, "m >= 0,
+    n != m" drops n > m); that bug lives in the read-only cfl_system, so here a
+    description with a comma after '|' and a parse that accepts no short word
+    make the oracle approximate: its "not in L" then never refutes."""
+    cond = text.split("|", 1)[1] if "|" in text else ""
+    if "," in cond:
+        return ("the condition is a comma-separated list, which cfl_system.lib.exponent_pattern can misread; "
+                "write it as one condition joined by 'and', or re-encode the IR as a predicate")
+    letters = sorted(set(alphabet))
+    checked = 0
+    for n in range(_EXPONENT_SANITY_LEN + 1):
+        for w in product(letters, repeat=n):
+            try:
+                if fn("".join(w)) is True:
+                    return None
+            except Exception:  # noqa: BLE001 - a failing oracle is no oracle
+                return "the parsed description raised an error on a short word"
+        checked = n
+        if len(letters) ** (n + 1) > 4000:
+            break
+    return (f"the parsed description accepts no word up to length {checked} (a misparse, or an empty "
+            "language): re-encode the IR as a predicate")
+
+
+def _pump_one_p(word: str, p: int, exits: list[int], searched: list[int], oracle: _CachedOracle | None,
+                deadline: Deadline, add_witness: Any) -> dict[str, Any]:
+    """Every split w = xyz with |xy| <= p, |y| >= 1, pumped at the searched i."""
+    rec: dict[str, Any] = {"p": p, "word": word, "length": len(word), "word_in_L": None,
+                           "splits": 0, "closed": 0, "claimed_exit_fails": 0, "undecided": 0,
+                           "examples": []}
+    if oracle is None:
+        m = min(p, len(word))
+        rec["splits_not_checked"] = m * (m + 1) // 2
+        return rec
+    rec["word_in_L"] = oracle(word)
+    if rec["word_in_L"] is not None:
+        add_witness(word, rec["word_in_L"], f"w(p) at p={p}")
+    if rec["word_in_L"] is not True:
+        return rec  # refuted (False) or unknown (None): the splits are not checked
+    for len_xy in range(1, min(p, len(word)) + 1):
+        for len_x in range(len_xy):
+            if deadline.expired():
+                rec["truncated"] = True
+                return rec
+            x, y, z = word[:len_x], word[len_x:len_xy], word[len_xy:]
+            rec["splits"] += 1
+            answers: dict[int, bool | None] = {}
+            for i in searched:
+                pumped = x + y * i + z
+                answers[i] = oracle(pumped) if len(pumped) <= DEFAULT_LIMITS.max_word_len else None
+                if answers[i] is not None:
+                    add_witness(pumped, answers[i], f"p={p} x={x!r} y={y!r} i={i}")
+            claimed = [answers[i] for i in exits]
+            if any(a is False for a in claimed):
+                rec["closed"] += 1
+                continue
+            status = "claimed_exit_fails" if all(a is True for a in claimed) else "undecided"
+            rec[status] += 1
+            example = {"x": x, "y": y, "z": z, "status": status,
+                       "in_L_at": [i for i in searched if answers[i] is True],
+                       "exits_at": [i for i in searched if answers[i] is False],
+                       "unknown_at": [i for i in searched if answers[i] is None]}
+            if status == "claimed_exit_fails" and "first_failure" not in rec:
+                rec["first_failure"] = example
+            if len(rec["examples"]) < _PUMP_EXAMPLES:
+                rec["examples"].append(example)
+    return rec
+
+
+@tfl_tool(group="reg", max_trust="well_formed", timeout_s=PUMP_TIMEOUT_S)
+def pump_check_reg(args: PumpCheckRegArgs) -> ToolResult:
+    """Check a pumping-lemma argument for NON-regularity (tz §1.5) against the task IR, split by split.
+
+    You give the word family w(p) your argument picks, the exit exponents it uses and, if needed,
+    extra pumping lengths or the least p your argument covers (p_min). For p = 2, 3, 4 (always;
+    p_min..p_min+2 when p_min > 2) plus your extra p the tool instantiates w(p), checks
+    |w(p)| >= p and, with the IR's membership oracle, w(p) in L; then it takes EVERY split
+    w = xyz with |xy| <= p, |y| >= 1 and pumps x y^i z for i = 0, 2..6. A split is closed when one of
+    your exit_i gives a word not in L; data.per_p lists the splits that are not closed, with the
+    exponents at which they do leave L (exits_at), so you can fix the argument. exit_i is the same
+    at every p and every |y|: an argument whose exit depends on p or |y| (i = p!/|y| + 1) cannot
+    be stated here.
+
+    Trust (VERDICT_POLICY §4 reg/pumping, R6): at most well_formed, which is what the verdict gate
+    needs for a destructive basis: non_regular at confidence <= 0.55. Finitely many p and i never
+    prove the claim for all p and all splits; a regular language whose period exceeds the largest p
+    tried ((a^5)* with w = a^(5p), exit 0) closes every split too. refuted only when a concrete
+    premise is false: |w(p)| < p, or w(p) not in L (exact oracle); a refuted claim is no basis. A
+    split that stays in L at every claimed exit is unclosed: not_verified (no basis), not refuted,
+    since the tried i are not all i. A split on which one of your exit_i is undecided (unknown
+    oracle answer) is neither. Without an
+    oracle for the IR (e.g. a natural description that is not exponent notation, such as
+    reg-07's {a^(n^2)}) only the structure is checked (w(p) instantiates and |w(p)| >= p; data.
+    semantic_check false): still well_formed, and the membership claims are yours to prove.
+    Oracle: the IR's reg oracle, or for a natural IR whose description is exponent notation
+    ({a^n b^n | n >= 0}) the exponent-notation oracle. Unknown answers are never "not in L".
+    """
+    deadline = Deadline(PUMP_TIMEOUT_S - _DEADLINE_MARGIN_S)
+    ir = require_valid("reg", args.ir)
+    alphabet = list(word_alphabet("reg", ir))
+    blocks, variables = _parse_pattern(args.word, alphabet)
+    if len(variables) != 1:
+        raise ToolInputError(f"the word {args.word!r} must use exactly one variable (the pumping length), "
+                             f"found {sorted(variables) or 'none'}")
+    var = next(iter(variables))
+    p_values = args.checked_p()
+    exits = sorted(set(args.exit_i))
+    searched = [i for i in range(MAX_PUMP_I + 1) if i != 1]
+    class_oracle, notes = _pump_oracle(ir)
+    oracle = _CachedOracle(class_oracle) if class_oracle is not None else None
+
+    witnesses: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_witness(w: str, in_l: bool, source: str) -> None:
+        if w not in seen and len(witnesses) < _PUMP_WITNESSES:
+            seen.add(w)
+            witnesses.append({"word": w, "in_L": in_l, "source": source})
+
+    refutations: list[str] = []
+    unclosed: list[str] = []
+    per_p: list[dict[str, Any]] = []
+    for p in p_values:
+        word = _instantiate(blocks, var, p, DEFAULT_LIMITS.max_word_len)
+        if len(word) < p:
+            refutations.append(f"|w(p)| = {len(word)} < p = {p} at p = {p}: the lemma needs |w| >= p")
+            per_p.append({"p": p, "word": word, "length": len(word), "too_short": True})
+            continue
+        rec = _pump_one_p(word, p, exits, searched, oracle, deadline, add_witness)
+        per_p.append(rec)
+        if rec["word_in_L"] is False:
+            refutations.append(f"w(p) = {word!r} at p = {p} is NOT in L (oracle): the chosen word is invalid")
+        ex = rec.get("first_failure")
+        if ex is not None:
+            unclosed.append(
+                f"at p = {p}, {rec['claimed_exit_fails']} split(s) keep x y^i z in L for every claimed exit "
+                f"i in {exits} (oracle), e.g. x = {ex['x']!r}, y = {ex['y']!r}, z = {ex['z']!r}"
+                + (f"; that split does leave L at i = {ex['exits_at']}" if ex["exits_at"] else
+                   f"; that split stays in L at every tried i {searched}"))
+
+    decisive, unknown, longest = oracle.stats() if oracle is not None else (0, 0, 0)
+    n_splits = sum(r.get("splits", 0) for r in per_p)
+    closed = sum(r.get("closed", 0) for r in per_p)
+    failing = sum(r.get("claimed_exit_fails", 0) for r in per_p)
+    undecided = sum(r.get("undecided", 0) for r in per_p)
+    truncated = any(r.get("truncated") for r in per_p)
+    data: dict[str, Any] = {
+        "mode": "claim", "cls": "reg", "ir_fingerprint": ir_fingerprint(args.ir),
+        "oracle": class_oracle.describe() if class_oracle is not None else None,
+        "oracle_notes": notes,
+        "semantic_check": class_oracle is not None,
+        "word_pattern": args.word, "variable": var, "exit_i": exits, "p_values": p_values,
+        "p_min": args.p_min, "extra_p_values": sorted(set(args.p_values)),
+        "searched_i": searched, "split_condition": "|xy| <= p, |y| >= 1",
+        "per_p": per_p, "refutations": refutations, "unclosed_splits": unclosed, "witnesses": witnesses,
+        "scope": ("finite p and i only: closing every split at these p does not prove the claim for all p (a "
+                  "regular language whose period exceeds the largest p tried closes them too), and a split "
+                  "that survives the tried i may leave L at a larger i (VERDICT_POLICY §4)"),
+    }
+    if oracle is not None and oracle.notes:
+        data["unknown_reasons"] = oracle.notes
+    bounds = {"p_values": p_values, "i_values": searched, "n_words": decisive, "n_unknown": unknown,
+              "max_len": longest, "n_splits": n_splits, "splits_closed": closed,
+              "unresolved_splits": failing + undecided, "truncated": truncated}
+
+    exact = class_oracle is not None and class_oracle.exact
+    structural = [r for r in refutations if r.startswith("|w(p)|")]
+    if structural or (refutations and exact):
+        return ToolResult.success(data, trust="refuted", bounds=bounds, reason="; ".join(refutations)[:900])
+    if refutations:
+        return ToolResult.success(
+            data, trust="not_verified", bounds=bounds,
+            reason=(f"the approximate oracle ({class_oracle.note}) contradicts the argument: "
+                    + "; ".join(refutations)[:600] + " -- not a refutation; the argument is not verified"))
+    if unclosed:
+        # VERDICT_POLICY §4 reg/pumping: survival at the tried i does not refute (∀i is not
+        # checked), and the argument's real exit may depend on p or |y|, which exit_i cannot
+        # state. An unclosed split is no refutation, but the argument has no basis either.
+        return ToolResult.success(
+            data, trust="not_verified", bounds=bounds,
+            reason=("unclosed split(s): " + "; ".join(unclosed)[:700]
+                    + " -- not a refutation (VERDICT_POLICY §4: survival at the tried i proves nothing for all "
+                    "i), but the argument as stated does not close them: not verified. Fix the word or the "
+                    "exits; an exit that depends on p or |y| cannot be checked here (use a Nerode family)"))
+    if class_oracle is None:
+        return ToolResult.success(
+            data, trust="well_formed", bounds=bounds,
+            reason=(f"no membership oracle for this IR ({'; '.join(notes)[:300]}): checked only that w(p) "
+                    f"instantiates with |w(p)| >= p at p = {p_values}; w(p) in L and x y^i z not in L were "
+                    "NOT checked and are yours to prove; at most well_formed (VERDICT_POLICY §4)"))
+    unknown_words = [r["p"] for r in per_p if r.get("word_in_L") is None]
+    parts = [f"{closed} of {n_splits} splits closed at a claimed exit i in {exits} for p = {p_values}"]
+    if undecided:
+        parts.append(f"{undecided} split(s) undecided (unknown oracle answers; not a refutation)")
+    if unknown_words:
+        parts.append(f"w(p) undecided by the oracle at p = {unknown_words}, so its splits were not checked")
+    if truncated:
+        parts.append("the time limit cut the check short")
+    return ToolResult.success(
+        data, trust="well_formed", bounds=bounds,
+        reason="; ".join(parts) + ("; finite p and i are diagnostics, never a proof for all p: at most "
+                                   "well_formed (VERDICT_POLICY §4 reg/pumping, R6)"))

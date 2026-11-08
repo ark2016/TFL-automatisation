@@ -1,6 +1,6 @@
 {
  "description": "tfl-eval deep replay, dcfl-04 (trap): {a^n b^n c^m | n, m >= 0} is a DCFL. ir-builder validates the IR, main checks a hand-written DPDA against the task (dpda_vs_ir, R2'), then submits. The DPDA is dcfl_system/tests/test_dpda.py::SAFE_ANBNCM_DPDA.",
- "task": "{a^n b^n c^m | n, m >= 0}",
+ "task": "{a^n b^n c^m | n, m >= 0}\nВопрос: является ли язык детерминированным контекстно-свободным (DCFL)?",
  "template": "short_verdict",
  "defs": {
   "ir": {

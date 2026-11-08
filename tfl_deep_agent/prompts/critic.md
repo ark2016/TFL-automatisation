@@ -15,7 +15,8 @@ You do not write a new proof. Write your findings in the language of the task (u
      `run_dfa` against the given grammar or automaton;
    - a symbolic word (with p, n, …): instantiate it for small concrete values and check the
      instances;
-   - every pumped, cut or decomposed word: `check_membership` / `pump_check_cfl`;
+   - every pumped, cut or decomposed word: `check_membership` / `pump_check_cfl`; for REG, check a
+     pumping argument with `pump_check_reg` (|xy| <= p), not `pump_check_cfl`;
    - a construction: `dfa_vs_ir`, `grammar_vs_ir`, `dpda_vs_ir`; an LL(k) claim: `ll_table`.
 3. Look for the typical failures:
    - wrong quantifier order in a pumping or Ogden argument, or a decomposition fixed by the

@@ -191,8 +191,8 @@ def set_live_model_env(explicit_model: str | None, env: dict[str, str]) -> None:
 # system "deep": tfl_deep_agent
 # ---------------------------------------------------------------------------
 #
-# The deep agent gets only the task's `source_text` (no IR: it formalizes the
-# task itself), runs with every HITL stop auto-approved, and writes
+# The deep agent gets only the task's `source_text` plus one question line for
+# the entry's class (no IR: it formalizes the task itself), runs with every HITL stop auto-approved, and writes
 # `result.{json,md,html}` into its run directory. The verdict is the policy
 # token the agent's code-side verdict gate published (`published_verdict`,
 # else `verdict_token`): the same vocabulary as the four pipelines
@@ -210,12 +210,42 @@ def deep_mock_script(entry_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def deep_task_text(ir: dict) -> str:
-    """The only input the deep agent gets: the IR's `source_text`."""
+# One explicit question per manifest class, appended to the deep agent's input
+# (user decision 2026-11-08): many `source_text`s name no class, and the same
+# language is asked under several classes ({a^n b^n} is reg-01, dcfl-01 and
+# ll-01). The LL question asks for the smallest k, which is what the manifest's
+# `expected.k` holds; a grammar task (`ll_check_grammar`, Format 3) asks about
+# the given grammar, every other LL task about the language.
+DEEP_CLASS_QUESTIONS: dict[str, str] = {
+    "reg": "Вопрос: является ли язык регулярным?",
+    "cfl": "Вопрос: является ли язык контекстно-свободным?",
+    "dcfl": "Вопрос: является ли язык детерминированным контекстно-свободным (DCFL)?",
+}
+DEEP_LL_GRAMMAR_QUESTION = ("Вопрос: является ли данная грамматика LL(k) для некоторого k, "
+                            "и если да, то каково наименьшее такое k?")
+DEEP_LL_LANGUAGE_QUESTION = ("Вопрос: является ли язык LL(k)-языком для некоторого k, "
+                             "и если да, то каково наименьшее такое k?")
+
+
+def deep_class_question(task_class: str, ir: dict) -> str:
+    """The one-line question for a manifest entry of class *task_class*."""
+    if task_class == "ll":
+        if ir.get("task_type") == "ll_check_grammar":
+            return DEEP_LL_GRAMMAR_QUESTION
+        return DEEP_LL_LANGUAGE_QUESTION
+    question = DEEP_CLASS_QUESTIONS.get(task_class)
+    if question is None:
+        raise DeepAdapterError(f"no deep question for task class {task_class!r}")
+    return question
+
+
+def deep_task_text(ir: dict, task_class: str) -> str:
+    """The only input the deep agent gets: the IR's `source_text`, then on
+    its own line the question of the entry's class (`deep_class_question`)."""
     text = ir.get("source_text")
     if not isinstance(text, str) or not text.strip():
         raise DeepAdapterError("the task IR has no source_text (the deep agent's only input)")
-    return text.strip()
+    return f"{text.strip()}\n{deep_class_question(task_class, ir)}"
 
 
 def load_deep_settings(path: str | None = None) -> Any:

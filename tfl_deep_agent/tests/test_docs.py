@@ -247,15 +247,19 @@ def test_readme_says_the_runners_open_no_sandbox_while_that_is_true():
         assert claims_no_sandbox != runner_opens_sandbox, doc.name
 
 
-def test_docs_state_the_main_reserve_gap_while_it_is_open():
-    """Both READMEs say that main's worst-case call ($1.28) exceeds the report
-    reserve while ``main`` is not in ``FIT_MAX_TOKENS_ROLES``; once the gap is
-    closed the sentence must go."""
-    gap_open = "main" not in budget_mod.FIT_MAX_TOKENS_ROLES
+def test_docs_state_the_derived_max_tokens():
+    """Both READMEs say that max_tokens is derived from the remaining budget
+    with the 4096-token floor (user decision 2026-11-08), and no longer
+    describe the closed gap (main's fixed $1.28 worst case vs the reserve)."""
+    floor = budget_mod.MIN_OUTPUT_TOKENS
     deep = _section(_text(DEEP_README), "### Budget semantics")
     root = _section(_text(ROOT_README), "## TFL Deep Agent")
     for name, text in (("tfl_deep_agent/README.md", deep), ("README.md", root)):
-        assert ("$1.28" in text) == gap_open, name
+        assert f"{floor}-token floor" in text, name
+        assert "max_tokens" in text and "derived" in text, name
+        assert "Known gap" not in text and "still open" not in text, name
+    assert "floor((room − worst-case input cost) / output price)" in deep
+    assert "the reserve" in deep and "allocation" in deep
 
 
 def test_eval_section_matches_the_tfl_eval_cli():

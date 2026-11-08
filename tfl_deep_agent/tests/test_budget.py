@@ -107,6 +107,25 @@ def make_agent(chat, node, *, tools=(spawn_subagent, check_membership), **mw):
     return create_agent(chat, tools=list(tools), middleware=[B.BudgetMiddleware(node, role="main", **mw)])
 
 
+def leave_next(model, n, budget, ceiling, floor=B.MIN_OUTPUT_TOKENS):
+    """The largest c <= ceiling with: this call (n in, c out) plus one more call at the
+    floor whose prompt grew by c + NEXT_CALL_MARGIN_TOKENS fits in ``budget`` (0: none)."""
+    def fits(c):
+        return (config.worst_case_usd(model, n, c)
+                + config.worst_case_usd(model, n + c + B.NEXT_CALL_MARGIN_TOKENS, floor)) <= budget + 1e-9
+    if not fits(0):
+        return 0
+    c = ceiling
+    while not fits(c):  # a plain downward scan, independent of the middleware's bisection
+        c -= 1
+    return c
+
+
+def normal_cap(model, n, avail, reserve, ceiling):
+    """A normal call's derived max_tokens: above the reserve AND leaving the next floor call payable."""
+    return min(config.max_tokens_within(model, n, avail - reserve, ceiling), leave_next(model, n, avail, ceiling))
+
+
 def opus_cost(plain=0, out=0, cr=0, cw=0):
     c = config.MODEL_PRICING[OPUS]
     return (plain * c["input"] + out * c["output"] + cr * c["cache_read"] + cw * c["cache_write"]) / 1e6
@@ -292,7 +311,7 @@ def test_new_task_must_fit_in_the_day(tmp_path):
     with pytest.raises(B.DailyBudgetExceeded) as exc:
         B.BudgetLedger.for_task(st, spend_log=log)
     assert exc.value.details["remaining_usd"] == pytest.approx(4.0)
-    assert "$5.00" in str(exc.value)
+    assert "$10.00" in str(exc.value)
     small = S.apply_overrides(st, {"budget": {"per_task_usd": 4.0}})
     led = B.BudgetLedger.for_task(small, spend_log=log, task_id="new")
     assert led.root.limit == 4.0 and led.root.reserve == 0.3 and led.per_child_max_usd == 2.0
@@ -393,21 +412,230 @@ def test_usage_cost_prices_cache_separately_and_haiku_long_prompt():
 # BudgetMiddleware in a real create_agent graph
 # ---------------------------------------------------------------------------
 
-def test_over_budget_call_is_refused_without_calling_the_model():
-    # Opus, max_tokens 64000: worst case > $1.28 > the $1.00 task budget
+def test_call_that_cannot_get_the_floor_is_refused_without_calling_the_model():
+    # Opus: even the 4096-token floor costs > $0.08, more than the $0.05 task budget
     model = Scripted(replies=[ai("never")], model=OPUS, max_tokens=64000)
-    led = B.BudgetLedger(1.0, reserve_for_report_usd=0.3)
+    led = B.BudgetLedger(0.05, reserve_for_report_usd=0.01)
     out = make_agent(model, led.root).invoke({"messages": [HumanMessage(content="L = {a^n b^n}")]})
     assert model.calls == []
     last = out["messages"][-1]
     assert isinstance(last, AIMessage) and not last.tool_calls
     assert "refused before it was made" in last.content and "budget_exhausted" in last.content
     nums = last.response_metadata["tfl_budget"]
-    assert nums["max_tokens"] == 64000 and nums["model"] == OPUS
-    assert nums["worst_case_usd"] > 1.28 and nums["available_usd"] == pytest.approx(1.0)
-    assert f"${nums['worst_case_usd']:.4f}" in last.content
+    assert nums["max_tokens"] == B.MIN_OUTPUT_TOKENS == 4096 and nums["model"] == OPUS
+    assert nums["worst_case_usd"] > 0.08 and nums["available_usd"] == pytest.approx(0.05)
+    assert f"${nums['worst_case_usd']:.4f}" in last.content and "max_tokens 4096" in last.content
     assert last.response_metadata["stop_reason"] == "budget_exhausted"
     assert led.exhausted and led.spent_usd == 0.0 and led.root.inflight == 0.0
+
+
+def test_fixed_ceiling_is_refused_when_deriving_is_off():
+    # fit_max_tokens=False keeps the old arithmetic: 64000 on Opus ($1.28+) > the $1.00 budget
+    model = Scripted(replies=[ai("never")], model=OPUS, max_tokens=64000)
+    led = B.BudgetLedger(1.0, reserve_for_report_usd=0.3)
+    out = make_agent(model, led.root, fit_max_tokens=False).invoke({"messages": [HumanMessage(content="go")]})
+    assert model.calls == []
+    nums = out["messages"][-1].response_metadata["tfl_budget"]
+    assert nums["max_tokens"] == 64000 and nums["worst_case_usd"] > 1.28 and led.exhausted
+
+
+def test_opus_main_in_a_1_50_task_is_not_exhausted_after_two_calls():
+    """Before the 2026-11-08 decision every Opus main call reserved its full
+    64000 ceiling ($1.28+): a $1.50 task went to wrap-up on the first call and
+    could not afford a second one. With the derived cap the calls go on."""
+    calls = [ai("", tool_calls=[{"name": "check_membership", "args": {"word": f"w{i}"}, "id": f"c{i}"}],
+                total_in=4000, out=1500) for i in range(4)]
+    model = Scripted(replies=[*calls, ai("done", total_in=4000, out=500)], model=OPUS, max_tokens=64000)
+    led = B.BudgetLedger(1.50, reserve_for_report_usd=0.30)
+    out = make_agent(model, led.root).invoke({"messages": [HumanMessage(content="go")]})
+    assert out["messages"][-1].content == "done" and len(model.calls) == 5
+    assert not led.exhausted and led.root.state == "normal"
+    assert not any("BUDGET WRAP-UP" in str(c["messages"][-1].content) for c in model.calls)
+    sent = [c["kwargs"]["max_tokens"] for c in model.calls]
+    assert all(B.MIN_OUTPUT_TOKENS <= n < 64000 for n in sent)
+    assert sent == sorted(sent, reverse=True)          # the cap shrinks with the remainder
+    assert [r.max_tokens for r in led.records] == sent
+    assert all(r.worst_case_usd <= 1.20 + 1e-9 for r in led.records)  # never into the reserve
+    assert led.spent_usd < 1.50 - 0.30
+
+
+def test_max_tokens_is_derived_from_the_remaining_budget():
+    model = Scripted(replies=[ai("done", total_in=100, out=10)], model=OPUS, max_tokens=64000)
+    led = B.BudgetLedger(1.0, reserve_for_report_usd=0.3)
+    make_agent(model, led.root).invoke({"messages": [HumanMessage(content="go")]})
+    sent = model.calls[0]["kwargs"]["max_tokens"]
+    est_in = led.records[0].estimated_input_tokens
+    assert sent == config.max_tokens_within(OPUS, est_in, 0.7, 64000)
+    assert 4096 <= sent < 64000 and led.records[0].max_tokens == sent
+    assert config.worst_case_usd(OPUS, est_in, sent) <= 0.7 + 1e-9
+    assert config.worst_case_usd(OPUS, est_in, sent + 1) > 0.7
+    assert led.root.state == "normal"
+    # a scope that can pay for the ceiling sends the ceiling and no override
+    big = Scripted(replies=[ai("done", total_in=100, out=10)], model=OPUS, max_tokens=64000)
+    make_agent(big, B.BudgetLedger(10.0, reserve_for_report_usd=0.3).root).invoke(
+        {"messages": [HumanMessage(content="go")]})
+    assert "max_tokens" not in big.calls[0]["kwargs"]
+    # below min_output_tokens it refuses
+    tiny = B.BudgetLedger(0.01)
+    model2 = Scripted(replies=[ai("x")], model=OPUS, max_tokens=64000)
+    out = make_agent(model2, tiny.root).invoke({"messages": [HumanMessage(content="go")]})
+    assert model2.calls == [] and "refused" in out["messages"][-1].content
+    # a ceiling below the floor is its own floor: sent as is when it fits, never lowered further
+    small = Scripted(replies=[ai("done", total_in=10, out=10)], model=OPUS, max_tokens=1000)
+    make_agent(small, B.BudgetLedger(0.03).root).invoke({"messages": [HumanMessage(content="go")]})
+    assert small.calls and "max_tokens" not in small.calls[0]["kwargs"]
+    small2 = Scripted(replies=[ai("x")], model=OPUS, max_tokens=1000)
+    out = make_agent(small2, B.BudgetLedger(0.015).root).invoke({"messages": [HumanMessage(content="go")]})
+    assert small2.calls == [] and out["messages"][-1].response_metadata["tfl_budget"]["max_tokens"] == 1000
+
+
+def test_the_reserve_stays_for_the_report_call():
+    """Normal calls are capped by what is free ABOVE the reserve; the call
+    that no longer gets the floor there enters wrap-up and is capped by the
+    remainder WITH the reserve, so the report can still be submitted."""
+
+    @tool
+    def submit_report(verdict: str) -> str:
+        """Submit the report."""
+        return f"report: {verdict}"
+
+    model = Scripted(replies=[
+        ai("", tool_calls=[{"name": "check_membership", "args": {"word": "ab"}, "id": "c1"}],
+           total_in=1000, out=8000),
+        ai("", tool_calls=[{"name": "submit_report", "args": {"verdict": "regular"}, "id": "r1"}],
+           total_in=1200, out=3000),
+        ai("submitted", total_in=1300, out=10),
+    ], model=OPUS, max_tokens=64000)
+    led = B.BudgetLedger(0.50, reserve_for_report_usd=0.30)
+    out = make_agent(model, led.root, tools=(check_membership, submit_report)).invoke(
+        {"messages": [HumanMessage(content="go")]})
+    first, second = (c["kwargs"]["max_tokens"] for c in model.calls[:2])
+    r1, r2 = led.records[:2]
+    # call 1: only the $0.20 above the reserve (and the next floor call stays payable)
+    assert first == normal_cap(OPUS, r1.estimated_input_tokens, 0.50, 0.30, 64000)
+    assert r1.worst_case_usd <= 0.20 + 1e-9
+    # call 2: < floor above the reserve -> wrap-up; capped by the remainder with the reserve,
+    # leaving one more floor call payable when it can, else everything (the last call)
+    avail = 0.50 - r1.usd
+    room_above = avail - 0.30
+    assert config.max_tokens_within(OPUS, r2.estimated_input_tokens, room_above, 64000) < B.MIN_OUTPUT_TOKENS
+    keep = leave_next(OPUS, r2.estimated_input_tokens, avail, 64000)
+    assert second == (keep if keep >= B.MIN_OUTPUT_TOKENS
+                      else config.max_tokens_within(OPUS, r2.estimated_input_tokens, avail, 64000))
+    assert second >= B.MIN_OUTPUT_TOKENS and r2.worst_case_usd > room_above
+    assert "BUDGET WRAP-UP" in model.calls[1]["messages"][-1].content
+    tool_msgs = {m.tool_call_id: m for m in out["messages"] if isinstance(m, ToolMessage)}
+    assert tool_msgs["r1"].content == "report: regular"
+    assert led.root.state == "wrap_up" and led.spent_usd <= 0.50
+
+
+class UsesItsCap(Scripted):
+    """A scripted model that always produces its whole max_tokens (the worst case)."""
+
+    def _next(self, messages, kw):
+        result = super()._next(messages, kw)
+        msg = result.generations[0].message
+        cap = kw.get("max_tokens") or self.max_tokens
+        msg = msg.model_copy(update={"usage_metadata": usage(total_in=2000, out=int(cap))})
+        return ChatResult(generations=[ChatGeneration(message=msg)])
+
+
+def test_two_wrap_up_turns_still_reach_the_report():
+    """The first wrap-up turn is not the report (it calls check_membership) and uses its whole
+    cap; the reserve is held back for one more floor-sized call, so the report turn after it is
+    admitted rather than refused (budget_exhausted without a report)."""
+
+    @tool
+    def submit_report(verdict: str) -> str:
+        """Submit the report."""
+        return f"report: {verdict}"
+
+    model = UsesItsCap(replies=[
+        ai("", tool_calls=[{"name": "check_membership", "args": {"word": "ab"}, "id": "c1"}]),
+        ai("", tool_calls=[{"name": "submit_report", "args": {"verdict": "regular"}, "id": "r1"}]),
+        ai("submitted"),
+    ], model=OPUS, max_tokens=64000)
+    led = B.BudgetLedger(0.45, reserve_for_report_usd=0.38)
+    out = make_agent(model, led.root, tools=(check_membership, submit_report)).invoke(
+        {"messages": [HumanMessage(content="go")]})
+    r1, r2 = led.records[:2]
+    # call 1 is already in wrap-up (< floor above the reserve) and is NOT given all $0.45
+    assert "BUDGET WRAP-UP" in model.calls[0]["messages"][-1].content
+    assert r1.max_tokens < config.max_tokens_within(OPUS, r1.estimated_input_tokens, 0.45, 64000)
+    assert r1.max_tokens == leave_next(OPUS, r1.estimated_input_tokens, 0.45, 64000) >= B.MIN_OUTPUT_TOKENS
+    # call 2, the report, still gets at least the floor
+    assert r2.outcome == "ok" and r2.max_tokens >= B.MIN_OUTPUT_TOKENS
+    tool_msgs = {m.tool_call_id: m for m in out["messages"] if isinstance(m, ToolMessage)}
+    assert tool_msgs["c1"].content == "ab: yes" and tool_msgs["r1"].content == "report: regular"
+    assert led.spent_usd <= 0.45 + 1e-9
+
+
+def test_a_long_prompt_still_leaves_the_report_call_payable():
+    """Opus, an 80k-token late-run prompt: its input alone costs more than the $0.30 reserve.
+    The normal call is capped so that a floor-sized call with the grown prompt still fits
+    after it; the next call (prompt + this output + margin) is admitted at the floor or more."""
+    led = B.BudgetLedger(1.20, reserve_for_report_usd=0.30)
+    mw = B.BudgetMiddleware(led.root, role="main", model=OPUS, max_tokens=64000)
+    n = 80_000
+    assert config.worst_case_usd(OPUS, n, 0) > 0.30                 # the reserve alone cannot pay the prompt
+    est = B.CallEstimate(OPUS, n, 64000, config.worst_case_usd(OPUS, n, 64000))
+    with led.lock:
+        first, enter = mw.derive(est, led.root)
+        adm = led.root._admit_locked(first.worst_case_usd, enter_wrap_up=enter)
+    assert adm.ok and not enter and first.max_tokens >= B.MIN_OUTPUT_TOKENS
+    # the model uses its whole cap: the worst case is charged
+    led.root.settle(adm.reservation, B.CallRecord(node="task", role="main", model=OPUS,
+                                                  usd=first.worst_case_usd, worst_case_usd=first.worst_case_usd))
+    n2 = n + first.max_tokens + B.NEXT_CALL_MARGIN_TOKENS
+    nxt = B.CallEstimate(OPUS, n2, 64000, config.worst_case_usd(OPUS, n2, 64000))
+    with led.lock:
+        report, _ = mw.derive(nxt, led.root)
+        adm2 = led.root._admit_locked(report.worst_case_usd)
+    assert adm2.ok and report.max_tokens >= B.MIN_OUTPUT_TOKENS
+    assert led.root.in_wrap_up()
+
+
+def test_child_scope_caps_come_from_its_own_allocation():
+    led = B.BudgetLedger(10.0, reserve_for_report_usd=0.3)
+    child = led.root.allocate("sub", 0.40, reserve_usd=0.10)
+    model = Scripted(replies=[ai("answer", total_in=100, out=10)], model=OPUS, max_tokens=64000)
+    mw = B.BudgetMiddleware(led.root, role="prover")  # built over the root, charged to the active scope
+    graph = create_agent(model, tools=[check_membership], middleware=[mw])
+    with B.enter_scope(child):
+        graph.invoke({"messages": [HumanMessage(content="go")]})
+    sent = model.calls[0]["kwargs"]["max_tokens"]
+    rec = led.records[0]
+    assert rec.node == "task/sub"
+    assert sent == normal_cap(OPUS, rec.estimated_input_tokens, 0.40, 0.10, 64000) < 64000
+    # the root itself could have paid for the full ceiling
+    root_model = Scripted(replies=[ai("answer", total_in=100, out=10)], model=OPUS, max_tokens=64000)
+    create_agent(root_model, tools=[check_membership], middleware=[mw]).invoke(
+        {"messages": [HumanMessage(content="go")]})
+    assert "max_tokens" not in root_model.calls[0]["kwargs"]
+
+
+def test_parallel_branches_get_caps_from_their_own_allocations():
+    led = B.BudgetLedger(10.0, reserve_for_report_usd=0.3, per_subagent_max_usd=2.0)
+    wf = led.root.allocate("workflow:w", 1.0, kind="workflow")
+    branches = [wf.allocate(f"b{i}", 0.30, kind="branch", reserve_usd=0.05) for i in range(3)]
+    results: dict[str, int] = {}
+
+    def run(node):
+        model = Scripted(replies=[ai("ok", total_in=100, out=10)], model=OPUS, max_tokens=64000, delay=0.05)
+        create_agent(model, tools=[], middleware=[B.BudgetMiddleware(node, role="workflow:x")]).invoke(
+            {"messages": [HumanMessage(content="go")]})
+        results[node.name] = model.calls[0]["kwargs"]["max_tokens"]
+
+    threads = [threading.Thread(target=run, args=(b,)) for b in branches]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(results) == 3
+    for rec in led.records:
+        assert results[rec.node.rsplit("/", 1)[1]] == normal_cap(
+            OPUS, rec.estimated_input_tokens, 0.30, 0.05, 64000)
+    assert not led.exhausted and led.root.inflight == 0.0
 
 
 def test_actual_usage_is_charged_with_cache_tokens():
@@ -439,14 +667,15 @@ def test_response_model_name_is_used_for_pricing():
 
 
 def test_wrap_up_injects_the_instruction_and_blocks_spawning_tools():
-    # budget 0.10, reserve 0.06; each Haiku call reserves ~0.03-0.05 (max_tokens 60000)
+    # budget 0.10, reserve 0.099: $0.001 above the reserve does not pay for the 4096-token
+    # floor on Haiku ($0.002+), so the first call enters wrap-up and may use the reserve
     model = Scripted(replies=[
         ai("", tool_calls=[{"name": "spawn_subagent", "args": {"name": "x"}, "id": "s1"},
                            {"name": "check_membership", "args": {"word": "ab"}, "id": "m1"}],
            total_in=100, out=50),
         ai("report submitted", total_in=200, out=50),
     ], model=HAIKU, max_tokens=60000)
-    led = B.BudgetLedger(0.10, reserve_for_report_usd=0.08)
+    led = B.BudgetLedger(0.10, reserve_for_report_usd=0.099)
     out = make_agent(model, led.root).invoke({"messages": [HumanMessage(content="go")]})
     # first call already did not fit without the reserve -> wrap-up from the start
     first = model.calls[0]["messages"]
@@ -462,7 +691,7 @@ def test_wrap_up_injects_the_instruction_and_blocks_spawning_tools():
 
 def test_child_scope_gets_the_child_instruction():
     led = B.BudgetLedger(1.0)
-    child = led.root.allocate("sub", 0.05, reserve_usd=0.03)
+    child = led.root.allocate("sub", 0.05, reserve_usd=0.049)  # < the Haiku floor above the reserve
     model = Scripted(replies=[ai("answer", total_in=10, out=10)], model=HAIKU, max_tokens=80_000)
     make_agent(model, child).invoke({"messages": [HumanMessage(content="go")]})
     assert "return your final answer to the caller" in model.calls[0]["messages"][-1].content
@@ -523,7 +752,7 @@ def test_async_refusal_and_blocked_tool():
     out = asyncio.run(make_agent(model, led.root).ainvoke({"messages": [HumanMessage(content="go")]}))
     assert model.calls == [] and out["messages"][-1].response_metadata["stop_reason"] == "budget_exhausted"
 
-    led2 = B.BudgetLedger(0.10, reserve_for_report_usd=0.08)
+    led2 = B.BudgetLedger(0.10, reserve_for_report_usd=0.099)
     model2 = Scripted(replies=[
         ai("", tool_calls=[{"name": "spawn_subagent", "args": {"name": "x"}, "id": "s1"}], total_in=10, out=5),
         ai("report", total_in=10, out=5),
@@ -716,6 +945,40 @@ def test_budget_hook_needs_a_scope():
             assert B.make_middleware(None, role="prover").node is child
         assert B.make_middleware(None, role="x", node=child).node is child
     assert B.current_budget() is None
+
+
+@pytest.mark.parametrize("role", [*config.MODELS, "general", "spawn:helper", "workflow:step"])
+def test_every_hooked_role_derives_max_tokens(role):
+    led = B.BudgetLedger(1.0)
+    with B.use_budget(led):
+        mw = B.make_middleware(S.default_settings(), role=role)
+    assert mw.fit_max_tokens is True and mw.min_output_tokens == B.MIN_OUTPUT_TOKENS
+    from tfl_deep_agent.orchestration import spawn
+
+    assert spawn.MIN_OUTPUT_TOKENS == B.MIN_OUTPUT_TOKENS  # one floor for fixed roles and ad-hoc children
+
+
+def test_derived_max_tokens_reaches_the_wire_with_adaptive_thinking(wire):
+    """The lowered cap goes into the request body as max_tokens; the
+    request keeps adaptive thinking, the role's effort and the refusal
+    fallback (adaptive thinking has no budget_tokens, so any max_tokens >= 1
+    is a valid request; the floor is ours)."""
+    pytest.importorskip("langchain_anthropic")
+    from tfl_deep_agent.models import make_chat_model
+
+    led = B.BudgetLedger(1.50, reserve_for_report_usd=0.30)
+    graph = create_agent(make_chat_model(role="main", api_key="test"), tools=[check_membership],
+                         middleware=[B.BudgetMiddleware(led.root, role="main")])
+    graph.invoke({"messages": [HumanMessage(content="hi")]})
+    b = wire.last.body
+    rec = led.records[0]
+    assert b["model"] == OPUS and b["max_tokens"] == rec.max_tokens
+    assert B.MIN_OUTPUT_TOKENS <= b["max_tokens"] < config.MAX_TOKENS
+    assert b["max_tokens"] == normal_cap(OPUS, rec.estimated_input_tokens, 1.50, 0.30, config.MAX_TOKENS)
+    assert b["thinking"] == {"type": "adaptive"} and "budget_tokens" not in b["thinking"]
+    assert b["output_config"] == {"effort": "high"} and b["stream"] is True
+    assert "temperature" not in b and b["fallbacks"] == "default"
+    assert rec.usd > 0 and not led.exhausted
 
 
 def test_budget_hook_role_model_follows_settings_and_override(monkeypatch):

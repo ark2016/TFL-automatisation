@@ -74,12 +74,14 @@ Source: `docs/EVAL_SET.md`
 > | reg-07 | {a^{n²} \| n ≥ 0} | non_regular | унарный язык непериодичен **[trap: унарный]** |
 
 - No oracle exists: the eval IR is `natural`. The predicate IR has no squares, `arithmetic_index` has no oracle, and the
-  CFL exponent-notation oracle only takes linear conditions. So `nerode_probe`, `check_membership` and
-  `pump_check_cfl` return `unsupported`. So no ledger record supports `non_regular`: for REG the gate counts only
-  oracle-backed `nerode_probe` pairs and `lean_check` `proved`. Without a Lean proof the report is published as
-  `partial`, confidence ≤ 0.40 (R1). Sandbox enumeration is never a basis for the verdict.
+  CFL exponent-notation oracle only takes linear conditions. So `nerode_probe` and `check_membership` return
+  `unsupported`. Sandbox enumeration is never a basis for the verdict.
 - Pumping route (tz §1.5 quantifiers): for p, take z = a^{p²}. Every split has y = a^k with 1 ≤ k ≤ p, so
   xy²z = a^{p²+k} and p² < p²+k ≤ p²+p < (p+1)². So p²+k is not a square, and xy²z ∉ L.
+- Check it with `pump_check_reg(ir, word="a^(p^2)", exit_i=[2])`. Without an oracle the tool checks only the
+  structure: a^{p²} instantiates at p = 2, 3, 4 and has length ≥ p (`data.semantic_check: false`). It does not check
+  that a^{p²} ∈ L or that a^{p²+k} ∉ L; the argument above does. The result is `well_formed`, and the gate publishes
+  `non_regular` at confidence ≤ 0.55 (R6). Only a Lean `proved` result goes higher.
 
 ## B. Other eval tasks with a known pitfall
 
@@ -108,14 +110,28 @@ Source: `docs/THEORY.md` §0
   **every** split with |xy| ≤ n, |y| ≥ 1 must be handled. i = 1 never helps (xy¹z = w). These rules are also in
   `agent_system/prompts/pumping_agent.md`.
 - The word must be in L and have length ≥ n for every n, so give it as a family in n.
-- There is no `pump_check_reg` tool (TOOL_INVENTORY §3: deferred). One concrete split can be run as a diagnostic
-  through `pump_check_cfl` split mode with `cls="reg"`. Map x → `u`, y → `v`, z → `w` and leave `x`, `y` empty.
-  **Do not pass `p`**: the tool would then check the CFL window |vwx| ≤ p, which here is |yz|, the wrong condition.
-  Check |xy| ≤ p yourself. The result is at most `not_verified` (`evidence_role: "diagnostic"`). It is `refuted` only
-  when z ∉ L or when a claimed exit is in L.
-- A pumping argument produces no gate record in the deep agent (VERDICT_POLICY §4 reg/pumping allows at most
-  `well_formed`, and no REG pumping tool exists). On its own it leaves the verdict `partial` (≤ 0.40). If an oracle
-  exists, prefer a Nerode family for the evidence and keep pumping as the written argument.
+- Check the argument with `pump_check_reg(ir, word=..., exit_i=[...])`. It uses the REG condition |xy| ≤ p,
+  |y| ≥ 1 and pumps every such split of w(p) at i = 0, 2..6, always for p = 2, 3, 4 (`p_values` only adds p). Use
+  it for REG, not `pump_check_cfl`: that tool's window is the CFL condition |vwx| ≤ p.
+- `exit_i` is what your argument claims: every split leaves L at one of these i. Only |w(p)| < p and w(p) ∉ L
+  (exact oracle) make the result `refuted`. VERDICT_POLICY §4 says survival at several i does not prove survival at
+  all i, so a split on which every claimed exit stays in L is an unclosed split, not a refutation: the result is
+  `not_verified` and gives no basis. A split that survives the tried i only because an answer is unknown is not a
+  refutation either. `data.per_p[*].examples` lists the unclosed splits with `exits_at`, the exponents that do
+  leave L.
+- `exit_i` is the same at every p and every |y|. A correct argument whose exit depends on p or |y| (reg-10
+  {aⁱbʲ | i ≠ j}: w = aᵖbᵖ⁺ᵖ!, i = p!/|y| + 1) cannot be stated, and its check stays unclosed. For such a task
+  re-encode the IR as a predicate and prove it with a Nerode family instead.
+- If the argument needs p ≥ p₀ (for example, a case split that assumes p ≥ 3), pass `p_min=p₀` (the tool checks
+  p₀, p₀+1, p₀+2) and state the assumption in the proof. The lemma allows it: if a pumping length p works, so does
+  every larger one.
+- Closing every split is no sign of non-regularity. A regular L whose period or pumping length exceeds the largest
+  p tried closes them too: (a⁵)* with w = a⁵ᵖ and exit 0 closes all of them at p = 2, 3, 4 (THEORY §2.0 makes the
+  same point with {a¹⁰}). Before you rely on `pump_check_reg`, try a DFA (`dfa_vs_ir`).
+- The result is at most `well_formed`: `non_regular` at confidence ≤ 0.55 (R6). `nerode_probe` needs a REG oracle
+  (a `predicate`, `grammar` or `regex` IR); a `natural` IR in exponent notation has an oracle for `pump_check_reg`
+  only. With such an oracle a Nerode family gives the stronger basis (`bounded_pass`, 0.85); keep pumping as the
+  written argument.
 
 ### Myhill–Nerode
 

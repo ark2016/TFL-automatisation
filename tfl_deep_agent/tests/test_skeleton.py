@@ -64,7 +64,8 @@ def test_skill_dirs_exist(d):
 
 def test_settings_example_budget_matches_plan():
     s = json.loads((PKG / "settings.example.json").read_text(encoding="utf-8"))
-    assert s["budget"] == {"per_task_usd": 5.00, "per_day_usd": 20.00,
+    # per_task_usd 10.00: user decision 2026-11-08 (PLAN.md had 5.00)
+    assert s["budget"] == {"per_task_usd": 10.00, "per_day_usd": 20.00,
                            "per_subagent_max_usd": 2.00, "reserve_for_report_usd": 0.30}
     assert s["hitl"] == {"formalization": True, "report": True, "execute": False}
     assert s["models"]["opus_needs_reason"] is True

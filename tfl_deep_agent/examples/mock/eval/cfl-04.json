@@ -1,6 +1,6 @@
 {
  "description": "tfl-eval deep replay, cfl-04: the language of S -> aSa | bSb | eps is context-free. ir-builder validates the IR, main checks R2-CFG (input_grammar_cfg), then submits.",
- "task": "S -> aSa | bSb | eps  ({w w^R | w in {a,b}*})",
+ "task": "S -> aSa | bSb | eps  ({w w^R | w in {a,b}*})\nВопрос: является ли язык контекстно-свободным?",
  "template": "short_verdict",
  "defs": {
   "ir": {

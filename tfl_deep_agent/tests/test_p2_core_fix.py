@@ -523,7 +523,8 @@ def test_lean_role_fits_max_tokens_into_the_default_allocation():
     out = mw.wrap_model_call(_request(config.OPUS, max_tokens=128_000), handler)
     assert seen and seen[0] < 128_000
     assert (out.result[0].additional_kwargs or {}).get("tfl_budget") != "refused"
-    assert B.make_middleware(example_settings(), role="prover", node=child).fit_max_tokens is False
+    # since 2026-11-08 every role derives max_tokens from its remaining budget
+    assert B.make_middleware(example_settings(), role="prover", node=child).fit_max_tokens is True
 
 
 # ---------------------------------------------------------------------------
@@ -531,12 +532,13 @@ def test_lean_role_fits_max_tokens_into_the_default_allocation():
 # ---------------------------------------------------------------------------
 
 def test_text_answer_after_wrap_up_is_budget_exhausted():
-    worst = config.worst_case_usd(config.OPUS, 1, config.MAX_TOKENS)
+    # max_tokens is derived from the remainder (2026-11-08): after call 1 only $0.05 is
+    # left above the reserve, less than the 4096-token floor ($0.08+ on Opus) -> wrap-up
     spend = 50_000
     reserve = 0.5
-    per_task = worst + reserve + \
+    per_task = reserve + 0.05 + \
         B.usage_cost_usd(config.OPUS, {"input_tokens": 100, "output_tokens": spend, "cache_read_input_tokens": 0,
-                                       "cache_creation_input_tokens": 0}) - 0.05
+                                       "cache_creation_input_tokens": 0})
     script = {"task": TASK, "defs": {}, "models": {"main": [
         {"tool_calls": [DFA], "usage": {"input_tokens": 100, "output_tokens": spend}},
         {"content": "Язык регулярен, отчёт не нужен.", "usage": {"input_tokens": 100, "output_tokens": 50},

@@ -1,6 +1,6 @@
 {
- "description": "tfl-eval deep replay, reg-04: (ab)*a | b is regular. ir-builder validates the IR, main builds the minimal DFA (regex_to_dfa) and compares it with the IR oracle (dfa_vs_ir), then submits.",
- "task": "(ab)*a | b",
+ "description": "tfl-eval deep replay, reg-04: (ab)*a | b is regular. ir-builder validates the IR, main builds the minimal DFA from the IR's own regex (regex_to_dfa(ir=...); VERDICT_POLICY §1 verified needs a human-approved IR, and the eval run auto-approves HITL 1, so it is a bounded check, 0.85) and compares it with the IR oracle (dfa_vs_ir), then submits.",
+ "task": "(ab)*a | b\nВопрос: является ли язык регулярным?",
  "template": "short_verdict",
  "defs": {
   "ir": {
@@ -77,7 +77,9 @@
       "name": "regex_to_dfa",
       "id": "ev-dfa",
       "args": {
-       "regex": "(ab)*a|b"
+       "ir": {
+        "$def": "ir"
+       }
       }
      }
     ]
@@ -118,7 +120,7 @@
         },
         {
          "claim": "Минимальный полный ДКА из 5 состояний распознаёт L((ab)*a|b).",
-         "justification": "regex_to_dfa.",
+         "justification": "regex_to_dfa по выражению из IR задачи.",
          "evidence_ids": [
           "ev-dfa"
          ]
@@ -134,7 +136,8 @@
        "evidence_ids": [
         "ev-dfa",
         "ev-dfa-vs-ir"
-       ]
+       ],
+       "ir_fingerprint": "ir-a8bf22e6dd74"
       }
      }
     ]

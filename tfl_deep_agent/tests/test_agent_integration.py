@@ -183,7 +183,7 @@ def test_bad_budget_argument_and_bad_settings_fail_closed():
         A.create_tfl_agent(example_settings(), model_factory=A.scripted_model_factory(MOCK / "ll_simple_ll1.json"),
                            budget=5.0)
     broken = example_settings()
-    broken["budget"]["reserve_for_report_usd"] = 9.0  # more than per_task_usd
+    broken["budget"]["reserve_for_report_usd"] = 11.0  # more than per_task_usd
     with pytest.raises(SettingsError):
         A.create_tfl_agent(broken, model_factory=A.scripted_model_factory(MOCK / "ll_simple_ll1.json"))
 
@@ -354,12 +354,13 @@ def _opus_usd(output_tokens: int, input_tokens: int = 100) -> float:
 
 
 def test_main_call_over_budget_is_refused_and_a_partial_report_is_built():
-    # call 1 fits (worst case ~ Opus max_tokens), its actual usage eats most of the
-    # task budget, so call 2's worst case no longer fits even with the reserve
-    worst = config.worst_case_usd(config.OPUS, 1, config.MAX_TOKENS)
-    per_task = worst + 0.5
-    spend = 40_000
-    assert _opus_usd(spend) > per_task - worst  # call 2 cannot fit after it
+    # call 1 fits (max_tokens derived from the $0.70 above the reserve), its actual usage
+    # eats most of the task budget, so call 2 cannot get even the 4096-token floor
+    # with the reserve
+    floor = config.worst_case_usd(config.OPUS, 1, B.MIN_OUTPUT_TOKENS)
+    per_task = 0.9
+    spend = 42_000
+    assert _opus_usd(spend) > per_task - floor  # call 2 cannot fit after it
     script = {"task": TASK, "defs": {}, "models": {"main": [
         {"tool_calls": [DFA], "usage": {"input_tokens": 100, "output_tokens": spend}},
         _report_call(),  # never requested: the call is refused before the model
@@ -388,8 +389,9 @@ def test_main_call_over_budget_is_refused_and_a_partial_report_is_built():
 
 
 def test_subagent_refusal_reaches_the_main_agent_which_still_reports():
-    # the subagent's allocation (per_subagent_max_usd) is below one Sonnet worst case
-    sonnet_worst = config.worst_case_usd(config.SONNET, 1, config.MAX_TOKENS)
+    # the subagent's allocation (per_subagent_max_usd) is below one Sonnet call at the
+    # 4096-token floor (max_tokens is derived from the allocation, 2026-11-08)
+    sonnet_floor = config.worst_case_usd(config.SONNET, 1, B.MIN_OUTPUT_TOKENS)
     script = {"task": TASK, "defs": {}, "models": {
         "main": [
             {"tool_calls": [_task_call("ir-builder", "t1")]},
@@ -397,7 +399,7 @@ def test_subagent_refusal_reaches_the_main_agent_which_still_reports():
         ],
         "ir_builder": [_sub_reply("never requested")],
     }}
-    led = ledger(per_task=5.0, per_subagent=sonnet_worst / 2)
+    led = ledger(per_task=5.0, per_subagent=sonnet_floor / 2)
     _graph, state, factory = run(script, budget=led)
     result = A.collect_result(state, ledger=led)
 
@@ -414,12 +416,12 @@ def test_subagent_refusal_reaches_the_main_agent_which_still_reports():
 
 
 def test_subagent_refusal_without_a_report_is_budget_exhausted():
-    sonnet_worst = config.worst_case_usd(config.SONNET, 1, config.MAX_TOKENS)
+    sonnet_floor = config.worst_case_usd(config.SONNET, 1, B.MIN_OUTPUT_TOKENS)
     script = {"task": TASK, "defs": {}, "models": {
         "main": [{"tool_calls": [DFA, _task_call("ir-builder", "t1")]}, {"content": "I stop here."}],
         "ir_builder": [_sub_reply("never requested")],
     }}
-    led = ledger(per_task=5.0, per_subagent=sonnet_worst / 2)
+    led = ledger(per_task=5.0, per_subagent=sonnet_floor / 2)
     _graph, state, _factory = run(script, budget=led)
     without_ledger = A.collect_result(state)
     result = A.collect_result(state, ledger=led)
@@ -461,10 +463,11 @@ def test_no_free_money_for_a_subagent_gives_an_error_tool_message():
 # ---------------------------------------------------------------------------
 
 def test_wrap_up_at_reserve_blocks_subagents_and_the_agent_submits():
-    worst = config.worst_case_usd(config.OPUS, 1, config.MAX_TOKENS)
     reserve = 0.5
     spend = 50_000
-    per_task = worst + reserve + _opus_usd(spend) - 0.05  # after call 1: call 2 fits only with the reserve
+    # after call 1 only $0.05 is left above the reserve, less than the 4096-token floor
+    # ($0.08+ on Opus): call 2 fits only with the reserve
+    per_task = reserve + _opus_usd(spend) + 0.05
     script = {"task": TASK, "defs": {}, "models": {
         "main": [
             {"tool_calls": [DFA], "usage": {"input_tokens": 100, "output_tokens": spend}},
@@ -505,15 +508,15 @@ def test_wrap_up_at_reserve_blocks_subagents_and_the_agent_submits():
 # ---------------------------------------------------------------------------
 
 def test_cli_budget_exhausted_writes_the_partial_report(tmp_path, runs_dir, capsys):
-    worst = config.worst_case_usd(config.OPUS, 1, config.MAX_TOKENS)
+    # as in test_main_call_over_budget_...: call 2 cannot get the 4096-token floor
     script = {"task": TASK, "defs": {}, "models": {"main": [
-        {"tool_calls": [DFA], "usage": {"input_tokens": 100, "output_tokens": 40_000}},
+        {"tool_calls": [DFA], "usage": {"input_tokens": 100, "output_tokens": 42_000}},
         _report_call(),
     ]}}
     spath = tmp_path / "script.json"
     spath.write_text(json.dumps(script, ensure_ascii=False), encoding="utf-8")
     settings = example_settings()
-    settings["budget"].update({"per_task_usd": round(worst + 0.5, 2), "reserve_for_report_usd": 0.2})
+    settings["budget"].update({"per_task_usd": 0.9, "reserve_for_report_usd": 0.2})
     setpath = tmp_path / "settings.json"
     setpath.write_text(json.dumps(settings), encoding="utf-8")
     out = tmp_path / "out"

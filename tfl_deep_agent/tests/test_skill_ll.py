@@ -222,8 +222,10 @@ def test_max_k_in_skill_is_the_tool_maximum():
 def test_skill_does_not_recommend_unimplemented_tools():
     for path in SKILL_FILES:
         text = read(path)
-        for missing in ("ll_claim_check", "pump_check_reg"):
+        # pump_check_reg exists since 2026-11-08 (tools/reg.py); it is a REG tool and no LL route uses it
+        for missing in ("ll_claim_check",):
             assert missing not in text, f"{path.name} names the unimplemented tool {missing}"
+        assert "pump_check_reg" not in text, f"{path.name} sends an LL task to the REG pumping tool"
 
 
 # ---------------------------------------------------------------------------

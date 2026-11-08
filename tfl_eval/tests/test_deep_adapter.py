@@ -26,6 +26,18 @@ MANIFEST = {e["id"]: e for e in cli.load_manifest(cli.DEFAULT_MANIFEST)}
 SCRIPTED = sorted(p.stem for p in DEEP_MOCK_DIR.glob("*.json"))
 
 
+@pytest.fixture(autouse=True)
+def _undo_live_model_override(monkeypatch):
+    """`cli.main(["--live", ...])` writes the eval's Haiku default straight into
+    os.environ (`set_live_model_env`). `monkeypatch.delenv(..., raising=False)`
+    on an absent variable records no undo, so that write outlived the test and
+    forced claude-haiku-5-5 on every later deep-agent test in the same xdist
+    worker (test_reports.py::test_cfl_mock_run_renders_end_to_end). setenv then
+    delenv registers an undo that removes the variable at teardown."""
+    monkeypatch.setenv("TFL_MODEL_OVERRIDE", "placeholder")
+    monkeypatch.delenv("TFL_MODEL_OVERRIDE")
+
+
 def _submitted(verdict_text, lang, token, *, published=..., cap=0.85, trust="bounded_pass", basis=("ev-1",),
                **extra):
     result = {
@@ -126,15 +138,48 @@ def test_extract_confidence_prefers_final_confidence_then_cap():
 
 
 # ---------------------------------------------------------------------------
-# inputs: source_text only; mock scripts
+# inputs: source_text plus the class question; mock scripts
 # ---------------------------------------------------------------------------
 
-def test_task_text_is_the_source_text_only():
-    ir = json.loads((runners.REPO_ROOT / MANIFEST["reg-04"]["path"]).read_text(encoding="utf-8"))
-    assert deep_task_text(ir) == "(ab)*a | b"
+def _ir(entry_id):
+    return json.loads((runners.REPO_ROOT / MANIFEST[entry_id]["path"]).read_text(encoding="utf-8"))
+
+
+def test_task_text_is_the_source_text_and_one_class_question():
+    assert deep_task_text(_ir("reg-04"), "reg") == "(ab)*a | b\nВопрос: является ли язык регулярным?"
     for bad in ({}, {"source_text": "   "}, {"source_text": 3}):
         with pytest.raises(DeepAdapterError):
-            deep_task_text(bad)
+            deep_task_text(bad, "reg")
+    with pytest.raises(DeepAdapterError):
+        deep_task_text(_ir("reg-04"), "deep")
+
+
+def test_the_same_language_gets_the_question_of_its_class():
+    # {a^n b^n | n >= 0} is reg-01, dcfl-01 and ll-01: only the question line differs
+    texts = {i: deep_task_text(_ir(i), MANIFEST[i]["system"]) for i in ("reg-01", "dcfl-01", "ll-01")}
+    assert {t.split("\n")[0] for t in texts.values()} == {"{a^n b^n | n >= 0}"}
+    assert texts["reg-01"].endswith("является ли язык регулярным?")
+    assert texts["dcfl-01"].endswith("детерминированным контекстно-свободным (DCFL)?")
+    assert texts["ll-01"].endswith(runners.DEEP_LL_LANGUAGE_QUESTION)
+    assert len(set(texts.values())) == 3
+
+
+@pytest.mark.parametrize("entry_id", sorted(MANIFEST))
+def test_every_manifest_entry_gets_exactly_one_question_line(entry_id):
+    entry = MANIFEST[entry_id]
+    ir = _ir(entry_id)
+    text = deep_task_text(ir, entry["system"])
+    head, question = text.rsplit("\n", 1)
+    assert head == ir["source_text"].strip()
+    assert question.startswith("Вопрос: ") and question.endswith("?")
+    if entry["system"] == "ll":
+        # Format 3 asks about the given grammar, every other LL task about the language; both ask for the
+        # smallest k, which is what the manifest's expected k holds
+        grammar_task = ir.get("task_type") == "ll_check_grammar"
+        assert question == (runners.DEEP_LL_GRAMMAR_QUESTION if grammar_task else runners.DEEP_LL_LANGUAGE_QUESTION)
+        assert "наименьшее" in question
+    else:
+        assert question == runners.DEEP_CLASS_QUESTIONS[entry["system"]]
 
 
 def test_mock_script_lookup():
@@ -162,7 +207,7 @@ def test_every_deep_script_belongs_to_a_manifest_task(entry_id):
     assert entry_id in MANIFEST, f"{entry_id}.json does not name a manifest entry"
     script = load_mock_script(DEEP_MOCK_DIR / f"{entry_id}.json")
     ir = json.loads((runners.REPO_ROOT / MANIFEST[entry_id]["path"]).read_text(encoding="utf-8"))
-    assert script["task"] == deep_task_text(ir)
+    assert script["task"] == deep_task_text(ir, MANIFEST[entry_id]["system"])
     # the IR the replay validates is the manifest's own IR
     assert script["defs"]["ir"] == ir
 
@@ -197,10 +242,17 @@ def test_tfl_eval_system_deep_passes_in_mock_mode(tmp_path):
         assert r["class_mismatch"] is False
         assert "without human review" in r["human_review"]
         assert r["usage"] is None  # mock: no money, no usage
-        assert (Path(r["run_dir"]) / "result.json").is_file()
+        result = json.loads((Path(r["run_dir"]) / "result.json").read_text(encoding="utf-8"))
+        # the agent got the source text plus the question of the entry's class
+        assert result["task"] == deep_task_text(_ir(entry_id), MANIFEST[entry_id]["system"])
     assert ran["ll-17"]["k"] == 1 and ran["ll-17"]["k_correct"] is True
     assert ran["cfl-04"]["trust"] == "verified" and ran["cfl-04"]["confidence"] == 0.98
     assert ran["reg-13"]["verdict"] == "non_regular" and ran["reg-13"]["confidence"] == 0.85
+    # reg-04: the task's own regex compiled from the IR (regex_to_dfa(ir=...)). The eval run
+    # auto-approves HITL 1, so no human approved that IR: a bounded check like dfa_vs_ir
+    # (verified, 0.98, only for a human-approved IR, VERDICT_POLICY §1)
+    assert ran["reg-04"]["trust"] == "bounded_pass" and ran["reg-04"]["confidence"] == 0.85
+    assert ran["reg-04"]["verdict_gate"]["basis"] == ["ev-dfa", "ev-dfa-vs-ir"]
     # dcfl-04 (a trap): a hand-written DPDA checked against the task (R2', dpda_vs_ir)
     assert ran["dcfl-04"]["verdict"] == "dcfl" and ran["dcfl-04"]["trust"] == "bounded_pass"
     assert ran["dcfl-04"]["verdict_gate"]["basis"] == ["ev-dpda-vs-ir"]
@@ -276,7 +328,9 @@ def test_live_runs_every_entry_without_scripts_and_reports_usage(tmp_path, monke
     import os
 
     assert os.environ["TFL_MODEL_OVERRIDE"] == "claude-haiku-5-5"  # the eval's live default
-    assert sorted(c["task"] for c in calls) == sorted(["S -> aSb | ab", "{w reverse(w) | w in {a,b}*}"])
+    assert sorted(c["task"] for c in calls) == sorted([
+        "S -> aSb | ab\nВопрос: является ли язык регулярным?",
+        "{w reverse(w) | w in {a,b}*}\nВопрос: является ли язык детерминированным контекстно-свободным (DCFL)?"])
     assert all(c["live"] is True and c["mock_script"] is None for c in calls)
     assert all(c["run_dir"].parent == out / "deep_runs" for c in calls)
     recs = {r["id"]: r for r in report["records"]}

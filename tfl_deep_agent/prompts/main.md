@@ -28,7 +28,7 @@ Russian), with the standard terms: лемма о накачке, лемма Ог
 4. **Prove and verify concrete steps.** Every concrete object in the proof goes through an oracle:
    a constructed automaton or grammar against the IR (`dfa_vs_ir`, `grammar_vs_ir`,
    `dpda_vs_ir`), the words you pick (`check_membership`, `cyk`, `run_dfa`), the pumped or
-   decomposed words (`pump_check_cfl`, `check_membership`), an LL(k) claim (`ll_table`,
+   decomposed words (`pump_check_reg` for REG, `pump_check_cfl`, `check_membership`), an LL(k) claim (`ll_table`,
    `first_follow`). Delegate a long proof to the `prover` role; it checks its own steps the same way.
 5. **Critique.** Give the claim, the IR and the proof text — and nothing of your reasoning — to
    the `critic` role. It works in a fresh context and looks for the error. Fix what it finds, or
@@ -41,6 +41,49 @@ top-level `grammar`, you may build the IR yourself instead of the ir-builder rou
 `validate_ir(cls="ll", ir=IR)`, which also reaches HITL 1, then `ll_table(ir=IR, ...)`. A table of a
 grammar passed as `grammar` is your own artifact and never makes the verdict `verified`), but never
 skip the oracle checks of the concrete objects you rely on.
+
+## Определение класса
+
+When the task names one class («является ли язык регулярным?», «Is this grammar LL(1)?»), answer
+exactly that question with the workflow above. When it asks which class the language belongs to
+(«к какому классу относится язык», «определите класс»), or names no class at all, go from the
+narrowest class to the widest.
+
+The chain of language classes, as docs/THEORY.md states it:
+REG ⊊ LL(1) ⊆ ⋃ₖ LL(k) ⊊ DCFL ⊆ CFL.
+- REG ⊊ LL(1): the grammar of a DFA (Q → aδ(Q,a), Q → ε for accepting Q) is LL(1); {aⁿbⁿ} is a
+  non-regular LL(1) language (§3.2).
+- LL(k) ⊊ LL(k+1) as languages (§3.2: checked against [Ni, p. 109]; the proof of the strict
+  hierarchy was not read in that revision).
+- ⋃ₖ LL(k) ⊊ DCFL (§3.2). DCFL but not LL: {aⁿbⁿ} ∪ {aⁿcⁿ}, {aⁿ0bⁿ} ∪ {aⁿ1b²ⁿ} (§3.3 (C)),
+  {aⁱbʲ | i ≥ j}, {w b* c wᴿ} (part II §3.4).
+- DCFL ⊆ CFL (part II §1.6). THEORY.md does not state this inclusion as proper, so do not cite
+  its properness as a theorem: "CFL but not DCFL" for a language needs both proofs.
+
+Membership goes up the chain and non-membership goes down: L ∈ REG gives L ∈ LL(1), DCFL and CFL;
+L ∉ DCFL gives L ∉ LL(k) for every k (§3.3 (A)) and L ∉ REG; L ∉ CFL gives L in none of the four.
+
+1. Try REG, then LL(k) with the smallest k first, then DCFL, then CFL. A narrower positive proof
+   is simpler, and REG, DCFL and CFL have a `lean_statement` (LL(k) has none).
+2. For each class you try, formalize the task for that class (`ir-builder` or your own
+   `validate_ir` with that class; each new IR goes through HITL 1) and build the constructive
+   basis of the class listed under "Report". Stop at the first class whose membership a tool
+   result supports. Your own reasoning is not a positive proof. When you expect a class to fail,
+   start with its negative proof instead of a construction: you need that proof anyway (step 3).
+3. Prove non-membership for every narrower class. One proof for a wider class covers the
+   narrower ones (by the chain above), but a direct proof is often simpler (Myhill–Nerode for
+   REG). A narrower class you can neither prove nor exclude stays open: say so, and do not claim
+   non-membership.
+4. If no class has a positive proof, try a non-CFL proof (`language_class: cfl`, verdict "not
+   CFL"). Otherwise submit `verdict: "unknown"`.
+5. Report: `language_class` is the class of the positive proof, and the verdict names that class
+   only ("DCFL", "LL(1)"). Each negative proof for a narrower class is a step with its own
+   `evidence_ids`; do not list those ids in the verdict's `evidence_ids`. The summary states the
+   whole answer (for example «DCFL; не LL(k) ни при каком k; не регулярен»). Code rates only the
+   verdict of `language_class`; the steps of other classes do not change its trust.
+6. Code judges the verdict against the IR approved last at HITL 1. If you formalized another class
+   after the class of the verdict, call `validate_ir` on the verdict's IR once more before
+   `submit_report`. An IR that was already approved passes HITL 1 without a new stop.
 
 ## Roles (`task` tool)
 
@@ -98,7 +141,8 @@ Every TFL tool result carries a `trust` level set by code, not by you:
 
 - **Never write that something is verified, proved by machine, or checked unless a tool result
   says so** — and then only within that result's scope (`verified` for "this DFA recognises
-  L(regex)" says nothing about the task language unless the regex is the task's own definition).
+  L(regex)" says nothing about the task language unless the tool read the regex from the task's IR,
+  `regex_to_dfa` with `ir`; a regex you typed, even a copy of the task's pattern, is your artifact).
 - A finite pumping check (a few p, a few i) is diagnostics, not a proof of a general non-CFL claim.
 - An oracle answer `null` / unknown is not a "no".
 - A `refuted` result about your construction means the construction is wrong; it does not prove
@@ -141,7 +185,10 @@ Code, not you, rates the report (docs/VERDICT_POLICY.md). The verdict's trust an
 ceiling come from the strongest result of this run that checks the verdict's side **against the
 task** (the IR). Only the check that belongs to the task's class counts. A constructive verdict
 needs at least `bounded_pass` from:
-- reg: `dfa_vs_ir`;
+- reg: `dfa_vs_ir`, or `regex_to_dfa` with `ir` (the task's own regex or right-/left-linear grammar,
+  read from the IR by the tool: `verified` only when a human approved that IR at HITL 1 and its
+  `source_text` holds the definition; with HITL 1 off or auto-approved it counts like `dfa_vs_ir`,
+  `bounded_pass`; never encode a natural-language task as a regex of your own);
 - cfl: `grammar_vs_ir`, or `input_grammar_cfg` when the task language is given by a grammar
   (`kind: grammar`, not `grammar_filter`);
 - dcfl: `dpda_vs_ir` with an explicit DPDA (R2′). A grammar, a nondeterministic PDA or
@@ -152,9 +199,10 @@ needs at least `bounded_pass` from:
   `grammar_vs_ir` check of that same grammar. A matching grammar that is not LL(k) says nothing
   about LL(k).
 
-A destructive verdict needs at least `well_formed` from `nerode_probe` (reg; dcfl at most
-`well_formed`) or `pump_check_cfl` in claim mode (cfl, dcfl); for ll, from `ll_table` on the task's
-IR. For LL the destructive side has a basis only when the question is about the given grammar
+A destructive verdict needs at least `well_formed` from `nerode_probe` or `pump_check_reg` (reg; a
+`pump_check_reg` claim is at most `well_formed`, so non_regular <= 0.55), from `nerode_probe` (dcfl,
+at most `well_formed`) or from `pump_check_cfl` in claim mode (cfl, dcfl); for ll, from `ll_table` on
+the task's IR. For LL the destructive side has a basis only when the question is about the given grammar
 (Format 3: `ll_table` on the task's grammar, a conflict for the asked k, a left-recursion
 certificate, or "not LL(k) for k <= K"). When the question is about the language (Format 1/2), no
 result of this run is a destructive basis. A conflict or left-recursion certificate of a grammar is
@@ -165,7 +213,8 @@ confidence <= 0.40 (R1). Write the proof into the steps if you have one, but do 
 trying to raise that verdict.
 
 Exact results about your own artifact
-(`regex_to_dfa`, `cyk`, `run_dfa`, `ll_parse`) support steps but never raise the verdict. Your
+(`regex_to_dfa` with `regex` or `grammar`, `cyk`, `run_dfa`, `ll_parse`) support steps but never raise
+the verdict. Your
 citations can only lower the ceiling: a cited result that refutes the verdict's side blocks it, an id
 with no result behind it lowers the trust one level, evidence for the opposite verdict is a
 contradiction (R3): if only your side is `verified`, the verdict stands with ceiling 0.85; if only

@@ -11,22 +11,42 @@ Rules (``docs/architecture.html``, "Бюджет и настройки"; ``PLAN.
   parent's ``reserve_for_report_usd``. A child can never spend more than its
   allocation, nor more than any ancestor still has (an ancestor that overran
   because of a bad estimate shrinks every child under it).
+* **max_tokens from the remaining budget** (user decision 2026-11-08). Every
+  budgeted call gets ``max_tokens = min(ceiling, floor((room - worst-case
+  input cost) / output price))`` (``config.max_tokens_within``). The ceiling
+  is what the request would send anyway (the role's ``config.MAX_TOKENS`` /
+  ``MAX_TOKENS_PER_ROLE``, clamped to the model's cap, or a lower value the
+  request sets, e.g. the summary's 8192). ``room`` is what the scope has
+  free above its reserve; in wrap-up (below) it includes the reserve. Every
+  call is also capped so that one more call at the floor stays payable with
+  the grown prompt (this call's output plus :data:`NEXT_CALL_MARGIN_TOKENS`):
+  in normal mode that keeps the report call payable when the prompt is long
+  (the fixed reserve alone may not cover a long prompt), in wrap-up it keeps
+  the report call payable after a turn that was not the report. Only the last
+  call that fits gets everything left. The
+  floor is :data:`MIN_OUTPUT_TOKENS` (4096, or the ceiling when that is
+  lower): below it the call is refused. The lowered value reaches the model
+  through ``request.model_settings["max_tokens"]``.
 * **Check before the call.** The worst case of a call is
   ``config.worst_case_usd(model, input_tokens, max_tokens)``: every prompt
   token at the dearer of the input / cache-write rates plus ``max_tokens``
   output tokens. The worst case is reserved (in flight) while the call runs,
   so parallel branches cannot over-commit; it is replaced by the actual cost
-  when the call returns.
-* **Refusal.** A call whose worst case does not fit is not made. The
-  middleware returns an ``AIMessage`` with the numbers instead; it has no tool
-  calls, so the agent loop ends and the renderer builds a partial report with
-  status ``budget_exhausted`` (``BudgetNode.state == "exhausted"``).
+  when the call returns. The cap and the reservation are taken under one
+  ledger lock, so a parallel sibling cannot take the money in between.
+* **Refusal.** A call whose worst case does not fit even at the floor is not
+  made. The middleware returns an ``AIMessage`` with the numbers instead; it
+  has no tool calls, so the agent loop ends and the renderer builds a partial
+  report with status ``budget_exhausted`` (``BudgetNode.state == "exhausted"``).
 * **Actual usage.** Charged from ``AIMessage.usage_metadata`` with cache
   tokens priced separately. langchain-anthropic reports ``input_tokens`` as
   the whole prompt (input + cache read + cache write; DEV_NOTES "P0"), so the
   plain input is ``input_tokens - cache_read - cache_creation``.
 * **Wrap-up.** When the next call no longer fits without touching the node's
-  reserve, the node switches to wrap-up: the call may use the reserve, an
+  reserve (not even at the floor), or no longer leaves a floor-sized report
+  call payable, the node switches to wrap-up: the call may
+  use the reserve (its ``max_tokens`` is derived from the remainder with the
+  reserve; this is the report call), an
   instruction to submit the report is appended to every further request, and
   the spawning tools (``task``, ``spawn_subagent``, ``run_workflow``) are
   refused. New allocations are refused as well.
@@ -87,12 +107,20 @@ def _clean(x: float) -> float:
 # Tools that create subagents or workflows; refused in wrap-up mode.
 DEFAULT_SPAWNING_TOOLS: frozenset[str] = frozenset({"task", "spawn_subagent", "run_workflow"})
 
-# Roles whose BudgetMiddleware lowers max_tokens to what fits by default
-# (fit_max_tokens). The lean role's ceiling (config.MAX_TOKENS_PER_ROLE, 128000
-# on Opus: about $2.56 worst case) is above the default per_subagent_max_usd
-# ($2.00), so without this it is refused on every call. The general
-# max_tokens-vs-budget decision (DEV_NOTES "P0 fix") stays open for the others.
-FIT_MAX_TOKENS_ROLES: frozenset[str] = frozenset({"lean"})
+#: Smallest max_tokens a budgeted call is lowered to; below it the call is
+#: refused. Adaptive thinking (``thinking: {"type": "adaptive"}``, every 5.x
+#: model) has no budget parameter and no API minimum besides max_tokens >= 1,
+#: but thinking tokens count toward max_tokens, and the manual-thinking
+#: minimum ``budget_tokens >= 1024 < max_tokens`` (anthropic SDK,
+#: ``ThinkingConfigEnabledParam``) shows how much reasoning the API treats as
+#: the least useful amount. 4096 leaves room for ~1k-3k thinking tokens plus a
+#: tool call or a short answer. ``orchestration/spawn.py`` uses the same value.
+MIN_OUTPUT_TOKENS = 4096
+
+#: Prompt growth assumed between a call and the next one besides the call's own
+#: output: the tool result and the wrap-up note. Used to keep one more call at
+#: the floor payable (``BudgetMiddleware._cap_leaving_next``).
+NEXT_CALL_MARGIN_TOKENS = 2048
 
 # Kinds of child allocations capped by budget.per_subagent_max_usd.
 CAPPED_KINDS: frozenset[str] = frozenset({"subagent", "branch"})
@@ -404,39 +432,50 @@ class BudgetNode:
     def admit(self, worst_case_usd: float) -> Admission:
         """Reserve ``worst_case_usd`` for one call, entering wrap-up when the
         call does not fit without the reserve. ``ok=False`` means refuse."""
+        with self.ledger.lock:
+            adm = self._admit_locked(worst_case_usd)
+        self._emit_admission(adm)
+        return adm
+
+    def _admit_locked(self, worst_case_usd: float, *, enter_wrap_up: bool = False) -> Admission:
+        """:meth:`admit` without the listener events (call with the ledger
+        lock held, then :meth:`_emit_admission` after releasing it).
+        ``enter_wrap_up``: the caller found that a normal call no longer leaves
+        the report call payable (``BudgetMiddleware.derive``), so this call
+        enters wrap-up even when its worst case fits above the reserve."""
         x = float(worst_case_usd)
         entered = False
-        with self.ledger.lock:
-            if self.closed:
-                avail = 0.0
-                ok = False
-            else:
-                avail = self._available()
-                if not self.in_wrap_up() and x > avail - self.reserve + EPS:
-                    self.wrap_up = True
-                    entered = True
-                wrap = self.in_wrap_up()
-                limit = avail if wrap else avail - self.reserve
-                ok = x <= limit + EPS
-            wrap = self.in_wrap_up() or self.closed
-            res = None
-            if ok:
-                res = Reservation(self, x, wrap)
-                for n in (self, *self.ancestors()):
-                    n.inflight += x
-            else:
-                self.exhausted = True
-                self.refusals += 1
-            status = self._status_locked()
-        adm = Admission(ok=ok, worst_case_usd=x, available_usd=avail, reserve_usd=self.reserve,
-                        wrap_up=wrap, entered_wrap_up=entered, reservation=res, status=status)
-        if entered:
-            self.ledger._emit({"event": "wrap_up", "node": self.path, "available_usd": avail,
-                               "worst_case_usd": x, "reserve_usd": self.reserve})
-        if not ok:
-            self.ledger._emit({"event": "refused", "node": self.path, "available_usd": avail,
-                               "worst_case_usd": x})
-        return adm
+        if self.closed:
+            avail = 0.0
+            ok = False
+        else:
+            avail = self._available()
+            if not self.in_wrap_up() and (enter_wrap_up or x > avail - self.reserve + EPS):
+                self.wrap_up = True
+                entered = True
+            wrap = self.in_wrap_up()
+            limit = avail if wrap else avail - self.reserve
+            ok = x <= limit + EPS
+        wrap = self.in_wrap_up() or self.closed
+        res = None
+        if ok:
+            res = Reservation(self, x, wrap)
+            for n in (self, *self.ancestors()):
+                n.inflight += x
+        else:
+            self.exhausted = True
+            self.refusals += 1
+        status = self._status_locked()
+        return Admission(ok=ok, worst_case_usd=x, available_usd=avail, reserve_usd=self.reserve,
+                         wrap_up=wrap, entered_wrap_up=entered, reservation=res, status=status)
+
+    def _emit_admission(self, adm: Admission) -> None:
+        if adm.entered_wrap_up:
+            self.ledger._emit({"event": "wrap_up", "node": self.path, "available_usd": adm.available_usd,
+                               "worst_case_usd": adm.worst_case_usd, "reserve_usd": self.reserve})
+        if not adm.ok:
+            self.ledger._emit({"event": "refused", "node": self.path, "available_usd": adm.available_usd,
+                               "worst_case_usd": adm.worst_case_usd})
 
     def release(self, res: Reservation) -> None:
         """Drop a reservation without charging (the call raised)."""
@@ -848,9 +887,11 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
     worst case (``"worst_case"``, default, safe for money) or nothing
     (``"zero"``, scripted fake-model runs).
 
-    ``fit_max_tokens`` (default off; PLAN's open max_tokens question, option
-    (b)): when the worst case does not fit, lower ``max_tokens`` for this call
-    to what does fit, if that is at least ``min_output_tokens``.
+    ``fit_max_tokens`` (default on; user decision 2026-11-08): every call's
+    ``max_tokens`` is ``min(ceiling, what the scope can pay for)`` and a call
+    that cannot get ``min_output_tokens`` is refused (module docstring).
+    ``False`` keeps the fixed ceiling (the call is refused when the ceiling's
+    worst case does not fit); only tests that pin that arithmetic use it.
     """
 
     def __init__(
@@ -863,8 +904,8 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
         token_counter: Callable[[Any], int] | None = None,
         missing_usage: Literal["worst_case", "zero"] = "worst_case",
         spawning_tools: Iterable[str] = DEFAULT_SPAWNING_TOOLS,
-        fit_max_tokens: bool = False,
-        min_output_tokens: int = 4096,
+        fit_max_tokens: bool = True,
+        min_output_tokens: int = MIN_OUTPUT_TOKENS,
     ) -> None:
         if not _HAVE_LANGCHAIN:  # pragma: no cover
             raise ImportError("BudgetMiddleware needs the [deep] extra (langchain)")
@@ -880,7 +921,9 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
         self.token_counter = token_counter or estimate_input_tokens
         self.missing_usage = missing_usage
         self.spawning_tools = frozenset(spawning_tools)
-        self.fit_max_tokens = fit_max_tokens
+        self.fit_max_tokens = bool(fit_max_tokens)
+        if int(min_output_tokens) < 1:
+            raise ValueError(f"min_output_tokens must be >= 1, got {min_output_tokens!r}")
         self.min_output_tokens = int(min_output_tokens)
         self._scale = 1.0
         self._scale_lock = threading.Lock()
@@ -934,34 +977,85 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
         max_tokens = self._max_tokens(request, model)
         return CallEstimate(model, scaled, max_tokens, config.worst_case_usd(model, scaled, max_tokens))
 
-    def _fit(self, est: CallEstimate, budget_usd: float) -> CallEstimate | None:
-        """``est`` with max_tokens lowered so the worst case fits ``budget_usd``."""
-        input_cost = config.worst_case_usd(est.model, est.input_tokens, 0)
-        per_out = config.worst_case_usd(est.model, est.input_tokens, 1_000_000) - input_cost
-        if per_out <= 0:
-            return None
-        n = math.floor((budget_usd - input_cost) / per_out * 1_000_000)
-        n = min(n, est.max_tokens)
-        if n < self.min_output_tokens:
-            return None
+    def floor_tokens(self, ceiling: int) -> int:
+        """The least max_tokens a call with this ``ceiling`` may be lowered to."""
+        return max(1, min(self.min_output_tokens, int(ceiling)))
+
+    def _with_max_tokens(self, est: CallEstimate, n: int) -> CallEstimate:
         return CallEstimate(est.model, est.input_tokens, n, config.worst_case_usd(est.model, est.input_tokens, n))
+
+    def _cap_leaving_next(self, est: CallEstimate, budget_usd: float) -> int:
+        """The largest ``max_tokens`` c (at most ``est.max_tokens``) such that
+        this call's worst case AND one more call at the floor fit in
+        ``budget_usd``, the next prompt being this one plus c output tokens
+        plus :data:`NEXT_CALL_MARGIN_TOKENS` (the tool result, the wrap-up
+        note). ``0`` when not even c = 0 leaves that. Prices may step up with
+        the prompt length (``config.worst_case_usd``), so the search is a
+        bisection over a monotone check, not a closed formula."""
+        floor = self.floor_tokens(est.max_tokens)
+        n, model = est.input_tokens, est.model
+
+        def fits(c: int) -> bool:
+            return (config.worst_case_usd(model, n, c)
+                    + config.worst_case_usd(model, n + c + NEXT_CALL_MARGIN_TOKENS, floor)) <= budget_usd + EPS
+
+        if not fits(0):
+            return 0
+        lo, hi = 0, int(est.max_tokens)
+        if fits(hi):
+            return hi
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            lo, hi = (mid, hi) if fits(mid) else (lo, mid)
+        return lo
+
+    def derive(self, est: CallEstimate, node: BudgetNode) -> tuple[CallEstimate, bool]:
+        """``(estimate, enter_wrap_up)``: the estimate this call is admitted
+        with (ledger lock held).
+
+        * Normal mode: ``max_tokens`` is the most that both stays above the
+          reserve and leaves one more call at the floor payable with the grown
+          prompt (:meth:`_cap_leaving_next`), so the reserve is never too small
+          for the report call's prompt (a long prompt on Opus would otherwise
+          leave the report call below the floor).
+        * When that is below the floor, the call enters wrap-up
+          (``enter_wrap_up`` true). In wrap-up every call is capped so that one
+          more floor-sized call still fits (a report that has to be resent, or
+          a turn that was not the report, leaves the report call payable); only
+          when not even that fits does the call get all that is left (the last
+          call).
+        * When nothing fits, the estimate at the floor, which
+          :meth:`BudgetNode.admit` then refuses."""
+        avail = node._available()
+        wrap = node.in_wrap_up()
+        floor = self.floor_tokens(est.max_tokens)
+        if not wrap:
+            above = config.max_tokens_within(est.model, est.input_tokens, avail - node.reserve, est.max_tokens)
+            n = min(above, self._cap_leaving_next(est, avail))
+            if n >= floor:
+                return (est if n == est.max_tokens else self._with_max_tokens(est, n)), False
+        n = self._cap_leaving_next(est, avail)
+        if n < floor:
+            n = config.max_tokens_within(est.model, est.input_tokens, avail, est.max_tokens)
+        if n >= floor:
+            return (est if n == est.max_tokens else self._with_max_tokens(est, n)), not wrap
+        return self._with_max_tokens(est, floor), False
 
     # -- shared pre / post ----------------------------------------------------
 
     def _before(self, request: Any) -> tuple[Any, CallEstimate, Admission]:
         est = self.estimate(request)
-        if self.fit_max_tokens:
-            with self.node.ledger.lock:
-                avail = self.node._available()
-                room = avail if self.node.in_wrap_up() else avail - self.node.reserve
-                if est.worst_case_usd > room + EPS:
-                    fitted = self._fit(est, room) or (
-                        self._fit(est, avail) if est.worst_case_usd > avail + EPS else None)
-                    if fitted is not None:
-                        est = fitted
-                        request = request.override(
-                            model_settings={**(request.model_settings or {}), "max_tokens": est.max_tokens})
-        adm = self.node.admit(est.worst_case_usd)
+        ceiling = est.max_tokens
+        node = self.node
+        enter = False
+        with node.ledger.lock:  # cap and reservation in one step; listeners run after the lock
+            if self.fit_max_tokens:
+                est, enter = self.derive(est, node)
+            adm = node._admit_locked(est.worst_case_usd, enter_wrap_up=enter)
+        node._emit_admission(adm)
+        if adm.ok and est.max_tokens != ceiling:
+            request = request.override(
+                model_settings={**(request.model_settings or {}), "max_tokens": est.max_tokens})
         if adm.ok and adm.wrap_up:
             request = self._with_wrap_up(request, adm)
         return request, est, adm
@@ -1337,8 +1431,6 @@ def make_middleware(settings: Any = None, *, role: str | None = None, node: Budg
         node = cur[0]
     merged = {**(cur[1] if cur else {}), **kwargs}
     merged.setdefault("model", _role_model(settings, role))
-    if role in FIT_MAX_TOKENS_ROLES:
-        merged.setdefault("fit_max_tokens", True)
     return BudgetMiddleware(node, role=role, **merged)
 
 
@@ -1456,6 +1548,7 @@ def budgeted_summarizer(model: Any, budget_mw: BudgetMiddleware, *, wrappers: Se
 
 __all__: Sequence[str] = (
     "DEFAULT_SPAWNING_TOOLS",
+    "MIN_OUTPUT_TOKENS",
     "SUMMARY_MAX_TOKENS",
     "Admission",
     "BudgetExceeded",

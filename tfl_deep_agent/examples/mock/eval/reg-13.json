@@ -1,6 +1,6 @@
 {
  "description": "tfl-eval deep replay, reg-13: L(S -> aSb | ab) = {a^n b^n | n >= 1} is not regular. ir-builder validates the IR, main checks the family a^n with separating suffix b^n (nerode_probe), then submits.",
- "task": "S -> aSb | ab",
+ "task": "S -> aSb | ab\nВопрос: является ли язык регулярным?",
  "template": "short_verdict",
  "defs": {
   "ir": {

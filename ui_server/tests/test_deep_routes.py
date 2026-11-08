@@ -205,7 +205,7 @@ def test_mock_run_command_and_child_env(fake_agent, monkeypatch):
     assert argv[argv.index("--template") + 1] == "short_verdict"
     assert Path(argv[argv.index("--file") + 1]).read_text(encoding="utf-8") == MOCK_TEXT["text"]
     snap = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
-    assert snap["limits"]["max_model_calls"] == 7 and snap["budget"]["per_task_usd"] == 5.0
+    assert snap["limits"]["max_model_calls"] == 7 and snap["budget"]["per_task_usd"] == 10.0
     env = dr._child_env(False)
     assert "ANTHROPIC_API_KEY" not in env and env["TFL_DEEP_RUNS_DIR"] == os.environ["TFL_DEEP_RUNS_DIR"]
     assert "ANTHROPIC_API_KEY" in dr._child_env(True)  # live passes the server's own environment through
@@ -564,7 +564,7 @@ def test_fold_events_builds_the_tree_budget_and_todos():
 
 def test_settings_get_put(tmp_path):
     got = dr.api_get_settings()
-    assert got["settings"]["budget"]["per_task_usd"] == 5.0 and got["error"] is None
+    assert got["settings"]["budget"]["per_task_usd"] == 10.0 and got["error"] is None
     assert "short_verdict" in got["templates"] and got["defaults"]["budget"]
     status, body = dr.dispatch("PUT", "/api/deep/settings", "", {"budget": {"per_task_usd": "lots"}})
     assert status == 400
@@ -584,7 +584,7 @@ def test_settings_get_put(tmp_path):
 def test_estimate_no_data_then_measured(fake_agent):
     est = dr.api_estimate()
     assert est["run"]["n"] == 0 and est["run"]["estimated_cost_usd"] is None
-    assert est["cap_usd"] == 5.0 and est["day"]["can_start"] is True
+    assert est["cap_usd"] == 10.0 and est["day"]["can_start"] is True
     assert est["models"] and all("model" in m or "tier" in m or m for m in est["models"])
     # a finished live run counts, a mock run does not
     for i, (mode, spent) in enumerate((("live", 0.8), ("live", 1.2), ("mock", 0.5))):
@@ -735,7 +735,7 @@ def test_real_mock_pdf_run_through_both_hitl_points(port):
     assert {"intake", "ir-builder"} <= names, data["subagents"]
     tool_events = [e for e in data["events"] if e["event"] == "tool_call"]
     assert all("trust" in e for e in tool_events)
-    assert data["budget"]["spent_usd"] > 0 and data["budget"]["limit_usd"] == 5.0
+    assert data["budget"]["spent_usd"] > 0 and data["budget"]["limit_usd"] == 10.0
     assert data["usage"]["calls"] >= 3
 
     # polling: after=N returns only the newer lines

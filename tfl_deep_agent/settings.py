@@ -54,7 +54,7 @@ SETTINGS_PATH_ENV = "TFL_DEEP_SETTINGS"
 # PLAN.md / architecture.html defaults. settings.example.json is this dict.
 DEFAULTS: dict[str, Any] = {
     "budget": {
-        "per_task_usd": 5.00,
+        "per_task_usd": 10.00,  # user decision 2026-11-08: one run is limited to ~$10
         "per_day_usd": 20.00,
         "per_subagent_max_usd": 2.00,
         "reserve_for_report_usd": 0.30,

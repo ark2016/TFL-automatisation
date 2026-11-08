@@ -46,11 +46,14 @@ a report from a template that a human approves (HITL).
 - Dynamic subagents (`spawn_subagent`) and dynamic workflows (`run_workflow`, compiled to a
   LangGraph `StateGraph` with `Send` fan-out). The model for each is chosen by the agent from
   `models.allowed` in settings (haiku / sonnet / opus).
-- Money limits live in settings: `per_task_usd` 5.00, `per_day_usd` 20.00,
+- Money limits live in settings: `per_task_usd` 10.00 (user, 2026-11-08; was 5.00), `per_day_usd` 20.00,
   `per_subagent_max_usd` 2.00, `reserve_for_report_usd` 0.30. The budget is hierarchical
   (task → subagents → workflow branches) and checked before each model call (worst case: input
-  tokens + `max_tokens` at config prices). When only the reserve is left, the agent must submit its
-  report; if it does not, the renderer produces a partial report with status `budget_exhausted`.
+  tokens + `max_tokens` at config prices). `max_tokens` of every budgeted call is derived from the
+  remaining budget of its scope (user, 2026-11-08): min(role ceiling from `config.py`,
+  floor((remaining − worst-case input cost) / output price)), refused below a 4096-token floor.
+  When only the reserve is left, the agent must submit its report (that call's `max_tokens` comes from
+  the reserve); if it does not, the renderer produces a partial report with status `budget_exhausted`.
 - Sandbox code output caps at trust `well_formed`. `bounded_pass` is only for whitelisted oracle tools.
 - Opus is allowed but needs a `reason` string, which is logged (`opus_needs_reason: true`).
 - Basic UI: a "Deep Agent" tab in the existing TFL Lab (`ui_server`).
@@ -79,6 +82,6 @@ MAX_TOKENS conventions. `TFL_MODEL_OVERRIDE` forces every role and every ad-hoc 
 | P5 | `DockerSandbox(BaseSandbox)`, `Dockerfile.sandbox` (no network, read-only repo at `/opt/tfl`, limits), cleanup | coder in a mock scenario imports `cyk` from `/opt/tfl` inside the sandbox |
 | P6 | `lean_statement` (from IR via `lean_ir`), `lean_check` (via `type_check`), lean-formalizer role, `scan_proof_body` guard | the REG golden `proof.lean`, split into statement and body, verifies through the tool with trust `verified` |
 | P7 | TFL Lab "Deep Agent" tab: upload (base64 JSON), settings, live progress, HITL cards, report view; `ui_server/deep_routes.py` | endpoint tests on a fake agent pass, and a mock PDF run goes through both HITL points |
-| P8 | `tfl_eval` adapter `system="deep"` (source_text only, auto-approve), README section, `tfl_deep_agent/CLAUDE.md`, root CLAUDE.md update | `tfl-eval --system deep` passes in mock mode. A live Haiku smoke test is NOT run: it needs explicit user approval of a budget |
+| P8 | `tfl_eval` adapter `system="deep"` (source_text plus one question line for the entry's class, user 2026-11-08; auto-approve), README section, `tfl_deep_agent/CLAUDE.md`, root CLAUDE.md update | `tfl-eval --system deep` passes in mock mode. A live Haiku smoke test is NOT run: it needs explicit user approval of a budget |
 
 Dev notes, environment decisions and deviations go to `tfl_deep_agent/DEV_NOTES.md`.
