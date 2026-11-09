@@ -277,12 +277,24 @@ def _trailing_tool_messages(messages: Sequence[Any]) -> list[Any]:
     return list(reversed(out))
 
 
-def _first_human_text(messages: Sequence[Any]) -> str:
+def _is_task_message(msg: Any) -> bool:
+    """A human message that states a task: not a note the harness added (HITL 1 feedback,
+    budget / call-limit wrap-up; they carry a ``tfl_*`` key in ``additional_kwargs``)."""
     from langchain_core.messages import HumanMessage
 
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            return _text_of(msg)
+    return isinstance(msg, HumanMessage) and not any(
+        str(k).startswith("tfl_") for k in (getattr(msg, "additional_kwargs", None) or {}))
+
+
+def _first_human_text(messages: Sequence[Any], before: int | None = None) -> str:
+    """The task the human last stated (a follow-up may state a new one) before message
+    index ``before`` (default: all); else the first human message."""
+    msgs = list(messages)
+    head = msgs if before is None else msgs[:before]
+    for pool in (head, msgs):
+        tasks = [m for m in pool if _is_task_message(m)]
+        if tasks:
+            return _text_of(tasks[-1])
     return ""
 
 
@@ -452,7 +464,8 @@ def formalization_request(state: Mapping[str, Any], target: Any, *, evidence: An
                         call_id=target.tool_call_id)
     checks = ir_checks(found["class"], found["ir"])
     args = {
-        "task_text": _first_human_text(messages)[:20000],
+        "task_text": _first_human_text(
+            messages, next((i for i, m in enumerate(messages) if m is target), None))[:20000],
         "source": dict(source) if source else {"kind": "text"},
         "transcription": _text_of(intake[-1])[:20000] if intake else None,
         "trigger": trigger,
@@ -590,7 +603,8 @@ class FormalizationReviewMiddleware(_AgentMiddleware):  # type: ignore[misc,vali
         message, rec = self._apply(decision, args, target.tool_call_id)
         from langchain_core.messages import HumanMessage
 
-        return {"messages": [HumanMessage(content=message)], STATE_KEY: [*superseded, rec]}
+        return {"messages": [HumanMessage(content=message, additional_kwargs={"tfl_hitl": FORMALIZATION})],
+                STATE_KEY: [*superseded, rec]}
 
     async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         return self.before_model(state, runtime)
@@ -1037,6 +1051,8 @@ def resume_value(request: Mapping[str, Any], decision: Decision, *,
         edited_args = (decisions[0].get("edited_action") or {}).get("args") or {}
         if edited_args.get("transcription"):
             review["transcription"] = edited_args["transcription"]
+        elif args0.get("task_text"):
+            review["task_text"] = args0["task_text"]  # the task this IR was built for (a follow-up may state a new one)
         if edited_args.get("ir") is not None:
             from .tools.ir import ir_fingerprint
 
@@ -1860,6 +1876,9 @@ def _task_text(run: Mapping[str, Any], state: Mapping[str, Any], later_calls: Co
         if (r.get("point") == FORMALIZATION and r.get("transcription")
                 and r.get("reviewed_call_id") not in later_calls):
             return str(r["transcription"])
+        if (r.get("point") == FORMALIZATION and r.get("task_text")
+                and r.get("reviewed_call_id") not in later_calls):
+            return str(r["task_text"])
     if run.get("task_text"):
         return str(run["task_text"])
     messages = list(state.get("messages") or [])
@@ -1898,14 +1917,15 @@ def _accepted_report_at(messages: Sequence[Any]) -> int | None:
 
 def _as_accepted(state: Mapping[str, Any]) -> tuple[Mapping[str, Any], frozenset[str]]:
     """``(state, later tool calls)``: the state as its accepted report had it. A report
-    ends its segment, so what came later starts with the human's next message. A run with
+    ends its segment, so what came later starts with the human's next message (a task message:
+    the notes HITL 1 adds in the same segment, e.g. a ``validate_ir`` in the report's own turn, are not a cut). A run with
     no accepted report, or no message after it, comes back as it is."""
-    from langchain_core.messages import HumanMessage, ToolMessage
+    from langchain_core.messages import ToolMessage
 
     messages = list(state.get("messages") or [])
     at = _accepted_report_at(messages)
     cut = None if at is None else next(
-        (i for i in range(at + 1, len(messages)) if isinstance(messages[i], HumanMessage)), None)
+        (i for i in range(at + 1, len(messages)) if _is_task_message(messages[i])), None)
     if cut is None:
         return state, frozenset()
     later = frozenset(m.tool_call_id for m in messages[cut:] if isinstance(m, ToolMessage))
@@ -1982,6 +2002,20 @@ def _write_result(d: Path, run: Mapping[str, Any], result: Mapping[str, Any], bu
                         human_review=review)
 
 
+def _drop_stale_draft(d: Path, run: dict[str, Any], graph: Any, config: Mapping[str, Any],
+                      budget: Any, evidence: Any) -> None:
+    """A stop that is not HITL 2 while ``result.*`` still shows a draft the human has
+    decided (rejected) earlier in this continuation: write the result of the thread as it
+    stands (the accepted report, or none), so the page does not show that draft as pending."""
+    run.pop("draft", None)
+    try:
+        state = dict(graph.get_state(config).values)
+        result = final_result(d, run, state, budget, evidence)
+        _write_result(d, run, result, budget, evidence)
+    except Exception:  # noqa: BLE001 - the stop itself must still be recorded
+        pass
+
+
 def _write_awaiting(d: Path, run: dict[str, Any], info: PendingInfo, graph: Any, config: Mapping[str, Any],
                     budget: Any, evidence: Any) -> None:
     """``run.json`` with the pending request, ``hitl.md``, and at HITL 2 the
@@ -2009,6 +2043,8 @@ def _write_awaiting(d: Path, run: dict[str, Any], info: PendingInfo, graph: Any,
                      human_review={"decision": "awaiting"}, status=STATUS_AWAITING)
         run["draft"] = {"verdict": (draft.get("report") or {}).get("verdict"), "trust": draft.get("trust"),
                         "confidence_cap": draft.get("confidence_cap"), "unknown_ids": draft.get("unknown_ids")}
+    elif run.get("draft"):
+        _drop_stale_draft(d, run, graph, config, budget, evidence)
     try:
         run["pending"]["card"] = pending_card(info.request, draft=run.get("draft") if info.point == REPORT else None,
                                               point=info.point)

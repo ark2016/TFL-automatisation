@@ -3404,3 +3404,7 @@ Two gaps in that baseline (`accepted_report`), both reproduced first (R1 went fr
   report and rating unchanged (Haiku wrote `exact?` three times, `lean_check` ran in Docker); the budget card at the start of a run
   with a $0.01 limit, top-up to $0.04 and the run continuing; declining inside a follow-up makes no model call, shows the chat note
   and keeps the report. R-IR itself is covered by mock tests only. A proof that passes `lean_check` was not seen live: that needs Opus.
+
+## Core backlog round (bk/deep-core)
+
+- Lean prompt no longer points at a missing /skills/lean/SKILL.md. Follow-up replies are kept whole (no truncated flag). HITL 1 feedback messages carry additional_kwargs tfl_hitl; the card's task_text is the task stated before the reviewed call and the review stores task_text, so a new report names the new task. _as_accepted cuts at the next task message, not at a HITL note. A non-HITL-2 stop drops a stale rejected draft from result.*. Verdict-gate predicates moved to evidence/rules.py (ledger re-exports them). CA-015 for runs with no budget stop left as decided earlier (needs the user).
