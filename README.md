@@ -683,7 +683,7 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
   (Lean/Mathlib v4.33.0 + langlib); see "R-Lean architecture" above.
 - **Anthropic API key** in `.env` for `--live` runs. Offline / mock mode needs no key. (`tfl-deep --live` never
   reads `.env`: it needs `ANTHROPIC_API_KEY` in the environment.)
-- **`[deep]` extra** (optional) for the TFL Deep Agent: `deepagents==0.7.34`, `langchain`, `langchain-anthropic`,
+- **`[deep]` extra** (optional) for the TFL Deep Agent: `deepagents==0.7.34`, `jsonschema`, `langchain`, `langchain-anthropic`,
   `langgraph-checkpoint-sqlite`, `pypdf`. Its sandbox uses the `tfl-sandbox` Docker image
   (`tfl_deep_agent/sandbox/build.ps1`).
 

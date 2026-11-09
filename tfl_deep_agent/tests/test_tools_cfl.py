@@ -306,7 +306,10 @@ def test_pda_run_push_orders_agree():
 
 def test_pda_run_on_the_live_task11_pda():
     """The pda_builder output of a live cfl run for {a^i b^j | j < i < 2j}."""
-    pda = load("cfl_system/examples/live_outputs/task11_ai_bj_between_result.json")
+    try:
+        pda = load("cfl_system/examples/live_outputs/task11_ai_bj_between_result.json")
+    except FileNotFoundError:
+        pytest.skip("live_outputs is gitignored: this run's output exists only on the machine that made it")
     holder = [pda]
     while holder:
         node = holder.pop()
@@ -435,6 +438,7 @@ def test_pump_claim_ticket50_wrong_p4_instance_is_refuted():
     assert r.data["ir_sha256"] == cfl_tools.ir_digest(TICKET50_IR)
 
 
+@pytest.mark.slow  # every split is checked; can pass the tool's 30 s limit on a loaded runner
 def test_pump_claim_ticket50_corrected_instance_stays_well_formed():
     claim = json.loads(json.dumps(TICKET50_PUMPING))
     claim["evidence"]["word_instances"]["4"] = "a" * 8 + "b" + "ab" * 4 + "a" * 8

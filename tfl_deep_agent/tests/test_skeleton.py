@@ -41,11 +41,14 @@ EXPECTED_SKILL_DIRS = ["reg", "cfl", "dcfl", "ll", "lean", "report-templates"]
 
 @pytest.mark.parametrize("name", EXPECTED_MODULES)
 def test_module_imports(name):
+    if name == "sandbox.docker_backend":  # the one listed module that needs the [deep] extra at import time
+        pytest.importorskip("deepagents")
     mod = importlib.import_module(f"tfl_deep_agent.{name}")
     assert mod.__doc__, f"{name} has no docstring"
 
 
 def test_every_package_module_imports():
+    pytest.importorskip("deepagents")
     for info in pkgutil.walk_packages([str(PKG)], prefix="tfl_deep_agent."):
         if ".tests" in info.name or info.name == "tfl_deep_agent.__main__":
             continue

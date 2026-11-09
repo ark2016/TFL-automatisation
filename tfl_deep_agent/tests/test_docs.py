@@ -226,6 +226,7 @@ def test_readme_layout_names_existing_paths():
 
 
 def test_readme_sandbox_and_lean_facts_match_the_code():
+    pytest.importorskip("deepagents")
     from tfl_deep_agent.sandbox import docker_backend
 
     text = _section(_text(DEEP_README), "## Sandbox and Lean")

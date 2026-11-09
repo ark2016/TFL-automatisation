@@ -281,6 +281,7 @@ def test_live_run_refused_when_the_day_is_spent(fake_agent):
 
 
 def test_pdf_upload_is_stored_with_its_type(fake_agent):
+    pytest.importorskip("pypdf")
     from tfl_deep_agent.tests.hitl_scripts import make_pdf
 
     pdf = make_pdf()

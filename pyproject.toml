@@ -23,6 +23,7 @@ dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-xdist>=3.5", "ruff>=0.6"]
 # tfl_deep_agent/tests skip cleanly when this extra is not installed.
 deep = [
     "deepagents==0.7.34",
+    "jsonschema>=4",
     "langchain>=1.4,<2",
     "langchain-anthropic>=1.7.10,<2",
     "langgraph-checkpoint-sqlite>=3.1",

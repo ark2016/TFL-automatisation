@@ -15,11 +15,14 @@ import re
 from pathlib import Path
 
 import pytest
-from deepagents.backends.filesystem import FilesystemBackend
-from deepagents.middleware.skills import _list_skills, _parse_skill_metadata
 
-from tfl_deep_agent.tools.base import REGISTRY, load_groups
-from tfl_deep_agent.tools.theory import load_theory
+pytest.importorskip("deepagents")
+
+from deepagents.backends.filesystem import FilesystemBackend  # noqa: E402
+from deepagents.middleware.skills import _list_skills, _parse_skill_metadata  # noqa: E402
+
+from tfl_deep_agent.tools.base import REGISTRY, load_groups  # noqa: E402
+from tfl_deep_agent.tools.theory import load_theory  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL_DIR = ROOT / "tfl_deep_agent" / "skills" / "dcfl"

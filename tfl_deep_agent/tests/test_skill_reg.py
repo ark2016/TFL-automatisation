@@ -94,6 +94,7 @@ def test_frontmatter_fields() -> None:
 
 
 def test_loaded_by_deepagents_skills_middleware(caplog: pytest.LogCaptureFixture) -> None:
+    pytest.importorskip("deepagents")
     from deepagents.backends import FilesystemBackend
     from deepagents.middleware.skills import SkillsMiddleware
 

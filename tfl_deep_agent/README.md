@@ -38,7 +38,7 @@ not_verified).
 
 ## Install
 
-The agent needs the optional `[deep]` extra: `deepagents==0.7.34`, `langchain`, `langchain-anthropic`,
+The agent needs the optional `[deep]` extra: `deepagents==0.7.34`, `jsonschema`, `langchain`, `langchain-anthropic`,
 `langgraph-checkpoint-sqlite` and `pypdf`.
 
 ```bash
