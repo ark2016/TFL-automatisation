@@ -324,12 +324,8 @@ class Pipeline:
 
         Returns the prompt text, or None if the file is not found.
 
-        DEFERRED: the ``input_parser`` agent (prompts/input_parser.md and its
-        entries in config.py) is configured but NOT called anywhere in this
-        pipeline -- REG runs take an already-built IR JSON. A free-text
-        ``--text`` entry (as in ll_system/orchestrator.py) is a possible
-        follow-up; until it is wired, this default exists only so the
-        prompt file can be loaded by tests and tooling.
+        The ``input_parser`` prompt is used by the CLI ``--text`` entry
+        (``parse_text_to_ir``); this loader lets tests and tooling read it.
         """
         prompt_dir = Path(__file__).parent / "prompts"
         prompt_file = prompt_dir / f"{name}.md"
@@ -442,6 +438,34 @@ def _get_alphabet(ir: dict) -> list[str]:
 # CLI
 # ---------------------------------------------------------------------------
 
+def parse_text_to_ir(text: str, runner: Any) -> dict:
+    """Turn a raw problem statement into an IR via the ``input_parser`` agent.
+
+    *runner* is any object with ``run_agent(name, input_data)`` (an
+    ``LLMRunner`` live; a scripted stub in tests). Raises ``RuntimeError``
+    on an agent error, a missing/non-dict IR, or an IR that fails
+    ``validate_ir``.
+    """
+    output = runner.run_agent("input_parser", {"source_text": text})
+    if not isinstance(output, dict) or output.get("status") == "agent_error":
+        errs = (output or {}).get("errors") if isinstance(output, dict) else None
+        errs = errs or ["input_parser produced no output"]
+        raise RuntimeError(f"--text parsing failed: {'; '.join(map(str, errs))}")
+    # LLMRunner wraps the parsed object as {"evidence": <ir>}; a bare IR is
+    # also accepted.
+    ir = output.get("evidence") if isinstance(output.get("evidence"), dict) else output
+    if isinstance(ir.get("ir"), dict):
+        ir = ir["ir"]
+    if not isinstance(ir, dict) or not ir.get("language_spec"):
+        raise RuntimeError("--text parsing failed: input_parser returned no IR object")
+    ir = dict(ir)
+    ir.setdefault("source_text", text)
+    ir_errors = validate_ir(ir)
+    if ir_errors:
+        raise RuntimeError(f"--text produced an invalid IR: {'; '.join(ir_errors)}")
+    return ir
+
+
 def main() -> None:
     """CLI entry point."""
     import argparse
@@ -449,7 +473,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="TFL Agent System Orchestrator",
     )
-    parser.add_argument("ir_json", help="Path to IR JSON file")
+    parser.add_argument("ir_json", nargs="?", default=None,
+                        help="Path to IR JSON file (omit when using --text)")
+    parser.add_argument("--text", metavar="TEXT", default=None,
+                        help="Problem statement in natural language; the IR is built "
+                             "by the input_parser agent (requires --live)")
     parser.add_argument("dfa_json", nargs="?", default=None,
                         help="Path to DFA JSON (only without --mock/--live)")
 
@@ -483,11 +511,30 @@ def main() -> None:
     args = parser.parse_args()
 
     # Load IR
-    try:
-        with open(args.ir_json, encoding="utf-8") as f:
-            ir = json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"Error reading IR file: {exc}", file=sys.stderr)
+    live_llm = None
+    if args.text and not args.ir_json:
+        if not args.live:
+            print("Error: --text requires --live (it runs the input_parser agent; "
+                  "there is no offline path for free-text input)", file=sys.stderr)
+            sys.exit(1)
+        from .lib.llm_client import LLMRunner
+        try:
+            live_llm = LLMRunner(verbose=args.verbose)
+            ir = parse_text_to_ir(args.text, live_llm)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        args.ir_json = "text_input.json"
+    elif args.ir_json:
+        try:
+            with open(args.ir_json, encoding="utf-8") as f:
+                ir = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Error reading IR file: {exc}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print('Error: provide an IR JSON file, or --text "<problem statement>"',
+              file=sys.stderr)
         sys.exit(1)
 
     # Inject student notes from CLI if provided
@@ -511,7 +558,7 @@ def main() -> None:
         elif args.live:
             from .lib.llm_client import LLMRunner
             try:
-                llm = LLMRunner(verbose=args.verbose)
+                llm = live_llm or LLMRunner(verbose=args.verbose)
             except RuntimeError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 sys.exit(1)
