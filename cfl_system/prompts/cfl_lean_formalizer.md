@@ -36,14 +36,20 @@ opposite direction), say so in `notes` — do not silently prove a different, ea
 - `theorem tfl_main : L.IsContextFree` — the verdict is **cfl**. If `statement.language_decl`
   defines `def L : Language Letter := g.language` (a grammar IR), the proof is one line,
   `exact ⟨g, rfl⟩` (worked example 2): `Language.IsContextFree L` is by definition
-  `∃ g : ContextFreeGrammar Letter, g.language = L`. Otherwise (a set-builder `L`) you must
-  exhibit a grammar `g : ContextFreeGrammar Letter` (Mathlib,
-  `Mathlib.Computability.ContextFreeGrammar`) with `g.language = L`, i.e. `⟨g, ?_⟩`, and prove
-  both inclusions (every derivation yields a word of `L`, and every word of `L` is derivable —
-  usually by induction on the length parameter with an invariant on sentential forms). **No
-  compiled worked example exists for the set-builder case yet**: it is markedly harder than the
-  refutations, expect it to take retries, keep the grammar as small as possible and reuse the
-  plan's grammar/PDA verbatim when it gives one. Do not give up by writing `sorry` — that is
+  `∃ g : ContextFreeGrammar Letter, g.language = L`. A grammar language cut by a regular filter
+  (`g.language ⊓ {w | …}`) is `TflLean.isContextFree_inf_isRegular ⟨g, rfl⟩ hR` with the filter's
+  regularity from the closure section below (compiled: `Examples/AnBnMod4Filter_CF.lean`). For a
+  set-builder `L`, first try closure: rewrite `L` (`have e : L = … := by ext w; …`, `rw [e]`) as a
+  union (`TflLean.isContextFree_add`), homomorphic image or intersection with a regular language
+  of languages the closure section already knows, e.g. `{a^(j·n) b^(k·n)}`
+  (`TflLean.isContextFree_anbn_mul`; compiled: `Examples/AnBnUnionAnB2n_CF.lean` for
+  `{aⁿbⁿ} ∪ {aⁿb²ⁿ}`). Otherwise you must exhibit a grammar `g : ContextFreeGrammar Letter`
+  (Mathlib, `Mathlib.Computability.ContextFreeGrammar`) with `g.language = L`, i.e. `⟨g, ?_⟩`,
+  and prove both inclusions (every derivation yields a word of `L`, and every word of `L` is
+  derivable — usually by induction on the length parameter with an invariant on sentential
+  forms). **No compiled example proves `g.language = L` for a set-builder `L` directly**: it is
+  markedly harder than the refutations, expect it to take retries, keep the grammar as small as
+  possible and reuse the plan's grammar/PDA verbatim when it gives one. Do not give up by writing `sorry` — that is
   rejected as `has_sorry` (not evidence either way); if you truly cannot close a goal, return your
   best complete attempt and explain the gap in `notes`.
 
@@ -145,12 +151,15 @@ Return **only** a JSON object, no markdown fences, no commentary outside the JSO
   a line at column 0 (that would end the `by` block early). `compose_lean_file` rejects a
   `proof_body` containing any of these *before* it ever reaches the compiler
   (docs/VERDICT_POLICY.md R-Lean) — there is no legitimate proof that needs them.
-- The plan's method may be one for which no Lean lemma is available here (a Parikh argument, a
-  substitution, a closure reduction to a language other than `{aⁿbⁿcⁿ}`). Do not try to
-  formalize the closure theorem; instead prove `¬ L.IsContextFree` directly by pumping/Ogden on
-  `L` with a witness of your own (the plan's witness word if it has one), and say in `notes` that
-  you changed the route. The one closure reduction that **is** available is "`L ∩ x⁺y⁺z⁺` is
-  `{xⁿyⁿzⁿ}` up to renaming": `TflLean.not_isContextFree_of_slice` (worked example 3).
+- The plan's method may be one for which no Lean lemma is available here (a Parikh argument, or
+  a closure reduction to a language that nothing below refutes). Do not try to formalize
+  Parikh's theorem; instead prove `¬ L.IsContextFree` directly by pumping/Ogden on `L` with a
+  witness of your own (the plan's witness word if it has one), and say in `notes` that you
+  changed the route. Closure reductions that **are** available: "`L ∩ x⁺y⁺z⁺` is `{xⁿyⁿzⁿ}` up to
+  renaming" (`TflLean.not_isContextFree_of_slice`, worked example 3), intersection with any regular
+  language (`TflLean.not_isContextFree_of_inf_isRegular`) and homomorphic images
+  (`TflLean.not_isContextFree_of_homomorphicImage`) — the reduced language still has to be refuted
+  (slice lemma, pumping, or `TflLean.not_isContextFree_pow2` for `{a^(2^k)}`).
 
 ## Available lemmas
 
@@ -253,6 +262,30 @@ Transfer section (langlib's worked results moved onto any alphabet; no `Fintype`
 - langlib bridges: `is_CF_iff_isContextFree : is_CF L ↔ L.IsContextFree` (langlib's `is_CF`
   vs Mathlib's predicate), `notCF_lang_eq_eq_pos : ¬ is_CF lang_eq_eq_pos`,
   `CF_of_CF_inter_regular (h₁ : is_CF L₁) (h₂ : L₂.IsRegular) : is_CF (L₁ ⊓ L₂)`.
+
+Closure section (langlib's closure theorems in Mathlib's `L.IsContextFree`; no `Fintype` needed
+unless shown):
+
+- `TflLean.isContextFree_inf_isRegular (hL : L.IsContextFree) (hR : R.IsRegular) :
+  (L ⊓ R).IsContextFree`, `TflLean.not_isContextFree_of_inf_isRegular (hR : R.IsRegular)
+  (h : ¬ (L ⊓ R).IsContextFree) : ¬ L.IsContextFree`.
+- `TflLean.isContextFree_add (h₁ : L₁.IsContextFree) (h₂ : L₂.IsContextFree) : (L₁ + L₂).IsContextFree`
+  (`L₁ + L₂` is the union; `Language.mem_add : w ∈ L₁ + L₂ ↔ w ∈ L₁ ∨ w ∈ L₂`; bind the parts
+  with `let A : Language Letter := {w | …}` so `A + B` elaborates as a `Language`).
+- `TflLean.isContextFree_subst (hL) (hf : ∀ a, (f a).IsContextFree) : (L.subst f).IsContextFree`,
+  `TflLean.isContextFree_homomorphicImage (h : α → List β) (hL) : (L.homomorphicImage h).IsContextFree`,
+  `TflLean.mem_homomorphicImage_iff (L) (h) (u) : u ∈ L.homomorphicImage h ↔ ∃ w ∈ L, w.flatMap h = u`,
+  `TflLean.not_isContextFree_of_homomorphicImage (h) (hn : ¬ (L.homomorphicImage h).IsContextFree) :
+  ¬ L.IsContextFree`, `TflLean.isContextFree_map (f : α → β) (hL) : (Language.map f L).IsContextFree`,
+  `TflLean.isContextFree_inverseHomomorphicImage [Fintype α] (h) (hL)`.
+- Known languages: `TflLean.isContextFree_anbn (a b)` (`{w | ∃ n : ℕ, w = List.replicate n a ++
+  List.replicate n b}`), `TflLean.isContextFree_anbn_mul (a b) (j k)` (`List.replicate (j * n) a ++
+  List.replicate (k * n) b`), `TflLean.not_isContextFree_pow2 (a)` (`{w | ∃ k : ℕ, w = List.replicate
+  (2 ^ k) a}` is not CF).
+- Regular filters: `TflLean.isRegular_length_mod (m r) (hm : 0 < m)` (`{w | w.length % m = r}`),
+  `TflLean.isRegular_count_mod (a) (m r) (hm : 0 < m)` (`{w | w.count a % m = r}`),
+  `TflLean.isRegular_replicate_append_replicate (hab : a ≠ b)` (`a*b*`), `TflLean.isRegular_of_dfa`;
+  `TflLean.isContextFree_of_isRegular [Fintype T]` (REG ⊆ CFL).
 
 ## Worked example 1 — `{aⁿbⁿcⁿ | n ≥ 0}` is not context-free
 

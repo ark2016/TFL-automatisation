@@ -556,20 +556,27 @@ use their `lean_formalizer` agents for this role. This exists because
   (`is_CF`/`is_DCF`, the pumping lemma, DCFL complement/intersection-with-REG closure, `DCFL ⊆ CFL`). The IR->Lean
   translator covers: exponent notation (with a decidable companion `Bool` def), reversals/palindromes, grammars
   (`g.language`, also `g.language ⊓ {w | filter}`), and predicate filters; a `natural_language_filter` or an
-  unsupported predicate gives `None` (`not_formalizable`, no evidence either way). **LL(k) is not formalized.**
-  Methods without Lean lemmas in the image (closure with a regular language, Parikh, substitution) are proved
-  directly or not at all.
+  unsupported predicate gives `None` (`not_formalizable`, no evidence either way). **LL(k) is not formalized**
+  in the pipelines; `docs/LEAN_LLK.md` designs the statement (`TflLL.IsLLk g k` over leftmost derivations,
+  compiled together with one `¬ IsLLk` example) and the plan. Closure is in `TflLean/Lemmas.lean`: CFL ∩ REG,
+  union, substitution, (inverse) homomorphism, letter maps, REG ⊆ DCFL/CFL, DCFL ∩ REG, the intersection method
+  for REG, regular filters (`|w| mod m`, `|w|_a mod m`, `a*b*`), and `{aⁿbⁿ}` (CF, DCF, not regular),
+  `{a^(2^k)}` (not CF) on any alphabet. Methods with no Lean formalization in Mathlib v4.33.0 or langlib @
+  c5fb834 (Parikh's theorem, Yu's DCFL pumping lemma, Shallit's Theorem 4.7.4) are proved directly or not at all.
 - **Reference proofs** (`agent_system/docker/tfl_lean/TflLean/Examples/`, each is exactly
   `compose_lean_file(render_statement(IR, direction), body)` and compiles to `proved`, replay OK; checked by
   `agent_system/tests/test_lean_examples.py`, `cfl_system/tests/test_lean_examples_cfl.py`,
   `dcfl_system/tests/test_lean_examples_dcfl.py`, Docker-conditional):
-  `EvenA_Regular`, `AnBnNotRegular` (REG); `AnBnCnNotCF`, `AnBnAnNotCF` (via the closure lemma
-  `TflLean.not_isContextFree_of_slice`), `EvenPalGrammar_CF` (CFL); `AnBnCm_DCF`, `AnBnCmPos_DCF`,
-  `AiBjCkNeq_NotDCF` (DCFL; the non-DCFL direction goes through `TflLean.not_isDCF_of_not_isContextFree`).
-  Shared lemmas: `TflLean/Lemmas.lean`.
-  Known gaps: no compiled worked example for the *positive* CFL direction beyond `EvenPalGrammar_CF`; the
-  exam_04 grammar case (DCFL by a grammar) has no grammar->DPDA bridge in the image, so the mock is an honest
-  refusal; nested exponents (`a^(2^n)`) are not translated.
+  `EvenA_Regular`, `AnBnNotRegular`, `AiBjNeq_NotRegular` (REG; the last by the intersection method,
+  `Lᶜ ∩ a*b* = {aⁿbⁿ}`); `AnBnCnNotCF`, `AnBnAnNotCF` (via the closure lemma
+  `TflLean.not_isContextFree_of_slice`), `EvenPalGrammar_CF`, `AnBnMod4Filter_CF` (grammar ∩ regular filter),
+  `AnBnUnionAnB2n_CF` (set-builder `{aⁿbⁿ} ∪ {aⁿb²ⁿ}` as a union of homomorphic images) (CFL); `AnBnCm_DCF`,
+  `AnBnCmPos_DCF`, `AnBn_DCF`, `AiBjCkNeq_NotDCF` (DCFL; the non-DCFL direction goes through
+  `TflLean.not_isDCF_of_not_isContextFree`). Shared lemmas: `TflLean/Lemmas.lean`.
+  Known gaps: a set-builder CFL that is not a closure image of a known language still needs a grammar with
+  `g.language = L` proved by hand (no compiled example); the exam_04 grammar case (DCFL by a grammar) has no
+  grammar->DPDA bridge (only REG ⊆ DCFL, `TflLean.isDCF_of_isRegular`), so the mock is an honest refusal;
+  nested exponents (`a^(2^n)`) are not translated.
 - **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0` (resolves to commit
   `db584cd6d46c92f209a44c0f1c829460d327499d`), langlib pinned at commit
   `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — verified against langlib's *own* `lake-manifest.json` at that

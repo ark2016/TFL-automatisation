@@ -18,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_system.tests.test_lean_examples import TRANSFER_EXAMPLES, TRANSFER_LEMMA_NAMES
+from agent_system.tests.test_lean_examples import (
+    CLOSURE_EXAMPLES,
+    CLOSURE_LEMMA_NAMES,
+    TRANSFER_EXAMPLES,
+    TRANSFER_LEMMA_NAMES,
+)
 from agent_system.tests.test_lean_examples import _proof_body as example_proof_body
 from agent_system.tests.test_lean_examples import _statement as example_statement
 from dcfl_system.lib.lean_ir import render_statement
@@ -31,6 +36,8 @@ DCFL_EXAMPLES = [name for name, spec in TRANSFER_EXAMPLES.items() if spec[1] == 
 # The examples quoted as few-shots in the prompt (AnBnCm_DCF.lean is the same
 # technique as AnBnCmPos_DCF.lean with the n, m ≥ 0 lemma; compiled only).
 FEW_SHOT = ["AnBnCmPos_DCF.lean", "AiBjCkNeq_NotDCF.lean"]
+# Compiled reference examples the prompt names by file (not quoted as few-shots).
+DCFL_CLOSURE_EXAMPLES = [name for name, spec in CLOSURE_EXAMPLES.items() if spec[1] == "dcfl"]
 
 
 def test_there_are_examples_for_both_directions():
@@ -39,9 +46,9 @@ def test_there_are_examples_for_both_directions():
     assert set(FEW_SHOT) <= set(DCFL_EXAMPLES)
 
 
-@pytest.mark.parametrize("name", DCFL_EXAMPLES)
+@pytest.mark.parametrize("name", [*DCFL_EXAMPLES, *DCFL_CLOSURE_EXAMPLES])
 def test_example_statement_is_the_renderers(name):
-    ir_path, _system, direction, _stmt = TRANSFER_EXAMPLES[name]
+    ir_path, _system, direction, _stmt = {**TRANSFER_EXAMPLES, **CLOSURE_EXAMPLES}[name]
     ir = json.loads((REPO / ir_path).read_text(encoding="utf-8"))
     rendered = render_statement(ir, direction)
     assert rendered is not None, ir_path
@@ -67,3 +74,17 @@ def test_prompt_names_only_existing_transfer_lemmas():
                  "replicate_append_replicate_append_replicate_inj"):
         assert name in TRANSFER_LEMMA_NAMES
         assert f"TflLean.{name}" in prompt, name
+
+
+def test_prompt_names_the_closure_lemmas_and_reference_examples():
+    prompt = PROMPT.read_text(encoding="utf-8")
+    for name in ("isDCF_anbn", "isDCF_of_isRegular", "isDCF_inf_isRegular",
+                 "not_isDCF_of_inf_isRegular", "isRegular_length_mod", "isRegular_count_mod",
+                 "isRegular_replicate_append_replicate"):
+        assert name in CLOSURE_LEMMA_NAMES
+        assert f"TflLean.{name}" in prompt, name
+    assert DCFL_CLOSURE_EXAMPLES
+    for name in DCFL_CLOSURE_EXAMPLES:
+        assert f"Examples/{name}" in prompt, name
+    # is_DCF_of_is_RG is reachable now (through TflLean.isDCF_of_isRegular)
+    assert "**Not available**: `is_DCF_of_is_RG`" not in prompt

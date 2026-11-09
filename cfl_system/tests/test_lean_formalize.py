@@ -710,6 +710,13 @@ def test_hint_list_covers_the_new_transfer_lemmas():
         assert f"TflLean.{name}" in orch._LEAN_AVAILABLE_LEMMAS, name
 
 
+def test_hint_list_covers_the_closure_lemmas():
+    for name in ("isContextFree_inf_isRegular", "not_isContextFree_of_inf_isRegular",
+                 "isContextFree_add", "isContextFree_homomorphicImage", "isContextFree_anbn_mul",
+                 "not_isContextFree_pow2", "isRegular_length_mod"):
+        assert f"TflLean.{name}" in orch._LEAN_AVAILABLE_LEMMAS, name
+
+
 def test_hint_lemmas_appear_in_the_prompt():
     prompt = PROMPT.read_text(encoding="utf-8")
     for name in orch._LEAN_AVAILABLE_LEMMAS:
