@@ -128,3 +128,34 @@ def test_agent_examples_have_required_keys(agent_name, filename):
         if gap:
             missing.append(f"{heading!r}: missing {sorted(gap)}")
     assert not missing, f"{filename}: example(s) missing contract keys:\n" + "\n".join(missing)
+
+
+# ---------------------------------------------------------------------------
+# Input keys the orchestrator builds are mentioned in the prompt
+# ---------------------------------------------------------------------------
+
+_SPECIALIST_INPUT_FILES = [
+    f for a, f in sorted(PROMPT_FILES.items())
+    if a in {"cfg_builder", "pda_builder", "decomposition", "parikh", "pumping_cfl",
+             "ogden", "closure_reduction", "interchange", "morphism"}
+]
+
+
+@pytest.mark.parametrize("filename", _SPECIALIST_INPUT_FILES)
+def test_specialist_prompt_documents_every_input_key(filename):
+    """`_build_specialist_input` keys (+ `prior_oracle_test` on retry)."""
+    text = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+    for key in ("ir", "hypothesis", "classifier_hint", "preprocess", "retry_params", "prior_oracle_test"):
+        assert key in text, f"{filename}: input key {key!r} is not documented"
+
+
+def test_reasoning_prompt_documents_every_input_key():
+    from cfl_system.orchestrator import MAX_INVERSIONS, MAX_RETRIES
+
+    text = (PROMPTS_DIR / PROMPT_FILES["reasoning"]).read_text(encoding="utf-8")
+    for key in ("ir", "hypothesis", "classifier_hint", "specialist_outputs", "failed_agents",
+                "oracle_test", "claim_verification", "proof_checker", "retry_count",
+                "inversion_count", "max_retries", "max_inversions"):
+        assert f'"{key}"' in text, f"cfl_reasoning.md: input key {key!r} is not documented"
+    assert f'"max_retries": {MAX_RETRIES}' in text
+    assert f'"max_inversions": {MAX_INVERSIONS}' in text

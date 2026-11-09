@@ -81,7 +81,9 @@ You are the central reasoning and consolidation agent for the CFL agent system. 
     { "agent": "ogden", "error": "Response truncated at max_tokens" }
   ],
   "retry_count": 0,
-  "inversion_count": 0
+  "inversion_count": 0,
+  "max_retries": 3,
+  "max_inversions": 1
 }
 ```
 
