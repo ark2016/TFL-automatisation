@@ -37,12 +37,13 @@ flag is taken at that stop.
 A run also stops when its budget is about to run out (``--decision edit --payload
 '{"add_usd": 5}'`` adds money, ``--decision approve`` finishes with what is left);
 only a run started with ``--auto-approve`` goes straight to the report. In review
-mode ``auto`` nothing asks on the terminal, so this stop exits with code 3 there too.
+mode ``auto`` nothing asks on the terminal in the process that
+started the run, so this stop exits with code 3 there too; a later ``--resume`` on a terminal does ask.
 A finished run takes follow-up messages in the same conversation: ``--resume RUN_DIR
 --message TEXT``. The agent answers in text, or submits a new report (HITL 2 as
 usual); a follow-up that fails exits with code 1 and leaves the previous report in
 place. ``--resume RUN_DIR --abandon`` drops a follow-up whose process was killed or
-that waits at a stop, and brings the previous report back; its process must be gone.
+that waits at a stop, and brings the previous report back; refused while the recording process is alive.
 A value starting with ``@`` is a file; ``@@text`` is the literal ``@text``.
 
 The run directory (``--save``, default ``<runs dir>/<run id>``) holds
@@ -108,8 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "--approve-rest / --auto-approve")
     r.add_argument("--abandon", action="store_true",
                    help="drop the follow-up in progress, one whose process was killed or one waiting at a stop: "
-                        "the previous report, status, reviews and review mode come back. Its process must be gone "
-                        "(this is not checked); it takes no other flag")
+                        "the previous report, status, reviews and review mode come back. Refused while the process "
+                        "that recorded it is alive; it takes no other flag")
     r.add_argument("--decision", choices=["approve", "edit", "reject"], help="the decision on the pending stop")
     r.add_argument("--payload", metavar="JSON",
                    help="edit: a JSON object of the fields to change (HITL 1: transcription / ir / class; "
@@ -231,7 +232,7 @@ def _abandon(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             or args.approve_rest or args.live or args.auto_approve or args.no_dialog):
         parser.error("--abandon takes no other flag: it only drops the follow-up in progress")
     try:
-        status = followup.abandon_followup(args.resume)
+        status = followup.abandon_followup(args.resume, check_alive=True)
     except RunError as exc:
         return _fail(str(exc))
     except OSError as exc:
@@ -299,7 +300,7 @@ def _resume(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             outcome = hitl.resume_run(args.resume, decision, live=args.live, dialog=_dialog(args),
                                       approve_rest=args.approve_rest,
                                       auto_approve_later=args.auto_approve and not args.approve_rest)
-    except (hitl.RunError, hitl.DecisionError, ValueError) as exc:
+    except (hitl.RunError, hitl.DecisionError, ValueError, OSError, ImportError) as exc:
         return _fail(str(exc))
     return _report(outcome)
 

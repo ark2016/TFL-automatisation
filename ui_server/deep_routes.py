@@ -533,11 +533,11 @@ def _settle_followup_locked(run: dict[str, Any], agent: dict[str, Any], *, rc: i
         _followup_back_locked(run, dead_note)
     elif agent.get("status") == WAITING_STATUS and agent.get("pending"):
         return False
+    elif agent.get("followup_error"):  # the agent failed and has restored the report itself; its reason beats rc
+        _followup_back_locked(run, str(agent["followup_error"]))
     elif rc not in (None, EXIT_SUBMITTED, EXIT_NO_REPORT):  # the CLI refused it: nothing has changed
         _followup_back_locked(run, f"the follow-up did not run (exit code {rc}); the previous report stays"
                               + (f"\n{tail}" if tail else ""))
-    elif agent.get("followup_error"):  # the agent failed and has restored the report itself
-        _followup_back_locked(run, str(agent["followup_error"]))
     else:
         return False
     return True

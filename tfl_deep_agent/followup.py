@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
@@ -180,7 +181,7 @@ def begin_followup(d: Path, run: dict[str, Any]) -> None:
     caller saves ``run``). What the message may change starts over; the conversation
     continues from the stable checkpoint."""
     run["followup_in_progress"] = {
-        "snapshot": snapshot_report(d), "started_at": now(), "previous_status": run.get("status"),
+        "snapshot": snapshot_report(d), "started_at": now(), "pid": os.getpid(), "previous_status": run.get("status"),
         "previous_result": run.get("result"), "previous_error": run.get("error"),
         "previous_accepted_report": run.get("accepted_report"),
         "n_reviews": len(run.get("reviews") or []),
@@ -227,19 +228,52 @@ def emit_abandoned(emitter: Any, status: str, error: str | None) -> None:
     emitter.segment_end(status)
 
 
+def pid_alive(pid: Any) -> bool:
+    """Whether a process with this pid exists (``False`` for a missing or invalid pid)."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5 or kernel32.GetLastError() == 5  # access denied: it exists
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def abandon_followup(run_dir: str | Path, *, error: str | None = None,
-                     run: dict[str, Any] | None = None) -> str | None:
+                     run: dict[str, Any] | None = None, check_alive: bool = False) -> str | None:
     """Drop the follow-up in progress; no process of the run may be alive. The report,
     the status, the reviews and the review mode are as before the message, nothing is
     pending, and the next message starts from the stable checkpoint. ``error``: why it did
     not finish (``None``: it was cancelled). ``run``: the caller's newer copy of
     ``run.json``, so the money a dying segment has counted is not lost. Returns the
-    restored status, ``None`` when the run has no follow-up in progress. A restore that
+    restored status, ``None`` when the run has no follow-up in progress. ``check_alive`` (the CLI's ``--abandon``): refuse with ``RunError`` while the pid recorded with the follow-up is alive. A restore that
     fails raises ``OSError`` and leaves the record, and the chat is told nothing."""
     d = Path(run_dir)
     current = load_run(d) if run is None else run
     if not current.get("followup_in_progress"):
         return None
+    if check_alive:
+        pid = current["followup_in_progress"].get("pid")
+        if pid != os.getpid() and pid_alive(pid):
+            raise RunError(f"{d}: the follow-up's process (pid {pid}) is still alive; wait for it or stop it first")
     fail_followup(d, current, error)
     save_run(d, current)
     try:

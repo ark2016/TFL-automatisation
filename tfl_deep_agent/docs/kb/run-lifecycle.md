@@ -171,7 +171,7 @@ tags: [deep-agent, run, cli, hitl, progress]
 
 ## Что проверить при отладке
 
-- Запуск «завис» со статусом `running` и нет живого процесса: процесс умер между `save_run` и концом сегмента; `pending` пуст, поэтому `--resume --decision` откажет. Если в `run.json` есть `followup_in_progress`, процесс умер на сообщении: `--resume RUN_DIR --abandon` возвращает прежний отчёт (процесс должен быть мёртв, это не проверяется). Смотрите `progress.jsonl` и `segments` (у последнего нет `ended_at`).
+- Запуск «завис» со статусом `running` и нет живого процесса: процесс умер между `save_run` и концом сегмента; `pending` пуст, поэтому `--resume --decision` откажет. Если в `run.json` есть `followup_in_progress`, процесс умер на сообщении: `--resume RUN_DIR --abandon` возвращает прежний отчёт (пока жив процесс, записавший `pid` в `followup_in_progress`, команда откажет). Смотрите `progress.jsonl` и `segments` (у последнего нет `ended_at`).
 - `--resume` отвечает «nothing to resume»: статус не `awaiting_human`.
 - «is a live run ... pass --live» или «is a mock run; --live does not apply»: режим запуска записан в `run.json["mode"]` и не меняется.
 - Ошибка агента не даёт код 2: она попадает в `run["error"]`, результат со статусом `error` пишется, код выхода 1.

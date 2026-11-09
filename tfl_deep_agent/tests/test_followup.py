@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 
@@ -591,6 +592,28 @@ def test_cli_abandon_after_a_hard_kill(tmp_path):
     assert r.returncode == run_store.EXIT_USAGE and "--resume RUN_DIR" in r.stderr
     r = H.tfl_deep("--resume", str(d), "--message", QUESTION, "--no-dialog", env=env)
     assert r.returncode == hitl.EXIT_SUBMITTED, r.stderr
+
+
+def test_abandon_refused_while_recording_process_alive(tmp_path):
+    d = tmp_path / "r"
+    d.mkdir()
+    (d / "result.json").write_text("{}", encoding="utf-8")
+    run = {"run_id": "x", "status": "running", "reviews": [],
+           "followup_in_progress": {"snapshot": followup.snapshot_report(d), "previous_status": "submitted",
+                                    "pid": os.getpid(), "n_reviews": 0, "review_switch": {}}}
+    run_store.save_run(d, run)
+    assert followup.pid_alive(os.getpid()) and not followup.pid_alive(None) and not followup.pid_alive(-1)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        run["followup_in_progress"]["pid"] = child.pid
+        run_store.save_run(d, run)
+        with pytest.raises(run_store.RunError, match="still alive"):
+            followup.abandon_followup(d, check_alive=True)
+    finally:
+        child.kill()
+        child.wait()
+    assert not followup.pid_alive(child.pid)
+    assert followup.abandon_followup(d, check_alive=True) == "submitted"
 
 
 class _SilentProgress:
