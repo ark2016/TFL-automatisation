@@ -30,11 +30,30 @@ from agent_system.lib.type_check import (
 )
 
 
-def run_lean(text: str, timeout: int = 300) -> list[dict]:
+# ``docker run`` exits 125 when the daemon fails to create or start the
+# container (seen on WSL2 as "runc did not terminate successfully: exit status
+# 139"); 126/127 when the command in the image cannot run. None of these is a
+# Lean result.
+_DOCKER_START_FAILURE = {125, 126, 127}
+
+
+def run_lean(text: str, timeout: int = 300, attempts: int = 3) -> list[dict]:
     """Run ``lake env lean --json`` on *text* in the image, return the parsed
-    messages (``severity`` / ``data`` / ``pos``). Raises on Docker failure to
-    start or timeout; Lean errors are ordinary ``severity == "error"``
-    messages."""
+    messages (``severity`` / ``data`` / ``pos``). A container that fails to
+    start is retried up to *attempts* times, then raises ``RuntimeError`` with
+    Docker's stderr, so a Docker fault never reads as "Lean printed nothing".
+    Lean errors are ordinary ``severity == "error"`` messages."""
+    last = ""
+    for _ in range(attempts):
+        rc, stdout, stderr = _run_lean_once(text, timeout)
+        if rc not in _DOCKER_START_FAILURE:
+            return _parse_lean_json_messages(stdout)
+        last = f"docker run exited {rc}: {stderr.strip()[-500:]}"
+    raise RuntimeError(f"Lean container did not start after {attempts} attempts; {last}")
+
+
+def _run_lean_once(text: str, timeout: int) -> tuple[int, str, str]:
+    """One ``docker run``; returns ``(returncode, stdout, stderr)``."""
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".lean", delete=False, encoding="utf-8", newline="\n"
     ) as f:
@@ -54,7 +73,7 @@ def run_lean(text: str, timeout: int = 300) -> list[dict]:
             ],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout + 30, env=env,
         )
-        return _parse_lean_json_messages(proc.stdout)
+        return proc.returncode, proc.stdout, proc.stderr
     finally:
         Path(tmp).unlink(missing_ok=True)
 
