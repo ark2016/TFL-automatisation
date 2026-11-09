@@ -35,6 +35,7 @@ ledger, a report rated outside a run): that is the second line of defence.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal
 
@@ -302,6 +303,24 @@ def evidence_id_error(unknown: Mapping[str, Sequence[str]], evidence: Any) -> di
             "unknown_ids": list(unknown), "valid_ids": grouped, "error": text}
 
 
+_TOOL_MARKUP_RE = re.compile(
+    r"</?(?:antml:)?(?:parameter|invoke|function_calls)\b"
+    r"|</(?:hypothesis|method|construction|summary|conclusion|verdict|claims|steps|lemmas)>")
+
+
+def leaked_markup_fields(report: Any, path: str = "") -> list[str]:
+    """The report fields holding tool-call markup: a malformed call can put
+    ``</hypothesis><parameter name="construction">...`` inside one field, which
+    swallows the next field and would print the markup in the report."""
+    if isinstance(report, str):
+        return [path or "report"] if _TOOL_MARKUP_RE.search(report) else []
+    if isinstance(report, Mapping):
+        return [f for k, v in report.items() for f in leaked_markup_fields(v, f"{path}.{k}" if path else str(k))]
+    if isinstance(report, (list, tuple)):
+        return [f for i, v in enumerate(report) for f in leaked_markup_fields(v, f"{path}[{i}]")]
+    return []
+
+
 def make_submit_report_tool(evidence: Any = None) -> Any:
     """The ``submit_report`` LangChain tool.
 
@@ -326,6 +345,11 @@ def make_submit_report_tool(evidence: Any = None) -> Any:
 
     def _run(**kwargs: Any) -> tuple[str, dict[str, Any]]:
         report = validate_report(kwargs)
+        leaked = leaked_markup_fields(report)
+        if leaked:
+            raise ToolException(
+                f"tool-call markup inside field(s) {', '.join(leaked)}: the call was malformed and one field "
+                "swallowed the next. Resubmit with each field holding only its own text.")
         ledger = _ledger()
         if ledger is not None:
             unknown = unknown_evidence_ids(report, ledger)

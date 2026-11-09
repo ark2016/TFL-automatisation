@@ -819,3 +819,48 @@ def test_budget_exhausted_mock_run_renders_a_partial_report(tmp_path):
     md = paths["md"].read_text(encoding="utf-8")
     assert "> [!warning] Бюджет исчерпан" in md and "**Без проверки человеком.**" in md
     assert json.loads(paths["json"].read_text(encoding="utf-8"))["rendered"]["template"] == "partial"
+
+
+# ---- defects found by the live round of 2026-11-09 ----
+
+INTAKE_ANSWER = ("## Tasks\n1. Задача (reg-03).\nЯзык L: чётность a и b совпадает.\n\n"
+                 "(First task in the file; the file holds only this one task.)\n\n## Uncertain readings\n- none\n")
+
+
+def test_task_statement_drops_the_intake_format() -> None:
+    assert R._task_statement(INTAKE_ANSWER) == "Задача (reg-03).\nЯзык L: чётность a и b совпадает."
+
+
+def test_task_statement_keeps_uncertain_readings_and_several_tasks() -> None:
+    text = "## Tasks\n1. Первая.\n2. Вторая.\n\n## Uncertain readings\n- строка 2: n или η? В тексте: n\n"
+    out = R._task_statement(text)
+    assert out.startswith("1. Первая.\n2. Вторая.")
+    assert "Неуверенное чтение файла:\n- строка 2: n или η? В тексте: n" in out
+
+
+def test_task_statement_leaves_plain_text_alone() -> None:
+    assert R._task_statement("Язык ## Tasks в середине строки") == "Язык ## Tasks в середине строки"
+
+
+def test_ll_table_found_in_search_mode_result() -> None:
+    assert R._ll_table_md({"S": {"a": ["a", "S", "a"], "c": ["c"]}}) is not None
+    ev = [{"id": "toolu_ll", "tool": "ll_table", "ok": True, "trust": "verified", "has_tool_result": True,
+           "args": {"max_k": 12, "grammar": {"nonterminals": ["S"], "start": "S",
+                                             "rules": [{"lhs": "S", "rhs": ["c"]}]}},
+           "data": {"k": None, "result_for_k": {"k": 1, "parse_table": {"S": {"c": ["c"]}}}}}]
+    result = {"task": "L = {c}", "report": {
+        "verdict": "LL(1)", "answer": "yes", "language_class": "ll", "summary": "LL(1).", "method": "таблица",
+        "evidence_ids": ["toolu_ll"], "steps": [{"title": "Т", "text": "т", "evidence_ids": ["toolu_ll"]}]}}
+    md = R.render_report(result, evidence=ev, template="full_proof", status="submitted").markdown
+    assert "**Таблица LL(1)-анализа**" in md
+
+
+def test_answer_box_says_who_checked_what_and_a_negative_answer_is_no_class() -> None:
+    result = {"task": "L", "trust": "well_formed", "confidence_cap": 0.55, "verdict_token": "non_cfl",
+              "formalization": {"status": "approved", "ir_fingerprint": "ir-1", "auto": False},
+              "report": {"verdict": "not CFL", "answer": "no", "language_class": "cfl", "summary": "Не КС.",
+                         "method": "накачка", "evidence_ids": [], "steps": []}}
+    md = R.render_report(result, evidence=[], template="full_proof", status="submitted",
+                         human_review="auto-approved (review mode or --auto-approve): without human review").markdown
+    assert "Вопрос о классе: CFL" in md and "> Класс: CFL" not in md
+    assert "формализацию проверил человек, отчёт принят автоматически" in md

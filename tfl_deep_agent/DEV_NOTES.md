@@ -3225,3 +3225,21 @@ old "↳" step line.
   code (Graphviz HTML labels can read local files). The SVG is rejected if it holds script / foreignObject / image /
   on* / javascript:, and black / white become `currentColor` / none, so it reads in light and dark pages.
 - Without `dot` the HTML shows the DOT source as code; nothing else changes. Tests: `tests/test_diagrams.py`.
+
+## 2026-11-09: live round on Haiku over CFL, DCFL, LL and a PDF ($0.0494)
+
+Runs 3a223c40e8f4 (cfl-01), 7dbf7558860b (dcfl-02), 93e109bed6fe (ll-03), fa30fb50ab6b (reg-03 from an image-only PDF),
+7ef71d330184 (cfl-04). All five verdicts match `docs/EVAL_SET.md`. Trust: well_formed for non_cfl, bounded_pass for the
+others, as the policy says for these bases. Nobody called `lean_statement` / `lean_check`: Lean is the agent's own choice.
+
+Fixed after reading the reports:
+- A malformed Haiku call put `</hypothesis><parameter name="construction">…` inside `hypothesis`, so `construction` was
+  empty and the markup was printed. `submit_report` now refuses tool-call markup in any field, and the model resubmits.
+- A file task printed the intake format (`## Tasks`, `## Uncertain readings`) under «Условие».
+  `render._task_statement` keeps the text and any uncertain reading.
+- `ll_table` with `max_k` keeps its table under `result_for_k`, so the code-made LL table never appeared in a live run.
+- The answer box said «Класс: CFL» under "not context-free", and "без проверки человеком" when a human approved the
+  formalization and only the report was auto-approved.
+
+Still open: no live reject at HITL 2 (the report was approved), no live `spawn_subagent` / `run_workflow`, no step of the
+five reports cites an evidence id (Haiku cites at report level only, so the "(проверено: tool ✓)" marks do not appear).

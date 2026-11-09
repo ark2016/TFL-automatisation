@@ -808,11 +808,35 @@ def _review_short(ctx: _Ctx) -> str:
         if form.get("status") == "approved":
             return report_part + "; формализация одобрена автоматически"
         return report_part + "; формализация не утверждена человеком"
+    if dec == "auto_approved" and form is not None and form.get("status") == "approved" and not form.get("auto"):
+        return "формализацию проверил человек, отчёт принят автоматически"
     return {
         "auto_approved": "одобрено автоматически, без проверки человеком",
         "awaiting": "черновик, ожидает проверки человеком",
         "rejected": "черновик возвращён человеком на доработку",
     }.get(dec, "без проверки человеком")
+
+
+_INTAKE_RE = re.compile(r"^\s*\\?##\s*Tasks\s*$(?P<tasks>.*?)^\s*\\?##\s*Uncertain readings\s*$(?P<unsure>.*)\Z",
+                        re.M | re.S)
+_INTAKE_NOTE_RE = re.compile(r"^\(.*\bin the file\b.*\)$", re.M)
+
+
+def _task_statement(task: str) -> str:
+    """The task as the report's «Условие» prints it. The intake subagent answers
+    a file task in its fixed format (``## Tasks`` / ``## Uncertain readings``,
+    prompts/intake.md): keep the task text, drop the headings, and keep any
+    uncertain reading, since the human has to see it. Other text is unchanged."""
+    m = _INTAKE_RE.match(task)
+    if not m:
+        return task
+    tasks = _INTAKE_NOTE_RE.sub("", m.group("tasks")).strip()
+    if not re.search(r"^2\.\s", tasks, re.M):
+        tasks = re.sub(r"^1\.\s+", "", tasks)
+    unsure = [ln.strip() for ln in m.group("unsure").splitlines() if ln.strip()]
+    if not unsure or unsure == ["- none"]:
+        return tasks
+    return tasks + "\n\nНеуверенное чтение файла:\n" + "\n".join(unsure)
 
 
 def formalization_label(result: Mapping[str, Any]) -> str | None:
@@ -922,7 +946,9 @@ def _verdict_block(ctx: _Ctx, vt: Mapping[str, Any]) -> str:
     if sub:
         lines.append(sub)
     cls = _CLASS_LABELS.get(lang)
-    lines.append(f"> {'Класс: ' + cls + ' · ' if cls else ''}Уверенность: {round(vt['confidence_cap'] * 100)}%"
+    # a negative answer is not "class: CFL" under "the language is not context-free"
+    cls_word = "Вопрос о классе" if ctx.report.get("answer") == "no" else "Класс"
+    lines.append(f"> {cls_word + ': ' + cls + ' · ' if cls else ''}Уверенность: {round(vt['confidence_cap'] * 100)}%"
                  f" · {_review_short(ctx)}")
     out = ["\n".join(lines)]
     gate = [g for g in vt.get("verdict_gate") or [] if g]
@@ -1189,10 +1215,12 @@ def _ledger_objects(ctx: _Ctx, vt: Mapping[str, Any], model_text: str = "") -> l
                     blocks.append(f"**Грамматика** ({src}):\n\n```\n{text}\n```")
         if "ll" not in seen and tool == "ll_table":
             order = [str(x) for x in (g.get("nonterminals") or [])] if isinstance(g, Mapping) else []
-            table = _ll_table_md(data.get("parse_table"), order)
+            # ll_table with max_k (search mode) keeps the table of the k found under result_for_k
+            found = data.get("result_for_k") if isinstance(data.get("result_for_k"), Mapping) else {}
+            table = _ll_table_md(data.get("parse_table") or found.get("parse_table"), order)
             if table:
                 seen.add("ll")
-                k = data.get("k") or args.get("k")
+                k = data.get("k") or found.get("k") or args.get("k")
                 blocks.append(f"**Таблица LL({k or 'k'})-анализа** ({src}):\n\n{table}")
     return blocks
 
@@ -1816,7 +1844,7 @@ def render_report(
     lemmas_out: list[dict[str, Any]] = []
     lean_out: dict[str, Any] = {}
     values: dict[str, str] = dict.fromkeys(PLACEHOLDERS, "")
-    values.update(title=page_title.replace("\n", " "), task=safe_text(task) or "—")
+    values.update(title=page_title.replace("\n", " "), task=safe_text(_task_statement(str(task))) or "—")
     if report is None:
         vt = {"trust": "not_verified", "confidence_cap": _CAPS["not_verified"], "basis": [],
               "verdict_token": None, "verdict_gate": [], "source": "partial"}

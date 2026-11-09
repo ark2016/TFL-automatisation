@@ -659,3 +659,12 @@ def test_subagent_records_carry_their_parent_task_call(tmp_path):
     sub = [r for r in recs if r.role not in (None, "main")]
     assert sub and all(r.parent_call in tasks for r in sub)
     assert all(r.parent_call is None for r in recs if r.role == "main")
+
+
+def test_submit_report_refuses_tool_call_markup_in_a_field() -> None:
+    from tfl_deep_agent.tools.report import leaked_markup_fields
+
+    bad = {"hypothesis": 'Идея.</hypothesis>\n<parameter name="construction">IR', "steps": [{"text": "ok"}]}
+    assert leaked_markup_fields(bad) == ["hypothesis"]
+    assert leaked_markup_fields({"steps": [{"text": "<invoke name='x'>"}]}) == ["steps[0].text"]
+    assert leaked_markup_fields({"hypothesis": "a < b, L = {a^n | n > 0}", "steps": []}) == []
