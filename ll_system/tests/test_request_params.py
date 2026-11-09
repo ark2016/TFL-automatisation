@@ -99,3 +99,12 @@ def test_model_override_env_forces_haiku(monkeypatch):
     assert "temperature" not in kwargs
     assert "effort" not in kwargs["output_config"]
     assert kwargs["output_config"]["format"]["type"] == "json_schema"
+
+
+def test_ll_has_no_lean_formalizer_agents():
+    """ll_system has no R-Lean path: no Lean proof-body agent in any config table."""
+    from ll_system import config
+
+    for table in (config.MODELS, config.TEMPERATURES, config.EFFORT):
+        assert not any(k.startswith("lean_formalizer") for k in table)
+    assert not any(k.startswith("lean_formalizer") for k in config.PROMPT_FILES)
