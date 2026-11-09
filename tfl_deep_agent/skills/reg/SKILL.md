@@ -248,7 +248,7 @@ Source: `agent_system/tz_tfl_agent_system.md` §1.8
 | the task language is regular: its own regex or linear grammar, compiled from the IR | `regex_to_dfa(ir=ir)` on an IR a human approved at HITL 1, whose `source_text` holds the definition | `verified` | 0.98 for regular |
 | the same record with HITL 1 off or auto-approved, or a definition not in the task text | `regex_to_dfa(ir=ir)` (counts like `dfa_vs_ir`) | `bounded_pass` | 0.85 for regular |
 | the DFA recognises exactly L(the regex or linear grammar you passed) | `regex_to_dfa(regex=...)` / `regex_to_dfa(grammar=...)` | `verified` | supporting step only, never the verdict basis |
-| Lean proof of the IR-generated statement (lean skill; P6 tools) | `lean_check` status `proved` | `verified` | 0.98 |
+| Lean proof of the IR-generated statement (`lean-formalizer` subagent; P6 tools) | `lean_check` status `proved` | `verified` | 0.98 |
 | your DFA or regex recognises the task language | `dfa_vs_ir` agreement on ≥ 30 decided words, all words up to `max_len` | `bounded_pass` | 0.85 |
 | the family's sampled pairs are Nerode-distinguishable | `nerode_probe`, every pair separated | `bounded_pass` | 0.85 for non_regular |
 | a pumping argument: w(p) and its exit exponents, checked at the p in `data.p_values` (with an oracle: w(p) ∈ L and every split; without one: structure only; when the oracle answers "unknown" for w(p) at every p, e.g. a word longer than the exponent oracle's limit, no split is checked and the result is still `well_formed`, VERDICT_POLICY §4) | `pump_check_reg` | `well_formed` | 0.55 for non_regular |

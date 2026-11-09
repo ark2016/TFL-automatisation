@@ -3438,3 +3438,14 @@ digest); accepted report replaced by a truncated one without a budget stop (drop
 in the rendered report task (only outside `$...$`); follow-up chat message becoming the report task (see the OPEN item above).
 Deferred: end-to-end mock test for a rejected draft followed by a new IR; `_is_task_message` for checkpoints without `tfl_hitl`.
 Follow-up: the compact exam_04 DPDA (356 transitions) fits the 2000-transition `dpda_vs_ir` limit, unlike the old 5835-transition one.
+
+## 2026-11-10: lean-formalizer prompt knows the lean-theory lemmas (bk2/deep-lean-prompt)
+
+- `prompts/lean.md` lists the Transfer, Closure, RegularFilters and TransferAnBn lemmas of `TflLean/Lemmas.lean`
+  (signatures copied from the file), Ogden's lemma (langlib, in the image via `TflLean.Langlib`), a route per direction,
+  what is not in the image (LL(k), Parikh, Yu, Shallit 4.7.4, inherent ambiguity, DCFL pumping, DCFL inverse homomorphism,
+  grammar to DPDA) and the compiled examples, with four proof bodies quoted verbatim.
+- `tests/test_tools_lean.py`: every `TflLean.*` name in `lean.md` must be declared in `Lemmas.lean`, the quoted bodies must
+  be substrings of their example files, and the "not in the image" list must stay. `lean_statement` still refuses `ll`.
+- Skills: `cfl` step 8 no longer says the only compiled sample is {aⁿbⁿcⁿ} and that closure is not ported; the references to
+  a `lean` skill (there is none) now name the `lean-formalizer` subagent.
