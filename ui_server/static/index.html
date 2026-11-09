@@ -10,6 +10,7 @@
   -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'">
   <title>TFL Lab · Agent Pipeline Runner</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <meta name="viewport" content="width=1280">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -849,6 +850,10 @@
       <span class="brand-mark">TFL Lab</span>
       <span class="brand-tag">agent pipeline runner · local</span>
     </div>
+    <nav class="mode-switch" id="mode-switch" aria-label="workspace">
+      <button class="mode-btn active" id="mode-pipelines" data-mode="pipelines">Pipelines</button>
+      <button class="mode-btn" id="mode-deep" data-mode="deep">Deep Agent</button>
+    </nav>
     <div class="topbar-spacer"></div>
     <div class="topbar-meta">
       <span>run: <kbd>⌘</kbd> <kbd>↵</kbd></span>
@@ -857,7 +862,7 @@
     <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">⚙</button>
   </header>
 
-  <main class="workspace">
+  <main class="workspace" id="workspace">
     <!-- LEFT: project + examples -->
     <aside class="pane sidebar">
       <div class="proj-switch" id="proj-switch">
@@ -996,6 +1001,112 @@
     </section>
   </main>
 
+  <!-- DEEP AGENT: tfl_deep_agent through /api/deep/* (ui_server/deep_routes.py); code in /static/deep.js -->
+  <main class="deep-view empty" id="deep-view">
+    <!-- LEFT: runs -->
+    <aside class="pane dk-side">
+      <button class="dk-new" id="deep-new" type="button">+ Новая задача</button>
+      <div class="dk-side-title">
+        <span>Запуски</span>
+        <span class="dk-count" id="deep-run-count"></span>
+      </div>
+      <div class="dk-runs" id="deep-run-list"></div>
+      <div class="dk-side-foot">
+        <button class="dk-settings-btn" id="deep-settings-open" type="button" title="настройки Deep Agent: бюджет, модели, точки проверки, лимиты">⚙ Настройки</button>
+      </div>
+    </aside>
+
+    <!-- CENTER: the conversation of one run -->
+    <section class="pane dk-chat">
+      <header class="dk-head" id="deep-head">
+        <span class="dk-head-title" id="dh-title">Новая задача</span>
+        <span class="dk-pill hidden" id="dh-status"></span>
+        <span class="dk-tag hidden" id="dh-mode"></span>
+        <span class="dk-head-right">
+          <span class="dk-budget-line" id="deep-budget-line"></span>
+          <button class="dk-linkbtn" id="deep-log-open" type="button" style="display:none">журнал</button>
+          <button class="dk-btn ghost" id="deep-report-open" type="button" style="display:none">Отчёт</button>
+          <button class="dk-btn danger" id="deep-cancel" type="button" style="display:none">Остановить</button>
+        </span>
+      </header>
+      <div class="dk-stream" id="deep-stream">
+        <div class="dk-column">
+          <div class="dk-feed" id="deep-feed"></div>
+          <div class="dk-tail" id="deep-tail"></div>
+        </div>
+      </div>
+      <div class="dk-composer" id="deep-composer">
+        <div class="dk-column">
+          <div class="dk-box" id="deep-drop">
+            <div class="dk-attached" id="deep-file">
+              <span class="dk-attached-kind" id="deep-file-kind">PDF</span>
+              <span class="dk-attached-name" id="deep-file-name"></span>
+              <span class="dk-attached-size" id="deep-file-size"></span>
+              <button class="dk-attached-x" id="deep-file-clear" type="button" title="убрать файл" aria-label="убрать файл">✕</button>
+            </div>
+            <textarea class="dk-input" id="deep-text" rows="2" spellcheck="false"
+              placeholder="Опишите задачу или перетащите PDF/изображение"></textarea>
+            <div class="dk-box-row">
+              <label class="dk-attach" for="deep-file-input" title="прикрепить PDF, PNG, JPG, WebP или текст">＋ файл</label>
+              <input type="file" id="deep-file-input" class="visually-hidden"
+                accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,application/pdf,image/png,image/jpeg,image/webp,text/plain">
+              <span class="dk-box-hint">Ctrl+Enter — отправить</span>
+              <button class="dk-send" id="deep-run" type="button" title="Отправить (Ctrl+Enter)" aria-label="Отправить">↑</button>
+            </div>
+          </div>
+          <div class="dk-opts">
+            <select class="dk-select" id="deep-review-mode" title="когда агент останавливается и ждёт вашего решения"></select>
+            <label class="dk-money" title="бюджет задачи, $">$<input type="number" id="deep-budget" min="0.01" step="0.25"></label>
+            <select class="dk-select" id="deep-main-model" title="модель главного агента"></select>
+            <select class="dk-select" id="deep-template" title="шаблон отчёта"></select>
+            <select class="dk-select" id="deep-mode" title="mock (бесплатно, по сценарию) или live (платно)"></select>
+          </div>
+          <textarea class="dk-inline" id="deep-mock-inline" spellcheck="false"
+            placeholder='сценарий mock: {"models": {"main": [...], "intake": [...]}}'></textarea>
+          <div class="dk-live" id="deep-live-group">
+            <span class="dk-estimate" id="deep-estimate"></span>
+            <label class="dk-confirm"><input type="checkbox" id="deep-confirm"><span>подтверждаю расходы API</span></label>
+          </div>
+          <div class="dk-composer-note" id="deep-composer-note"></div>
+          <div class="dk-msg" id="deep-msg"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: the report document (or its draft), the log -->
+    <section class="pane dk-report" id="deep-report-pane">
+      <header class="dk-panel-head">
+        <span class="dk-panel-title" id="deep-panel-title">Отчёт</span>
+        <span id="deep-panel-tpl"></span>
+        <span class="dk-panel-links" id="deep-panel-links"></span>
+        <span class="dk-head-right">
+          <button class="dk-linkbtn" id="deep-panel-log" type="button">журнал</button>
+          <button class="dk-icon" id="deep-panel-wide" type="button" title="на всю ширину" aria-label="на всю ширину">⤢</button>
+          <button class="dk-icon" id="deep-panel-close" type="button" title="закрыть" aria-label="закрыть">✕</button>
+        </span>
+      </header>
+      <div class="dk-panel-body" id="deep-report"></div>
+      <pre class="dk-log" id="deep-log" style="display:none"></pre>
+    </section>
+  </main>
+
+  <div class="modal-back" id="deep-settings-back">
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="deep-settings-title">
+      <div class="modal-head">
+        <span id="deep-settings-title">настройки Deep Agent</span>
+        <button class="icon-btn" id="deep-settings-close" aria-label="Закрыть">✕</button>
+      </div>
+      <div class="modal-body" id="deep-settings-body">
+        <span class="hint">загрузка…</span>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary" id="deep-settings-save">сохранить</button>
+        <button class="btn" id="deep-settings-cancel">закрыть</button>
+        <span class="set-status" id="deep-settings-status"></span>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-back" id="settings-back">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="modal-head">
@@ -1044,5 +1155,6 @@
   </div>
 
 <script src="/static/app.js"></script>
+<script src="/static/deep.js"></script>
 </body>
 </html>

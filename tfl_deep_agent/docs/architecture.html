@@ -1,0 +1,519 @@
+<title>TFL Deep Agent</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: одна колонка ~72ch с липкой навигацией сверху; таблицы и схемы в своих скролл-контейнерах */
+:root{
+  --bg:#F5F7F8; --surface:#FFFFFF; --fg:#17202B; --muted:#5A6676; --line:#DCE2E8;
+  --accent:#17705E; --accent-soft:#E2F1EC; --warn:#A8521A; --warn-soft:#FBEBDD;
+  --code-bg:#EEF2F4;
+  --font-body:"Golos Text",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"Cascadia Code",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161C; --surface:#182029; --fg:#E5EAF0; --muted:#9AA6B4; --line:#2A3440;
+  --accent:#5CC2A5; --accent-soft:#16332C; --warn:#E59C63; --warn-soft:#3A2617;
+  --code-bg:#1F2832; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161C; --surface:#182029; --fg:#E5EAF0; --muted:#9AA6B4; --line:#2A3440;
+  --accent:#5CC2A5; --accent-soft:#16332C; --warn:#E59C63; --warn-soft:#3A2617;
+  --code-bg:#1F2832; color-scheme:dark}
+
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:16px;line-height:1.6}
+.wrap{max-width:860px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 80px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+nav.toc{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line);margin-bottom:8px}
+nav.toc .in{max-width:860px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:10px;display:flex;gap:6px 16px;flex-wrap:wrap;font-size:13.5px}
+nav.toc a{color:var(--muted);text-decoration:none}
+nav.toc a:hover,nav.toc a:focus-visible{color:var(--accent)}
+a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+
+header.top{display:grid;gap:10px;padding-block:8px 24px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--font-mono);font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+h1{font-size:clamp(30px,5vw,42px);line-height:1.15;margin:0;font-weight:700;text-wrap:balance}
+.lede{font-size:18px;color:var(--muted);margin:0;max-width:66ch}
+.meta{display:flex;flex-wrap:wrap;gap:8px;font-family:var(--font-mono);font-size:12.5px}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:2px 10px;color:var(--muted)}
+.chip b{color:var(--fg);font-weight:600}
+
+section{padding-block:28px 4px;scroll-margin-top:56px}
+h2{font-size:24px;line-height:1.25;margin:0 0 12px;font-weight:700;text-wrap:balance}
+h3{font-size:17px;margin:22px 0 8px;font-weight:600}
+p{margin:0 0 12px;max-width:68ch}
+ul,ol{margin:0 0 12px;padding-left:22px;max-width:68ch}
+li{margin:4px 0}
+code{font-family:var(--font-mono);font-size:.88em;background:var(--code-bg);padding:1px 5px;border-radius:4px}
+pre{font-family:var(--font-mono);font-size:13px;line-height:1.55;background:var(--code-bg);padding:14px 16px;border-radius:8px;overflow-x:auto;margin:0 0 14px}
+pre code{background:none;padding:0}
+
+.decisions{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:4px}
+.dec{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
+.dec .k{font-family:var(--font-mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.dec .v{font-weight:600;margin:4px 0 6px}
+.dec p{font-size:14.5px;color:var(--muted);margin:0}
+
+.callout{border-left:3px solid var(--accent);background:var(--accent-soft);padding:12px 16px;border-radius:0 8px 8px 0;margin:6px 0 14px;max-width:72ch}
+.callout.warn{border-left-color:var(--warn);background:var(--warn-soft)}
+.callout p:last-child{margin-bottom:0}
+
+.diagram{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto;margin:8px 0 14px}
+.diagram pre.mermaid{background:none;padding:0;margin:0;font-family:var(--font-body)}
+
+.tbl{overflow-x:auto;margin:4px 0 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:620px}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--line)}
+th{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600;background:var(--bg)}
+tr:last-child td{border-bottom:none}
+td code{white-space:nowrap}
+.trust{font-family:var(--font-mono);font-size:12px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.t-ver{color:var(--accent);border-color:var(--accent)}
+.t-bnd{color:var(--fg)}
+.t-wf{color:var(--muted)}
+.t-ref{color:var(--warn);border-color:var(--warn)}
+
+.mock{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow-x:auto;margin:8px 0 14px}
+.mock pre{background:none;margin:0;font-size:12.5px}
+
+.phases{display:grid;gap:12px}
+.phase{display:grid;grid-template-columns:64px 1fr;gap:4px 14px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.phase .n{font-family:var(--font-mono);font-weight:600;color:var(--accent);font-size:15px;padding-top:1px}
+.phase .body{min-width:0}
+.phase h3{margin:0 0 6px}
+.phase ul{margin-bottom:6px}
+.phase .done{font-size:14px;color:var(--muted);margin:0}
+.phase .done b{color:var(--fg)}
+@media (max-width:520px){.phase{grid-template-columns:1fr}}
+
+.qs{counter-reset:q;list-style:none;padding:0}
+.qs li{counter-increment:q;position:relative;padding:10px 0 10px 34px;border-bottom:1px solid var(--line);margin:0}
+.qs li::before{content:counter(q);position:absolute;left:0;top:10px;font-family:var(--font-mono);font-size:13px;color:var(--accent);font-weight:600}
+.qs li:last-child{border-bottom:none}
+.qs .def{display:block;font-size:14px;color:var(--muted);margin-top:2px}
+footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-size:13.5px;color:var(--muted)}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+
+<nav class="toc" aria-label="Разделы"><div class="in">
+  <a href="#decisions">Решения</a>
+  <a href="#react">ReAct</a>
+  <a href="#arch">Схема</a>
+  <a href="#intake">Вход</a>
+  <a href="#tools">Инструменты</a>
+  <a href="#subagents">Субагенты</a>
+  <a href="#dynamic">Workflow</a>
+  <a href="#budget">Бюджет</a>
+  <a href="#trust">Доверие и HITL</a>
+  <a href="#sandbox">Sandbox</a>
+  <a href="#ui">UI</a>
+  <a href="#layout">Структура</a>
+  <a href="#testing">Тесты и деньги</a>
+  <a href="#phases">Этапы</a>
+  <a href="#risks">Риски</a>
+  <a href="#questions">Вопросы</a>
+</div></nav>
+
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">План архитектуры · версия 2 · для ultracode</div>
+  <h1>TFL Deep Agent</h1>
+  <p class="lede">Отдельный подход к задачам ТФЯ на <code>deepagents</code>, рядом с существующими пайплайнами. Агент принимает задание текстом, PDF или картинкой и сам строит план. Он выбирает инструменты и модели, запускает субагентов и параллельные workflow в пределах бюджета из настроек и готовит отчёт по шаблону, который утверждает человек.</p>
+  <div class="meta">
+    <span class="chip">папка <b>tfl_deep_agent/</b></span>
+    <span class="chip">ветка <b>feat/deep-agent</b></span>
+    <span class="chip">deepagents <b>0.7.34</b></span>
+    <span class="chip">langchain <b>1.4.x</b></span>
+    <span class="chip">UI <b>вкладка в TFL Lab</b></span>
+    <span class="chip">старые пайплайны <b>не трогаем</b></span>
+  </div>
+</header>
+
+<section id="decisions">
+  <h2>Принятые решения</h2>
+  <div class="decisions">
+    <div class="dec"><div class="k">Охват</div><div class="v">Один агент на все классы</div><p>REG, CFL, DCFL и LL(k) различаются skill-файлами и набором инструментов. Старые пайплайны агенту как инструмент не даём: это отдельный подход, и его нужно сравнивать с ними честно.</p></div>
+    <div class="dec"><div class="k">Вход</div><div class="v">Текст, PDF или картинка</div><p>Файл расшифровывает субагент <code>intake</code> с поддержкой изображений. IR агент строит сам, когда ему нужны оракулы.</p></div>
+    <div class="dec"><div class="k">Оркестрация</div><div class="v">Агент сам выбирает субагентов и модели</div><p>Есть готовые роли, ad-hoc субагенты через <code>spawn_subagent</code> и параллельные workflow через <code>run_workflow</code>. Модель для каждого шага (Haiku, Sonnet или Opus) агент выбирает из списка, разрешённого в настройках.</p></div>
+    <div class="dec"><div class="k">Деньги</div><div class="v">Лимиты в настройках</div><p>Лимиты на задачу, на день и на субагента, плюс резерв на отчёт. Перед каждым вызовом модели считается худший случай. Деньги кончились — агент сдаёт отчёт с тем, что успел.</p></div>
+    <div class="dec"><div class="k">Код агента</div><div class="v">Локальный Docker</div><p>Контейнер без сети, с лимитами, код репозитория смонтирован только на чтение. Lean проверяется в уже собранном образе <code>tfl-lean4</code>.</p></div>
+    <div class="dec"><div class="k">Итог</div><div class="v">HITL и отчёт по шаблону</div><p>Две остановки: после формализации и на отчёте. Шаблоны строятся по эталонам из <code>docs/examples/*_lean_proved</code>.</p></div>
+  </div>
+  <div class="callout">
+    <p><b>Журнал свидетельств как основа для HITL.</b> Middleware записывает каждый вызов инструмента, агент этот журнал не редактирует. Каждая запись получает уровень доверия по <code>docs/VERDICT_POLICY.md</code>. Журнал ничего не решает за человека, он показывает, какие утверждения отчёта проверены машинно, а какие держатся только на словах модели.</p>
+  </div>
+</section>
+
+<section id="react">
+  <h2>Где здесь ReAct</h2>
+  <p>Отдельно добавлять ReAct не нужно, он появляется сразу. <code>create_deep_agent</code> собирает агента через <code>langchain.agents.create_agent</code>: модель возвращает <code>tool_calls</code>, их исполняет ToolNode, результат возвращается модели как наблюдение, и так до финального ответа. Это обычный LangGraph-граф, поэтому работают стриминг, checkpointer и <code>interrupt</code>.</p>
+  <p>Сейчас порядок действий жёстко задаёт граф пайплайна, здесь его выбирает модель. Инварианты, которые раньше держал граф, переходят в четыре места:</p>
+  <ul>
+    <li><b>skills</b>: методички по классам языков, типовые ловушки, применимые теоремы;</li>
+    <li><b>middleware</b>: бюджет, журнал свидетельств, лимиты вызовов, прерывания для HITL;</li>
+    <li><b>политика оркестрации</b>: разрешённые модели, глубина вложенности субагентов, параллелизм;</li>
+    <li><b>финальный рендер</b>: блок свидетельств и уровни доверия в отчёт вставляет код, а не модель.</li>
+  </ul>
+</section>
+
+<section id="arch">
+  <h2>Схема</h2>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+  IN["Текст · PDF · картинка"] --> INT["intake<br/>Sonnet, vision"]
+  INT --> H1{"HITL 1<br/>расшифровка + IR"}
+  H1 --> M
+  subgraph M["Главный агент · Opus 5.5 · ReAct-цикл"]
+    direction LR
+    P["write_todos<br/>план"]
+    T["TFL-инструменты"]
+    S["skills"]
+    DYN["spawn_subagent<br/>run_workflow"]
+  end
+  M -- "task" --> ROLES["Роли: ir-builder · prover ·<br/>critic · lean · coder"]
+  DYN --> ADHOC["Ad-hoc субагенты и<br/>параллельные ветки<br/>Haiku / Sonnet / Opus"]
+  T --> ORC[("Оракулы из lib/<br/>agent · cfl · dcfl · ll")]
+  ROLES --> LEAN[("Docker tfl-lean4")]
+  ROLES --> SB[("Docker tfl-sandbox<br/>без сети")]
+  M -- "submit_report" --> H2{"HITL 2<br/>approve · edit · reject"}
+  H2 -- "reject + замечания" --> M
+  H2 -- "approve" --> R["Рендер шаблона<br/>result.json · .md · .html"]
+  BUD[["Бюджет: задача → субагенты → ветки"]] -.-> M
+  BUD -.-> ADHOC
+  LED[["Журнал свидетельств"]] -.-> R
+</pre>
+  </div>
+  <h3>Что из deepagents используем и что пишем сами</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Компонент</th><th>Откуда</th><th>Роль</th></tr></thead>
+    <tbody>
+      <tr><td>Планирование <code>write_todos</code></td><td>deepagents, встроено</td><td>Агент раскладывает задачу на шаги: формализация, гипотеза, доказательство, проверка, отчёт.</td></tr>
+      <tr><td>Файловая система и <code>CompositeBackend</code></td><td>deepagents, настраиваем</td><td><code>/workspace</code> находится в Docker-sandbox, <code>/skills</code>, <code>/theory</code> и <code>/input</code> (исходный файл задания) доступны только на чтение.</td></tr>
+      <tr><td><code>SkillsMiddleware</code></td><td>deepagents, контент наш</td><td>Методички и шаблоны отчётов подгружаются по требованию.</td></tr>
+      <tr><td><code>task</code> и готовые роли</td><td>deepagents, конфиг наш</td><td>У каждого субагента своё окно контекста.</td></tr>
+      <tr><td><code>spawn_subagent</code>, <code>run_workflow</code></td><td>пишем</td><td>Субагенты, которых агент создаёт сам, и параллельные ветки с выбором модели и выделенным бюджетом.</td></tr>
+      <tr><td><code>interrupt_on</code> и checkpointer</td><td>deepagents и LangGraph</td><td>Остановки HITL и продолжение через <code>Command(resume=...)</code>.</td></tr>
+      <tr><td>TFL-инструменты</td><td>пишем: обёртки над <code>*/lib</code></td><td>Типизированные pydantic-аргументы. Каждый результат несёт поле <code>trust</code>.</td></tr>
+      <tr><td><code>DockerSandbox</code></td><td>пишем: <code>BaseSandbox</code></td><td>Реализуем <code>execute</code>, upload и download.</td></tr>
+      <tr><td>Budget, Evidence, Concurrency middleware</td><td>пишем</td><td>Деньги, журнал, общий семафор <code>TFL_MAX_CONCURRENCY</code>.</td></tr>
+      <tr><td>Рендер отчёта</td><td>пишем, переиспользуем <code>renderer</code></td><td>Шаблон заполняется полями из <code>submit_report</code>, блок свидетельств берётся из журнала.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="intake">
+  <h2>Вход: текст, PDF, картинка</h2>
+  <ol>
+    <li><b>Приём файла.</b> Текст передаётся как есть. PDF и изображения (PNG, JPG, WebP) уходят в API Anthropic как content-блоки <code>document</code> и <code>image</code> в base64, Claude читает их напрямую. Ограничения на размер и число страниц задаются в настройках.</li>
+    <li><b>Расшифровка.</b> Субагент <code>intake</code> (по умолчанию Sonnet) переписывает условие в нормализованный текст с Unicode-формулами вида <code>{aⁿbⁿ | n ≥ 0}</code>. Если в PDF несколько задач, он возвращает их список, и человек выбирает нужную. Неуверенно прочитанные места помечает отдельно, например «индекс у w: 1 или l?».</li>
+    <li><b>HITL 1.</b> Человек видит рядом исходник (страницу или картинку), расшифровку, пересказ IR от ir-builder и примеры слов из языка и не из языка. Расшифровку и IR можно поправить до того, как на них начнутся доказательства.</li>
+  </ol>
+  <p>Главному агенту дальше передаётся утверждённый текст и IR, а исходный файл остаётся доступен по пути <code>/input</code>. Так в контексте каждого шага не лежат тяжёлые страницы PDF, а стоимость расшифровки платится один раз.</p>
+  <div class="callout warn"><p><b>Оговорка.</b> Оракулы проверяют утверждения относительно IR, который построил агент. Если расшифровка или IR неверны, все проверки будут зелёными, но про другой язык. Поэтому HITL 1 включён по умолчанию, а отчёт явно пишет «проверено относительно IR №…».</p></div>
+</section>
+
+<section id="tools">
+  <h2>Инструменты агента</h2>
+  <p>Это тонкие обёртки над модулями <code>agent_system/lib</code>, <code>cfl_system/lib</code>, <code>dcfl_system/lib</code> и <code>ll_system/lib</code>. Новый пакет их импортирует, старые пакеты из него ничего не импортируют. Названия рабочие: точный список функций составим на этапе P1 по фактическим сигнатурам.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Группа</th><th>Инструменты</th><th>Что дают</th><th>Макс. доверие</th></tr></thead>
+    <tbody>
+      <tr><td>IR</td><td><code>describe_ir_schema</code>, <code>validate_ir</code>, <code>ir_to_text</code></td><td>Схема и примеры IR для класса, проверка существующими валидаторами, пересказ IR обычным языком для HITL.</td><td><span class="trust t-wf">well_formed</span></td></tr>
+      <tr><td>Слова</td><td><code>sample_words</code>, <code>check_membership</code></td><td>Генерация слов из языка и не из языка до длины L, проверка принадлежности по IR.</td><td><span class="trust t-bnd">bounded_pass</span></td></tr>
+      <tr><td>REG</td><td><code>regex_to_dfa</code>, <code>run_dfa</code>, <code>nerode_probe</code>, <code>dfa_vs_ir</code></td><td>Построение и прогон DFA, поиск различающих суффиксов, ограниченная проверка эквивалентности.</td><td><span class="trust t-ver">verified</span> для заданного regex/DFA, иначе bounded</td></tr>
+      <tr><td>CFL</td><td><code>to_cnf</code>, <code>cyk</code>, <code>pda_run</code>, <code>parikh</code>, <code>pump_check_cfl</code></td><td>Принадлежность по грамматике, PDA, образ Парикха, проверка конкретного разбиения uvwxy.</td><td><span class="trust t-bnd">bounded_pass</span>, контрпример даёт <span class="trust t-ref">refuted</span></td></tr>
+      <tr><td>DCFL</td><td><code>dpda_run</code>, <code>closure_lookup</code>, <code>pattern_match</code></td><td>Прогон DPDA, таблица замкнутости, известные паттерны из <code>pattern_db</code>.</td><td><span class="trust t-bnd">bounded_pass</span></td></tr>
+      <tr><td>LL(k)</td><td><code>first_follow</code>, <code>ll_table</code>, <code>ll_parse</code>, <code>grammar_transform</code></td><td>FIRST/FOLLOW, таблица и конфликты для k, устранение левой рекурсии и факторизация.</td><td><span class="trust t-ver">verified</span> для LL(k) данной грамматики</td></tr>
+      <tr><td>Теория</td><td><code>list_theorems</code>, <code>get_theorem</code></td><td>Формулировки из <code>docs/THEORY.md</code> с пометками «[проверено]». Агент цитирует их, а не пересказывает по памяти.</td><td>справочно</td></tr>
+      <tr><td>Lean</td><td><code>lean_statement</code>, <code>lean_check</code></td><td>Формулировку теоремы строит код из IR через <code>lean_ir</code>, модель пишет только тело доказательства. Проверка идёт через <code>type_check.check_lean_file</code> в <code>tfl-lean4</code>.</td><td><span class="trust t-ver">verified</span> при <code>proved</code> без <code>sorry</code> и лишних аксиом</td></tr>
+      <tr><td>Оркестрация</td><td><code>spawn_subagent</code>, <code>run_workflow</code>, <code>budget_status</code></td><td>Субагенты и параллельные ветки, которые агент создаёт сам. Остаток бюджета и оценка стоимости шага до запуска.</td><td>—</td></tr>
+      <tr><td>Sandbox</td><td><code>execute</code> и файловые операции (встроены)</td><td>Произвольный Python в изоляции: перебор, проверка гипотез, поиск контрпримеров.</td><td><span class="trust t-wf">well_formed</span> (вопрос 1)</td></tr>
+      <tr><td>Отчёт</td><td><code>list_report_templates</code>, <code>submit_report</code></td><td>Выбор шаблона и сдача структурированных полей: вердикт, метод, шаги, ссылки на записи журнала.</td><td>точка HITL 2</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="subagents">
+  <h2>Готовые роли</h2>
+  <p>Модели по умолчанию для ролей задаются в настройках. Агент может переназначить модель для конкретного вызова, если она есть в списке разрешённых. <code>TFL_MODEL_OVERRIDE=claude-haiku-5-5</code> переводит на Haiku всех сразу, включая ad-hoc субагентов: это нужно для live-проверок.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Роль</th><th>По умолчанию</th><th>Инструменты</th><th>Задача</th></tr></thead>
+    <tbody>
+      <tr><td><b>main</b></td><td>Opus 5.5</td><td>все, кроме <code>execute</code></td><td>План, гипотеза, выбор метода и моделей, сборка отчёта.</td></tr>
+      <tr><td><b>intake</b></td><td>Sonnet 5.5</td><td>чтение <code>/input</code></td><td>Расшифровка PDF и картинок в текст условия, разбиение на задачи, пометки о неуверенных местах.</td></tr>
+      <tr><td><b>ir-builder</b></td><td>Sonnet 5.5</td><td>IR, слова</td><td>Переводит текст в IR, добивается прохождения <code>validate_ir</code>, возвращает IR, пересказ и примеры слов.</td></tr>
+      <tr><td><b>prover</b></td><td>Opus 5.5</td><td>теория, оракулы класса</td><td>Пишет доказательство и проверяет оракулом каждый конкретный шаг: разбиение, слово, накачку.</td></tr>
+      <tr><td><b>critic</b></td><td>Opus 5.5</td><td>оракулы, теория</td><td>Получает только утверждение и доказательство, без рассуждений автора. Ищет ошибку по списку типовых провалов: кванторы накачки, неинстанцированное p, ловушки из <code>EVAL_SET</code>.</td></tr>
+      <tr><td><b>lean-formalizer</b></td><td>Opus 5.5</td><td><code>lean_statement</code>, <code>lean_check</code>, теория</td><td>Пишет тело доказательства для зафиксированной формулировки и повторяет до успешной проверки или до лимита попыток.</td></tr>
+      <tr><td><b>coder</b></td><td>Sonnet 5.5</td><td><code>execute</code>, файлы <code>/workspace</code></td><td>Пишет и запускает Python в sandbox и возвращает код вместе с выводом. Оба попадают в журнал.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="dynamic">
+  <h2>Динамические субагенты и workflow</h2>
+  <p>Готовых ролей хватает на типовой путь. Для нестандартных задач у агента есть два инструмента, которые он вызывает сам.</p>
+  <h3><code>spawn_subagent</code>: субагент под конкретную подзадачу</h3>
+<pre><code>spawn_subagent(
+  name="nerode-classes",
+  instructions="Найди бесконечное семейство попарно различимых префиксов для IR №2 ...",
+  model="sonnet",                 # haiku | sonnet | opus, только из allowed в настройках
+  tools=["sample_words", "check_membership", "nerode_probe", "get_theorem"],
+  budget_usd=0.40,                # вычитается из остатка родителя, больше остатка нельзя
+  output_schema={...},            # необязательно: структурированный ответ
+  reason="перебор префиксов, Opus не нужен"   # пишется в журнал
+)</code></pre>
+  <p>Под капотом это <code>create_agent</code> с выбранной моделью и подмножеством инструментов из whitelist. Инструменты оркестрации ad-hoc субагенту по умолчанию не выдаются, вложенность ограничена настройкой <code>max_spawn_depth</code> (по умолчанию 2).</p>
+  <h3><code>run_workflow</code>: параллельный план</h3>
+<pre><code>run_workflow(steps=[
+  {"id": "pump",   "role": "prover", "model": "sonnet", "task": "доказательство через лемму о накачке"},
+  {"id": "ogden",  "role": "prover", "model": "sonnet", "task": "доказательство через лемму Огдена"},
+  {"id": "parikh", "role": "prover", "model": "haiku",  "task": "проверить, решает ли Парикх"},
+  {"id": "judge",  "role": "critic", "model": "opus", "depends_on": ["pump", "ogden", "parikh"],
+   "task": "выбрать корректное из трёх и найти дыры"}
+], budget_usd=2.0)</code></pre>
+  <p>Спецификация компилируется в LangGraph <code>StateGraph</code> с fan-out через <code>Send</code>: тот же механизм, что в текущих пайплайнах, только граф строит агент. Перед запуском код проверяет, что граф ацикличен, модели разрешены, число параллельных веток не больше <code>max_parallel</code>, а оценка стоимости укладывается в бюджет. Если оценка не укладывается, агент получает отказ с цифрами и упрощает план.</p>
+  <h3>Как агент выбирает модель</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Модель</th><th>Подсказка в системном промпте</th></tr></thead>
+    <tbody>
+      <tr><td>Haiku 5.5</td><td>Механика: перебор вариантов, проверка формата, массовые вызовы оракулов, черновые гипотезы.</td></tr>
+      <tr><td>Sonnet 5.5</td><td>Расшифровка, IR, код для sandbox, стандартные доказательства по известной схеме.</td></tr>
+      <tr><td>Opus 5.5</td><td>Нестандартная теория, критика, Lean. При <code>opus_needs_reason</code> агент обязан указать причину в <code>reason</code>.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="budget">
+  <h2>Бюджет и настройки</h2>
+  <p>Настройки лежат в <code>tfl_deep_agent/settings.json</code>. Файл в <code>.gitignore</code>, в репозитории только <code>settings.example.json</code>. CLI читает их сам, TFL Lab редактирует через модуль настроек пакета. Цифры ниже приведены для примера и правятся в UI.</p>
+<pre><code>{
+  "budget": {
+    "per_task_usd": 10.00,           // жёсткий потолок на одну задачу
+    "per_day_usd": 20.00,            // сумма по всем задачам за сутки
+    "per_subagent_max_usd": 2.00,    // один субагент или ветка workflow
+    "reserve_for_report_usd": 1.00   // неприкосновенный остаток на отчёт
+  },
+  "models": {
+    "allowed": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
+    "roles": {"main": "claude-opus-5-5", "intake": "claude-sonnet-5-5", "ir_builder": "claude-sonnet-5-5",
+              "prover": "claude-opus-5-5", "critic": "claude-opus-5-5", "lean": "claude-opus-5-5",
+              "coder": "claude-sonnet-5-5"},
+    "opus_needs_reason": true
+  },
+  "limits": {"max_model_calls": 80, "max_tool_calls": 300, "max_parallel": 4, "max_spawn_depth": 2},
+  "hitl":   {"formalization": true, "report": true, "execute": false},
+  "intake": {"max_pdf_pages": 20, "max_file_mb": 10}
+}</code></pre>
+  <h3>Как соблюдается лимит</h3>
+  <ul>
+    <li><b>Иерархия.</b> Бюджет задачи делится между субагентами и ветками workflow. Потомку выделяется кусок из остатка родителя, и потратить больше выделенного он не может.</li>
+    <li><b>Проверка перед вызовом.</b> <code>BudgetMiddleware</code> в <code>wrap_model_call</code> считает худший случай: входные токены плюс <code>max_tokens</code> по ценам из <code>config.py</code>. Если сумма больше остатка, вызов не делается, а агент получает сообщение с цифрами.</li>
+    <li><b>Учёт после вызова.</b> Расход считается по фактическому <code>usage</code> ответа, с учётом кеша. Стоимость видна по каждой роли и каждой модели.</li>
+    <li><b>Сворачивание.</b> Когда остаток доходит до <code>reserve_for_report_usd</code>, агент получает инструкцию сдать отчёт. Новые субагенты и workflow с этого момента запрещены. Если отчёт не сдан, рендер собирает частичный со статусом <code>budget_exhausted</code>.</li>
+    <li><b>Суточный лимит</b> считается по журналу расходов в каталоге прогонов. Новую задачу нельзя запустить, если её <code>per_task_usd</code> не помещается в остаток дня.</li>
+    <li>Live-режим включается только флагом <code>--live</code> в CLI или подтверждением <code>confirm_spend</code> в UI, как сейчас у Formalize.</li>
+  </ul>
+  <p>Для ориентира, эталонные прогоны пайплайнов на Opus из <code>docs/examples</code>: REG, грамматика SaSb, $0.89 и $2.11 на Lean; CFL, ticket 50, $2.39 и $1.59 на Lean. Агент с ReAct-циклом, скорее всего, будет дороже, поэтому по умолчанию заложено $5 на задачу.</p>
+</section>
+
+<section id="trust">
+  <h2>Доверие, HITL и отчёты</h2>
+  <h3>Журнал свидетельств</h3>
+  <ul>
+    <li><code>EvidenceMiddleware</code> через <code>wrap_tool_call</code> записывает каждый вызов, включая вызовы внутри субагентов и веток workflow, в <code>run_dir/evidence.jsonl</code>: id, инструмент, аргументы, результат, <code>trust</code>, модель, стоимость.</li>
+    <li>Уровень <code>trust</code> ставит обёртка инструмента по таблице из <code>VERDICT_POLICY</code>, модель на него не влияет.</li>
+    <li>В <code>submit_report</code> каждое утверждение ссылается на id записей. Несуществующий id делает утверждение <span class="trust t-wf">not_verified</span>.</li>
+    <li>Итоговый confidence ограничен потолком policy по сильнейшему подтверждающему свидетельству (переиспользуем <code>agent_system/lib/result_verdict.py</code>). Самооценка модели его не повышает.</li>
+  </ul>
+  <h3>Точки HITL</h3>
+  <ol>
+    <li><b>Формализация</b> (включена): расшифровка, IR и примеры слов, см. раздел «Вход».</li>
+    <li><b>Отчёт</b> (включена): <code>submit_report</code> прерывает граф. Можно утвердить, поправить поля (правка помечается в отчёте) или вернуть с текстом. После возврата агент продолжает работу с замечанием в контексте.</li>
+    <li><b>execute</b> (выключена): подтверждение каждого запуска кода, если нужно.</li>
+  </ol>
+  <p>Состояние хранится в SQLite-checkpointer в <code>run_dir</code>. На точке HITL процесс агента завершается со статусом <code>awaiting_human</code>, а после решения человека запускается новый процесс с <code>Command(resume=...)</code>. Держать процесс в ожидании не нужно, а прогон переживает перезапуск сервера. Флаг <code>--auto-approve</code> нужен для eval и тестов, в отчёте он фиксируется как «без проверки человеком».</p>
+  <h3>Шаблоны отчётов</h3>
+  <p>Шаблоны лежат в skill <code>/skills/report-templates/</code>: в <code>SKILL.md</code> описано, когда применять шаблон, рядом лежит Markdown с плейсхолдерами. Рендер без новых зависимостей, на <code>string.Template</code>. Структуру берём из эталонов <code>docs/examples/reg_grammar_SaSb_lean_proved</code> и <code>cfl_ticket50_w1bw2w3_lean_proved</code>: гипотеза, доказательство по шагам с леммами, заключение, Lean-блок.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Шаблон</th><th>Для чего</th></tr></thead>
+    <tbody>
+      <tr><td><code>full_proof</code></td><td>Основной: условие, вердикт, метод, вспомогательные леммы, доказательство по шагам, заключение. Повторяет структуру эталонных result.md.</td></tr>
+      <tr><td><code>exam_solution</code></td><td>Сжатая запись того же для сдачи: ответ, выбранное слово или конструкция, ключевые шаги.</td></tr>
+      <tr><td><code>short_verdict</code></td><td>Вердикт, одна-две строки обоснования, свидетельства.</td></tr>
+      <tr><td><code>lean_appendix</code></td><td>Добавляется к любому шаблону, если есть Lean-доказательство: статус, аксиомы, ссылка на <code>proof.lean</code>.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Блок «Свидетельства, модели и расходы» в конце любого шаблона генерирует код, а не модель. В эталоне ticket 50 есть известная ошибка: неформальное доказательство цитирует неверный пример для p = 4. Этот случай станет регрессионным тестом для критика.</p>
+</section>
+
+<section id="sandbox">
+  <h2>Docker-sandbox</h2>
+  <pre><code>docker run -d --name tfl-sbx-&lt;run_id&gt; \
+  --network none --read-only --tmpfs /workspace:rw,size=256m \
+  --memory 1g --cpus 1 --pids-limit 256 --user 1000:1000 \
+  --security-opt no-new-privileges --cap-drop ALL \
+  -v &lt;repo&gt;:/opt/tfl:ro  tfl-sandbox:latest  sleep infinity
+# execute(cmd, timeout) → docker exec … (таймаут на каждый вызов, вывод обрезается до N КБ)
+# в конце прогона: docker rm -f</code></pre>
+  <ul>
+    <li>Образ <code>tfl-sandbox</code>: <code>python:3.12-slim</code> и зависимости репозитория. Код репозитория смонтирован в <code>/opt/tfl</code> только на чтение, поэтому в sandbox можно импортировать CYK, DFA и остальные модули.</li>
+    <li>Lean не входит в этот образ, потому что он тяжёлый из-за Mathlib. Он остаётся в <code>tfl-lean4</code>, туда ходит только <code>lean_check</code>.</li>
+    <li>Пути Windows конвертируются функцией <code>_windows_docker_path</code> из <code>type_check.py</code>. Если Docker недоступен, <code>execute</code> не регистрируется, и отчёт это отмечает.</li>
+  </ul>
+</section>
+
+<section id="ui">
+  <h2>UI: вкладка Deep Agent в TFL Lab</h2>
+  <p>Отдельного фронтенда не делаем. В существующий <code>ui_server</code> (stdlib-сервер и одностраничный <code>app.js</code>) добавляется вкладка со своими эндпоинтами. Прогоны хранятся так же, как сейчас: <code>run.json</code>, <code>progress.jsonl</code>, результат в каталоге прогона.</p>
+  <div class="mock"><pre>┌ Deep Agent ───────────────────────────────────────────────────────────────┐
+│ [ Задание ]  текст ▢  или перетащите PDF / PNG / JPG сюда                 │
+│ Шаблон: full_proof ▾   Модель main: Opus ▾   Бюджет: $5.00   [ Оценка ]    │
+│                                              [ Запустить · confirm_spend ] │
+├─ План ────────────────────┬─ Ход работы ─────────────────────────────────────┤
+│ ☑ расшифровка             │ 12:01 intake · sonnet · $0.04                    │
+│ ☑ IR + проверка           │ 12:01 ⏸ HITL 1  [Расшифровка] [IR] [Слова]       │
+│ ◐ доказательство          │        [ Утвердить ] [ Править ] [ Вернуть ]      │
+│ ☐ критика                 │ 12:03 run_workflow · 3 ветки ├ pump  sonnet $0.21│
+│ ☐ Lean                    │                              ├ ogden sonnet $0.18│
+│ ☐ отчёт                   │                              └ judge opus   …    │
+├───────────────────────────┴──────────────────────────────────────────────────┤
+│ Бюджет ███████░░░░░░░░ $1.42 / $5.00   сегодня $6.10 / $20.00               │
+└──────────────────────────────────────────────────────────────────────────────┘</pre></div>
+  <ul>
+    <li><b>Ввод</b>: поле для текста и drag-and-drop файла. Файл читается в браузере в base64 и отправляется JSON-ом, поэтому парсер multipart на stdlib не нужен. Размер ограничен <code>max_file_mb</code>.</li>
+    <li><b>Настройки</b>: бюджеты, разрешённые модели, модели по ролям, точки HITL. Хранятся в <code>tfl_deep_agent/settings.json</code>.</li>
+    <li><b>Ход работы</b>: список todo, вызовы инструментов с плашкой trust, дерево субагентов и веток с моделью и стоимостью, полоса бюджета.</li>
+    <li><b>HITL-карточки</b>: исходник рядом с расшифровкой и IR; предпросмотр отчёта с правкой полей; кнопки «Утвердить», «Править», «Вернуть с комментарием».</li>
+    <li><b>Отчёт</b>: переключатель шаблона и таблица свидетельств.</li>
+  </ul>
+<pre><code>POST /api/deep/runs                  {text | file_b64 + mime, template, settings_override, confirm_spend}
+GET  /api/deep/runs/&lt;id&gt;?after=N     события (тот же формат опроса, что /api/runs/&lt;id&gt;)
+POST /api/deep/runs/&lt;id&gt;/resume      {decision: approve | edit | reject, payload}
+POST /api/deep/runs/&lt;id&gt;/cancel
+GET  /api/deep/estimate              оценка стоимости по настройкам и прошлым прогонам
+GET/PUT /api/deep/settings</code></pre>
+</section>
+
+<section id="layout">
+  <h2>Структура пакета</h2>
+<pre><code>tfl_deep_agent/
+  __init__.py  __main__.py  cli.py        # tfl-deep (текст | --file task.pdf) --save DIR [--live] [--auto-approve]
+  config.py                               # модели, effort, max_tokens, цены (синхронно с 4 config.py)
+  settings.py  settings.example.json      # бюджеты, разрешённые модели, HITL, лимиты
+  agent.py                                # create_tfl_agent(...) → create_deep_agent(...)
+  roles.py                                # готовые роли
+  orchestration/ spawn.py  workflow.py  model_policy.py
+  intake/    files.py                     # text / pdf / image → content-блоки
+  prompts/   main.md  intake.md  ir_builder.md  prover.md  critic.md  lean.md  coder.md
+  tools/     ir.py  words.py  reg.py  cfl.py  dcfl.py  ll.py  theory.py  lean.py  report.py
+  evidence/  ledger.py  policy.py
+  middleware/ budget.py  evidence.py  concurrency.py
+  sandbox/   docker_backend.py  Dockerfile.sandbox  build.ps1
+  skills/    reg/ cfl/ dcfl/ ll/ lean/ report-templates/
+  reports/   render.py
+  tests/
+  CLAUDE.md  README.md
+ui_server/   + deep_routes.py, вкладка в static/app.js и lab.css</code></pre>
+  <p>Зависимости вынесены в extra <code>[deep]</code>: <code>deepagents==0.7.34</code>, <code>langchain&gt;=1.4,&lt;2</code>, <code>langchain-anthropic</code>, <code>langgraph-checkpoint-sqlite</code>. Направление импортов: <code>tfl_deep_agent</code> импортирует из четырёх пакетов, <code>ui_server</code> импортирует из <code>tfl_deep_agent</code>, обратно никто не импортирует.</p>
+</section>
+
+<section id="testing">
+  <h2>Тесты и деньги</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Что</th><th>Чем платится</th><th>Нужно одобрение</th></tr></thead>
+    <tbody>
+      <tr><td>Написание кода мной и субагентами ultracode, <code>pytest</code>, тесты на фейковой модели, Docker и Lean локально</td><td>Лимиты подписки Claude Code. Запросов к API нет: корневой conftest убирает ключ и подменяет клиент.</td><td>нет</td></tr>
+      <tr><td>Replay-тесты: заранее записанные ответы модели прогоняются через настоящий цикл агента</td><td>бесплатно после одной записи</td><td>нет</td></tr>
+      <tr><td>Live smoke-тест агента: текст, PDF, картинка, по одной задаче</td><td><code>ANTHROPIC_API_KEY</code>, отдельный биллинг API</td><td>да, около $1 на Haiku</td></tr>
+      <tr><td>Прогон на Opus 1–2 эталонных задач</td><td>API, оценка $3–8 за задачу</td><td>да, отдельно</td></tr>
+    </tbody>
+  </table></div>
+  <p>Субагенты ultracode не могут подменить собой вызовы API у тестируемого агента: агент сам ходит в Anthropic API со своим ключом. Поэтому разработка и mock-тесты обходятся без бюджета, а проверка настоящего поведения модели всегда требует явного разрешения.</p>
+</section>
+
+<section id="phases">
+  <h2>Этапы для ultracode</h2>
+  <div class="phases">
+    <div class="phase"><div class="n">P0</div><div class="body">
+      <h3>Каркас и совместимость</h3>
+      <ul><li>Ветка <code>feat/deep-agent</code>, скелет пакета, extra <code>[deep]</code>, скрипт <code>tfl-deep</code>.</li>
+      <li>Проверить совместимость deepagents 0.7.34 с <code>langgraph 1.0.7</code> и <code>langchain-core 1.6.9</code>. Если понадобится обновить langgraph, прогнать весь существующий набор тестов.</li>
+      <li>Проверить без вызовов API, что langchain-anthropic умеет формировать запросы с PDF- и image-блоками, adaptive thinking и effort.</li></ul>
+      <p class="done"><b>Готово, когда</b> <code>pytest -q</code> зелёный целиком, а формы запросов зафиксированы тестом.</p></div></div>
+    <div class="phase"><div class="n">P1</div><div class="body">
+      <h3>Слой инструментов</h3>
+      <ul><li>Инвентаризация четырёх <code>lib/</code>, обёртки с pydantic-схемами, лимитами длины и времени, полем <code>trust</code>.</li>
+      <li>Юнит-тесты без LLM на эталонных задачах из <code>examples/</code>.</li></ul>
+      <p class="done"><b>Готово, когда</b> trust каждого инструмента совпадает с таблицей VERDICT_POLICY.</p></div></div>
+    <div class="phase"><div class="n">P2</div><div class="body">
+      <h3>Ядро, роли, бюджет</h3>
+      <ul><li><code>create_tfl_agent</code>, промпты, готовые роли, skills по классам из <code>tz_*.md</code> и <code>THEORY.md</code>.</li>
+      <li><code>settings.py</code> и <code>BudgetMiddleware</code> с иерархией, проверкой перед вызовом, резервом на отчёт и суточным лимитом. Семафор, prompt caching.</li>
+      <li>Тесты на <code>GenericFakeChatModel</code> со скриптом tool_calls.</li></ul>
+      <p class="done"><b>Готово, когда</b> mock-прогон доходит до отчёта на задачах REG, CFL и LL, а при превышении бюджета вызов отклоняется и агент сдаёт частичный отчёт.</p></div></div>
+    <div class="phase"><div class="n">P3</div><div class="body">
+      <h3>Вход, журнал, HITL, отчёты</h3>
+      <ul><li><code>intake</code>: текст, PDF, картинка, выбор задачи из нескольких.</li>
+      <li><code>EvidenceMiddleware</code>, сверка ссылок, потолки confidence.</li>
+      <li>HITL 1 и HITL 2, SQLite-checkpointer, возобновление новым процессом, CLI-диалог, <code>--auto-approve</code>.</li>
+      <li>Шаблоны по эталонам из <code>docs/examples</code>, рендер в <code>result.json</code>, <code>.md</code>, <code>.html</code>.</li></ul>
+      <p class="done"><b>Готово, когда</b> тест проходит цикл reject → правка → approve, а выдуманный id свидетельства понижает trust.</p></div></div>
+    <div class="phase"><div class="n">P4</div><div class="body">
+      <h3>Динамические субагенты и workflow</h3>
+      <ul><li><code>spawn_subagent</code>, <code>run_workflow</code> (компиляция в StateGraph, проверка ацикличности, лимиты), <code>model_policy</code>, <code>budget_status</code>.</li>
+      <li>Журнал и бюджет проходят сквозь все уровни вложенности.</li></ul>
+      <p class="done"><b>Готово, когда</b> mock-workflow из трёх параллельных веток и судьи укладывается в бюджет, а запрещённая модель, превышение глубины или цикл отклоняются понятной ошибкой.</p></div></div>
+    <div class="phase"><div class="n">P5</div><div class="body">
+      <h3>Docker-sandbox</h3>
+      <ul><li><code>DockerSandbox(BaseSandbox)</code>, <code>Dockerfile.sandbox</code>, build-скрипт, очистка контейнеров при сбое.</li>
+      <li>Тесты изоляции: нет сети, срабатывает таймаут, <code>/opt/tfl</code> только на чтение. Без Docker тесты пропускаются.</li></ul>
+      <p class="done"><b>Готово, когда</b> coder в mock-сценарии запускает перебор с импортом <code>cyk</code> из <code>/opt/tfl</code>.</p></div></div>
+    <div class="phase"><div class="n">P6</div><div class="body">
+      <h3>Lean</h3>
+      <ul><li><code>lean_statement</code> из IR, <code>lean_check</code>, lean-formalizer, <code>scan_proof_body</code> против <code>sorry</code> и <code>axiom</code>.</li></ul>
+      <p class="done"><b>Готово, когда</b> <code>proof.lean</code> из эталона REG, разбитый на формулировку и тело, проходит проверку через инструмент и получает <code>verified</code>.</p></div></div>
+    <div class="phase"><div class="n">P7</div><div class="body">
+      <h3>UI в TFL Lab</h3>
+      <ul><li><code>deep_routes.py</code>, вкладка в <code>app.js</code>: ввод с drag-and-drop, настройки, ход работы, HITL-карточки, отчёт.</li>
+      <li>Тесты эндпоинтов на фейковом агенте.</li></ul>
+      <p class="done"><b>Готово, когда</b> в браузере mock-прогон по PDF проходит обе точки HITL и показывает отчёт.</p></div></div>
+    <div class="phase"><div class="n">P8</div><div class="body">
+      <h3>Eval, документация, smoke</h3>
+      <ul><li>Адаптер <code>system="deep"</code> в <code>tfl_eval</code>: на вход только <code>source_text</code>, плюс <code>--auto-approve</code>.</li>
+      <li>README-раздел, <code>tfl_deep_agent/CLAUDE.md</code>, обновление корневого CLAUDE.md.</li>
+      <li>Live smoke-тест на Haiku только после вашего «да» на бюджет.</li></ul>
+      <p class="done"><b>Готово, когда</b> <code>tfl-eval --system deep</code> проходит в mock-режиме.</p></div></div>
+  </div>
+</section>
+
+<section id="risks">
+  <h2>Риски</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Риск</th><th>Что делаем</th></tr></thead>
+    <tbody>
+      <tr><td>Конфликт версий: deepagents может потребовать langgraph новее 1.0.7.</td><td>P0 начинается с проверки. Если конфликт серьёзный, обсуждаем отдельный venv для <code>[deep]</code>.</td></tr>
+      <tr><td>Расход: агент, который сам порождает субагентов и ветки, легко тратит больше пайплайна.</td><td>Иерархический бюджет, проверка перед вызовом, лимиты глубины и параллелизма, причина для Opus в журнале.</td></tr>
+      <tr><td>Самосертификация: модель называет ложное доказательство проверенным (EVAL_RESULTS, dcfl-21).</td><td>Журнал вместо самоотчёта, критик с чистым контекстом, потолки policy, человек в конце.</td></tr>
+      <tr><td>Ошибка расшифровки PDF или картинки (индексы, степени, кванторы).</td><td>Пометки о неуверенных местах, исходник рядом с расшифровкой в HITL 1.</td></tr>
+      <tr><td>langchain-anthropic может по-другому передавать thinking, effort или PDF-блоки.</td><td>Проверка формы запроса в P0. Если не совпадает, использовать <code>model_kwargs</code>, а в крайнем случае свою обёртку <code>BaseChatModel</code> над <code>AnthropicClient</code>.</td></tr>
+      <tr><td>Docker Desktop на Windows: пути, холодный старт, зависшие контейнеры.</td><td>Один контейнер на прогон, <code>rm -f</code> в <code>finally</code>, функция путей из <code>type_check.py</code>.</td></tr>
+      <tr><td>Лёгкие модели при правке промптов искажают выверенные доказательства.</td><td>Skills с теорией перед коммитом проходят adversarial-ревью на Opus.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="questions">
+  <h2>Открытые вопросы</h2>
+  <p>По каждому указан вариант, который возьму, если не будет других указаний.</p>
+  <ol class="qs">
+    <li>Какой уровень доверия давать перебору в sandbox?<span class="def">Беру <code>well_formed</code>: произвольный код может проверять не то, что заявлено. <code>bounded_pass</code> оставляю только whitelisted-оракулам.</span></li>
+    <li>Значения бюджета по умолчанию.<span class="def">Решение пользователя 2026-11-08: $10 на задачу, $20 в день, $2 на субагента, $1.00 резерва. Всё правится в настройках.</span></li>
+    <li>Может ли агент выбирать Opus свободно?<span class="def">Да, если Opus в списке разрешённых, но с обязательной причиной в журнале (<code>opus_needs_reason</code>).</span></li>
+  </ol>
+</section>
+
+<footer>План составлен по коду репозитория на коммите <code>8dae844</code> и документации deepagents 0.7.x. Названия инструментов рабочие, точные сигнатуры фиксируются на этапе P1.</footer>
+</div>

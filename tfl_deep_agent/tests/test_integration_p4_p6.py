@@ -1,0 +1,597 @@
+"""P4-P6 integration: orchestration tools, the code sandbox and the Lean tools in
+``create_tfl_agent``.
+
+Scripted chat models only (``agent.scripted_model_factory``); nothing reaches the
+API. The end-to-end test runs twice when Docker and the ``tfl-sandbox`` image are
+there: once on :class:`FakeSandbox` (a local-process backend implementing the
+same deepagents ``SandboxBackendProtocol``) and once on the real
+``DockerSandbox``; without Docker the real case skips with the reason."""
+
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+pytest.importorskip("deepagents")
+pytest.importorskip("langgraph")
+
+from deepagents.backends import FilesystemBackend
+from deepagents.backends.protocol import ExecuteResponse, SandboxBackendProtocol
+from langchain_core.messages import SystemMessage, ToolMessage
+
+from tfl_deep_agent import agent as A
+from tfl_deep_agent import settings as ST
+from tfl_deep_agent.evidence.ledger import EvidenceLedger
+from tfl_deep_agent.middleware import budget as B
+from tfl_deep_agent.sandbox import docker_backend as D
+from tfl_deep_agent.sandbox.workspace import SandboxedStateBackend, WorkspaceBackend
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _no_override(monkeypatch):
+    monkeypatch.delenv("TFL_MODEL_OVERRIDE", raising=False)
+
+
+# ---------------------------------------------------------------------------
+# a sandbox double: same protocol, local process, no Docker
+# ---------------------------------------------------------------------------
+
+class FakeSandbox(FilesystemBackend, SandboxBackendProtocol):
+    """Files in ``root`` (virtual paths: ``/workspace/a.py`` is
+    ``root/workspace/a.py``); ``execute`` runs ``python <file>`` with this
+    interpreter and the repository on ``PYTHONPATH`` (what ``/opt/tfl`` is in the
+    container). Output as ``DockerSandbox`` gives it: stdout, then stderr lines
+    prefixed ``[stderr]``."""
+
+    def __init__(self, root: Path) -> None:
+        (root / "workspace").mkdir(parents=True, exist_ok=True)
+        super().__init__(root_dir=str(root), virtual_mode=True)
+        self.root = root
+        self.commands: list[str] = []
+        self.closed = False
+
+    @property
+    def id(self) -> str:
+        return "fake-sandbox"
+
+    def _real(self, arg: str) -> str:
+        return str(self.root / arg.lstrip("/")) if arg.startswith("/workspace") else arg
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        self.commands.append(command)
+        argv = shlex.split(command)
+        if not argv or argv[0] not in ("python", "python3"):
+            return ExecuteResponse(output=f"fake sandbox runs only python: {command}", exit_code=127)
+        argv = [sys.executable, *(self._real(a) for a in argv[1:])]
+        env = {**os.environ, "PYTHONPATH": str(REPO), "PYTHONIOENCODING": "utf-8"}
+        env.pop("ANTHROPIC_API_KEY", None)
+        proc = subprocess.run(argv, cwd=self.root / "workspace", env=env, capture_output=True, text=True,
+                              encoding="utf-8", timeout=timeout or 60, check=False)
+        out = proc.stdout + "".join(f"[stderr] {line}\n" for line in proc.stderr.splitlines())
+        return ExecuteResponse(output=out, exit_code=proc.returncode, truncated=False)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+# ---------------------------------------------------------------------------
+# scripts
+# ---------------------------------------------------------------------------
+
+#: CNF of S -> a S b | eps, checked by brute force against w = a^n b^n
+BRUTE = '''\
+import itertools
+import sys
+
+sys.path.insert(0, "/opt/tfl")
+from cfl_system.lib.cyk import cyk_parse
+
+G = {
+    "terminals": ["a", "b"], "nonterminals": ["S0", "S", "A", "B", "C"], "start": "S0",
+    "rules": [
+        {"lhs": "S0", "rhs": []}, {"lhs": "S0", "rhs": ["A", "B"]}, {"lhs": "S0", "rhs": ["A", "C"]},
+        {"lhs": "S", "rhs": ["A", "B"]}, {"lhs": "S", "rhs": ["A", "C"]}, {"lhs": "C", "rhs": ["S", "B"]},
+        {"lhs": "A", "rhs": ["a"]}, {"lhs": "B", "rhs": ["b"]},
+    ],
+}
+words = members = mismatches = 0
+for n in range(7):
+    for t in itertools.product("ab", repeat=n):
+        w = "".join(t)
+        k = len(w) // 2
+        got = cyk_parse(G, w)
+        words += 1
+        members += got
+        mismatches += got != (w == "a" * k + "b" * k)
+print(f"bound=6 words={words} members={members} mismatches={mismatches}")
+print("cyk from", sys.modules["cfl_system.lib.cyk"].__file__)
+'''
+EXPECTED = "bound=6 words=127 members=4 mismatches=0"
+
+GRAMMAR = {"terminals": ["a", "b"], "nonterminals": ["S"], "start": "S",
+           "rules": [{"lhs": "S", "rhs": ["a", "S", "b"]}, {"lhs": "S", "rhs": []}]}
+
+STEPS = [
+    {"id": "cyk-check", "role": "prover", "model": "sonnet",
+     "task": "Check with cyk which of '', ab, aabb, aab, ba are generated by S -> aSb | eps."},
+    {"id": "pump", "role": "prover", "model": "haiku", "task": "Sketch why a^n b^n is not regular."},
+    {"id": "parikh", "role": "general", "model": "haiku", "task": "Parikh image of a^n b^n, one line."},
+    {"id": "judge", "role": "critic", "model": "sonnet", "task": "Which branch answers are consistent?",
+     "depends_on": ["cyk-check", "pump", "parikh"]},
+]
+
+
+def e2e_script() -> dict[str, Any]:
+    return {"models": {
+        "main": [
+            {"tool_calls": [{"name": "run_workflow", "id": "call-wf", "args": {
+                "name": "anbn", "steps": STEPS, "budget_usd": 1.2}}]},
+            {"tool_calls": [{"name": "task", "id": "call-coder", "args": {
+                "subagent_type": "coder",
+                "description": "Brute-force CYK for S -> aSb | eps against a^n b^n up to length 6."}}],
+             "expect": {"last_message_contains": "judge: consistent"}},
+            {"content": "main: workflow and brute force done",
+             "expect": {"last_message_contains": "mismatches=0"}},
+        ],
+        "workflow:cyk-check": [
+            {"tool_calls": [{"name": "cyk", "id": "ev-wf-cyk", "args": {
+                "grammar": GRAMMAR, "words": ["", "ab", "aabb", "aab", "ba"]}}]},
+            {"content": "cyk-check: '', ab, aabb in L(G); aab, ba not"},
+        ],
+        "workflow:pump": [{"content": "pump: a^p b^p, pumping inside a^p breaks the balance"}],
+        "workflow:parikh": [{"content": "parikh: {(n, n)}, semilinear"}],
+        "workflow:judge": [{"content": "judge: consistent",
+                            "expect": {"last_message_contains": "cyk-check:"}}],
+        "coder": [
+            {"tool_calls": [{"name": "write_file", "id": "w1", "args": {
+                "file_path": "/workspace/brute.py", "content": BRUTE}}]},
+            {"tool_calls": [{"name": "execute", "id": "x1", "args": {
+                "command": "python /workspace/brute.py", "timeout": 60}}]},
+            {"content": f"{EXPECTED} (execute output above)",
+             "expect": {"last_message_contains": "mismatches=0"}},
+        ],
+    }}
+
+
+def ledger() -> B.BudgetLedger:
+    return B.BudgetLedger(5.0, reserve_for_report_usd=0.3, per_subagent_max_usd=2.0)
+
+
+def tool_results(messages) -> dict[str, dict[str, Any]]:
+    out = {}
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            try:
+                out[m.name] = json.loads(m.content)
+            except (TypeError, ValueError):
+                out[m.name] = {"raw": m.content}
+    return out
+
+
+def system_text(model) -> str:
+    first = model.received[0]
+    return "\n".join(str(m.content) for m in first if isinstance(m, SystemMessage))
+
+
+def build(script: dict[str, Any], **kw: Any):
+    factory = A.scripted_model_factory(script)
+    kw.setdefault("budget", ledger())
+    kw.setdefault("budget_options", {"missing_usage": "zero"})
+    kw.setdefault("hitl", False)
+    graph = A.create_tfl_agent(ST.DEFAULTS, model_factory=factory, **kw)
+    return factory, graph
+
+
+# ---------------------------------------------------------------------------
+# end to end: main runs a workflow, the coder executes code
+# ---------------------------------------------------------------------------
+
+_STATUS = D.sandbox_status()
+
+
+@pytest.fixture(params=["fake", "docker"])
+def sandbox_case(request, tmp_path):
+    if request.param == "fake":
+        sb = FakeSandbox(tmp_path / "sbx")
+        yield "fake", sb
+        return
+    if not _STATUS[0]:
+        pytest.skip(f"Docker sandbox unavailable: {_STATUS[1]}")
+    sb = D.DockerSandbox(run_id="it-p4p6")
+    try:
+        sb.start()
+    except D.SandboxUnavailable as exc:  # pragma: no cover - flaky daemon
+        pytest.skip(f"Docker sandbox could not start: {exc}")
+    try:
+        yield "docker", sb
+    finally:
+        sb.close()
+
+
+def test_e2e_main_runs_a_workflow_and_the_coder_executes_code(sandbox_case):
+    kind, sb = sandbox_case
+    led = ledger()
+    ev = EvidenceLedger()
+    factory, graph = build(e2e_script(), sandbox=sb, budget=led, evidence=ev)
+    assert graph.tfl_sandbox.available and graph.tfl_sandbox.sandbox is sb and not graph.tfl_sandbox.owned
+    assert graph.tfl_orchestration is not None and graph.tfl_orchestration.limits is graph.tfl_limits
+    state = A.run_task(graph, "Is S -> aSb | eps exactly a^n b^n? Check by brute force.")
+
+    main = factory.models["main"]
+    assert state["messages"][-1].content == "main: workflow and brute force done"
+    assert main.calls_made == 3
+    # tools: main has orchestration, lean and task, never execute; the coder has execute
+    main_tools = set(main.bound_tools or [])
+    assert {"run_workflow", "spawn_subagent", "budget_status", "task", "lean_check", "lean_statement"} <= main_tools
+    assert "execute" not in main_tools
+    coder = factory.models["coder"]
+    assert "execute" in (coder.bound_tools or []) and coder.calls_made == 3
+    # the system prompt tells the main agent about the sandbox and the orchestration tools
+    sys_text = system_text(main)
+    assert "Code sandbox: available" in sys_text and "Orchestration tools" in sys_text
+
+    # the workflow: three parallel branches and a judge, inside its budget
+    wf = tool_results(state["messages"])["run_workflow"]
+    assert wf["ok"] is True, wf.get("error")
+    d = wf["data"]
+    assert d["status"] == "ok" and d["layers"] == [["cyk-check", "pump", "parikh"], ["judge"]]
+    assert d["budget"]["spent_usd"] <= 1.2
+    wf_node = next(c for c in led.root.children if c.name == "workflow:anbn")
+    assert wf_node.closed and [c.name for c in wf_node.children] == ["cyk-check", "pump", "parikh", "judge"]
+    # the branch's oracle call is in the run's evidence ledger, under the workflow
+    cyk_rec = next(r for r in ev.records() if r.tool == "cyk")
+    assert cyk_rec.ok and cyk_rec.scope.startswith("task/workflow:anbn/cyk-check")
+    assert cyk_rec.parent_call == "call-wf"
+
+    # the coder ran the brute force in the sandbox
+    exec_msg = coder.received[-1][-1]
+    text = str(exec_msg.content)
+    if "OCI runtime" in text:  # pragma: no cover - flaky daemon
+        pytest.skip(f"Docker daemon failure: {text[:200]}")
+    assert getattr(exec_msg, "name", None) == "execute"
+    assert EXPECTED in text and "exit code 0" in text
+    if kind == "docker":
+        assert "/opt/tfl/cfl_system/lib/cyk.py" in text
+    else:
+        assert sb.commands == ["python /workspace/brute.py"]
+        assert (sb.root / "workspace" / "brute.py").read_text(encoding="utf-8") == BRUTE
+    # execute is recorded; sandbox output is never more than well_formed
+    exec_rec = next(r for r in ev.records() if r.tool == "execute")
+    assert exec_rec.role == "coder" and exec_rec.parent_call == "call-coder"
+    assert exec_rec.trust in ("not_verified", "well_formed")
+    # every allocation is closed and the run stayed in budget
+    assert all(c.closed for c in led.root.children) and not led.exhausted and led.spent_usd < 5.0
+
+
+def test_auto_sandbox_is_owned_and_closed(monkeypatch, tmp_path):
+    """``sandbox="auto"`` opens a lazy DockerSandbox owned by the graph (no
+    container before the first call); ``close_sandbox`` closes it."""
+    made: list[Any] = []
+
+    class Lazy(FakeSandbox):
+        def __init__(self, *, run_id=None, auto_start=True):
+            super().__init__(tmp_path / "auto")
+            self.run_id = run_id
+            made.append(self)
+
+    monkeypatch.setattr(D, "sandbox_status", lambda image=None: (True, ""))
+    monkeypatch.setattr(D, "DockerSandbox", Lazy)
+    factory, graph = build({"models": {"main": [{"content": "done"}]}}, sandbox="auto", name="run-x")
+    info = graph.tfl_sandbox
+    assert info.available and info.owned and info.kind == "docker" and info.sandbox is made[0]
+    assert made[0].run_id == "run-x" and made[0].commands == []
+    assert "execute" not in (factory.models["main"].bound_tools or [])  # bound only at the first call
+    A.run_task(graph, "task")
+    assert "execute" not in (factory.models["main"].bound_tools or [])
+    A.close_sandbox(graph)
+    assert made[0].closed
+    assert info.to_dict() == {"available": True, "reason": "", "id": "fake-sandbox", "kind": "docker",
+                              "owned": True}
+
+
+# ---------------------------------------------------------------------------
+# no sandbox: no execute, no coder, and the prompt says so
+# ---------------------------------------------------------------------------
+
+def _no_sandbox_script() -> dict[str, Any]:
+    return {"models": {
+        "main": [
+            {"tool_calls": [{"name": "task", "id": "call-prover", "args": {
+                "subagent_type": "prover", "description": "x"}}]},
+            {"tool_calls": [{"name": "task", "id": "call-coder", "args": {
+                "subagent_type": "coder", "description": "run code"}}]},
+            {"content": "done"},
+        ],
+        "prover": [{"content": "prover: no code"}],
+    }}
+
+
+@pytest.mark.parametrize("sandbox,reason", [
+    (None, "no code sandbox was configured"),
+    (False, "switched off"),
+    ("auto", "Docker sandbox unavailable: docker not found"),
+])
+def test_without_a_sandbox_there_is_no_execute_and_no_coder(monkeypatch, sandbox, reason):
+    monkeypatch.setattr(D, "sandbox_status", lambda image=None: (False, "docker not found"))
+    factory, graph = build(_no_sandbox_script(), sandbox=sandbox)
+    assert not graph.tfl_sandbox.available and reason in graph.tfl_sandbox.reason
+    state = A.run_task(graph, "task")
+    main = factory.models["main"]
+    assert "coder" not in factory.models          # the role was never built
+    assert "execute" not in (main.bound_tools or [])
+    assert "execute" not in (factory.models["prover"].bound_tools or [])
+    sys_text = system_text(main)
+    assert "Code sandbox: NOT available" in sys_text and reason in sys_text
+    # a task for the missing coder is refused by deepagents' task tool
+    coder_msg = [m for m in state["messages"] if isinstance(m, ToolMessage) and m.tool_call_id == "call-coder"]
+    assert coder_msg and "coder" in str(coder_msg[0].content)
+    assert state["messages"][-1].content == "done"
+
+
+def test_spawn_depth_zero_binds_only_budget_status():
+    cfg = json.loads(json.dumps(ST.DEFAULTS))
+    cfg["limits"]["max_spawn_depth"] = 0
+    factory = A.scripted_model_factory({"models": {"main": [{"content": "done"}]}})
+    graph = A.create_tfl_agent(ST.validate_settings(cfg).to_dict(), model_factory=factory, budget=ledger(),
+                               budget_options={"missing_usage": "zero"}, hitl=False)
+    A.run_task(graph, "task")
+    main = factory.models["main"]
+    bound = set(main.bound_tools or [])
+    assert "budget_status" in bound and not {"spawn_subagent", "run_workflow"} & bound
+    sys_text = system_text(main)
+    assert "only `budget_status`" in sys_text and "`run_workflow` (a plan of steps" not in sys_text
+    # with the default depth both are bound and advertised
+    factory2, graph2 = build({"models": {"main": [{"content": "done"}]}})
+    A.run_task(graph2, "task")
+    assert {"spawn_subagent", "run_workflow"} <= set(factory2.models["main"].bound_tools or [])
+
+
+def test_hitl1_prompt_says_workflow_irs_are_not_reviewed():
+    text = A.main_system_prompt(ST.DEFAULTS, hitl={"formalization": True}, orchestration=True)
+    assert "built in a workflow step or by a spawned subagent is NOT reviewed" in text
+    from tfl_deep_agent.orchestration import spawn as S
+    from tfl_deep_agent.orchestration import workflow as W
+
+    ctx = S.OrchestrationContext.create(ST.DEFAULTS, model_factory=A.scripted_model_factory({"models": {"main": [{"content": "x"}]}}),
+                                        budget=ledger(), evidence=False)
+    assert "not reviewed at HITL 1" in W.workflow_description(ctx)
+
+
+def test_with_a_sandbox_only_the_coder_gets_execute(tmp_path):
+    script = {"models": {
+        "main": [{"tool_calls": [{"name": "task", "id": "p", "args": {"subagent_type": "prover",
+                                                                       "description": "x"}}]},
+                 {"content": "done"}],
+        "prover": [{"content": "ok"}]}}
+    factory, graph = build(script, sandbox=FakeSandbox(tmp_path / "s"))
+    A.run_task(graph, "task")
+    assert "execute" not in (factory.models["main"].bound_tools or [])
+    assert "execute" not in (factory.models["prover"].bound_tools or [])
+    assert "coder" in factory.models  # built, not called
+
+
+def test_main_cannot_dispatch_execute_even_when_registered(tmp_path):
+    sb = FakeSandbox(tmp_path / "s")
+    script = {"models": {"main": [
+        {"tool_calls": [{"name": "execute", "id": "bad", "args": {"command": "python -c print(1)"}}]},
+        {"content": "done"}]}}
+    scripted = A.scripted_model_factory(script)
+
+    def factory(role_key, model_id):
+        m = scripted(role_key, model_id)
+        m.strict_tools = False  # let main call a tool it was not offered: the dispatch filter must refuse it
+        return m
+
+    graph = A.create_tfl_agent(ST.DEFAULTS, model_factory=factory, budget=ledger(),
+                               budget_options={"missing_usage": "zero"}, hitl=False, sandbox=sb)
+    state = A.run_task(graph, "task")
+    msg = next(m for m in state["messages"] if isinstance(m, ToolMessage) and m.tool_call_id == "bad")
+    assert sb.commands == [] and "execute" in str(msg.content)
+
+
+def test_backend_and_sandbox_together_are_rejected(tmp_path):
+    with pytest.raises(ValueError, match="either backend"):
+        build({"models": {"main": [{"content": "x"}]}}, backend=A.make_backend(),
+              sandbox=FakeSandbox(tmp_path / "s"))
+
+
+def test_an_explicit_backend_decides_by_itself(tmp_path):
+    _, graph = build({"models": {"main": [{"content": "x"}]}}, backend=A.make_backend())
+    assert not graph.tfl_sandbox.available and "cannot execute" in graph.tfl_sandbox.reason
+    sb = FakeSandbox(tmp_path / "s")
+    factory, graph = build({"models": {"main": [{"content": "x"}]}}, backend=A.make_backend(sandbox=sb))
+    assert graph.tfl_sandbox.available and "coder" in factory.models
+
+
+def test_hitl_execute_interrupt_only_with_a_sandbox(monkeypatch, tmp_path):
+    from tfl_deep_agent import hitl as H
+
+    calls: list[int] = []
+    real = H.execute_interrupt_config
+
+    def spy():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(H, "execute_interrupt_config", spy)
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    script = {"models": {"main": [{"content": "x"}]}}
+    build(script, hitl={"execute": True}, checkpointer=InMemorySaver())
+    assert calls == []
+    build(script, hitl={"execute": True}, checkpointer=InMemorySaver(), sandbox=FakeSandbox(tmp_path / "s"))
+    assert calls == [1]
+
+
+# ---------------------------------------------------------------------------
+# backend adapters
+# ---------------------------------------------------------------------------
+
+def test_workspace_route_maps_paths_into_the_sandbox(tmp_path):
+    sb = FakeSandbox(tmp_path / "s")
+    comp = A.make_backend(sandbox=sb)
+    assert isinstance(comp.default, SandboxedStateBackend)
+    assert isinstance(comp.routes["/workspace/"], WorkspaceBackend)
+    assert A.backend_can_execute(comp)
+    assert comp.write("/workspace/pkg/a.py", "x = 1\n").error is None
+    assert (sb.root / "workspace" / "pkg" / "a.py").read_text() == "x = 1\n"   # inside the container's /workspace
+    assert "x = 1" in comp.read("/workspace/pkg/a.py").file_data["content"]
+    assert [e["path"] for e in comp.ls("/workspace/pkg").entries] == ["/workspace/pkg/a.py"]
+    assert [m["path"] for m in comp.glob("**/*.py", "/workspace/").matches] == ["/workspace/pkg/a.py"]
+    assert {m["path"] for m in comp.grep("x = 1", "/workspace/").matches} == {"/workspace/pkg/a.py"}
+    assert comp.edit("/workspace/pkg/a.py", "x = 1", "x = 2").error is None
+    assert "x = 2" in comp.read("/workspace/pkg/a.py").file_data["content"]
+    up = comp.upload_files([("/workspace/b.bin", b"\x00\x01")])
+    assert up[0].error is None and up[0].path == "/workspace/b.bin"
+    down = comp.download_files(["/workspace/b.bin"])
+    assert down[0].content == b"\x00\x01" and down[0].path == "/workspace/b.bin"
+    resp = comp.execute("python /workspace/pkg/a.py")
+    assert resp.exit_code == 0 and sb.commands == ["python /workspace/pkg/a.py"]
+
+
+def test_sandboxed_state_backend_keeps_input_read_only(tmp_path):
+    sb = FakeSandbox(tmp_path / "s")
+    st = SandboxedStateBackend(sb)
+    for res in (st.write("/input/task.md", "x"), st.edit("/input/task.md", "a", "b"),
+                st.delete("/input/task.md")):
+        assert res.error and "read-only" in res.error
+    assert st.upload_files([("/input/t.pdf", b"x")])[0].error == "permission_denied"
+    assert st.id == "fake-sandbox"
+    with pytest.raises(TypeError):
+        SandboxedStateBackend(A.make_backend())
+
+
+def test_main_writes_to_input_are_refused_with_a_sandbox(tmp_path):
+    script = {"models": {"main": [
+        {"tool_calls": [{"name": "write_file", "id": "w", "args": {"file_path": "/input/task.md",
+                                                                   "content": "changed"}},
+                        {"name": "write_file", "id": "s", "args": {"file_path": "/skills/x.md",
+                                                                   "content": "changed"}},
+                        {"name": "write_file", "id": "n", "args": {"file_path": "/notes.md",
+                                                                   "content": "scratch"}}]},
+        {"content": "done"}]}}
+    factory, graph = build(script, sandbox=FakeSandbox(tmp_path / "s"))
+    state = A.run_task(graph, "task")
+    by_id = {m.tool_call_id: str(m.content) for m in state["messages"] if isinstance(m, ToolMessage)}
+    assert "read-only" in by_id["w"] or "denied" in by_id["w"].lower()
+    assert "denied" in by_id["s"].lower() or "read-only" in by_id["s"]
+    assert "/notes.md" in state.get("files", {})        # scratch files still live in the state
+    assert "/input/task.md" not in state.get("files", {})
+
+
+def test_permissions_fit_the_backend(tmp_path):
+    plain = A.permissions_for(A.make_backend())
+    assert plain[0].paths == ["/skills", "/skills/**", "/input", "/input/**"]
+    scoped = A.permissions_for(A.make_backend(sandbox=FakeSandbox(tmp_path / "s")))
+    assert scoped[0].paths == ["/skills/**"]
+
+
+# ---------------------------------------------------------------------------
+# orchestration wiring
+# ---------------------------------------------------------------------------
+
+def test_orchestration_tools_can_be_switched_off_and_are_not_duplicated():
+    from tfl_deep_agent.orchestration import spawn as S
+
+    factory, graph = build({"models": {"main": [{"content": "x"}]}}, orchestration=False)
+    A.run_task(graph, "t")
+    assert graph.tfl_orchestration is None
+    assert not {"run_workflow", "spawn_subagent", "budget_status"} & set(factory.models["main"].bound_tools)
+    assert "Orchestration tools" not in system_text(factory.models["main"])
+
+    own = S.make_orchestration_tools(S.OrchestrationContext.create(ST.DEFAULTS, model_factory=factory,
+                                                                   budget=False, evidence=False),
+                                     names=["budget_status"])
+    factory2, graph2 = build({"models": {"main": [{"content": "x"}]}}, extra_tools=own)
+    A.run_task(graph2, "t")
+    bound = factory2.models["main"].bound_tools
+    assert bound.count("budget_status") == 1 and {"run_workflow", "spawn_subagent"} <= set(bound)
+
+
+def test_mock_scripts_accept_spawn_and_workflow_keys():
+    ok = A.load_mock_script({"models": {"main": [{"content": "x"}], "spawn:helper-1": [{"content": "y"}],
+                                        "workflow:judge": [{"content": "z"}]}})
+    assert set(ok["models"]) == {"main", "spawn:helper-1", "workflow:judge"}
+    for bad in ("bogus", "spawn:", "workflow:Bad", "task:x"):
+        with pytest.raises(A.ScriptError, match="unknown role"):
+            A.load_mock_script({"models": {"main": [{"content": "x"}], bad: [{"content": "y"}]}})
+
+
+def test_spawned_child_is_scripted_by_its_key():
+    script = {"models": {
+        "main": [{"tool_calls": [{"name": "spawn_subagent", "id": "s1", "args": {
+            "name": "helper", "instructions": "say hi", "model": "haiku", "budget_usd": 0.1}}]},
+                 {"content": "done", "expect": {"last_message_contains": "hi from the helper"}}],
+        "spawn:helper": [{"content": "hi from the helper"}]}}
+    led = ledger()
+    factory, graph = build(script, budget=led)
+    state = A.run_task(graph, "t")
+    res = tool_results(state["messages"])["spawn_subagent"]
+    assert res["data"]["status"] == "ok" and factory.models["spawn:helper"].calls_made == 1
+    assert [c.name for c in led.root.children] == ["spawn:helper"] and led.root.children[0].closed
+    assert graph.tfl_limits.status()["model_calls"] == 3      # 2 main + 1 child: one shared limit
+
+
+# ---------------------------------------------------------------------------
+# P6: lean_check in the verdict gate
+# ---------------------------------------------------------------------------
+
+def _lean_entry(**data: Any) -> dict[str, Any]:
+    base = {"cls": "reg", "side": "destructive", "status": "proved", "ir_fingerprint": "fp1"}
+    trust = "verified" if {**base, **data}["status"] == "proved" else "not_verified"
+    return {"id": "ev-lean", "tool": "lean_check", "ok": True, "trust": data.pop("trust", trust),
+            "data": {**base, **data}, "args": {}}
+
+
+def test_a_proved_lean_check_is_a_verified_basis_for_its_side():
+    entry = _lean_entry()
+    assert A._classify(entry, "reg", None, [entry]) == [("destructive", "verified")]
+    report = {"verdict": "not regular", "language_class": "reg", "ir_fingerprint": "fp1"}
+    gate = A.verdict_gate(report, [entry], ["ev-lean"])
+    assert gate["trust"] == "verified" and gate["basis"] == ["ev-lean"]
+    cfl = _lean_entry(cls="cfl", side="constructive")
+    assert A._classify(cfl, "cfl", None, [cfl]) == [("constructive", "verified")]
+
+
+@pytest.mark.parametrize("change,lang", [
+    ({"status": "failed"}, "reg"),
+    ({"status": "proved", "trust": "well_formed"}, "reg"),   # non-standard axioms: the tool gives less
+    ({}, "cfl"),                                             # a REG statement says nothing about CFL
+    ({"cls": "ll"}, "ll"),
+    ({"side": None}, "reg"),
+])
+def test_other_lean_results_are_no_basis(change, lang):
+    entry = _lean_entry(**change)
+    assert A._classify(entry, lang, None, [entry]) == []
+
+
+def test_lean_check_for_another_ir_is_excluded():
+    entry = _lean_entry(ir_fingerprint="other")
+    gate = A.verdict_gate({"verdict": "not regular", "language_class": "reg", "ir_fingerprint": "fp1"},
+                          [entry], ["ev-lean"])
+    assert gate["trust"] != "verified" and gate["excluded_ir_mismatch"] == ["ev-lean"]
+
+
+def test_lean_formalizer_role_has_the_lean_tools():
+    from tfl_deep_agent.roles import ROLES
+
+    lean = ROLES["lean"]
+    assert lean.name == "lean-formalizer" and "lean" in lean.tool_groups and "phase" not in lean.description
+    script = {"models": {
+        "main": [{"tool_calls": [{"name": "task", "id": "l", "args": {"subagent_type": "lean-formalizer",
+                                                                       "description": "prove"}}]},
+                 {"content": "done"}],
+        "lean": [{"content": "no proof"}]}}
+    factory, graph = build(script)
+    A.run_task(graph, "t")
+    assert {"lean_statement", "lean_check"} <= set(factory.models["lean"].bound_tools)
+    assert "execute" not in factory.models["lean"].bound_tools

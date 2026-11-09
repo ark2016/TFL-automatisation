@@ -91,6 +91,39 @@ jobs:
             -q --color=yes -m "slow" \
             -n auto --dist loadfile
 
+  # tfl_deep_agent and the deep parts of ui_server / tfl_eval need the [deep]
+  # extra (deepagents, langchain-anthropic, ...); without it their tests
+  # importorskip, so the `pytest` job above never runs them. Their own job, so
+  # the extra's heavier install stays out of the main job. Scripted / fake chat
+  # models only (tfl_deep_agent/tests/guard.py); the real-Docker sandbox and
+  # Lean tests skip when the tfl-sandbox / tfl-lean4 images are absent.
+  pytest-deep:
+    name: pytest (tfl_deep_agent, [deep] extra)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install project + deep + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[deep,dev]"
+
+      - name: Run the deep-agent suites
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
+        run: |
+          python -m pytest \
+            -q --color=yes -m "not slow" \
+            -n auto --dist loadfile \
+            tfl_deep_agent/tests ui_server/tests tfl_eval/tests tests/test_tfl_eval.py
+
   build:
     name: build wheel + smoke import
     runs-on: ubuntu-latest

@@ -1,0 +1,166 @@
+{
+ "description": "tfl-eval deep replay, reg-04: (ab)*a | b is regular. ir-builder validates the IR, main builds the minimal DFA from the IR's own regex (regex_to_dfa(ir=...); VERDICT_POLICY §1 verified needs a human-approved IR, and the eval run auto-approves HITL 1, so it is a bounded check, 0.85) and compares it with the IR oracle (dfa_vs_ir), then submits.",
+ "task": "(ab)*a | b\nВопрос: является ли язык регулярным?",
+ "template": "short_verdict",
+ "defs": {
+  "ir": {
+   "task_type": "classify_and_prove",
+   "source_text": "(ab)*a | b",
+   "language_spec": {
+    "kind": "regex",
+    "alphabet": [
+     "a",
+     "b"
+    ],
+    "pattern": "(ab)*a|b",
+    "has_backreferences": false
+   }
+  },
+  "dfa": {
+   "states": [
+    "q0",
+    "q1",
+    "q2",
+    "q3",
+    "q4"
+   ],
+   "alphabet": [
+    "a",
+    "b"
+   ],
+   "transitions": {
+    "q0": {
+     "a": "q1",
+     "b": "q2"
+    },
+    "q1": {
+     "a": "q3",
+     "b": "q4"
+    },
+    "q2": {
+     "a": "q3",
+     "b": "q3"
+    },
+    "q3": {
+     "a": "q3",
+     "b": "q3"
+    },
+    "q4": {
+     "a": "q1",
+     "b": "q3"
+    }
+   },
+   "start": "q0",
+   "accept": [
+    "q1",
+    "q2"
+   ]
+  }
+ },
+ "models": {
+  "main": [
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-ir-builder",
+      "args": {
+       "subagent_type": "ir-builder",
+       "description": "Класс reg. Построй IR для задачи: «(ab)*a | b». Верни IR, fingerprint и пересказ."
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "regex_to_dfa",
+      "id": "ev-dfa",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "dfa_vs_ir",
+      "id": "ev-dfa-vs-ir",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       },
+       "dfa": {
+        "$def": "dfa"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "submit_report",
+      "id": "call-report",
+      "args": {
+       "verdict": "regular",
+       "answer": "yes",
+       "language_class": "reg",
+       "method": "конструкция: регулярное выражение → минимальный полный ДКА",
+       "summary": "Язык задан регулярным выражением (ab)*a | b, поэтому он регулярен.",
+       "template": "short_verdict",
+       "steps": [
+        {
+         "claim": "Язык задан регулярным выражением (ab)*a | b над {a, b}.",
+         "justification": "Условие задачи; IR вида regex прошёл validate_ir.",
+         "evidence_ids": []
+        },
+        {
+         "claim": "Минимальный полный ДКА из 5 состояний распознаёт L((ab)*a|b).",
+         "justification": "regex_to_dfa по выражению из IR задачи.",
+         "evidence_ids": [
+          "ev-dfa"
+         ]
+        },
+        {
+         "claim": "ДКА согласуется с оракулом IR на всех словах до заданной длины.",
+         "justification": "Ограниченная сверка dfa_vs_ir.",
+         "evidence_ids": [
+          "ev-dfa-vs-ir"
+         ]
+        }
+       ],
+       "evidence_ids": [
+        "ev-dfa",
+        "ev-dfa-vs-ir"
+       ],
+       "ir_fingerprint": "ir-a8bf22e6dd74"
+      }
+     }
+    ]
+   }
+  ],
+  "ir_builder": [
+   {
+    "tool_calls": [
+     {
+      "name": "validate_ir",
+      "id": "ib-validate",
+      "args": {
+       "cls": "reg",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "content": "Класс reg, task_type classify_and_prove, language_spec kind regex, pattern (ab)*a|b над {a, b}. validate_ir: valid. В L: a, b, aba. Не в L: ε, ab, ba. Неуверенные места: нет."
+   }
+  ]
+ }
+}

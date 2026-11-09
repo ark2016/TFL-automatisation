@@ -1,0 +1,38 @@
+# Sandbox image for the coder role (P5): no network, read-only repo at /opt/tfl, limits.
+#
+# Build with build.ps1 / build.sh (or DockerSandbox's build_image()): the Dockerfile is sent on
+# stdin with NO build context, so no repository file (.env, run dirs) can be copied into the image.
+# The repository is never baked in: DockerSandbox mounts it read-only at /opt/tfl at run time
+# (PYTHONPATH=/opt/tfl), and runs the container with --network none --read-only --cap-drop ALL
+# --security-opt no-new-privileges --user 1000:1000 and memory / cpu / pids limits.
+#
+# Runtime dependencies: the third-party imports of agent_system / cfl_system / dcfl_system /
+# ll_system (anthropic, dotenv, httpx2, langgraph; langchain-core comes with langgraph), pinned to
+# the versions of the repository's .venv on 2026-11-08 so /opt/tfl modules import the same way.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN pip install \
+        "anthropic==1.13.0" \
+        "httpx2==2.13.1" \
+        "python-dotenv==1.2.1" \
+        "langgraph==1.2.20" \
+        "langchain-core==1.7.6" \
+ && groupadd --gid 1000 sandbox \
+ && useradd --uid 1000 --gid 1000 --home-dir /workspace --no-create-home --shell /bin/sh sandbox \
+ && mkdir -p /opt/tfl /workspace \
+ && chown 1000:1000 /workspace
+
+ENV PYTHONPATH=/opt/tfl \
+    HOME=/workspace
+
+LABEL tfl.sandbox.image="1" \
+      org.opencontainers.image.description="TFL deep-agent coder sandbox (python 3.12, repo mounted at /opt/tfl)"
+
+USER 1000:1000
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

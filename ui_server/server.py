@@ -42,6 +42,9 @@ exposes a small API:
                                      the current settings (`<system>.formalize --estimate`:
                                      no API, no Docker)
   GET  /runs/<run_id>/<file>      → rendered result artifact / progress files
+  /api/deep/...                   → the Deep Agent (tfl_deep_agent) runs, HITL resume, follow-up
+                                     messages, cancel, estimate and settings: see
+                                     ui_server/deep_routes.py
 
 Usage:
     .venv/Scripts/python -m ui_server.server [--port 8000]
@@ -1575,8 +1578,17 @@ class Handler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
 
+            if path.startswith("/api/deep/"):
+                self._handle_deep("GET", path, parsed.query, None)
+                return
+
             if path == "/" or path == "/index.html":
                 self._send_file(STATIC_DIR / "index.html")
+                return
+
+            if path == "/favicon.ico":
+                # browsers ask for it regardless of <link rel="icon">: the same SVG, no 404 noise
+                self._send_file(STATIC_DIR / "favicon.svg")
                 return
 
             if path.startswith("/static/"):
@@ -1674,6 +1686,15 @@ class Handler(BaseHTTPRequestHandler):
             logger.exception("GET %s failed", self.path)
             self._send_error_json(500, f"internal: {exc}")
 
+    def _handle_deep(self, method: str, path: str, query: str, payload: object) -> None:
+        """/api/deep/... (ui_server/deep_routes.py; it maps its own errors to statuses)."""
+        routes = _deep_routes()
+        status, obj = routes.dispatch(method, path, query, payload)
+        if isinstance(obj, routes.FileResponse):
+            self._send_file(obj.path)
+        else:
+            self._send_json(obj, status=status)
+
     def do_POST(self):  # noqa: N802
         self._handle_body_request("POST")
 
@@ -1697,7 +1718,8 @@ class Handler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             length = int(self.headers.get("Content-Length", "0"))
-            if length > MAX_BODY_BYTES:
+            deep = path.startswith("/api/deep/")
+            if length > (_deep_routes().max_body_bytes() if deep else MAX_BODY_BYTES):
                 self._send_error_json(413, "request body too large")
                 return
             raw = self.rfile.read(length) if length else b""
@@ -1705,6 +1727,10 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(raw.decode("utf-8")) if raw else {}
             except json.JSONDecodeError as exc:
                 self._send_error_json(400, f"invalid JSON body: {exc}")
+                return
+
+            if deep:
+                self._handle_deep(method, path, parsed.query, payload)
                 return
 
             if method == "PUT":
@@ -1739,6 +1765,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception("%s %s failed", method, self.path)
             self._send_error_json(500, f"internal: {exc}")
+
+
+def _deep_routes():
+    """ui_server.deep_routes, imported on first use (it imports this module's
+    helpers lazily as well, so neither import runs at the other's load time)."""
+    from ui_server import deep_routes
+
+    return deep_routes
 
 
 # ---------------------------------------------------------------------------
@@ -1783,6 +1817,12 @@ def main() -> None:
     if active:
         adopt_orphans(active)
         sys.stderr.write(f"--force: adopted {len(active)} active run(s): {', '.join(active)}\n")
+    try:  # Deep Agent runs: a HITL stop stays resumable; a live child is watched until it ends
+        deep_active = _deep_routes().restore_runs()
+        if deep_active:
+            sys.stderr.write(f"  deep agent: watching {len(deep_active)} run(s) still in progress\n")
+    except Exception:  # noqa: BLE001 - never blocks the pipeline UI
+        logger.exception("could not restore the deep-agent runs")
     url = f"http://{args.host}:{args.port}/"
     sys.stderr.write(f"TFL Lab UI → {url}\n")
     sys.stderr.write(f"  static:  {STATIC_DIR}\n")

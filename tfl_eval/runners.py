@@ -3,16 +3,31 @@
 Keeps `tfl_eval.cli` free of the four pipelines' differing contracts
 (`agent_system` nests the verdict under `evidence.reasoning`; `cfl_system`,
 `dcfl_system` and `ll_system` return it at the top level).
+
+System "deep" (`tfl_deep_agent`, opt-in) has its own entry points at the end
+of the module: `deep_task_text`, `deep_mock_script`, `run_deep`, `extract_deep`.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 SYSTEMS = ("reg", "cfl", "dcfl", "ll")
+
+# `tfl_deep_agent` (one agent for all four classes): opt-in via `--systems deep`,
+# never part of the default `--systems` (= SYSTEMS), so a plain `tfl-eval` run
+# behaves exactly as before.
+DEEP_SYSTEM = "deep"
+ALL_SYSTEMS = SYSTEMS + (DEEP_SYSTEM,)
+
+# Mock replays for the deep agent, one per manifest entry: `<entry id>.json`
+# (`tfl_deep_agent.agent.load_mock_script` format, see tfl_deep_agent/DEV_NOTES.md).
+DEEP_MOCK_DIR = REPO_ROOT / "tfl_deep_agent" / "examples" / "mock" / "eval"
 
 # Directory each system's MockRunner loads `{task_name}_{agent}[.json|_output.json]`
 # files from (see each orchestrator's `MockRunner`).
@@ -170,3 +185,171 @@ def set_live_model_env(explicit_model: str | None, env: dict[str, str]) -> None:
         env[_MODEL_OVERRIDE_ENV] = explicit_model
     elif _MODEL_OVERRIDE_ENV not in env:
         env[_MODEL_OVERRIDE_ENV] = _DEFAULT_LIVE_MODEL
+
+
+# ---------------------------------------------------------------------------
+# system "deep": tfl_deep_agent
+# ---------------------------------------------------------------------------
+#
+# The deep agent gets only the task's `source_text` plus one question line for
+# the entry's class (no IR: it formalizes the task itself), runs with every HITL stop auto-approved, and writes
+# `result.{json,md,html}` into its run directory. The verdict is the policy
+# token the agent's code-side verdict gate published (`published_verdict`,
+# else `verdict_token`): the same vocabulary as the four pipelines
+# (regular / non_regular / partial, cfl / non_cfl / null, dcfl / non_dcfl /
+# null, ll / not_ll / uncertain), never the model's free-text verdict.
+
+class DeepAdapterError(RuntimeError):
+    """The deep agent could not be run for an eval entry (bad input, a run
+    that stopped for a human although auto-approve was on, ...)."""
+
+
+def deep_mock_script(entry_id: str) -> Path | None:
+    """The deep agent's mock replay for manifest entry *entry_id*, if any."""
+    path = DEEP_MOCK_DIR / f"{entry_id}.json"
+    return path if path.is_file() else None
+
+
+# One explicit question per manifest class, appended to the deep agent's input
+# (user decision 2026-11-08): many `source_text`s name no class, and the same
+# language is asked under several classes ({a^n b^n} is reg-01, dcfl-01 and
+# ll-01). The LL question asks for the smallest k, which is what the manifest's
+# `expected.k` holds; a grammar task (`ll_check_grammar`, Format 3) asks about
+# the given grammar, every other LL task about the language.
+DEEP_CLASS_QUESTIONS: dict[str, str] = {
+    "reg": "Вопрос: является ли язык регулярным?",
+    "cfl": "Вопрос: является ли язык контекстно-свободным?",
+    "dcfl": "Вопрос: является ли язык детерминированным контекстно-свободным (DCFL)?",
+}
+DEEP_LL_GRAMMAR_QUESTION = ("Вопрос: является ли данная грамматика LL(k) для некоторого k, "
+                            "и если да, то каково наименьшее такое k?")
+DEEP_LL_LANGUAGE_QUESTION = ("Вопрос: является ли язык LL(k)-языком для некоторого k, "
+                             "и если да, то каково наименьшее такое k?")
+
+
+def deep_class_question(task_class: str, ir: dict) -> str:
+    """The one-line question for a manifest entry of class *task_class*."""
+    if task_class == "ll":
+        if ir.get("task_type") == "ll_check_grammar":
+            return DEEP_LL_GRAMMAR_QUESTION
+        return DEEP_LL_LANGUAGE_QUESTION
+    question = DEEP_CLASS_QUESTIONS.get(task_class)
+    if question is None:
+        raise DeepAdapterError(f"no deep question for task class {task_class!r}")
+    return question
+
+
+def deep_task_text(ir: dict, task_class: str) -> str:
+    """The only input the deep agent gets: the IR's `source_text`, then on
+    its own line the question of the entry's class (`deep_class_question`)."""
+    text = ir.get("source_text")
+    if not isinstance(text, str) or not text.strip():
+        raise DeepAdapterError("the task IR has no source_text (the deep agent's only input)")
+    return f"{text.strip()}\n{deep_class_question(task_class, ir)}"
+
+
+def load_deep_settings(path: str | None = None) -> Any:
+    """`tfl_deep_agent.settings.load_settings` (*path*, else the package's
+    settings.json, else the defaults); an explicit *path* must exist."""
+    if path is not None and not Path(path).is_file():
+        raise DeepAdapterError(f"deep settings file not found: {path}")
+    from tfl_deep_agent import settings as settings_mod
+
+    try:
+        return settings_mod.load_settings(path)
+    except settings_mod.SettingsError as exc:
+        problems = "; ".join(getattr(exc, "problems", None) or [])
+        raise DeepAdapterError(f"{exc}{': ' + problems if problems else ''}") from None
+
+
+def run_deep(task_text: str, run_dir: Path, *, mock_script: Path | None = None,
+             live: bool = False, settings: Any = None) -> dict:
+    """Run the deep agent on *task_text* in *run_dir* with `--auto-approve`
+    semantics and return its `result.json` (the run's outcome as a fallback).
+
+    Exactly one of *mock_script* (mock mode, no API) and *live* (real
+    Anthropic API calls, spends money) must be given."""
+    if (mock_script is not None) == bool(live):
+        raise DeepAdapterError("run_deep needs exactly one of mock_script or live=True")
+    from tfl_deep_agent import hitl
+
+    try:
+        outcome = hitl.start_run(
+            run_dir, task_text, settings=settings,
+            mock_script=str(mock_script) if mock_script is not None else None,
+            live=bool(live), auto_approve=True, dialog=None,
+        )
+    except (hitl.RunError, hitl.DecisionError) as exc:
+        raise DeepAdapterError(str(exc)) from None
+    if outcome.awaiting:
+        point = getattr(outcome.pending, "point", "?")
+        raise DeepAdapterError(f"the run stopped for a human decision at {point} despite auto-approve")
+    result_path = Path(run_dir) / "result.json"
+    if result_path.is_file():
+        return json.loads(result_path.read_text(encoding="utf-8"))
+    return dict(outcome.result or {})
+
+
+def _deep_ll_k(verdict_text: Any) -> int | None:
+    """k from the report's verdict text ('LL(1)', 'grammar is LL(2)'), if any."""
+    m = re.search(r"ll\s*\(\s*(\d+)\s*\)", str(verdict_text or "").lower())
+    return int(m.group(1)) if m else None
+
+
+def extract_deep(result: dict, task_class: str | None = None) -> dict:
+    """Normalize a deep-agent `result.json` to the `extract` shape plus the
+    deep-specific fields `deep_status`, `language_class`, `class_mismatch`,
+    `trust`.
+
+    * verdict: the published policy token when the report was accepted
+      (`status: submitted`), else None (a run without a report is
+      inconclusive);
+    * confidence: the code-set ceiling (`confidence`, else `confidence_cap`);
+      the model's self-assessment never raises it;
+    * k: for an `ll` verdict, the k named in the report's verdict text;
+    * class_mismatch: the report answered another class than the manifest
+      task's (its token is then from another vocabulary and scores wrong).
+    """
+    status = result.get("status")
+    report = result.get("report") if isinstance(result.get("report"), dict) else {}
+    submitted = status == "submitted" and bool(report)
+    lang = report.get("language_class") if submitted else None
+
+    verdict = None
+    k = None
+    if submitted:
+        # `published_verdict` is what the result publishes (REG: None for an
+        # unresolved contradiction); older results only carry the gate token
+        verdict = result["published_verdict"] if "published_verdict" in result else result.get("verdict_token")
+        if lang == "ll" and verdict == "ll":
+            k = _deep_ll_k(report.get("verdict"))
+
+    confidence = result.get("confidence")
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        confidence = result.get("confidence_cap")
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        confidence = None
+
+    trust = result.get("trust") if submitted else None
+    basis = list(result.get("basis") or []) if submitted else []
+    gate = {
+        "trust": trust,
+        "confidence_cap": result.get("confidence_cap"),
+        "basis": basis,
+        "downgrades": list(result.get("verdict_gate") or []),
+        "verdict_direction": result.get("verdict_direction"),
+        "contradiction": result.get("contradiction"),
+    }
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "k": k,
+        "verdict_gate": gate,
+        "basis_trust": [trust] if basis and trust else [],
+        "deep_status": status,
+        "language_class": lang,
+        "class_mismatch": bool(submitted and task_class is not None and lang != task_class),
+        "trust": trust,
+        "human_review": result.get("human_review"),
+        "budget_spent_usd": (result.get("budget") or {}).get("spent_usd"),
+    }

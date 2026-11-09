@@ -39,7 +39,8 @@ echo "ANTHROPIC_API_KEY=sk-..." > .env
 
 # `pip install -e .` also registers console scripts, so any of these work
 # from anywhere in the venv instead of `python -m ...`:
-#   tfl-lab   tfl-reg   tfl-cfl   tfl-dcfl   tfl-ll
+#   tfl-lab   tfl-reg   tfl-cfl   tfl-dcfl   tfl-ll   tfl-eval
+# (`tfl-deep`, the TFL Deep Agent, needs `pip install -e ".[deep]"`; see "TFL Deep Agent" below)
 
 # Install Graphviz (for PDA state diagrams in HTML reports)
 #   Windows: https://graphviz.org/download/ (add bin/ to PATH)
@@ -339,6 +340,65 @@ flowchart LR
 
 ---
 
+## TFL Deep Agent
+
+[`tfl_deep_agent/`](tfl_deep_agent/) is a separate approach next to the four pipelines, not a replacement. It is one
+autonomous [deepagents](https://pypi.org/project/deepagents/) (LangChain) agent for all four classes. Full guide:
+[`tfl_deep_agent/README.md`](tfl_deep_agent/README.md). Contract: [`tfl_deep_agent/PLAN.md`](tfl_deep_agent/PLAN.md).
+
+- **Input.** Text, a PDF or an image. An `intake` role transcribes a file, and an `ir-builder` role turns the
+  statement into an IR. The pipelines need a hand-written IR instead.
+- **Work.** The agent plans by itself and calls typed tools over the pipelines' `lib/` oracles; the old pipelines
+  are not exposed as tools.
+  - It delegates to fixed roles: `prover`, `critic`, `lean-formalizer`, and `coder` in a Docker sandbox. The
+    `coder` exists only when a sandbox is open; the CLI, TFL Lab and eval runners do not open a sandbox yet, so
+    their runs have no `coder` and no `execute`.
+  - It spawns ad-hoc subagents (`spawn_subagent`) and parallel workflows (`run_workflow`), each picking a model
+    from the allowed list.
+- **Money.** A hierarchical budget from the settings: $10.00 per task, $20.00 per day, $2.00 per subagent and $1.00
+  reserved for the report. It is checked before every model call at the worst case. Each call's `max_tokens` is
+  derived from what its scope has left: the role's ceiling from `config.py` while the scope can pay for it, less
+  later, and a refusal below a 4096-token floor. When only the reserve is left, the agent must submit its report,
+  and that call's `max_tokens` comes from the reserve (see [`tfl_deep_agent/README.md`](tfl_deep_agent/README.md)
+  "Budget semantics").
+- **Human review.** HITL 1 checks the transcription and the IR, HITL 2 approves the report. A stopped run is resumed
+  in a new process. `--review-mode all|formalization|auto` chooses which reviews wait for a human.
+- **Money questions and follow-ups.** When the task budget runs out, the run asks for more money instead of ending (a
+  "budget stop"; `--auto-approve` turns it off, review mode `auto` alone does not). A finished run takes further
+  messages in the same conversation (`--resume DIR --message TEXT`, or the composer in TFL Lab).
+- **Report.** The report comes from a template (`full_proof`, `exam_solution`, `short_verdict`, `lean_appendix`).
+  Its trust labels and confidence ceiling are computed by code from the evidence ledger, with the same rules as
+  the pipelines (`docs/VERDICT_POLICY.md`).
+
+```bash
+pip install -e ".[deep,dev]"        # the [deep] extra: deepagents, langchain, langchain-anthropic, ...
+
+# Mock mode (default, free): scripted model replies, real tools
+tfl-deep --mock-script tfl_deep_agent/examples/mock/ll_simple_ll1.json --save out/ll1 --auto-approve
+tfl-deep --mock-script tfl_deep_agent/examples/mock/reg_regex_regular.json --save out/reg --no-dialog  # exit 3 at HITL 1
+tfl-deep --resume out/reg --decision approve        # also: edit --payload JSON|@file, reject --comment TEXT,
+                                                    # --approve-rest (approve this stop, auto-approve later reviews)
+tfl-deep --resume out/reg --message "Why is q2 accepting?"   # a follow-up to the finished run
+tfl-deep --mock-script tfl_deep_agent/examples/mock/reg_regex_regular.json --review-mode formalization --no-dialog  # only HITL 1 waits
+
+# Live (real money; only on explicit request, Haiku only, budget agreed first)
+TFL_MODEL_OVERRIDE=claude-haiku-5-5 tfl-deep --file task.pdf --live
+```
+
+- **Settings.** `tfl_deep_agent/settings.json` (gitignored; defaults in `settings.example.json`, `$TFL_DEEP_SETTINGS`
+  or `--settings` point elsewhere) holds the budget, the allowed models and the model per role, the HITL points,
+  the limits and the intake caps.
+- **Spend log.** `.tfl_lab_runs/deep_spend_log.jsonl` (or `$TFL_DEEP_RUNS_DIR`) holds the per-day spend, shared by
+  the CLI and TFL Lab.
+- **Docker.** The sandbox image is built by `tfl_deep_agent/sandbox/build.ps1`; Lean checks use the `tfl-lean4` image.
+  Both are optional.
+- **TFL Lab.** The UI has a **Deep Agent** workspace (top-bar switch, or `/#deep`).
+- **Eval.** `tfl-eval --systems deep` runs the eval set through the agent, see "`tfl-eval`" below.
+- **Exit codes:** `0` report accepted, `1` no report (a partial result is written) or a follow-up failed (the previous
+  report stays), `2` usage, `3` waiting for a human.
+
+---
+
 ## Models and cost structure
 
 All four pipelines use the same three-tier model stack:
@@ -402,10 +462,13 @@ Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a 
 ├── cfl_system/             # CFL pipeline (orchestrator.py = graph + LiveRunner + CLI)
 ├── dcfl_system/            # DCFL pipeline (same idea)
 ├── ll_system/              # LL pipeline (same idea)
+├── tfl_deep_agent/         # TFL Deep Agent: one deepagents agent for all four classes (README.md, PLAN.md)
 ├── ui_server/              # TFL Lab web UI
 │   ├── server.py           # stdlib http.server
-│   ├── static/index.html   # single-page frontend
-│   └── tests/              # guards, path confinement, CLI contract
+│   ├── deep_routes.py      # /api/deep/* for the Deep Agent workspace
+│   ├── static/             # single-page frontend (index.html, app.js, deep.js, lab.css)
+│   └── tests/              # guards, path confinement, CLI contract, /api/deep routes and frontend helpers
+├── tfl_eval/               # tfl-eval: accuracy / calibration over docs/EVAL_SET.md
 ├── pumping_lemma/          # Legacy pumping-lemma checker (reference, not maintained)
 ├── reverse_morfism/        # Legacy inverse-homomorphism solver
 ├── pumping_len.py          # Min pumping-length finder for regex (standalone, see below)
@@ -431,11 +494,13 @@ Pure-function modules have pytest coverage; LLM-driven layers are covered by moc
 
 ```bash
 .venv/Scripts/python -m pytest -q
-# → 3447 passed, 161 skipped, 2 xfailed (with -n 4)
 ```
 
+The counts change with every commit, so none are recorded here; run the command for the current ones. `-n 4` runs it in
+parallel. Tests that need Docker, Graphviz `dot` or node skip with a reason when they are missing.
+
 The configured `testpaths` include `tfl_eval/tests` and exclude the legacy `pumping_lemma/tests`, which call the
-real Anthropic API. The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-lean4` image.
+real Anthropic API. Tests that type-check Lean 4 templates need Docker with the `tfl-lean4` image and skip without it.
 
 The root `conftest.py` also strips `ANTHROPIC_API_KEY` and blocks live Anthropic client calls during test runs.
 
@@ -590,7 +655,13 @@ expected one.
 tfl-eval --systems cfl,ll                       # mock mode (default): free, no API calls
 tfl-eval --systems cfl,ll --ids cfl-01,cfl-02    # narrow to specific eval-set ids
 tfl-eval --live                                  # real API calls — only on request; forces Haiku unless overridden
+tfl-eval --systems deep                          # the TFL Deep Agent (opt-in): source_text + a class question, HITL auto-approved
 ```
+
+`--systems deep` gives the deep agent every selected entry, whatever its class. In mock mode it replays
+`tfl_deep_agent/examples/mock/eval/<id>.json`, and entries without a script are skipped. `--deep-settings JSON`
+picks its settings file. With `--live`, the eval refuses to start when the deep entries' worst case is above
+`--deep-max-usd` (default $1.00). See [`tfl_deep_agent/README.md`](tfl_deep_agent/README.md) "Eval".
 
 Without `--live`, a task runs through its pipeline's `MockRunner` when the manifest names an existing mock
 fixture; otherwise it is reported `skipped` rather than guessed at. Metrics (`tfl_eval/metrics.py`): overall /
@@ -610,7 +681,11 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 - **Graphviz `dot` binary** — rendering PDA state diagrams as inline SVG in HTML reports. Falls back to [Mermaid](https://mermaid.js.org/) via CDN if `dot` is absent. Install it from https://graphviz.org/download/ and make sure `dot` is on `PATH`.
 - **Lean 4 + Docker** (optional) — `--formalize` type-checks generated proofs against the `tfl-lean4` image
   (Lean/Mathlib v4.33.0 + langlib); see "R-Lean architecture" above.
-- **Anthropic API key** in `.env` for `--live` runs. Offline / mock mode needs no key.
+- **Anthropic API key** in `.env` for `--live` runs. Offline / mock mode needs no key. (`tfl-deep --live` never
+  reads `.env`: it needs `ANTHROPIC_API_KEY` in the environment.)
+- **`[deep]` extra** (optional) for the TFL Deep Agent: `deepagents==0.7.34`, `jsonschema`, `langchain`, `langchain-anthropic`,
+  `langgraph-checkpoint-sqlite`, `pypdf`. Its sandbox uses the `tfl-sandbox` Docker image
+  (`tfl_deep_agent/sandbox/build.ps1`).
 
 ---
 

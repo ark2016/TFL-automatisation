@@ -1,0 +1,345 @@
+{
+ "description": "REG mock replay: (ab)*a|b is regular. Main plans, ir-builder validates the IR, main builds the minimal DFA from the IR's own regex (regex_to_dfa(ir=...): the verified basis when a human approves the IR at HITL 1; with HITL 1 off, as here, a bounded check like dfa_vs_ir, 0.85) and compares it with the IR, the critic re-runs words on the DFA, main submits the report.",
+ "task": "Является ли регулярным язык, заданный регулярным выражением (ab)*a | b над алфавитом {a, b}? Обоснуйте ответ.",
+ "template": "full_proof",
+ "defs": {
+  "ir": {
+   "task_type": "classify_and_prove",
+   "source_text": "(ab)*a | b",
+   "language_spec": {
+    "kind": "regex",
+    "alphabet": [
+     "a",
+     "b"
+    ],
+    "pattern": "(ab)*a|b",
+    "has_backreferences": false
+   }
+  },
+  "dfa": {
+   "states": [
+    "q0",
+    "q1",
+    "q2",
+    "q3",
+    "q4"
+   ],
+   "alphabet": [
+    "a",
+    "b"
+   ],
+   "transitions": {
+    "q0": {
+     "a": "q1",
+     "b": "q2"
+    },
+    "q1": {
+     "a": "q3",
+     "b": "q4"
+    },
+    "q2": {
+     "a": "q3",
+     "b": "q3"
+    },
+    "q3": {
+     "a": "q3",
+     "b": "q3"
+    },
+    "q4": {
+     "a": "q1",
+     "b": "q3"
+    }
+   },
+   "start": "q0",
+   "accept": [
+    "q1",
+    "q2"
+   ]
+  }
+ },
+ "models": {
+  "main": [
+   {
+    "content": "План: формализация, построение ДКА, сверка с IR, критика, отчёт.",
+    "tool_calls": [
+     {
+      "name": "write_todos",
+      "args": {
+       "todos": [
+        {
+         "content": "Формализовать задачу в IR (ir-builder)",
+         "status": "in_progress"
+        },
+        {
+         "content": "Построить минимальный ДКА по выражению",
+         "status": "pending"
+        },
+        {
+         "content": "Сверить ДКА с IR оракулом",
+         "status": "pending"
+        },
+        {
+         "content": "Критика с чистым контекстом",
+         "status": "pending"
+        },
+        {
+         "content": "Отчёт",
+         "status": "pending"
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-ir-builder",
+      "args": {
+       "subagent_type": "ir-builder",
+       "description": "Класс reg. Построй IR для задачи: «Является ли регулярным язык, заданный регулярным выражением (ab)*a | b над алфавитом {a, b}?». Верни IR, fingerprint, пересказ и примеры слов."
+      }
+     }
+    ]
+   },
+   {
+    "content": "IR валиден; язык задан регулярным выражением. Строю ДКА по выражению из самого IR и смотрю теорию по REG.",
+    "tool_calls": [
+     {
+      "name": "regex_to_dfa",
+      "id": "ev-dfa",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     },
+     {
+      "name": "list_theorems",
+      "id": "th-reg",
+      "args": {
+       "cls": "reg"
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "dfa_vs_ir",
+      "id": "ev-dfa-vs-ir",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       },
+       "dfa": {
+        "$def": "dfa"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-critic",
+      "args": {
+       "subagent_type": "critic",
+       "description": "Утверждение: язык L = L((ab)*a|b) над {a,b} регулярен. Доказательство: L задан регулярным выражением; по нему построен минимальный полный ДКА из 5 состояний. IR: {\"task_type\": \"classify_and_prove\", \"language_spec\": {\"kind\": \"regex\", \"pattern\": \"(ab)*a|b\", \"alphabet\": [\"a\", \"b\"]}}. ДКА: q0..q4, старт q0, принимающие q1, q2; q0-a->q1, q0-b->q2, q1-a->q3, q1-b->q4, q2-*->q3, q3-*->q3, q4-a->q1, q4-b->q3. Найди ошибку."
+      }
+     }
+    ],
+    "expect": {
+     "last_message_contains": "agrees with the IR oracle"
+    }
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "write_todos",
+      "args": {
+       "todos": [
+        {
+         "content": "Формализовать задачу в IR (ir-builder)",
+         "status": "completed"
+        },
+        {
+         "content": "Построить минимальный ДКА по выражению",
+         "status": "completed"
+        },
+        {
+         "content": "Сверить ДКА с IR оракулом",
+         "status": "completed"
+        },
+        {
+         "content": "Критика с чистым контекстом",
+         "status": "completed"
+        },
+        {
+         "content": "Отчёт",
+         "status": "in_progress"
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "submit_report",
+      "id": "call-report",
+      "args": {
+       "verdict": "regular",
+       "language_class": "reg",
+       "method": "конструкция: регулярное выражение → минимальный полный ДКА, сверка ДКА с языком задачи",
+       "hypothesis": "Язык задан регулярным выражением, поэтому ожидаем, что он регулярен. Чтобы это показать, предъявим конечный автомат, распознающий ровно $L$, и свяжем его с условием задачи.",
+       "summary": "Язык задан регулярным выражением (ab)*a | b, поэтому он регулярен; по выражению построен минимальный ДКА из 5 состояний.",
+       "construction": "Минимальный полный ДКА над $\\{a, b\\}$ из 5 состояний: $q_0$ — начальное; $q_1$ — прочитано $(ab)^n a$ (принимающее); $q_4$ — прочитано $(ab)^{n+1}$; $q_2$ — прочитано $b$ (принимающее); $q_3$ — тупиковое состояние.",
+       "template": "full_proof",
+       "steps": [
+        {
+         "title": "Язык задачи",
+         "claim": "$L = L((ab)^*a \\mid b) = \\{(ab)^n a \\mid n \\ge 0\\} \\cup \\{b\\}$ над алфавитом $\\{a, b\\}$.",
+         "justification": "Альтернатива $(ab)^*a$ даёт слова $a, aba, ababa, \\dots$, альтернатива $b$ — единственное слово $b$. IR задачи — это то же регулярное выражение (kind: regex); субагент ir-builder построил его и проверил структуру через validate_ir.",
+         "evidence_ids": []
+        },
+        {
+         "title": "Конечный автомат",
+         "claim": "Минимальный полный ДКА из 5 состояний (таблица переходов — в разделе «Конструкция») распознаёт ровно $L((ab)^*a \\mid b)$.",
+         "justification": "ДКА построен по выражению из IR: конструкция Томпсона, детерминизация подмножествами, минимизация Хопкрофта. Из $q_0$ по $a$ попадаем в принимающее $q_1$, по $b$ — в принимающее $q_2$; из $q_1$ по $b$ — в $q_4$, откуда по $a$ снова в $q_1$; все остальные переходы ведут в тупик $q_3$. Поэтому принимаются ровно слова $(ab)^n a$ и $b$.",
+         "evidence_ids": [
+          "ev-dfa"
+         ]
+        },
+        {
+         "title": "Сверка с условием",
+         "claim": "Ответы ДКА совпадают с оракулом принадлежности IR на всех словах над $\\{a, b\\}$ длины $\\le 10$.",
+         "justification": "dfa_vs_ir сравнил ответ ДКА с оракулом IR на каждом таком слове, расхождений нет. Это ограниченная проверка: она связывает автомат с формализацией задачи, а равенство языков следует из шага 2.",
+         "evidence_ids": [
+          "ev-dfa-vs-ir"
+         ]
+        }
+       ],
+       "conclusion": "Язык $L = L((ab)^*a \\mid b)$ распознаётся конечным автоматом (шаг 2), следовательно, $L$ регулярен. $\\blacksquare$",
+       "evidence_ids": [
+        "ev-dfa",
+        "ev-dfa-vs-ir"
+       ],
+       "ir_fingerprint": "ir-a8bf22e6dd74"
+      }
+     }
+    ]
+   }
+  ],
+  "ir_builder": [
+   {
+    "tool_calls": [
+     {
+      "name": "describe_ir_schema",
+      "args": {
+       "cls": "reg",
+       "kind": "regex"
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "validate_ir",
+      "id": "ib-validate",
+      "args": {
+       "cls": "reg",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "ir_to_text",
+      "args": {
+       "cls": "reg",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     },
+     {
+      "name": "sample_words",
+      "args": {
+       "cls": "reg",
+       "ir": {
+        "$def": "ir"
+       },
+       "max_len": 6,
+       "count": 6
+      }
+     }
+    ]
+   },
+   {
+    "content": "Класс reg, task_type classify_and_prove. IR: {\"task_type\": \"classify_and_prove\", \"source_text\": \"(ab)*a | b\", \"language_spec\": {\"kind\": \"regex\", \"alphabet\": [\"a\", \"b\"], \"pattern\": \"(ab)*a|b\", \"has_backreferences\": false}}. validate_ir: valid. В L: a, b, aba, ababa. Не в L: ε, ab, ba, bb. Неуверенные места: нет."
+   }
+  ],
+  "critic": [
+   {
+    "expect": {
+     "last_message_contains": "Найди ошибку"
+    },
+    "tool_calls": [
+     {
+      "name": "run_dfa",
+      "id": "cr-run",
+      "args": {
+       "dfa": {
+        "$def": "dfa"
+       },
+       "words": [
+        "",
+        "a",
+        "b",
+        "ab",
+        "aba",
+        "abab",
+        "ababa",
+        "ba",
+        "bb"
+       ]
+      }
+     },
+     {
+      "name": "check_membership",
+      "id": "cr-member",
+      "args": {
+       "cls": "reg",
+       "ir": {
+        "$def": "ir"
+       },
+       "words": [
+        "",
+        "a",
+        "b",
+        "ab",
+        "aba",
+        "abab",
+        "ababa",
+        "ba",
+        "bb"
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "content": "Дефектов не найдено. Проверки: run_dfa и check_membership на 9 словах дают одинаковые ответы (a, b, aba, ababa ∈ L; ε, ab, abab, ba, bb ∉ L). Это не доказательство корректности."
+   }
+  ]
+ }
+}

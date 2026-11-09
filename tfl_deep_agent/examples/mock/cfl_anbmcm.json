@@ -1,0 +1,277 @@
+{
+ "description": "CFL mock replay: {a^n b^m c^m} is context-free. ir-builder validates the IR, the prover checks the grammar S -> aS | B, B -> bBc | eps with cyk and grammar_vs_ir, main repeats the comparison and submits.",
+ "task": "Является ли язык L = {a^n b^m c^m | n, m >= 0} контекстно-свободным? Обоснуйте ответ.",
+ "template": "full_proof",
+ "defs": {
+  "ir": {
+   "task_type": "classify_and_prove_cfl",
+   "source_text": "Является ли язык L = {a^n b^m c^m | n, m >= 0} контекстно-свободным?",
+   "language_spec": {
+    "kind": "natural",
+    "alphabet": [
+     "a",
+     "b",
+     "c"
+    ],
+    "description": "{a^n b^m c^m | n, m >= 0}"
+   }
+  },
+  "grammar": {
+   "terminals": [
+    "a",
+    "b",
+    "c"
+   ],
+   "nonterminals": [
+    "S",
+    "B"
+   ],
+   "start": "S",
+   "rules": [
+    {
+     "lhs": "S",
+     "rhs": [
+      "a",
+      "S"
+     ]
+    },
+    {
+     "lhs": "S",
+     "rhs": [
+      "B"
+     ]
+    },
+    {
+     "lhs": "B",
+     "rhs": [
+      "b",
+      "B",
+      "c"
+     ]
+    },
+    {
+     "lhs": "B",
+     "rhs": []
+    }
+   ]
+  }
+ },
+ "models": {
+  "main": [
+   {
+    "tool_calls": [
+     {
+      "name": "write_todos",
+      "args": {
+       "todos": [
+        {
+         "content": "Формализовать задачу в IR (ir-builder)",
+         "status": "in_progress"
+        },
+        {
+         "content": "Построить КС-грамматику (prover)",
+         "status": "pending"
+        },
+        {
+         "content": "Сверить грамматику с IR",
+         "status": "pending"
+        },
+        {
+         "content": "Отчёт",
+         "status": "pending"
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-ir-builder",
+      "args": {
+       "subagent_type": "ir-builder",
+       "description": "Класс cfl. Построй IR для задачи: «Является ли язык L = {a^n b^m c^m | n, m >= 0} контекстно-свободным?»."
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-prover",
+      "args": {
+       "subagent_type": "prover",
+       "description": "Гипотеза: L = {a^n b^m c^m | n, m >= 0} — КС. Метод: конструкция грамматики S -> aS | B, B -> bBc | ε. IR: {\"task_type\": \"classify_and_prove_cfl\", \"language_spec\": {\"kind\": \"natural\", \"alphabet\": [\"a\",\"b\",\"c\"], \"description\": \"{a^n b^m c^m | n, m >= 0}\"}}. Проверь каждое конкретное утверждение оракулом."
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "grammar_vs_ir",
+      "id": "ev-grammar-vs-ir",
+      "args": {
+       "grammar": {
+        "$def": "grammar"
+       },
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     },
+     {
+      "name": "cyk",
+      "id": "ev-cyk",
+      "args": {
+       "grammar": {
+        "$def": "grammar"
+       },
+       "words": [
+        "",
+        "a",
+        "bc",
+        "abc",
+        "aabbcc",
+        "abbcc",
+        "acb",
+        "abcc"
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "submit_report",
+      "id": "call-report",
+      "args": {
+       "verdict": "CFL",
+       "language_class": "cfl",
+       "method": "конструкция КС-грамматики и её сверка с оракулом IR",
+       "hypothesis": "Слово языка — это блок $a^n$, за которым идёт блок $b^m c^m$. Блок $a^n$ ни с чем не связан, а $b^m c^m$ — классическая пара с равным числом букв, которую порождает рекурсия $B \\to bBc$. Поэтому ожидаем, что язык контекстно-свободен, и предъявим грамматику.",
+       "summary": "Грамматика S → aS | B, B → bBc | ε порождает {aⁿbᵐcᵐ | n, m ≥ 0}; сверка с оракулом IR до длины 6 расхождений не нашла.",
+       "construction": "КС-грамматика $G$ с начальным символом $S$:\n```\nS → aS | B\nB → bBc | ε\n```\n$S$ дописывает слева буквы $a$ и переходит в $B$; $B$ порождает $b^m c^m$.",
+       "template": "full_proof",
+       "steps": [
+        {
+         "title": "Грамматика порождает язык",
+         "claim": "$L(G) = \\{a^n b^m c^m \\mid n, m \\ge 0\\}$.",
+         "justification": "Из $B$ выводятся ровно слова $b^m c^m$: индукцией по $m$, применяя $B \\to bBc$ $m$ раз и затем $B \\to \\varepsilon$; другого способа избавиться от $B$ нет. Любой вывод из $S$ имеет вид $S \\Rightarrow^* a^n S \\Rightarrow a^n B$, поэтому $L(G) = \\{a^n\\} \\cdot \\{b^m c^m\\}$. Обратно, слово $a^n b^m c^m$ выводится применением $S \\to aS$ $n$ раз, затем $S \\to B$ и $m$ шагов для $B$. Этот шаг машинно не проверялся.",
+         "evidence_ids": []
+        },
+        {
+         "title": "Разбор контрольных слов",
+         "claim": "$\\varepsilon, a, bc, abc, aabbcc, abbcc \\in L(G)$; $acb, abcc \\notin L(G)$.",
+         "justification": "Алгоритм CYK по грамматике в нормальной форме Хомского дал эти ответы; они согласуются с описанием языка из шага 1: в $acb$ нарушен порядок букв, в $abcc$ число $c$ больше числа $b$.",
+         "evidence_ids": [
+          "ev-cyk"
+         ]
+        },
+        {
+         "title": "Сверка с условием",
+         "claim": "Грамматика согласуется с оракулом принадлежности IR на всех словах над $\\{a, b, c\\}$ длины $\\le 6$.",
+         "justification": "grammar_vs_ir сравнил принадлежность каждого такого слова $L(G)$ и языку задачи, расхождений нет. Это ограниченная проверка: она связывает грамматику с формализацией задачи на коротких словах, а равенство языков опирается на шаг 1.",
+         "evidence_ids": [
+          "ev-grammar-vs-ir"
+         ]
+        }
+       ],
+       "conclusion": "Язык $\\{a^n b^m c^m \\mid n, m \\ge 0\\}$ порождается КС-грамматикой $G$ (шаг 1), следовательно, он контекстно-свободен. $\\blacksquare$",
+       "evidence_ids": [
+        "ev-grammar-vs-ir"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "ir_builder": [
+   {
+    "tool_calls": [
+     {
+      "name": "validate_ir",
+      "id": "ib-validate",
+      "args": {
+       "cls": "cfl",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "sample_words",
+      "args": {
+       "cls": "cfl",
+       "ir": {
+        "$def": "ir"
+       },
+       "max_len": 6,
+       "count": 6
+      }
+     }
+    ]
+   },
+   {
+    "content": "Класс cfl, task_type classify_and_prove_cfl, kind natural (экспоненциальная запись, оракул точный). validate_ir: valid. Неуверенные места: нет."
+   }
+  ],
+  "prover": [
+   {
+    "tool_calls": [
+     {
+      "name": "get_theorem",
+      "id": "pr-theory",
+      "args": {
+       "id": "2.0"
+      }
+     },
+     {
+      "name": "cyk",
+      "id": "pr-cyk",
+      "args": {
+       "grammar": {
+        "$def": "grammar"
+       },
+       "words": [
+        "",
+        "bc",
+        "abc",
+        "aabbcc",
+        "abbc",
+        "acb"
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "grammar_vs_ir",
+      "id": "pr-gvi",
+      "args": {
+       "grammar": {
+        "$def": "grammar"
+       },
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "content": "Гипотеза: L — КС, метод: конструкция грамматики. Шаги: (1) S → aS | B порождает aⁿB; (2) B → bBc | ε порождает bᵐcᵐ. cyk: ε, bc, abc, aabbcc ∈ L(G); abbc, acb ∉ L(G). grammar_vs_ir: bounded_pass до длины 6. Не проверено машинно: равенство L(G) = L для всех длин (индукция)."
+   }
+  ]
+ }
+}

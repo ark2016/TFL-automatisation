@@ -1,0 +1,278 @@
+{
+ "description": "LL mock replay: S -> aAb | bBa; A -> aA | eps; B -> bB | eps is LL(1). ir-builder validates the IR, main computes FIRST/FOLLOW and the LL(1) table, parses two words and submits.",
+ "task": "S → aAb | bBa; A → aA | ε; B → bB | ε. Is this grammar LL(1)?",
+ "template": "short_verdict",
+ "defs": {
+  "ir": {
+   "task_type": "ll_check_grammar",
+   "source_text": "S → aAb | bBa; A → aA | ε; B → bB | ε. Is this grammar LL(1)?",
+   "grammar": {
+    "nonterminals": [
+     "S",
+     "A",
+     "B"
+    ],
+    "terminals": [
+     "a",
+     "b"
+    ],
+    "start": "S",
+    "rules": [
+     {
+      "lhs": "S",
+      "rhs": [
+       "a",
+       "A",
+       "b"
+      ]
+     },
+     {
+      "lhs": "S",
+      "rhs": [
+       "b",
+       "B",
+       "a"
+      ]
+     },
+     {
+      "lhs": "A",
+      "rhs": [
+       "a",
+       "A"
+      ]
+     },
+     {
+      "lhs": "A",
+      "rhs": []
+     },
+     {
+      "lhs": "B",
+      "rhs": [
+       "b",
+       "B"
+      ]
+     },
+     {
+      "lhs": "B",
+      "rhs": []
+     }
+    ]
+   },
+   "question": "is_ll_k",
+   "k": 1
+  },
+  "grammar": {
+   "nonterminals": [
+    "S",
+    "A",
+    "B"
+   ],
+   "terminals": [
+    "a",
+    "b"
+   ],
+   "start": "S",
+   "rules": [
+    {
+     "lhs": "S",
+     "rhs": [
+      "a",
+      "A",
+      "b"
+     ]
+    },
+    {
+     "lhs": "S",
+     "rhs": [
+      "b",
+      "B",
+      "a"
+     ]
+    },
+    {
+     "lhs": "A",
+     "rhs": [
+      "a",
+      "A"
+     ]
+    },
+    {
+     "lhs": "A",
+     "rhs": []
+    },
+    {
+     "lhs": "B",
+     "rhs": [
+      "b",
+      "B"
+     ]
+    },
+    {
+     "lhs": "B",
+     "rhs": []
+    }
+   ]
+  }
+ },
+ "models": {
+  "main": [
+   {
+    "tool_calls": [
+     {
+      "name": "write_todos",
+      "args": {
+       "todos": [
+        {
+         "content": "IR (ir-builder)",
+         "status": "in_progress"
+        },
+        {
+         "content": "FIRST/FOLLOW и таблица LL(1)",
+         "status": "pending"
+        },
+        {
+         "content": "Отчёт",
+         "status": "pending"
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "task",
+      "id": "call-ir-builder",
+      "args": {
+       "subagent_type": "ir-builder",
+       "description": "Класс ll. Построй IR для задачи: «S → aAb | bBa; A → aA | ε; B → bB | ε. Является ли грамматика LL(1)?»."
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "first_follow",
+      "id": "ev-first-follow",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       },
+       "k": 1
+      }
+     },
+     {
+      "name": "ll_table",
+      "id": "ev-ll-table",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       },
+       "k": 1
+      }
+     },
+     {
+      "name": "get_theorem",
+      "id": "th-ll",
+      "args": {
+       "id": "3.1"
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "ll_parse",
+      "id": "ev-parse-aab",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       },
+       "k": 1,
+       "word": "aab"
+      }
+     },
+     {
+      "name": "ll_parse",
+      "id": "ev-parse-ba",
+      "args": {
+       "ir": {
+        "$def": "ir"
+       },
+       "k": 1,
+       "word": "ba"
+      }
+     }
+    ]
+   },
+   {
+    "tool_calls": [
+     {
+      "name": "submit_report",
+      "id": "call-report",
+      "args": {
+       "verdict": "LL(1)",
+       "language_class": "ll",
+       "method": "FIRST/FOLLOW и таблица LL(1) без конфликтов",
+       "hypothesis": "Альтернативы $S$ начинаются с разных терминалов, а $\\varepsilon$-альтернативы $A$ и $B$ выбираются по следующему за ними символу. Ожидаем, что одного символа предпросмотра достаточно.",
+       "summary": "Множества выбора альтернатив каждого нетерминала не пересекаются: для $S$ это $\\{a\\}$ и $\\{b\\}$, для $A$ — $\\{a\\}$ и $\\mathrm{FOLLOW}(A) = \\{b\\}$, для $B$ — $\\{b\\}$ и $\\mathrm{FOLLOW}(B) = \\{a\\}$. Таблица LL(1) без конфликтов, поэтому грамматика LL(1).",
+       "template": "short_verdict",
+       "steps": [
+        {
+         "title": "FIRST и FOLLOW",
+         "claim": "$\\mathrm{FIRST}_1(aAb) = \\{a\\}$, $\\mathrm{FIRST}_1(bBa) = \\{b\\}$; $\\mathrm{FOLLOW}(A) = \\{b\\}$, $\\mathrm{FOLLOW}(B) = \\{a\\}$.",
+         "justification": "$A$ встречается только в правиле $S \\to aAb$, где за ним стоит $b$; $B$ — только в $S \\to bBa$, где за ним стоит $a$.",
+         "evidence_ids": [
+          "ev-first-follow"
+         ]
+        },
+        {
+         "title": "Таблица без конфликтов",
+         "claim": "В каждой клетке таблицы LL(1) не больше одного правила, грамматика LL(1).",
+         "justification": "Множества выбора альтернатив попарно не пересекаются: $\\{a\\}$ и $\\{b\\}$ для $S$; $\\{a\\}$ (правило $A \\to aA$) и $\\{b\\}$ (правило $A \\to \\varepsilon$, по FOLLOW) для $A$; $\\{b\\}$ и $\\{a\\}$ для $B$.",
+         "evidence_ids": [
+          "ev-ll-table"
+         ]
+        },
+        {
+         "title": "Контрольный разбор",
+         "claim": "Слова $aab$ и $ba$ разбираются по таблице без ошибок.",
+         "justification": "LL(1)-анализатор на $aab$ применил $S \\to aAb$, $A \\to aA$, $A \\to \\varepsilon$; на $ba$ — $S \\to bBa$, $B \\to \\varepsilon$.",
+         "evidence_ids": [
+          "ev-parse-aab",
+          "ev-parse-ba"
+         ]
+        }
+       ],
+       "evidence_ids": [
+        "ev-ll-table"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "ir_builder": [
+   {
+    "tool_calls": [
+     {
+      "name": "validate_ir",
+      "id": "ib-validate",
+      "args": {
+       "cls": "ll",
+       "ir": {
+        "$def": "ir"
+       }
+      }
+     }
+    ]
+   },
+   {
+    "content": "Класс ll, task_type ll_check_grammar, question is_ll_k, k = 1. validate_ir: valid. Неуверенные места: нет."
+   }
+  ]
+ }
+}

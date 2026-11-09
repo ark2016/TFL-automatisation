@@ -19,10 +19,21 @@ def test_index_has_no_inline_scripts():
     assert not re.search(r"\son\w+\s*=", html), "inline event handler attribute"
 
 
-def test_every_dom_id_used_by_app_exists_in_index():
+@pytest.mark.parametrize("name", ["app.js", "deep.js"])
+def test_every_dom_id_used_by_the_scripts_exists_in_index(name):
+    src = (STATIC / name).read_text(encoding="utf-8")
     ids = set(re.findall(r'\bid="([^"]+)"', INDEX))
-    used = set(re.findall(r"\$\('([^']+)'\)", APP)) | set(re.findall(r"getElementById\('([^']+)'\)", APP))
+    used = set(re.findall(r"\$\('([^']+)'\)", src)) | set(re.findall(r"getElementById\('([^']+)'\)", src))
+    assert used, name
     assert used - ids == set()
+
+
+def test_scripts_and_icon_are_linked():
+    # deep.js (the Deep Agent tab) uses app.js's helpers, so it loads after it
+    a = INDEX.index('<script src="/static/app.js"></script>')
+    assert a < INDEX.index('<script src="/static/deep.js"></script>')
+    assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">' in INDEX
+    assert (STATIC / "favicon.svg").is_file()
 
 
 def test_lab_css_is_linked_and_exists():
@@ -30,7 +41,7 @@ def test_lab_css_is_linked_and_exists():
     assert (STATIC / "lab.css").is_file()
 
 
-@pytest.mark.parametrize("name", ["app.js", "index.html", "lab.css"])
+@pytest.mark.parametrize("name", ["app.js", "deep.js", "index.html", "lab.css"])
 def test_no_run_timeout_wording(name):
     text = (STATIC / name).read_text(encoding="utf-8")
     assert not re.search(r"run[-_ ]?timeout|timed out|'timeout'|\"timeout\"", text, flags=re.I)
@@ -45,8 +56,9 @@ def test_progress_and_settings_surface_present():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_app_js_parses():
-    r = subprocess.run(["node", "--check", str(STATIC / "app.js")], capture_output=True, text=True)
+@pytest.mark.parametrize("name", ["app.js", "deep.js"])
+def test_scripts_parse(name):
+    r = subprocess.run(["node", "--check", str(STATIC / name)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
 

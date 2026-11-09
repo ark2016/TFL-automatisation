@@ -1,0 +1,24 @@
+{
+  "budget": {
+    "per_task_usd": 10.00,
+    "per_day_usd": 20.00,
+    "per_subagent_max_usd": 2.00,
+    "reserve_for_report_usd": 1.00
+  },
+  "models": {
+    "allowed": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
+    "roles": {
+      "main": "claude-opus-5-5",
+      "intake": "claude-sonnet-5-5",
+      "ir_builder": "claude-sonnet-5-5",
+      "prover": "claude-opus-5-5",
+      "critic": "claude-opus-5-5",
+      "lean": "claude-opus-5-5",
+      "coder": "claude-sonnet-5-5"
+    },
+    "opus_needs_reason": true
+  },
+  "limits": {"max_model_calls": 80, "max_tool_calls": 300, "max_parallel": 4, "max_spawn_depth": 2},
+  "hitl": {"formalization": true, "report": true, "execute": false},
+  "intake": {"max_pdf_pages": 20, "max_file_mb": 10}
+}

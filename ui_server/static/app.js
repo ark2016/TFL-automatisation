@@ -1125,12 +1125,13 @@ async function saveSettings() {
     fail(e.message);
   }
 }
-btnSettings.addEventListener('click', openSettings);
+// The gear opens the settings of the workspace on screen (pipelines or Deep Agent).
+btnSettings.addEventListener('click', () => (isDeepMode() ? deepOpenSettings() : openSettings()));
 $('settings-close').addEventListener('click', closeSettings);
 $('settings-cancel').addEventListener('click', closeSettings);
 $('settings-save').addEventListener('click', saveSettings);
 settingsBack.addEventListener('click', (e) => { if (e.target === settingsBack) closeSettings(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSettings(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeSettings(); deepCloseSettings(); } });
 
 //---------------------------------------------------------------------------
 // Md sub-tab toggle (Preview ↔ Raw)
@@ -1178,7 +1179,8 @@ function ensureMdLibs() {
 function loadScript(src, integrity) {
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = src; s.async = true;
+    // in the list's order: KaTeX's auto-render takes `katex` when it loads, before it there is none
+    s.src = src; s.async = false;
     if (integrity) { s.integrity = integrity; s.crossOrigin = 'anonymous'; }
     s.onload = resolve; s.onerror = () => reject(new Error('failed to load ' + src));
     document.head.appendChild(s);
@@ -1374,11 +1376,12 @@ btnNew.addEventListener('click', () => {
   editor.focus();
 });
 
-// Cmd+Enter = mock run
+// Cmd+Enter = mock run (of the pipeline, or of the Deep Agent on its tab; never a live run)
 document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key === 'Enter') {
     e.preventDefault();
+    if (isDeepMode()) { deepRunShortcut(); return; }
     if (!state.running) runPipeline(false);
   }
 });
@@ -1391,3 +1394,5 @@ syncRunButtons();
 loadProjects();
 refreshRuns();
 setStatus(null, 'ready');
+
+// The Deep Agent tab lives in /static/deep.js (loaded after this file; it uses the helpers above).
