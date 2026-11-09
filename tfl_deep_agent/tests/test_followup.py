@@ -759,13 +759,13 @@ def test_cli_auto_approve_does_not_go_with_a_message(tmp_path):
 # Small contract points
 # ---------------------------------------------------------------------------
 
-def test_a_long_reply_says_it_was_cut(tmp_path):
+def test_a_long_reply_is_kept_whole(tmp_path):
     emitter = ProgressEmitter(tmp_path, run_id="r")
     emitter.assistant_message("да")
     emitter.assistant_message("x" * (run_store.MAX_MESSAGE_CHARS + 1))
     short, long = [e for e in events(tmp_path) if e["event"] == "assistant_message"]
     assert "truncated" not in short
-    assert long["truncated"] is True and len(long["text"]) == run_store.MAX_MESSAGE_CHARS
+    assert "truncated" not in long and len(long["text"]) == run_store.MAX_MESSAGE_CHARS + 1
 
 
 def test_the_message_limit_holds_in_the_core(tmp_path):

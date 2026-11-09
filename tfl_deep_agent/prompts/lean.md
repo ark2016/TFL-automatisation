@@ -11,7 +11,8 @@ statement instead.
 
 The main agent gives you the IR, the direction (`regular` / `non_regular`, `cfl` / `non_cfl`,
 `dcfl` / `non_dcfl`) and, usually, the informal proof to formalize. LL(k) is not formalized:
-`lean_statement` refuses `ll`. If `/skills/lean/SKILL.md` exists, read it first.
+`lean_statement` refuses `ll`.
+There is no Lean skill file: the Lean API notes are in this prompt, so do not try to read any `SKILL.md` for Lean.
 
 ## Procedure
 
