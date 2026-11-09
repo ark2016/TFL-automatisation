@@ -571,6 +571,7 @@ def normalize_budget(budget: Any) -> dict[str, Any] | None:
         "by_model": by_model,
         "by_role": by_role,
         "refusals": _walk_refusals(tree) if tree else list(summary.get("refusals") or []),
+        "extensions": [dict(e) for e in summary.get("extensions") or [] if isinstance(e, Mapping)],
     }
 
 
@@ -1466,6 +1467,11 @@ def _evidence_block(ctx: _Ctx, claims_out: Sequence[Mapping[str, Any]],
     if ctx.integrity is not None and not ctx.integrity:
         run.append("Целостность журнала (hash chain): цела.")
     out += ["", " · ".join(run) + ("" if run[-1].endswith(".") else ".")]
+    extensions = (b or {}).get("extensions") or []
+    if extensions:
+        out += ["", "**Бюджет добавлен:** " + "; ".join(
+            f"+{_money(e.get('add_usd') or 0.0)}, лимит {_money(e.get('new_limit_usd') or 0.0)} "
+            f"({e.get('reviewer') or 'человек'}, {e.get('at') or '?'})" for e in extensions) + "."]
 
     out += ["", "<details><summary>Журнал вызовов, модели и расходы</summary>", ""]
     if ctx.evidence:

@@ -116,7 +116,7 @@ def test_documented_commands_parse(doc):
         if args.mock_script:
             assert (ROOT / args.mock_script).is_file(), args.mock_script
         if args.resume:
-            assert args.decision, argv
+            assert args.decision or args.message or args.abandon, argv
         assert not (args.live and args.mock_script), argv
 
 

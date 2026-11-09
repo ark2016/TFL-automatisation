@@ -50,30 +50,38 @@ must survive the process boundary is stored in the run directory:
 
 Review modes (``review_mode``, per run, stored in ``run.json``): ``all``
 (default) -- every enabled point waits for a human; ``formalization`` -- HITL
-1 (and ``execute``) wait, HITL 2 is auto-approved; ``auto`` -- every stop is
-answered with "approve" in the same process (``auto_approve=True`` /
-``--auto-approve`` is an alias). An auto-approved stop is recorded with source
+1 (and ``execute``) wait, HITL 2 is auto-approved; ``auto`` -- every review is
+answered with "approve" in the same process. The budget stop is no review: review
+mode ``auto`` does not answer it (with no dialog the run waits there, the CLI exits 3).
+``auto_approve=True`` / ``--auto-approve`` when a run starts means review mode ``auto``
+plus no budget stop. An auto-approved review is recorded with source
 ``auto`` and decision ``auto_approved``; an auto-approved report is marked
 "без проверки человеком", and an auto-approved formalization is not a human
 approval for the verdict gate (:func:`run_binding`). ``resume_run(...,
-approve_rest=True)`` approves the pending stop as the human's decision and
+approve_rest=True)`` approves the pending review as the human's decision and
 switches the run to ``auto``. A ``dialog`` callable (the CLI's TTY dialog)
 asks in the same process; ``None`` from it leaves the run awaiting.
 
+Each HITL 2 review holds the digest of the report it decided (``report_digest``), and
+:func:`review_summary` reads the review of the report the result carries: a draft rejected
+in a follow-up says nothing about the approved report that stays.
+
 While a run waits, ``run.json`` ``pending.card`` holds the short card of the
 stop (:func:`pending_card`; TFL Lab shows it as ``pending_point``).
+
+Budget stop: module ``budget_stop``. Follow-up messages: module ``followup``; this
+module runs their segments (:func:`send_followup`) and has the point :data:`BUDGET` in
+its tables.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import datetime as _dt
 import json
 import re
 import shutil
-import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, NotRequired
 
@@ -86,51 +94,97 @@ except ImportError:  # pragma: no cover - exercised only without [deep]
     _AgentState = dict  # type: ignore[assignment,misc]
     _HAVE_LANGCHAIN = False
 
+from . import budget_stop as budget_stop_mod
+from . import followup as followup_mod
+from .budget_stop import BUDGET
+from .run_store import (
+    CHECKPOINT_FILE,
+    DECISIONS,
+    EXIT_AWAITING,
+    EXIT_NO_REPORT,
+    EXIT_SUBMITTED,
+    FINAL_STATUSES,
+    REPORT_HISTORY_DIR,
+    REVIEW_ALL,
+    REVIEW_AUTO,
+    REVIEW_FORMALIZATION,
+    REVIEW_MODES,
+    RUN_FILE,
+    STATUS_AWAITING,
+    DecisionError,
+    RunError,
+    first_decision,
+    load_run,
+    read_result,
+    save_run,
+)
+from .run_store import get_field as _get
+from .run_store import message_text as _text_of
+from .run_store import now as _now
+
 FORMALIZATION = "formalization"
 REPORT = "report"
 EXECUTE = "execute"
 SUBMIT_REPORT = "submit_report"
 IR_BUILDER = "ir-builder"
 INTAKE = "intake"
-DECISIONS = ("approve", "edit", "reject")
 
 STATE_KEY = "tfl_hitl"
-STATUS_AWAITING = "awaiting_human"
-RUN_FILE = "run.json"
-CHECKPOINT_FILE = "checkpoints.sqlite"
 MOCK_SCRIPT_FILE = "mock_script.json"
 MOCK_CURSORS_FILE = "mock_cursors.json"
 CARD_FILE = "hitl.md"
 INPUT_DIR = "input"
 RUN_SCHEMA = 1
 
-#: exit codes of a run (the CLI's): 0 report accepted, 1 ended without a
-#: report, 3 waiting for a human decision (2 is the CLI's usage error)
-EXIT_SUBMITTED, EXIT_NO_REPORT, EXIT_AWAITING = 0, 1, 3
-
 AUTO_APPROVED_LABEL = "auto-approved (review mode or --auto-approve): without human review"
 FORMALIZATION_EDIT_FIELDS = ("transcription", "ir", "class")
 _CLASSES = ("reg", "cfl", "dcfl", "ll")
 
-#: per-run review modes (user decision 2026-11-08): ``all`` every enabled
-#: point waits for a human; ``formalization`` HITL 1 (and ``execute``) wait,
-#: HITL 2 is auto-approved; ``auto`` every point is auto-approved (the old
-#: ``auto_approve``). An auto-approved stop is recorded with source ``auto``
-#: and decision ``auto_approved``, exactly like ``--auto-approve``.
-REVIEW_ALL, REVIEW_FORMALIZATION, REVIEW_AUTO = "all", "formalization", "auto"
-REVIEW_MODES = (REVIEW_ALL, REVIEW_FORMALIZATION, REVIEW_AUTO)
+
+@dataclasses.dataclass(frozen=True)
+class PointFacts:
+    """What the code needs to know about a stop's point."""
+
+    title: str | None                                     # None: built from the action names
+    auto_approvable: bool                                 # a review mode may answer it (money: never)
+    shows_args: bool                                      # the card prints the raw call arguments
+    editable: Callable[[Mapping[str, Any]], list[str]]    # the fields an edit takes, from the first action's args
+
+
+def _report_fields(_args: Mapping[str, Any]) -> list[str]:
+    from .tools.report import SubmitReportArgs
+
+    return list(SubmitReportArgs.model_fields)
+
+
+POINTS = {
+    FORMALIZATION: PointFacts(title="HITL 1 · формализация: условие и IR", auto_approvable=True, shows_args=False,
+                              editable=lambda _args: list(FORMALIZATION_EDIT_FIELDS)),
+    REPORT: PointFacts(title="HITL 2 · черновик отчёта", auto_approvable=True, shows_args=False,
+                       editable=_report_fields),
+    EXECUTE: PointFacts(title="Запуск кода в песочнице (execute)", auto_approvable=True, shows_args=True,
+                        editable=lambda args: sorted(args)),
+    BUDGET: PointFacts(title="Бюджет задачи заканчивается", auto_approvable=False, shows_args=False,
+                       editable=lambda _args: ["add_usd"]),
+}
+_OTHER_POINT = PointFacts(title=None, auto_approvable=True, shows_args=True, editable=lambda args: sorted(args))
+
+
+def point_facts(point: str | None) -> PointFacts:
+    return POINTS.get(point or "", _OTHER_POINT)
 
 
 def resolve_review_mode(review_mode: str | None = None, auto_approve: bool = False) -> str:
-    """The review mode of a new run: ``review_mode`` (one of :data:`REVIEW_MODES`),
-    ``auto_approve=True`` being an alias of ``auto``; default ``all``."""
+    """The review mode of a new run: ``review_mode`` (one of :data:`REVIEW_MODES`);
+    ``auto_approve=True`` needs ``auto`` or nothing; default ``all``."""
     if review_mode is None:
         return REVIEW_AUTO if auto_approve else REVIEW_ALL
     mode = str(review_mode).strip().lower()
     if mode not in REVIEW_MODES:
         raise RunError(f"unknown review mode {review_mode!r}; one of {list(REVIEW_MODES)}")
     if auto_approve and mode != REVIEW_AUTO:
-        raise RunError(f"auto_approve is the review mode 'auto'; it conflicts with review mode {mode!r}")
+        raise RunError(f"auto_approve means review mode 'auto' plus no budget stop; it conflicts with "
+                       f"review mode {mode!r}")
     return mode
 
 
@@ -146,39 +200,15 @@ def review_mode_of(run: Mapping[str, Any]) -> str:
 def auto_approves(mode: str, point: str) -> bool:
     """Whether a stop at ``point`` is approved without a human in ``mode``:
     ``auto`` every point; ``formalization`` only the report (HITL 2), never
-    HITL 1 or ``execute``; ``all`` none."""
+    HITL 1 or ``execute``; ``all`` none. A point that is not ``auto_approvable``
+    (the budget stop) always waits for a human."""
+    if not point_facts(point).auto_approvable:
+        return False
     if mode == REVIEW_AUTO:
         return True
     if mode == REVIEW_FORMALIZATION:
         return point == REPORT
     return False
-
-
-class DecisionError(ValueError):
-    """A human decision that does not fit the pending request (wrong type, an
-    edit that does not validate, a rejection without a comment)."""
-
-
-class RunError(ValueError):
-    """A run directory that cannot be started or resumed as asked."""
-
-
-def _now() -> str:
-    return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-def _get(obj: Any, key: str, default: Any = None) -> Any:
-    if isinstance(obj, Mapping):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
-
-
-def _text_of(msg: Any) -> str:
-    text = getattr(msg, "text", None)
-    if isinstance(text, str):
-        return text
-    content = _get(msg, "content", "")
-    return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str)
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +586,7 @@ class FormalizationReviewMiddleware(_AgentMiddleware):  # type: ignore[misc,vali
         from langgraph.types import interrupt
 
         response = interrupt(request)
-        decision = _first_decision(response)
+        decision = first_decision(response)
         message, rec = self._apply(decision, args, target.tool_call_id)
         from langchain_core.messages import HumanMessage
 
@@ -629,16 +659,6 @@ def _ir_problems(cls: str | None, ir: Any) -> list[str]:
         return [f"{type(exc).__name__}: {exc}"]
 
 
-def _first_decision(response: Any) -> dict[str, Any]:
-    if isinstance(response, Mapping) and isinstance(response.get("decisions"), list) and response["decisions"]:
-        d = response["decisions"][0]
-        if isinstance(d, Mapping):
-            return dict(d)
-    if isinstance(response, Mapping) and response.get("type") in DECISIONS:
-        return dict(response)
-    raise ValueError(f"HITL: a resume value must be {{'decisions': [{{'type': ...}}]}}, got {response!r}")
-
-
 # ---------------------------------------------------------------------------
 # HITL 2 (submit_report) and execute: deepagents interrupt_on configs
 # ---------------------------------------------------------------------------
@@ -665,7 +685,7 @@ def formalization_binding(records: Sequence[Mapping[str, Any]] | None, *, on: bo
     * ``no_ir`` -- approved, but there was no IR to approve;
     * ``not_held`` -- HITL 1 is on and no formalization reached it.
 
-    ``auto``: the run answers every stop automatically (``--auto-approve``)."""
+    ``auto``: the run answers every review automatically (``--auto-approve``)."""
     if not on:
         return None
     recs = [r for r in records or [] if _get(r, "point") == FORMALIZATION and _get(r, "decision") != "superseded"]
@@ -749,16 +769,21 @@ def report_review_text(report: Mapping[str, Any], evidence: Any = None,
 
 
 def report_interrupt_config(evidence: Any = None, *, formalization_on: bool = False) -> dict[str, Any]:
-    """``interrupt_on["submit_report"]``: approve / edit / reject, only for a
-    report whose fields validate and (with ``evidence``) whose evidence ids are
-    all in the ledger (``when``), with the code-made review text
-    as the description (``formalization_on``: HITL 1 is on, the card states
-    its decision or that none was held)."""
+    """``interrupt_on["submit_report"]``: approve / edit / reject, with the code-made
+    review text as the description (``formalization_on``: HITL 1 is on, the card
+    states its decision or that none was held).
+
+    ``when`` skips the stop for the refusals it can foresee, so the tool refuses the
+    report straight away and the model resubmits with no card: invalid fields, unknown
+    evidence ids when it has the ledger (``evidence``), leaked tool-call markup. A
+    report refused for unknown ids with no ledger here still stops first."""
 
     def when(request: Any) -> bool:
+        from .tools.report import leaked_markup_fields
+
         call = _get(request, "tool_call") or {}
         report = _valid_report(_get(call, "args"))
-        if report is None:
+        if report is None or leaked_markup_fields(report):
             return False
         if evidence is not None:
             from .tools.report import unknown_evidence_ids
@@ -801,16 +826,30 @@ class Decision:
             raise DecisionError(f"unknown decision {self.type!r}; one of {list(DECISIONS)}")
 
 
+def allowed_decisions(request: Mapping[str, Any]) -> list[str]:
+    """The decisions that fit every action of a pending request."""
+    acts = list(_get(request, "action_requests") or [])
+    configs = {_get(c, "action_name"): c for c in _get(request, "review_configs") or []}
+    return [d for d in DECISIONS
+            if all(d in list(_get(configs.get(_get(a, "name")), "allowed_decisions") or ["approve", "reject"])
+                   for a in acts)]
+
+
 def parse_decision(decision: str, payload: Any = None, *, comment: str | None = None,
-                   source: str = "human", reviewer: str | None = None) -> Decision:
+                   source: str = "human", reviewer: str | None = None,
+                   allowed: Sequence[str] | None = None) -> Decision:
     """A :class:`Decision` from the CLI / API form: ``decision`` is approve /
     edit / reject; ``payload`` (a JSON text or an object) is, for edit, the
     fields to change (``{"verdict": ...}`` at HITL 2, ``{"transcription":
     ..., "ir": {...}}`` at HITL 1) and, for reject, the comment (a JSON string
-    or ``{"comment": ...}``)."""
+    or ``{"comment": ...}``). ``allowed``: what the pending request takes
+    (:func:`allowed_decisions`), checked first, so a decision the stop does not
+    take is not asked for a comment."""
     kind = str(decision or "").strip().lower()
     if kind not in DECISIONS:
-        raise DecisionError(f"--decision must be one of {list(DECISIONS)}, not {decision!r}")
+        raise DecisionError(f"the decision must be one of {list(DECISIONS)}, not {decision!r}")
+    if allowed is not None and kind not in allowed:
+        raise DecisionError(f"{kind!r} is not allowed at this stop (allowed: {list(allowed)})")
     if isinstance(payload, str):
         text = payload.strip()
         if text:
@@ -818,14 +857,14 @@ def parse_decision(decision: str, payload: Any = None, *, comment: str | None = 
                 payload = json.loads(text)
             except json.JSONDecodeError as exc:
                 if kind != "reject":
-                    raise DecisionError(f"--payload is not valid JSON: {exc}") from None
+                    raise DecisionError(f"the payload is not valid JSON: {exc}") from None
                 payload = text  # a plain-text comment
         else:
             payload = None
     args: dict[str, Any] | None = None
     if kind == "edit":
         if not isinstance(payload, Mapping) or not payload:
-            raise DecisionError("edit needs --payload with a JSON object of the fields to change")
+            raise DecisionError("edit needs a payload: a JSON object of the fields to change")
         args = dict(payload)
         comment = comment or (str(args.pop("comment")) if "comment" in args else None)
     elif isinstance(payload, Mapping):
@@ -833,14 +872,15 @@ def parse_decision(decision: str, payload: Any = None, *, comment: str | None = 
     elif isinstance(payload, str):
         comment = comment or payload
     if kind == "reject" and not str(comment or "").strip():
-        raise DecisionError("reject needs a comment (--comment TEXT or --payload '{\"comment\": ...}'): "
-                            "the agent continues with it")
+        raise DecisionError("reject needs a comment: the agent continues with it")
     return Decision(kind, args, str(comment).strip() if comment else None, source, reviewer)
 
 
 def request_point(request: Any) -> str:
-    """``formalization`` / ``report`` / ``execute`` / ``other`` for an interrupt value."""
+    """``formalization`` / ``report`` / ``execute`` / ``budget`` / ``other`` for an interrupt value."""
     names = {_get(a, "name") for a in (_get(request, "action_requests") or [])}
+    if BUDGET in names:
+        return BUDGET
     if FORMALIZATION in names:
         return FORMALIZATION
     if SUBMIT_REPORT in names:
@@ -906,6 +946,17 @@ def _edit_formalization(original: Mapping[str, Any], changes: Mapping[str, Any])
     return out, fields
 
 
+def _decided_report_digest(actions: Sequence[Any], decisions: Sequence[Mapping[str, Any]]) -> str | None:
+    """The digest of the report a HITL 2 decision is about: an edit's result, else the
+    draft as ``submit_report`` would accept it. A draft that does not validate still gets
+    one (of its raw fields), which no accepted report matches."""
+    for action, decision in zip(reversed(actions), reversed(decisions), strict=True):
+        if _get(action, "name") == SUBMIT_REPORT:
+            args = (decision.get("edited_action") or {}).get("args") or _get(action, "args") or {}
+            return followup_mod.report_digest(_valid_report(args) or dict(args))
+    return None
+
+
 def resume_value(request: Mapping[str, Any], decision: Decision, *,
                  evidence: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """``(HITLResponse, review record)`` for ``decision`` on ``request``.
@@ -917,6 +968,8 @@ def resume_value(request: Mapping[str, Any], decision: Decision, *,
         raise DecisionError("the pending interrupt has no action to decide on")
     configs = {_get(c, "action_name"): c for c in _get(request, "review_configs") or []}
     point = request_point(request)
+    if point == BUDGET:
+        return budget_stop_mod.budget_resume(actions[0], decision)
     if decision.type == "edit" and len(actions) != 1:
         raise DecisionError(f"edit needs exactly one pending action, there are {len(actions)}")
     decisions: list[dict[str, Any]] = []
@@ -954,6 +1007,7 @@ def resume_value(request: Mapping[str, Any], decision: Decision, *,
     if point == FORMALIZATION:
         args0 = dict(_get(actions[0], "args") or {})
         review["ir_fingerprint"] = args0.get("ir_fingerprint")
+        review["reviewed_call_id"] = args0.get("reviewed_call_id")
         edited_args = (decisions[0].get("edited_action") or {}).get("args") or {}
         if edited_args.get("transcription"):
             review["transcription"] = edited_args["transcription"]
@@ -961,6 +1015,8 @@ def resume_value(request: Mapping[str, Any], decision: Decision, *,
             from .tools.ir import ir_fingerprint
 
             review["ir_fingerprint"] = ir_fingerprint(edited_args["ir"])
+    if point == REPORT:
+        review["report_digest"] = _decided_report_digest(actions, decisions)
     return {"decisions": decisions}, review
 
 
@@ -982,35 +1038,6 @@ def reject_message(point: str, comment: str) -> str:
 # The run directory
 # ---------------------------------------------------------------------------
 
-def load_run(run_dir: str | Path) -> dict[str, Any]:
-    p = Path(run_dir) / RUN_FILE
-    if not p.is_file():
-        raise RunError(f"{run_dir}: not a deep-agent run directory (no {RUN_FILE})")
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RunError(f"{p}: unreadable: {exc}") from None
-
-
-def save_run(run_dir: str | Path, run: Mapping[str, Any]) -> Path:
-    p = Path(run_dir) / RUN_FILE
-    data = {**dict(run), "updated_at": _now()}
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
-    # Windows: replacing a file another process has open for reading (TFL Lab
-    # polling the run, an editor, an antivirus scan) fails with a transient
-    # sharing violation (WinError 5 / 32); retry briefly instead of failing the run
-    for attempt in range(40):
-        try:
-            tmp.replace(p)
-            break
-        except PermissionError:
-            if attempt == 39:
-                raise
-            time.sleep(0.05)
-    return p
-
-
 @dataclasses.dataclass
 class PendingInfo:
     """What the human decides on: the interrupt, its point and the card text."""
@@ -1030,9 +1057,12 @@ class RunOutcome:
     run_id: str
     status: str                       # awaiting_human | submitted | incomplete | budget_exhausted | error
     exit_code: int
-    result: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None  # a failed follow-up: the previous report's result
     pending: PendingInfo | None = None
     paths: dict[str, Path] = dataclasses.field(default_factory=dict)
+    reply: str | None = None          # a follow-up: the agent's text answer
+    followup_note: str | None = None  # a follow-up with no model call: why there is no reply
+    followup_error: str | None = None  # a follow-up that failed: exit code 1, the previous report was restored
 
     @property
     def awaiting(self) -> bool:
@@ -1043,6 +1073,9 @@ Dialog = Callable[[PendingInfo], "Decision | None"]
 
 
 def resume_hint(run_dir: str | Path, point: str) -> str:
+    if point == BUDGET:
+        return (f"tfl-deep --resume {run_dir} --decision edit --payload '{{\"add_usd\": 5}}'\n"
+                f"tfl-deep --resume {run_dir} --decision approve  # finish with what is left")
     edit = ('\'{"transcription": "...", "ir": {...}}\'' if point == FORMALIZATION
             else '\'{"verdict": "...", "steps": [...]}\'' if point == REPORT else "'{...}'")
     return (f"tfl-deep --resume {run_dir} --decision approve\n"
@@ -1055,7 +1088,7 @@ def describe_pending(run_dir: str | Path, interrupt_id: str, request: Mapping[st
     parts = [str(_get(a, "description") or "") for a in _get(request, "action_requests") or []]
     if point == REPORT:
         parts.append(f"Draft report: {Path(run_dir) / 'result.md'}")
-    elif point not in (FORMALIZATION, REPORT):
+    if point_facts(point).shows_args:
         parts += [f"```json\n{json.dumps(_get(a, 'args'), ensure_ascii=False, indent=2, default=str)}\n```"
                   for a in _get(request, "action_requests") or []]
     parts.append("Decide (in a new process):\n\n```\n" + resume_hint(run_dir, point) + "\n```")
@@ -1068,9 +1101,6 @@ def describe_pending(run_dir: str | Path, interrupt_id: str, request: Mapping[st
 
 #: a card line is shorter than this
 CARD_LINE_MAX = 90
-CARD_TITLES = {FORMALIZATION: "HITL 1 · формализация: условие и IR",
-               REPORT: "HITL 2 · черновик отчёта",
-               EXECUTE: "Запуск кода в песочнице (execute)"}
 _CLASS_LABELS = {"reg": "REG", "cfl": "CFL", "dcfl": "DCFL", "ll": "LL(k)"}
 
 
@@ -1155,7 +1185,7 @@ def card_details(request: Mapping[str, Any], point: str | None = None) -> str:
     point = point or request_point(request)
     acts = list(_get(request, "action_requests") or [])
     parts = [str(_get(a, "description") or "") for a in acts]
-    if point not in (FORMALIZATION, REPORT):
+    if point_facts(point).shows_args:
         parts += [f"```json\n{json.dumps(_get(a, 'args'), ensure_ascii=False, indent=2, default=str)}\n```"
                   for a in acts]
     return "\n\n".join(p for p in parts if p)
@@ -1168,26 +1198,21 @@ def pending_card(request: Mapping[str, Any], *, draft: Mapping[str, Any] | None 
     "details_md", "editable": [fields an edit decision accepts]}``. ``draft``:
     the HITL 2 draft's code-computed rating (``run.json`` ``draft``);
     ``point``: the stop's point when known (``run.json`` ``pending.point``)."""
-    point = point if point in CARD_TITLES else request_point(request)
+    point = point if point in POINTS else request_point(request)
+    facts = point_facts(point)
     acts = list(_get(request, "action_requests") or [])
     first = dict(_get(acts[0], "args") or {}) if acts else {}
-    configs = {_get(c, "action_name"): c for c in _get(request, "review_configs") or []}
-    allowed = [d for d in DECISIONS
-               if all(d in list(_get(configs.get(_get(a, "name")), "allowed_decisions") or ["approve", "reject"])
-                      for a in acts)] if acts else []
     if point == FORMALIZATION:
-        summary, editable = _formalization_summary(first), list(FORMALIZATION_EDIT_FIELDS)
+        summary = _formalization_summary(first)
     elif point == REPORT:
-        from .tools.report import SubmitReportArgs
-
-        summary, editable = _report_summary(first, draft), list(SubmitReportArgs.model_fields)
+        summary = _report_summary(first, draft)
+    elif point == BUDGET:
+        summary = budget_stop_mod.budget_summary(first)
     else:
         cmd = first.get("command") if isinstance(first.get("command"), str) else None
         summary = [_short(f"Команда: {cmd}")] if cmd else [_short(f"Вызов: {_get(a, 'name')}") for a in acts][:4]
-        editable = sorted(first)
-    if "edit" not in allowed or len(acts) != 1:
-        editable = []
-    title = CARD_TITLES.get(point) or _short(f"Остановка: {', '.join(str(_get(a, 'name')) for a in acts)}")
+    editable = facts.editable(first) if len(acts) == 1 and "edit" in allowed_decisions(request) else []
+    title = facts.title or _short(f"Остановка: {', '.join(str(_get(a, 'name')) for a in acts)}")
     return {"point": point, "title": title, "summary": [s for s in summary if s][:4],
             "details_md": card_details(request, point), "editable": editable}
 
@@ -1230,6 +1255,7 @@ def start_run(
     hitl: Any = True,
     run_id: str | None = None,
     review_mode: str | None = None,
+    budget_stop: bool | None = None,
 ) -> RunOutcome:
     """Start a run in ``run_dir`` (created; it must not hold a run yet).
 
@@ -1238,9 +1264,11 @@ def start_run(
     factory; pass it again to :func:`resume_run`) or ``live=True``
     (``agent.default_model_factory``; real API calls). ``hitl``: ``True`` =
     ``settings.hitl``, a mapping of points, or ``False``. ``review_mode``
-    (:data:`REVIEW_MODES`; ``auto_approve=True`` is an alias of ``auto``):
-    which enabled points wait for a human. Returns at the end of the run or at
-    the first stop nobody answered here."""
+    (:data:`REVIEW_MODES`): which enabled points wait for a human.
+    ``auto_approve=True`` means review mode ``auto`` plus no budget stop.
+    ``budget_stop``: whether the run asks a human for money before it runs out
+    (module ``budget_stop``); ``None`` means ``not auto_approve``. Returns at the
+    end of the run or at the first stop nobody answered here."""
     from . import agent as agent_mod
     from .intake import files as intake_files
 
@@ -1279,6 +1307,7 @@ def start_run(
         "message": text, "input": source, "settings": cfg, "hitl": points,
         "review_mode": mode_of_review, "initial_review_mode": mode_of_review,
         "auto_approve": mode_of_review == REVIEW_AUTO,
+        "budget_stop": (not auto_approve) if budget_stop is None else bool(budget_stop),
         "reviews": [], "pending": None, "budget": {"spent_usd": 0.0, "records": []},
         "limits": {"model_calls": 0, "tool_calls": 0}, "segments": [], "result": None, "error": None,
     }
@@ -1299,6 +1328,7 @@ def resume_run(
     live: bool = False,
     dialog: Dialog | None = None,
     approve_rest: bool = False,
+    auto_approve_later: bool = False,
 ) -> RunOutcome:
     """Resume a run waiting at a HITL stop with ``decision``
     (``Command(resume=...)``; usually in a new process). The decision is
@@ -1306,10 +1336,13 @@ def resume_run(
     :class:`DecisionError` and leaves the run as it was. A live run needs
     ``live=True`` again (it spends money); a mock run refuses it.
 
-    ``approve_rest`` (only with the decision ``approve``): this stop is approved
+    ``approve_rest`` (only with the decision ``approve``): this review is approved
     as the human's decision, and the run switches to review mode ``auto``, so
-    every later stop is auto-approved (recorded as ``auto``). It is stored in
-    ``run.json`` (``review_mode``, ``approve_rest``), so a later process keeps it."""
+    every later review is auto-approved (recorded as ``auto``). It is stored in
+    ``run.json`` (``review_mode``, ``approve_rest``), so a later process keeps it.
+    ``auto_approve_later`` (``--auto-approve`` on a resume): the same switch with any
+    decision, and with no mark on the decision. Neither is taken at the budget stop,
+    and neither changes ``budget_stop``."""
     from langgraph.types import Command
 
     if approve_rest and decision.type != "approve":
@@ -1318,26 +1351,25 @@ def resume_run(
     run = load_run(d)
     if run.get("status") != STATUS_AWAITING or not run.get("pending"):
         raise RunError(f"{d}: the run is {run.get('status')!r}, not {STATUS_AWAITING!r}; nothing to resume")
-    mode = run.get("mode")
-    if mode == "live" and not live:
-        raise RunError(f"{d} is a live run: resuming it makes real API calls; pass --live to confirm")
-    if mode != "live" and live:
-        raise RunError(f"{d} is a {mode} run; --live does not apply")
-    if (mode == "custom" or run.get("factory") == "custom") and model_factory is None:
-        raise RunError(f"{d} was started with a custom model factory; pass it to resume_run again")
-    if mode != "live" and model_factory is not None:
-        from . import agent as agent_mod
-
-        if agent_mod.is_live_factory(model_factory):
-            raise RunError(f"{d} is a {mode} run; a live model factory cannot resume it")
+    check_run_mode(d, run, model_factory, live, "resuming")
     pending = run["pending"]
-    value, review = resume_value(pending["request"], decision, evidence=_run_evidence(d))
+    point = request_point(pending["request"])
+    at_budget = point == BUDGET
+    for switch, asked in (("approve_rest", approve_rest), ("auto_approve", auto_approve_later)):
+        refusal = budget_stop_mod.review_switch_refusal(point, switch) if asked else None
+        if refusal:
+            raise DecisionError(refusal)
+    request = budget_stop_mod.with_todays_day_left(run, pending["request"]) if at_budget else pending["request"]
+    value, review = resume_value(request, decision, evidence=_run_evidence(d))
     review["interrupt_id"] = pending["interrupt_id"]
-    if approve_rest:
-        review["approve_rest"] = True
+    if at_budget:
+        budget_stop_mod.apply_budget_review(run, review)
+    if approve_rest or auto_approve_later:
         run.setdefault("initial_review_mode", review_mode_of(run))
         run["review_mode"] = REVIEW_AUTO
         run["auto_approve"] = True
+    if approve_rest:
+        review["approve_rest"] = True
         run["approve_rest"] = {"at": review["at"], "point": review["point"],
                                "interrupt_id": pending["interrupt_id"], "source": decision.source,
                                "reviewer": decision.reviewer}
@@ -1345,8 +1377,88 @@ def resume_run(
     run["pending"] = None
     run["status"] = "running"
     save_run(d, run)
-    return _segment(d, run, Command(resume={pending["interrupt_id"]: value}), model_factory=model_factory,
-                    dialog=dialog, resumed_with=review)
+    return guarded_segment(d, run, Command(resume={pending["interrupt_id"]: value}), model_factory=model_factory,
+                           dialog=dialog, resumed_with=review)
+
+
+def send_followup(
+    run_dir: str | Path,
+    message: str,
+    *,
+    model_factory: Callable[[str, str], Any] | None = None,
+    live: bool = False,
+    dialog: Dialog | None = None,
+) -> RunOutcome:
+    """Send a follow-up message to a finished run (usually in a new process).
+
+    Refused with :class:`RunError` by ``followup.clean_message``, ``followup.followup_refusal``,
+    :func:`check_run_mode` or ``followup.day_refusal``; nothing changes then. The report goes
+    to ``report_history/<n>/`` first and the graph continues from the last finished state. A
+    follow-up whose agent fails returns the previous report and status with
+    ``RunOutcome.followup_error`` set and exit code 1. Otherwise the result is written as
+    usual, and a text reply comes back as ``RunOutcome.reply``. The run's call limits start
+    over for each message; money stays capped by the budget."""
+    from langchain_core.messages import HumanMessage
+
+    d = Path(run_dir)
+    run = load_run(d)
+    text = followup_mod.clean_message(message)
+    refusal = followup_mod.followup_refusal(run, d)
+    if refusal:
+        raise RunError(f"{d}: {refusal}")
+    check_run_mode(d, run, model_factory, live, "continuing")
+    refusal = followup_mod.day_refusal(run)
+    if refusal:
+        raise RunError(f"{d}: {refusal}")
+    _take_report_baseline(d, run)
+    followup_mod.begin_followup(d, run)
+    save_run(d, run)
+    return guarded_segment(d, run, {"messages": [HumanMessage(content=text)]}, model_factory=model_factory,
+                           dialog=dialog, resumed_with=None, message=text)
+
+
+def check_run_mode(d: Path, run: Mapping[str, Any], model_factory: Any, live: bool, doing: str) -> None:
+    """A live run needs ``live=True`` again, a mock run refuses it, a custom one
+    needs its factory. ``doing``: "resuming" / "continuing", for the message."""
+    mode = run.get("mode")
+    if mode == "live" and not live:
+        raise RunError(f"{d} is a live run: {doing} it makes real API calls; it needs live=True to confirm")
+    if mode != "live" and live:
+        raise RunError(f"{d} is a {mode} run: live=True does not apply to {doing} it")
+    if (mode == "custom" or run.get("factory") == "custom") and model_factory is None:
+        raise RunError(f"{d} was started with a custom model factory: {doing} it needs that factory again")
+    if mode != "live" and model_factory is not None:
+        from . import agent as agent_mod
+
+        if agent_mod.is_live_factory(model_factory):
+            raise RunError(f"{d} is a {mode} run: a live model factory does not apply to {doing} it")
+
+
+def guarded_segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, dialog: Dialog | None,
+                    resumed_with: Mapping[str, Any] | None, message: str | None = None) -> RunOutcome:
+    """:func:`_segment`; a follow-up that does not get through it (an exception from
+    anywhere in it, the keyboard, the interpreter exiting) is abandoned, so the run
+    stays continuable. ``run``: this process's copy, with the money counted so far. A
+    process killed hard cannot get here, and neither can a restore that keeps failing:
+    the record stays in ``run.json`` until ``followup.abandon_followup``
+    (``--resume RUN_DIR --abandon``, or TFL Lab). The original exception is what is raised."""
+    try:
+        return _segment(d, run, value, model_factory=model_factory, dialog=dialog, resumed_with=resumed_with,
+                        message=message)
+    except BaseException as exc:
+        if run.get("followup_in_progress"):
+            error = f"{type(exc).__name__}: {exc}" if isinstance(exc, Exception) else None
+            try:
+                followup_mod.abandon_followup(d, error=error, run=run)
+            except OSError as restore_error:
+                exc.add_note(f"the previous report could not be restored ({restore_error}); "
+                             f"to retry: {followup_mod.abandon_command(d)}")
+        raise
+
+
+def _stable_checkpoint(graph: Any, config: Mapping[str, Any]) -> str | None:
+    snap = graph.get_state(config)
+    return ((getattr(snap, "config", None) or {}).get("configurable") or {}).get("checkpoint_id")
 
 
 def _budget_ledger(run: Mapping[str, Any], settings_obj: Any, factory: Any = None) -> Any:
@@ -1367,6 +1479,9 @@ def _budget_ledger(run: Mapping[str, Any], settings_obj: Any, factory: Any = Non
             b.per_task_usd, reserve_for_report_usd=b.report_reserve_usd,
             per_subagent_max_usd=b.per_subagent_max_usd, spend_log=None, task_id=run["run_id"],
             already_spent_usd=float(prev.get("spent_usd") or 0.0))
+    # money the human added at the budget stop: not in settings, whose validator keeps
+    # per_task_usd <= per_day_usd (the day's cap still binds through the ledger)
+    led.raise_limit(float(run.get("budget_limit_usd") or 0.0))
     fields = {f.name for f in dataclasses.fields(budget_mod.CallRecord)}
     led.records.extend(budget_mod.CallRecord(**{k: v for k, v in r.items() if k in fields})
                        for r in prev.get("records") or [])
@@ -1420,7 +1535,11 @@ def run_state(run_dir: str | Path) -> dict[str, Any]:
             settings_obj, model_factory=factory, template=run["template"], checkpointer=saver, budget=budget,
             evidence=EvidenceLedger.open(d, run_id=run["run_id"]), hitl=run["hitl"],
             task_source=run.get("input"))
-        return dict(graph.get_state({"configurable": {"thread_id": run["thread_id"]}}).values)
+        configurable = {"thread_id": run["thread_id"]}
+        if run.get("status") in FINAL_STATUSES and run.get("stable_checkpoint_id"):
+            # a killed or failed follow-up leaves a newer checkpoint on a branch nobody continues
+            configurable["checkpoint_id"] = run["stable_checkpoint_id"]
+        return dict(graph.get_state({"configurable": configurable}).values)
     finally:
         conn.close()
 
@@ -1435,9 +1554,11 @@ def _pending_interrupts(graph: Any, config: Mapping[str, Any]) -> list[Any]:
 
 
 def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, dialog: Dialog | None,
-             resumed_with: Mapping[str, Any] | None) -> RunOutcome:
+             resumed_with: Mapping[str, Any] | None, message: str | None = None) -> RunOutcome:
     """One process segment: build the agent on the run's checkpoint, run
-    until the end or an unanswered stop, write ``run.json`` (and the report)."""
+    until the end or an unanswered stop, write ``run.json`` (and the report).
+    ``message``: the text of a follow-up (:func:`send_followup`), whose input
+    ``value`` starts from the stable checkpoint."""
     from langgraph.types import Command
 
     from . import agent as agent_mod
@@ -1451,7 +1572,7 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
     factory = _factory(d, run, model_factory)
     try:
         budget = _budget_ledger(run, settings_obj, factory)
-    except RunError as exc:
+    except RunError as exc:  # the day's budget, on a new run only: a follow-up was checked by day_refusal
         run["segments"].pop()
         run["status"], run["error"] = "error", str(exc)
         save_run(d, run)
@@ -1464,24 +1585,34 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
     saver, conn = _open_checkpointer(d)
     progress = open_emitter(d, run, segment, budget=budget, evidence=evidence)
     config = {"configurable": {"thread_id": run["thread_id"]}}
+    invoke_config = config
+    if message is not None:
+        progress.user_message(message)
+        if run.get("stable_checkpoint_id"):  # a run older than the key: its latest checkpoint
+            invoke_config = {"configurable": {**config["configurable"],
+                                              "checkpoint_id": run["stable_checkpoint_id"]}}
     error: str | None = None
     pending: PendingInfo | None = None
     graph = None
     try:
         graph = agent_mod.create_tfl_agent(
             settings_obj, model_factory=factory, template=run["template"], checkpointer=saver, budget=budget,
-            evidence=evidence, hitl=run["hitl"], task_source=run.get("input"))
+            evidence=evidence, hitl=run["hitl"], task_source=run.get("input"),
+            request_budget_extension=(budget_stop_mod.request_budget_extension
+                                      if budget_stop_mod.budget_stop_enabled(run) else None),
+            skip_call_when_low=budget_stop_mod.declining_skips_the_call(run))
         limits = getattr(graph, "tfl_limits", None)
         if limits is not None:
             limits.model_calls = int(run["limits"].get("model_calls") or 0)
             limits.tool_calls = int(run["limits"].get("tool_calls") or 0)
         while True:
             try:
-                graph.invoke(value, config)
+                graph.invoke(value, invoke_config)
             except Exception as exc:  # noqa: BLE001 - any agent failure still yields a partial result
                 prefix = "mock script" if isinstance(exc, agent_mod.ScriptError) else type(exc).__name__
                 error = f"{prefix}: {exc}"
                 break
+            invoke_config = config  # the newest checkpoint from here on: the branch this message started
             interrupts = _pending_interrupts(graph, config)
             if not interrupts:
                 break
@@ -1499,6 +1630,8 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
                     break
             resume, review = resume_value(request, decision, evidence=evidence)
             review["interrupt_id"] = intr.id
+            if info.point == BUDGET:
+                budget_stop_mod.apply_budget_review(run, review, budget)
             run["reviews"].append(review)
             run["pending"] = None
             run["status"] = "running"
@@ -1515,37 +1648,80 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
                          "records": [r.to_dict() for r in budget.records]}
         segment["ended_at"] = _now()
 
-    paths: dict[str, Path] = {}
     try:
         if pending is not None:
-            run["status"] = STATUS_AWAITING
-            segment["status"] = STATUS_AWAITING
-            save_run(d, run)
-            progress.segment_end(STATUS_AWAITING)
-            return RunOutcome(d, run["run_id"], STATUS_AWAITING, EXIT_AWAITING, pending=pending,
-                              result=run.get("draft"), paths={"run": d / RUN_FILE, "card": d / CARD_FILE})
+            return _finish_awaiting(d, run, segment, pending, progress)
         state: dict[str, Any] = {"messages": []}
+        stable = None
         if graph is not None:
             try:
                 state = dict(graph.get_state(config).values)
+                stable = _stable_checkpoint(graph, config)
             except Exception as exc:  # noqa: BLE001 - the result is still written from an empty state
                 error = error or f"cannot read the final state: {type(exc).__name__}: {exc}"
-        result = final_result(d, run, state, budget, evidence, error=error)
-        paths = _write_result(d, run, result, budget, evidence)
-        run["status"] = result["status"]
-        run["error"] = error
-        run["result"] = {"status": result["status"], "paths": {k: str(v) for k, v in paths.items()},
-                         "verdict": (result.get("report") or {}).get("verdict"), "trust": result.get("trust"),
-                         "confidence_cap": result.get("confidence_cap")}
-        segment["status"] = result["status"]
-        run.pop("draft", None)
-        save_run(d, run)
-        progress.done(result, error)
-        code = EXIT_SUBMITTED if result["status"] == "submitted" else EXIT_NO_REPORT
-        return RunOutcome(d, run["run_id"], result["status"], code, result=result, paths=paths)
+        return _finish_segment(d, run, segment, state=state, error=error, budget=budget, evidence=evidence,
+                               stable_checkpoint=stable, progress=progress)
     finally:
         progress.detach()
         conn.close()
+
+
+def _finish_awaiting(d: Path, run: dict[str, Any], segment: dict[str, Any], pending: PendingInfo,
+                     progress: Any) -> RunOutcome:
+    """A segment that stops at a review nobody answered here."""
+    run["status"] = STATUS_AWAITING
+    segment["status"] = STATUS_AWAITING
+    save_run(d, run)
+    progress.segment_end(STATUS_AWAITING)
+    return RunOutcome(d, run["run_id"], STATUS_AWAITING, EXIT_AWAITING, pending=pending,
+                      result=run.get("draft"), paths={"run": d / RUN_FILE, "card": d / CARD_FILE})
+
+
+def _finish_segment(d: Path, run: dict[str, Any], segment: dict[str, Any], *, state: Mapping[str, Any],
+                    error: str | None, budget: Any, evidence: Any, stable_checkpoint: str | None,
+                    progress: Any) -> RunOutcome:
+    """A segment that ran to its end. A follow-up that failed goes back to the previous
+    report; anything else writes the result. ``state``: the main thread's values at the
+    end; ``stable_checkpoint``: where the next follow-up starts (``None``: from the one
+    the run already has, else the newest)."""
+    followup = run.get("followup_in_progress")
+    if followup and error:
+        followup_mod.fail_followup(d, run, error)
+        segment["status"] = "error"
+        save_run(d, run)
+        followup_mod.emit_abandoned(progress, str(run["status"]), error)
+        return RunOutcome(d, run["run_id"], str(run["status"]), EXIT_NO_REPORT, read_result(d),
+                          paths={"run": d / RUN_FILE}, followup_error=error)
+    result = final_result(d, run, state, budget, evidence, error=error)
+    _note_accepted_report(run, state, evidence)
+    paths = _write_result(d, run, result, budget, evidence)
+    run["status"] = result["status"]
+    run["error"] = error
+    run["result"] = {"status": result["status"], "paths": {k: str(v) for k, v in paths.items()},
+                     "verdict": (result.get("report") or {}).get("verdict"), "trust": result.get("trust"),
+                     "confidence_cap": result.get("confidence_cap"),
+                     "report_digest": followup_mod.report_digest(result.get("report"))}
+    run["stable_checkpoint_id"] = stable_checkpoint or run.get("stable_checkpoint_id")
+    segment["status"] = result["status"]
+    changed = not followup or followup_mod.report_changed(followup.get("previous_result"), run["result"])
+    if changed:
+        run["report_revision"] = int(run.get("report_revision") or 0) + 1
+    reply = followup_mod.last_reply(state) if followup else None
+    note = followup_mod.unanswered_note(state) if followup else None
+    run.pop("followup_in_progress", None)
+    run.pop("draft", None)
+    save_run(d, run)
+    if reply:
+        progress.assistant_message(reply)
+    if note:
+        progress.emit("followup_unanswered", text=note)
+    if changed or result["status"] != "submitted":
+        progress.done(result, error)
+    else:
+        progress.segment_end(result["status"], error)  # same report: no second final card in the chat
+    code = EXIT_SUBMITTED if result["status"] == "submitted" else EXIT_NO_REPORT
+    return RunOutcome(d, run["run_id"], result["status"], code, result=result, paths=paths, reply=reply,
+                      followup_note=note)
 
 
 def _run_evidence(d: Path) -> Any:
@@ -1577,10 +1753,19 @@ def _ask(dialog: Dialog | None, info: PendingInfo, *, evidence: Any = None) -> D
         return decision
 
 
-def review_summary(run: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
-    """``(human_review label, review mapping for the renderer)`` from the run's
-    HITL 2 history."""
+def review_summary(run: Mapping[str, Any], report: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    """``(human_review label, review mapping for the renderer)`` from the run's HITL 2
+    history. ``report``: the accepted report; the last review holding its digest speaks for
+    it, so a draft rejected later does not. Reviews with no digest (a run written before
+    the key) count when no review holds it; reviews of other reports only: it was not
+    reviewed. With no accepted report, the last review says what became of the last draft."""
     reports = [r for r in run.get("reviews") or [] if r.get("point") == REPORT]
+    digest = followup_mod.report_digest(report)
+    if digest and reports:
+        reports = ([r for r in reports if r.get("report_digest") == digest]
+                   or [r for r in reports if not r.get("report_digest")])
+        if not reports:
+            return "not reviewed", {"decision": "not_reviewed"}
     if not reports:
         if not (run.get("hitl") or {}).get(REPORT):
             return "not reviewed (HITL 2 is off in settings)", {"decision": "not_reviewed"}
@@ -1627,6 +1812,7 @@ def _hitl_block(run: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
         "auto_approve": bool(run.get("auto_approve")),
         "review_mode": review_mode_of(run),
         "initial_review_mode": run.get("initial_review_mode") or review_mode_of(run),
+        "budget_stop": budget_stop_mod.budget_stop_on(run),
         "approve_rest": run.get("approve_rest"),
         "reviews": reviews,
         "formalization": (form[-1].get("decision") if form
@@ -1637,11 +1823,13 @@ def _hitl_block(run: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
     }
 
 
-def _task_text(run: Mapping[str, Any], state: Mapping[str, Any]) -> str:
+def _task_text(run: Mapping[str, Any], state: Mapping[str, Any], later_calls: Collection[str] = ()) -> str:
     """The task as the report states it: the text as the human corrected it at
-    HITL 1, else the given text, else (a file) the intake transcription."""
+    HITL 1, else the given text, else (a file) the intake transcription.
+    ``later_calls``: tool calls whose reviews came after the report (:func:`_as_accepted`)."""
     for r in reversed(run.get("reviews") or []):
-        if r.get("point") == FORMALIZATION and r.get("transcription"):
+        if (r.get("point") == FORMALIZATION and r.get("transcription")
+                and r.get("reviewed_call_id") not in later_calls):
             return str(r["transcription"])
     if run.get("task_text"):
         return str(run["task_text"])
@@ -1654,11 +1842,11 @@ def _task_text(run: Mapping[str, Any], state: Mapping[str, Any]) -> str:
 
 
 def _result_common(d: Path, run: Mapping[str, Any], result: dict[str, Any], budget: Any,
-                   state: Mapping[str, Any]) -> dict[str, Any]:
+                   state: Mapping[str, Any], *, task: str | None = None) -> dict[str, Any]:
     result["run_id"] = run["run_id"]
     result["mode"] = "mock" if run.get("mode") == "mock" else run.get("mode")
     result["template"] = run.get("template")
-    result["task"] = _task_text(run, state)
+    result["task"] = _task_text(run, state) if task is None else task
     if run.get("input"):
         result["input"] = run["input"]
     result["budget_refusal"] = result.pop("budget", None)
@@ -1666,22 +1854,82 @@ def _result_common(d: Path, run: Mapping[str, Any], result: dict[str, Any], budg
         result.pop("budget_refusal")
     result["budget"] = {**budget.summary(), "note": (
         "live: charged to the per-day log" if run.get("mode") == "live"
-        else "mock: token estimates of the scripted replies; no money spent")}
+        else "mock: token estimates of the scripted replies; no money spent"),
+        "extensions": list(run.get("budget_extensions") or [])}
     result["hitl"] = _hitl_block(run, state)
     result["run_dir"] = str(d)
     return result
 
 
+def _accepted_report_at(messages: Sequence[Any]) -> int | None:
+    from . import agent as agent_mod
+
+    return next((i for i in reversed(range(len(messages))) if agent_mod._is_submitted_report(messages[i])), None)
+
+
+def _as_accepted(state: Mapping[str, Any]) -> tuple[Mapping[str, Any], frozenset[str]]:
+    """``(state, later tool calls)``: the state as its accepted report had it. A report
+    ends its segment, so what came later starts with the human's next message. A run with
+    no accepted report, or no message after it, comes back as it is."""
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    messages = list(state.get("messages") or [])
+    at = _accepted_report_at(messages)
+    cut = None if at is None else next(
+        (i for i in range(at + 1, len(messages)) if isinstance(messages[i], HumanMessage)), None)
+    if cut is None:
+        return state, frozenset()
+    later = frozenset(m.tool_call_id for m in messages[cut:] if isinstance(m, ToolMessage))
+    return ({**state, "messages": messages[:cut],
+             STATE_KEY: [r for r in state.get(STATE_KEY) or [] if r.get("id") not in later]}, later)
+
+
+def _note_accepted_report(run: dict[str, Any], state: Mapping[str, Any], evidence: Any) -> None:
+    """A report accepted just now: how much evidence it was rated by (``run.json``
+    ``accepted_report``). The ledger is append-only, so that count is the cut later."""
+    messages = list(state.get("messages") or [])
+    at = _accepted_report_at(messages)
+    if at is not None and messages[at].tool_call_id != (run.get("accepted_report") or {}).get("call_id"):
+        run["accepted_report"] = {"call_id": messages[at].tool_call_id, "evidence_count": len(evidence.records())}
+
+
+def _take_report_baseline(d: Path, run: dict[str, Any]) -> None:
+    """Before a follow-up adds records: a report with no matching ``accepted_report`` (a
+    run older than the key, a first run whose final state could not be read) is fixed at
+    today's count, so what the message adds does not rate it."""
+    from .evidence.ledger import EvidenceLedger
+
+    _note_accepted_report(run, run_state(d), EvidenceLedger.open(d, run_id=run["run_id"]))
+
+
+def _rating_evidence(run: Mapping[str, Any], state: Mapping[str, Any], evidence: Any) -> list[Any] | None:
+    """The records an already accepted report is rated by; ``None``: all of them (no
+    report yet, or a report accepted in this segment). :func:`send_followup` takes the
+    baseline of an older report before the follow-up's first record."""
+    messages = list(state.get("messages") or [])
+    at = _accepted_report_at(messages)
+    accepted = run.get("accepted_report") or {}
+    if at is None or messages[at].tool_call_id != accepted.get("call_id"):
+        return None
+    return evidence.records()[:int(accepted["evidence_count"])]
+
+
 def final_result(d: Path, run: Mapping[str, Any], state: Mapping[str, Any], budget: Any, evidence: Any, *,
                  error: str | None = None) -> dict[str, Any]:
     """The run's result dict (``agent.collect_result`` over the evidence
-    ledger, plus run / HITL / budget fields)."""
+    ledger, plus run / HITL / budget fields). An accepted report is rated by what existed
+    when it was accepted: a follow-up's later IR, reviews and tool runs do not move it,
+    and a report submitted after them binds to them as usual."""
     from . import agent as agent_mod
 
-    label, _ = review_summary(run)
-    result = agent_mod.collect_result(state, human_review=label, ledger=budget, evidence=evidence,
-                                      formalization=run_binding(run, state))
-    result = _result_common(d, run, result, budget, state)
+    accepted, later = _as_accepted(state)
+    # rated by what existed when accepted: a later human approval of the same IR does not lift it
+    reviewed_then = {**run, "reviews": [r for r in run.get("reviews") or [] if r.get("reviewed_call_id") not in later]}
+    result = agent_mod.collect_result(state, ledger=budget, evidence=evidence,
+                                      formalization=run_binding(reviewed_then, accepted),
+                                      rating_evidence=_rating_evidence(run, state, evidence))
+    result["human_review"], _ = review_summary(run, result.get("report"))
+    result = _result_common(d, run, result, budget, state, task=_task_text(run, accepted, later))
     if error:
         result["status"] = "error"
         result["reason"] = error
@@ -1691,16 +1939,17 @@ def final_result(d: Path, run: Mapping[str, Any], state: Mapping[str, Any], budg
     return result
 
 
-def _budget_view(budget: Any) -> dict[str, Any]:
-    return {**budget.summary(), "records": [r.to_dict() for r in budget.records]}
+def _budget_view(budget: Any, run: Mapping[str, Any]) -> dict[str, Any]:
+    return {**budget.summary(), "records": [r.to_dict() for r in budget.records],
+            "extensions": list(run.get("budget_extensions") or [])}
 
 
 def _write_result(d: Path, run: Mapping[str, Any], result: Mapping[str, Any], budget: Any,
                   evidence: Any) -> dict[str, Path]:
     from .reports.render import write_report
 
-    _, review = review_summary(run)
-    return write_report(d, result, evidence=evidence, budget=_budget_view(budget), task_text=result.get("task"),
+    _, review = review_summary(run, result.get("report"))
+    return write_report(d, result, evidence=evidence, budget=_budget_view(budget, run), task_text=result.get("task"),
                         human_review=review)
 
 
@@ -1727,7 +1976,7 @@ def _write_awaiting(d: Path, run: dict[str, Any], info: PendingInfo, graph: Any,
                                          evidence=evidence, pending_report=_valid_report(args) or dict(args),
                                          formalization=run_binding(run, state))
         draft = _result_common(d, run, draft, budget, state)
-        write_report(d, draft, evidence=evidence, budget=_budget_view(budget), task_text=draft.get("task"),
+        write_report(d, draft, evidence=evidence, budget=_budget_view(budget, run), task_text=draft.get("task"),
                      human_review={"decision": "awaiting"}, status=STATUS_AWAITING)
         run["draft"] = {"verdict": (draft.get("report") or {}).get("verdict"), "trust": draft.get("trust"),
                         "confidence_cap": draft.get("confidence_cap"), "unknown_ids": draft.get("unknown_ids")}
@@ -1735,7 +1984,7 @@ def _write_awaiting(d: Path, run: dict[str, Any], info: PendingInfo, graph: Any,
         run["pending"]["card"] = pending_card(info.request, draft=run.get("draft") if info.point == REPORT else None,
                                               point=info.point)
     except Exception as exc:  # noqa: BLE001 - the long card (hitl.md) is still there
-        run["pending"]["card"] = {"point": info.point, "title": CARD_TITLES.get(info.point, info.point),
+        run["pending"]["card"] = {"point": info.point, "title": point_facts(info.point).title or info.point,
                                   "summary": [_short(f"(card not built: {type(exc).__name__})")],
                                   "details_md": card_details(info.request), "editable": []}
     save_run(d, run)
@@ -1776,7 +2025,25 @@ class TTYDialog:
             text = Path(text[1:]).read_text(encoding="utf-8")
         return json.loads(text)
 
+    def _budget(self, info: PendingInfo) -> Decision | None:
+        self.print(info.card)
+        while True:
+            choice = self.input("[a]dd money / [f]inish with what is left / [l]ater: ").strip().lower()[:1]
+            if choice == "f":
+                return Decision("approve", source="dialog", reviewer=self.reviewer)
+            if choice in ("l", "q"):
+                return None
+            if choice == "a":
+                amount = self.input("How many dollars to add: ").strip()
+                try:
+                    return Decision("edit", args={"add_usd": budget_stop_mod.budget_add({"add_usd": amount})},
+                                    source="dialog", reviewer=self.reviewer)
+                except DecisionError as exc:
+                    self.print(str(exc))
+
     def __call__(self, info: PendingInfo) -> Decision | None:
+        if info.point == BUDGET:
+            return self._budget(info)
         self.print(info.card)
         while True:
             choice = self.input("[a]pprove / [e]dit / [r]eject / [l]ater: ").strip().lower()[:1]
@@ -1821,13 +2088,15 @@ def copy_input(path: str | Path, run_dir: str | Path) -> Path:  # pragma: no cov
 
 
 __all__ = [
-    "AUTO_APPROVED_LABEL", "CARD_FILE", "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_NO_REPORT",
-    "EXIT_SUBMITTED", "FORMALIZATION", "REPORT", "REVIEW_ALL", "REVIEW_AUTO", "REVIEW_FORMALIZATION",
-    "REVIEW_MODES", "RUN_FILE", "STATUS_AWAITING", "auto_approves", "card_details", "pending_card",
+    "AUTO_APPROVED_LABEL", "BUDGET", "CARD_FILE", "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_NO_REPORT",
+    "EXIT_SUBMITTED", "FINAL_STATUSES", "FORMALIZATION", "POINTS", "REPORT", "REPORT_HISTORY_DIR",
+    "REVIEW_ALL", "REVIEW_AUTO", "REVIEW_FORMALIZATION",
+    "REVIEW_MODES", "RUN_FILE", "STATUS_AWAITING", "allowed_decisions", "auto_approves",
+    "card_details", "check_run_mode", "first_decision", "guarded_segment", "pending_card", "point_facts",
     "resolve_review_mode", "review_mode_of",
     "Decision", "DecisionError", "FormalizationReviewMiddleware", "HitlState", "PendingInfo", "RunError",
     "RunOutcome", "TTYDialog", "describe_pending", "execute_interrupt_config", "final_result", "find_ir",
     "formalization_binding", "formalization_card", "formalization_note", "formalization_request", "ir_checks", "load_run", "merge_reviews", "parse_decision",
     "report_interrupt_config", "report_review_text", "request_point", "resume_run", "resume_value",
-    "review_summary", "run_binding", "save_run", "start_run",
+    "review_summary", "run_binding", "save_run", "send_followup", "start_run",
 ]

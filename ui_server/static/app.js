@@ -1179,7 +1179,8 @@ function ensureMdLibs() {
 function loadScript(src, integrity) {
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = src; s.async = true;
+    // in the list's order: KaTeX's auto-render takes `katex` when it loads, before it there is none
+    s.src = src; s.async = false;
     if (integrity) { s.integrity = integrity; s.crossOrigin = 'anonymous'; }
     s.onload = resolve; s.onerror = () => reject(new Error('failed to load ' + src));
     document.head.appendChild(s);

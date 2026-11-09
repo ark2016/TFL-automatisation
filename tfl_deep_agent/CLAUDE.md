@@ -40,7 +40,10 @@ One deepagents (LangChain) agent for REG / CFL / DCFL / LL(k) tasks, next to the
 | money: ledger, worst-case check, wrap-up, day log | `middleware/budget.py`; the day log is `<runs dir>/deep_spend_log.jsonl`, the runs dir `$TFL_DEEP_RUNS_DIR` or `.tfl_lab_runs` |
 | fixed roles and their tools | `roles.py`, `prompts/*.md` |
 | agent build, verdict gate, mock replay | `agent.py` |
-| HITL points, run directory, resume | `hitl.py` |
+| HITL points, run directory, resume | `hitl.py`; the facts of each point are in its `POINTS` table |
+| follow-up messages, the Lean button's rule, the report's history | `followup.py` (imports without the `[deep]` extra); `send_followup` itself runs in `hitl.py` |
+| the budget stop | `budget_stop.py` (imports without the `[deep]` extra) |
+| the run record: its file, statuses, exit codes, the message limit | `run_store.py` (stdlib only) |
 | tools and their trust | `tools/*.py` on `tools/base.py`. Inventory: `docs/TOOL_INVENTORY.md`. |
 | evidence ledger, report rating | `evidence/ledger.py`, `evidence/policy.py`, `middleware/evidence.py` |
 | ad-hoc subagents, workflows, model policy | `orchestration/` |

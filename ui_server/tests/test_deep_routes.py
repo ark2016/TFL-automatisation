@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tfl_deep_agent import followup as followup_mod
+from tfl_deep_agent.run_store import MAX_MESSAGE_CHARS
 from ui_server import deep_routes as dr
 from ui_server import server as srv
 
@@ -67,7 +69,7 @@ def deep_state(tmp_path, monkeypatch):
 
 FAKE_AGENT = textwrap.dedent('''
     """Writes what `python -m tfl_deep_agent` writes; argv: run_dir behaviour [decision]."""
-    import json, os, sys, time
+    import json, os, shutil, sys, time
     from pathlib import Path
 
     d = Path(sys.argv[1]); mode = sys.argv[2]
@@ -122,6 +124,29 @@ FAKE_AGENT = textwrap.dedent('''
     elif mode == "crash":
         print("Traceback: boom", file=sys.stderr)
         sys.exit(2)
+    elif mode in ("die", "followup_sleep", "followup_stop"):  # a follow-up: its record in run.json, the report changing
+        prev = json.loads((d / "run.json").read_text(encoding="utf-8"))
+        hist = d / "report_history" / "1"
+        hist.mkdir(parents=True)
+        for name in ("result.json", "result.md"):
+            shutil.copy2(d / name, hist / name)
+        run = {**prev, "status": "running", "followup_in_progress": {
+            "snapshot": "report_history/1", "started_at": "now", "previous_status": prev["status"],
+            "previous_result": prev.get("result"), "previous_error": None, "n_reviews": 0, "review_switch": {}}}
+        (d / "result.md").write_text("half-written", encoding="utf-8")
+        (d / "result.json").write_text("half-written", encoding="utf-8")
+        if mode == "followup_stop":
+            run.update(status="awaiting_human", pending={"point": "budget", "interrupt_id": "b1", "asked_at": "now",
+                "request": {"action_requests": [{"name": "budget", "description": "more?", "args": {
+                                "spent_usd": 1, "limit_usd": 2, "available_usd": 1, "reserve_usd": 0.5, "day_left_usd": None}}],
+                            "review_configs": [{"action_name": "budget", "allowed_decisions": ["approve", "edit"]}]}})
+        (d / "run.json").write_text(json.dumps(run), encoding="utf-8")
+        if mode == "followup_sleep":
+            time.sleep(120)
+        if mode == "followup_stop":
+            sys.exit(3)
+        print("Traceback (most recent call last):\\nValueError: boom in the follow-up", file=sys.stderr)
+        sys.exit(1)
 ''')
 
 
@@ -131,8 +156,9 @@ def fake_agent(tmp_path, monkeypatch):
     the real builders produced."""
     script = tmp_path / "fake_agent.py"
     script.write_text(FAKE_AGENT, encoding="utf-8")
-    ctl = {"start": "awaiting", "resume": "submitted", "start_argv": [], "resume_argv": []}
-    real_start, real_resume = dr.build_start_command, dr.build_resume_command
+    ctl = {"start": "awaiting", "resume": "submitted", "followup": "submitted",
+           "start_argv": [], "resume_argv": [], "followup_argv": []}
+    real_start, real_resume, real_followup = dr.build_start_command, dr.build_resume_command, dr.build_followup_command
 
     def start(run_dir, task_file, **kw):
         ctl["start_argv"].append(real_start(run_dir, task_file, **kw))
@@ -143,7 +169,12 @@ def fake_agent(tmp_path, monkeypatch):
         return [sys.executable, str(script), str(run_dir), ctl["resume"], decision]
 
     monkeypatch.setattr(dr, "build_start_command", start)
+    def follow_up(run_dir, message_file, **kw):
+        ctl["followup_argv"].append(real_followup(run_dir, message_file, **kw))
+        return [sys.executable, str(script), str(run_dir), ctl["followup"]]
+
     monkeypatch.setattr(dr, "build_resume_command", resume)
+    monkeypatch.setattr(dr, "build_followup_command", follow_up)
     return ctl
 
 
@@ -438,7 +469,7 @@ def test_review_mode_on_create(fake_agent):
     assert data["run"]["review_mode"] == "formalization" and data["hitl"]["review_mode"] == "formalization"
     lab = json.loads((dr.DEEP_RUNS_DIR / out["run_id"] / "lab.json").read_text(encoding="utf-8"))
     assert lab["review_mode"] == "formalization"
-    # the default adds no flag; auto_approve stays the mock-only alias of "auto"
+    # the default adds no flag; auto_approve (mock only) is review mode auto plus no budget stop
     out = dr.api_create(MOCK_TEXT)
     wait_status(out["run_id"], {"awaiting_human"})
     assert "--review-mode" not in fake_agent["start_argv"][-1] and out["review_mode"] == "all"
@@ -476,7 +507,7 @@ def test_pending_card_survives_an_unreadable_run_json(tmp_path):
     (tmp_path / "hitl.md").write_text("# HITL 2\nfull card", encoding="utf-8")
     run = {"status": "awaiting_human", "run_dir": str(tmp_path)}
     card = dr.pending_card(run, {}, {"point": "report"})
-    assert card == {"point": "report", "title": dr._CARD_TITLES["report"], "summary": [],
+    assert card == {"point": "report", "title": dr._point_title("report"), "summary": [],
                     "details_md": "# HITL 2\nfull card", "editable": []}
     stored = {"point": "report", "title": "t", "summary": ["Ответ: x"], "details_md": "d", "editable": ["steps"]}
     assert dr.pending_card(run, {"pending": {"point": "report", "card": stored}}) == stored
@@ -850,3 +881,567 @@ def test_real_mock_pdf_run_through_both_hitl_points(port):
     assert status == 200 and html
     after = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
     assert after["rendered"]["template"] == "short_verdict"
+
+
+# ---------------------------------------------------------------------------
+# Follow-up messages and the budget stop
+# ---------------------------------------------------------------------------
+
+def _finished_fake(fake_agent, payload=MOCK_TEXT):
+    """A finished run of the fake agent, with what the follow-up checks look at."""
+    fake_agent["start"] = "submitted"
+    run_id = dr.api_create(payload)["run_id"]
+    data = wait_status(run_id, {"completed"})
+    run_dir = dr.DEEP_RUNS_DIR / run_id
+    (run_dir / "checkpoints.sqlite").write_bytes(b"")
+    agent = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    agent["settings"] = json.loads(SETTINGS_EXAMPLE.read_text(encoding="utf-8"))
+    (run_dir / "run.json").write_text(json.dumps(agent), encoding="utf-8")
+    return run_id, data
+
+
+def _post_message(run_id, payload):
+    return dr.dispatch("POST", f"/api/deep/runs/{run_id}/message", "", payload)
+
+
+@pytest.mark.parametrize("payload, needle", [
+    ({}, "needs text"),
+    ({"text": "  \n"}, "needs text"),
+    ({"text": 5}, "needs text"),
+    ({"text": "x", "preset": "lean"}, "not both"),
+    ({"preset": "poem"}, "unknown preset"),
+    ({"text": "x", "decision": "approve"}, "unknown field"),
+    ({"text": "x" * (MAX_MESSAGE_CHARS + 1)}, "too long"),
+])
+def test_message_validation(fake_agent, payload, needle):
+    run_id, _ = _finished_fake(fake_agent)
+    status, body = _post_message(run_id, payload)
+    assert status == 400 and needle in body["error"], body
+    assert not fake_agent["followup_argv"]
+
+
+def test_message_runs_a_new_process_with_the_text_in_a_file(fake_agent):
+    run_id, data = _finished_fake(fake_agent)
+    assert data["followup"]["in_progress"] is False
+    assert dr.api_detail(run_id)["followup"]["can_message"] is True
+    text = "Почему ответ такой? " * 10
+    assert dr.api_message(run_id, {"text": text}) == {"run_id": run_id, "status": "queued"}
+    data = wait_status(run_id, {"completed"})
+    argv = fake_agent["followup_argv"][0]
+    assert argv[argv.index("--resume") + 1] == str(dr.DEEP_RUNS_DIR / run_id)
+    assert "--no-dialog" in argv and "--live" not in argv
+    assert text.strip() not in argv  # never through argv
+    message_file = Path(argv[argv.index("--message") + 1].lstrip("@"))
+    assert message_file.read_text(encoding="utf-8") == text.strip()
+    assert data["run"]["segments"] == 2 and data["run"]["result_status"] == "submitted"
+    assert not dr._runs[run_id].get("followup_from") and data["followup"]["in_progress"] is False
+
+
+def test_two_sends_do_not_share_a_message_file(fake_agent, monkeypatch):
+    run_id, _ = _finished_fake(fake_agent)
+    barrier = threading.Barrier(2)
+    build = dr.build_followup_command
+
+    def both_have_written(run_dir, message_file, **kw):
+        barrier.wait(timeout=20)  # each send's file is on disk here, none has taken the run yet
+        return build(run_dir, message_file, **kw)
+
+    monkeypatch.setattr(dr, "build_followup_command", both_have_written)
+    statuses = {}
+
+    def send(text):
+        statuses[text] = _post_message(run_id, {"text": text})[0]
+
+    threads = [threading.Thread(target=send, args=(text,)) for text in ("первое", "второе")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert sorted(statuses.values()) == [200, 409], statuses
+    winner = next(text for text, status in statuses.items() if status == 200)
+    wait_status(run_id, {"completed"})
+    files = {Path(argv[argv.index("--message") + 1].lstrip("@")) for argv in fake_agent["followup_argv"]}
+    assert len(files) == 2  # each send wrote its own file
+    kept = [f for f in files if f.is_file()]  # the loser has removed its own
+    assert len(kept) == 1 and kept[0].read_text(encoding="utf-8") == winner
+
+
+def test_message_is_refused_while_the_run_is_going_or_waiting(fake_agent):
+    run_id = dr.api_create(MOCK_TEXT)["run_id"]
+    data = wait_status(run_id, {"awaiting_human"})
+    assert data["followup"]["can_message"] is False and "decision" in data["followup"]["reason"]
+    status, body = _post_message(run_id, {"text": "x"})
+    assert status == 409 and "decision" in body["error"]
+    dr.api_cancel(run_id)
+    data = wait_status(run_id, {"cancelled"})
+    assert data["followup"]["can_message"] is False and "new task" in data["followup"]["reason"]
+    assert _post_message(run_id, {"text": "x"})[0] == 409
+    fake_agent["start"] = "sleep"
+    going = dr.api_create(MOCK_TEXT)["run_id"]
+    wait_status(going, {"running"})
+    data = dr.api_detail(going)
+    assert data["followup"]["can_message"] is False and "working" in data["followup"]["reason"]
+    assert _post_message(going, {"text": "x"})[0] == 409
+    assert _post_message("0123456789ab", {"text": "x"})[0] == 404
+    dr.api_cancel(going)
+    wait_status(going, {"cancelled"})
+
+
+def test_message_needs_a_saved_conversation(fake_agent):
+    run_id, _ = _finished_fake(fake_agent)
+    (dr.DEEP_RUNS_DIR / run_id / "checkpoints.sqlite").unlink()
+    data = dr.api_detail(run_id)
+    assert data["followup"]["can_message"] is False and "no conversation" in data["followup"]["reason"]
+    assert _post_message(run_id, {"text": "x"})[0] == 409
+
+
+def test_live_message_needs_confirm_spend_and_money_left_today(fake_agent):
+    run_id, _ = _finished_fake(fake_agent, {"text": "x", "live": True, "confirm_spend": True})
+    status, body = _post_message(run_id, {"text": "вопрос"})
+    assert status == 400 and "confirm_spend" in body["error"]
+    assert not fake_agent["followup_argv"]
+    from tfl_deep_agent.middleware import budget as budget_mod
+
+    agent_file = dr.DEEP_RUNS_DIR / run_id / "run.json"
+    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "mode": "live"}),
+                          encoding="utf-8")  # what a live agent records; the fake does not
+    log = budget_mod.DailySpendLog(dr.spend_dir() / budget_mod.SPEND_LOG_NAME)
+    log.append({"task": "other", "usd": 1000.0})
+    status, body = _post_message(run_id, {"text": "вопрос", "confirm_spend": True})
+    assert status == 409 and "used up" in body["error"]
+    # one wording with the CLI, which refuses through followup.day_refusal too
+    assert body["error"] == followup_mod.day_refusal(json.loads(agent_file.read_text(encoding="utf-8")), log)
+    assert not fake_agent["followup_argv"]
+    log.path.unlink()
+    assert dr.api_message(run_id, {"text": "вопрос", "confirm_spend": True})["status"] == "queued"
+    wait_status(run_id, {"completed"})
+    assert "--live" in fake_agent["followup_argv"][0]
+
+
+def test_the_routes_import_nothing_heavy():
+    code = ("import sys\n"
+            "import ui_server.deep_routes\n"
+            "heavy = sorted({m.split('.')[0] for m in sys.modules} & {'deepagents', 'langchain', 'langchain_core', "
+            "'langgraph', 'pydantic'})\n"
+            "print(heavy)\n"
+            "sys.exit(1 if heavy else 0)\n")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False, timeout=120,
+                       cwd=str(Path(dr.__file__).resolve().parents[1]))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_follow_up_the_cli_refused_keeps_the_finished_run(fake_agent):
+    run_id, _ = _finished_fake(fake_agent)
+    fake_agent["followup"] = "crash"
+    dr.api_message(run_id, {"text": "вопрос"})
+    data = wait_status(run_id, {"completed", "error"})
+    assert data["run"]["status"] == "completed" and data["run"]["result_status"] == "submitted"
+    assert data["run"]["error"] is None and data["followup"]["can_message"] is True
+    assert "exit code 2" in data["followup"]["error"] and "boom" in data["followup"]["error"]
+    assert not dr._runs[run_id].get("followup_from")
+    # the next message clears it
+    fake_agent["followup"] = "submitted"
+    dr.api_message(run_id, {"text": "вопрос"})
+    assert wait_status(run_id, {"completed"})["followup"]["error"] is None
+
+
+def _read_report(run_id):
+    run_dir = dr.DEEP_RUNS_DIR / run_id
+    return (run_dir / "result.md").read_text(encoding="utf-8"), (run_dir / "result.json").read_text(encoding="utf-8")
+
+
+def test_a_follow_up_that_dies_with_exit_1_is_not_taken_for_a_cancel(fake_agent):
+    """Exit 1 is also "no report": what tells them apart is the surviving record."""
+    run_id, _ = _finished_fake(fake_agent)
+    before = _read_report(run_id)
+    fake_agent["followup"] = "die"
+    dr.api_message(run_id, {"text": "вопрос"})
+    data = wait_status(run_id, {"completed", "error"})
+    assert data["run"]["status"] == "completed" and data["run"]["result_status"] == "submitted"
+    assert data["run"]["error"] is None and data["followup"]["can_message"] is True
+    note = data["followup"]["error"]
+    assert "exited with code 1" in note and "boom in the follow-up" in note
+    assert _read_report(run_id) == before
+    agent = json.loads((dr.DEEP_RUNS_DIR / run_id / "run.json").read_text(encoding="utf-8"))
+    assert "followup_in_progress" not in agent and agent["status"] == "submitted"
+    abandoned = [e for e in data["events"] if e["event"] == "followup_abandoned"]
+    assert len(abandoned) == 1 and "boom in the follow-up" in abandoned[0]["error"]
+
+
+def test_a_killed_follow_up_process_restores_the_report(fake_agent):
+    run_id, _ = _finished_fake(fake_agent)
+    before = _read_report(run_id)
+    fake_agent["followup"] = "followup_sleep"
+    dr.api_message(run_id, {"text": "вопрос"})
+    _wait_for_snapshot(run_id)
+    dr._runs[run_id]["proc"].kill()
+    data = wait_status(run_id, {"completed", "error", "interrupted"})
+    assert data["run"]["status"] == "completed" and "exited with code" in data["followup"]["error"]
+    assert _read_report(run_id) == before
+
+
+def test_a_vanished_follow_up_keeps_the_reason(tmp_path, monkeypatch):
+    """What the watcher of an orphan process does: it has no exit code, only a reason."""
+    monkeypatch.setattr(dr, "_persist_locked", lambda _run: None)
+    d = tmp_path / "orphan"
+    d.mkdir()
+    (d / "result.md").write_text("half", encoding="utf-8")
+    hist = d / "report_history" / "1"
+    hist.mkdir(parents=True)
+    (hist / "result.md").write_text("# report", encoding="utf-8")
+    (d / "run.json").write_text(json.dumps({"run_id": "orphan", "status": "running", "followup_in_progress": {
+        "snapshot": "report_history/1", "previous_status": "submitted", "previous_result": None,
+        "previous_error": None, "n_reviews": 0, "review_switch": {}}}), encoding="utf-8")
+    run = {"run_id": "orphan", "run_dir": str(d), "status": "running", "segments": [], "error": None,
+           "followup_from": {"status": "completed", "result_status": "submitted", "error": None}}
+    reason = "the server restarted and the process is gone"
+    dr._settle_process_end(run, reason=reason)
+    assert run["status"] == "completed" and run["followup_error"] == reason and run["error"] is None
+    assert (d / "result.md").read_text(encoding="utf-8") == "# report"
+
+
+def _wait_for_snapshot(run_id, timeout=30.0):
+    """The fake follow-up has made its snapshot and changed result.*."""
+    run_dir = dr.DEEP_RUNS_DIR / run_id
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if (run_dir / "result.md").read_text(encoding="utf-8") == "half-written":
+            return
+        time.sleep(0.05)
+    raise AssertionError("no snapshot yet")
+
+
+def test_the_report_stays_visible_during_a_follow_up_from_the_snapshot(fake_agent):
+    run_id, first = _finished_fake(fake_agent)
+    fake_agent["followup"] = "followup_sleep"
+    dr.api_message(run_id, {"text": "вопрос"})
+    _wait_for_snapshot(run_id)
+    # a detail with nothing before it: what a page reload gets
+    data = dr.api_detail(run_id)
+    assert data["followup"]["in_progress"] is True and data["run"]["status"] in ("queued", "running")
+    view = data["result"]
+    assert view["verdict"] == first["result"]["verdict"] and view["draft"] is False and view["can_render"] is False
+    assert "report_history/1/result.md" in view["urls"]["md"]
+    status, served = dr.dispatch("GET", f"/api/deep/runs/{run_id}/files/report_history/1/result.md")
+    assert status == 200 and served.path.read_text(encoding="utf-8") == "# report"
+    dr.api_cancel(run_id)
+    data = wait_status(run_id, {"completed", "error"})
+    assert data["result"]["verdict"] == first["result"]["verdict"] and "report_history" not in data["result"]["urls"]["md"]
+    assert _read_report(run_id)[0] == "# report"
+
+
+def test_the_report_stays_visible_at_a_budget_stop_of_a_follow_up(fake_agent):
+    run_id, first = _finished_fake(fake_agent)
+    fake_agent["followup"] = "followup_stop"
+    dr.api_message(run_id, {"text": "вопрос"})
+    data = wait_status(run_id, {"awaiting_human"})
+    assert data["followup"]["in_progress"] is True
+    assert data["result"]["verdict"] == first["result"]["verdict"] and "report_history/1" in data["result"]["urls"]["md"]
+    dr.api_cancel(run_id)
+    data = wait_status(run_id, {"completed", "error"})
+    assert data["run"]["status"] == "completed" and data["followup"]["error"] is None
+    assert _read_report(run_id)[0] == "# report"
+
+
+def _lean_run_dir(tmp_path, report):
+    if report is not None:
+        (tmp_path / "result.json").write_text(json.dumps({"report": report}), encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize("result, report, available, needle", [
+    ({"status": "submitted", "trust": "library"}, {"language_class": "reg"}, True, None),
+    ({"status": "submitted", "trust": "verified"}, {"language_class": "cfl"}, True, None),  # another tool's trust
+    ({"status": "submitted", "trust": "library"}, {"language_class": "ll"}, False, "no Lean path"),
+    ({"status": "incomplete"}, None, False, "no accepted report"),
+])
+def test_lean_view(tmp_path, result, report, available, needle):
+    settings = json.loads(SETTINGS_EXAMPLE.read_text(encoding="utf-8"))
+    view = dr._lean_view({"result": result, "settings": settings}, _lean_run_dir(tmp_path, report))
+    assert view["available"] is available
+    if available:
+        assert view["model"] == settings["models"]["roles"]["lean"]
+        assert view["subagent_limit_usd"] == settings["budget"]["per_subagent_max_usd"]
+    else:
+        assert needle in view["reason"] and view["model"] is None
+
+
+def test_lean_view_shows_the_model_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("TFL_MODEL_OVERRIDE", "claude-haiku-5-5")
+    settings = json.loads(SETTINGS_EXAMPLE.read_text(encoding="utf-8"))
+    view = dr._lean_view({"result": {"status": "submitted", "trust": "library"}, "settings": settings},
+                         _lean_run_dir(tmp_path, {"language_class": "reg"}))
+    assert view["model"] == "claude-haiku-5-5"
+
+
+# ---- the real CLI over the mock scripts
+
+def _reg_followup_task():
+    return json.loads((dr.MOCK_DIR / "reg_followup.json").read_text(encoding="utf-8"))["task"]
+
+
+def _approve_until_done(run_id):
+    for _ in range(6):
+        data = wait_status(run_id, {"awaiting_human", "completed", "error", "cancelled"}, timeout=240)
+        if data["run"]["status"] != "awaiting_human":
+            return data
+        dr.api_resume(run_id, {"decision": "approve"})
+        time.sleep(0.05)
+    raise AssertionError("still waiting after six approvals")
+
+
+def test_real_mock_follow_ups_answer_then_report_then_cancel():
+    pytest.importorskip("deepagents")
+    pytest.importorskip("langgraph.checkpoint.sqlite")
+    run_id = dr.api_create({"text": _reg_followup_task(), "mock_script": "reg_followup.json"})["run_id"]
+    data = _approve_until_done(run_id)
+    assert data["run"]["status"] == "completed", data["log_tail"]
+    assert data["followup"]["can_message"] is True
+    # a human confirmed the formalization, so this answer is verified: that is no Lean proof, the button stays
+    assert data["result"]["trust"] == "verified" and data["followup"]["lean"]["available"] is True
+    first = data["result"]
+    assert first["report_revision"] == 1 and "?v=" not in first["urls"]["md"]
+    run_dir = dr.DEEP_RUNS_DIR / run_id
+    report = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))["report"]
+
+    # the first follow-up: a text answer, the report stays
+    assert dr.api_message(run_id, {"text": "Верно ли, что bab не в языке?"})["status"] == "queued"
+    data = wait_status(run_id, {"completed", "error"}, timeout=240)
+    assert data["run"]["status"] == "completed", data["log_tail"]
+    kinds = [e["event"] for e in data["events"]]
+    assert "user_message" in kinds and "assistant_message" in kinds and kinds.count("done") == 1
+    assert data["result"]["report_revision"] == 1 and data["result"]["verdict"] == first["verdict"]
+    # the same report; only the money of the run grew in its budget section
+    assert json.loads((run_dir / "result.json").read_text(encoding="utf-8"))["report"] == report
+    files = (run_dir / "result.md").read_bytes()
+
+    # the second one: a new report stops at HITL 2 ... and is cancelled: the old one is back
+    assert dr.api_message(run_id, {"text": "Отправь отчёт заново"})["status"] == "queued"
+    data = wait_status(run_id, {"awaiting_human", "completed", "error"}, timeout=240)
+    assert data["run"]["status"] == "awaiting_human", data["log_tail"]
+    assert data["followup"]["in_progress"] is True and data["followup"]["can_message"] is False
+    # HITL 2 of a follow-up shows the draft, from a detail with nothing before it (a reload) too
+    assert data["result"]["draft"] is True and "report_history" not in data["result"]["urls"]["md"]
+    dr.api_cancel(run_id)
+    data = wait_status(run_id, {"completed", "error", "cancelled"}, timeout=60)
+    assert data["run"]["status"] == "completed", data["log_tail"]
+    assert data["followup"]["can_message"] is True and data["followup"]["in_progress"] is False
+    assert (run_dir / "result.md").read_bytes() == files
+    assert data["result"]["report_revision"] == 1 and data["result"]["draft"] is False
+    assert data["followup"]["error"] is None
+    assert "followup_abandoned" in [e["event"] for e in data["events"]]
+
+
+def test_real_mock_new_report_gets_a_new_revision():
+    pytest.importorskip("deepagents")
+    pytest.importorskip("langgraph.checkpoint.sqlite")
+    script = json.loads((dr.MOCK_DIR / "reg_followup.json").read_text(encoding="utf-8"))
+    del script["models"]["main"][-2]  # the follow-up goes straight to the new report
+    run_id = dr.api_create({"text": script["task"], "mock_script": script})["run_id"]
+    data = _approve_until_done(run_id)
+    assert data["run"]["status"] == "completed", data["log_tail"]
+    dr.api_message(run_id, {"text": "Отправь отчёт заново"})
+    data = wait_status(run_id, {"awaiting_human", "error"}, timeout=240)
+    assert data["run"]["status"] == "awaiting_human", data["log_tail"]
+    data = _approve_until_done(run_id)
+    assert data["run"]["status"] == "completed", data["log_tail"]
+    assert data["result"]["report_revision"] == 2 and data["result"]["urls"]["md"].endswith("?v=2")
+    assert [e["event"] for e in data["events"]].count("done") == 2
+    assert (dr.DEEP_RUNS_DIR / run_id / "report_history" / "1" / "result.md").is_file()
+
+
+def test_real_mock_lean_preset_reaches_the_agent():
+    pytest.importorskip("deepagents")
+    pytest.importorskip("langgraph.checkpoint.sqlite")
+    run_id = dr.api_create({"text": _reg_followup_task(), "mock_script": "reg_followup.json",
+                            "auto_approve": True})["run_id"]
+    data = wait_status(run_id, {"completed", "error"}, timeout=240)
+    assert data["run"]["status"] == "completed", data["log_tail"]
+    lean = data["followup"]["lean"]
+    assert lean["available"] is True and lean["model"] and lean["subagent_limit_usd"] == 2.0
+    assert dr.api_message(run_id, {"preset": "lean"})["status"] == "queued"
+    data = wait_status(run_id, {"completed", "error"}, timeout=240)
+    assert data["run"]["status"] == "completed", data["log_tail"]
+    asked = next(e for e in data["events"] if e["event"] == "user_message")
+    assert "lean-formalizer" in asked["text"]
+    assert any(e["event"] == "assistant_message" for e in data["events"])
+
+
+def test_real_mock_budget_stop_card_and_extension():
+    pytest.importorskip("deepagents")
+    pytest.importorskip("langgraph.checkpoint.sqlite")
+    run_id = dr.api_create({**MOCK_TEXT, "settings_override": {
+        "budget": {"per_task_usd": 0.1, "reserve_for_report_usd": 0.001},
+        "hitl": {"formalization": False, "report": False}}})["run_id"]
+    data = wait_status(run_id, {"awaiting_human", "completed", "error"}, timeout=240)
+    assert data["run"]["status"] == "awaiting_human", data["log_tail"]
+    card = data["pending_point"]
+    assert card["point"] == "budget" and card["editable"] == ["add_usd"]
+    assert card["summary"][0].startswith("Потрачено $")
+    assert data["hitl"]["pending"]["allowed_decisions"] == ["approve", "edit"]
+    bad = [
+        ({"decision": "reject", "comment": "нет"}, "not allowed"),
+        ({"decision": "edit", "payload": {"add_usd": -1}}, "greater than 0"),
+        ({"decision": "edit", "payload": {"limit_usd": 9}}, "unknown field"),
+        ({"decision": "approve", "approve_rest": True}, "budget"),
+    ]
+    for payload, needle in bad:
+        status, body = dr.dispatch("POST", f"/api/deep/runs/{run_id}/resume", "", payload)
+        assert status == 400 and needle in body["error"], (payload, body)
+    assert dr.api_detail(run_id)["run"]["status"] == "awaiting_human"
+    assert dr.api_resume(run_id, {"decision": "edit", "payload": {"add_usd": 5}})["status"] == "queued"
+    data = wait_status(run_id, {"awaiting_human", "completed", "error"}, timeout=240)
+    assert data["run"]["status"] == "completed", data["log_tail"]
+    assert data["run"]["result_status"] == "submitted"
+    assert data["budget"]["limit_usd"] == pytest.approx(5.1)
+    decision = next(e for e in data["events"] if e["event"] == "hitl_decision")
+    assert decision["add_usd"] == 5 and decision["new_limit_usd"] == pytest.approx(5.1)
+
+
+# ---------------------------------------------------------------------------
+# A follow-up whose report could not be restored
+# ---------------------------------------------------------------------------
+
+def test_a_restore_that_fails_says_so_and_names_the_way_out(fake_agent, monkeypatch):
+    run_id, _ = _finished_fake(fake_agent)
+    fake_agent["followup"] = "die"
+
+    def fails(*_a, **_k):
+        raise OSError("the file is locked")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(dr.followup, "abandon_followup", fails)
+        dr.api_message(run_id, {"text": "вопрос"})
+        data = wait_status(run_id, {"completed", "error"})
+    assert data["run"]["status"] == "completed" and data["run"]["error"] is None
+    shut = data["followup"]
+    assert shut["can_message"] is False and shut["in_progress"] is False
+    assert "could not be restored" in shut["error"] and "--abandon" in shut["error"]
+    assert f"--resume {dr.DEEP_RUNS_DIR / run_id} --abandon" in shut["reason"]
+    assert "start a new task" not in shut["reason"]
+    assert "followup_in_progress" in json.loads((dr.DEEP_RUNS_DIR / run_id / "run.json").read_text(encoding="utf-8"))
+    status, body = _post_message(run_id, {"text": "вопрос"})
+    assert status == 409 and "--abandon" in body["error"]
+
+
+def test_a_cancel_whose_restore_fails_says_so_too(fake_agent, monkeypatch):
+    run_id, _ = _finished_fake(fake_agent)
+    fake_agent["followup"] = "followup_sleep"
+    dr.api_message(run_id, {"text": "вопрос"})
+    _wait_for_snapshot(run_id)
+
+    def fails(*_a, **_k):
+        raise OSError("the file is locked")
+
+    monkeypatch.setattr(dr.followup, "abandon_followup", fails)
+    dr.api_cancel(run_id)
+    data = wait_status(run_id, {"completed", "error"})
+    assert data["run"]["status"] == "completed"
+    assert "could not be restored" in data["followup"]["error"] and data["followup"]["can_message"] is False
+    assert "--abandon" in data["followup"]["reason"]
+
+
+def test_a_cancel_at_a_stop_whose_restore_fails_names_the_way_out(fake_agent, monkeypatch):
+    """The agent's own record still says it waits at the stop, but nothing here will answer it."""
+    run_id, _ = _finished_fake(fake_agent)
+    fake_agent["followup"] = "followup_stop"
+    dr.api_message(run_id, {"text": "вопрос"})
+    wait_status(run_id, {"awaiting_human"})
+
+    def fails(*_a, **_k):
+        raise OSError("the file is locked")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(dr.followup, "abandon_followup", fails)
+        dr.api_cancel(run_id)
+        data = wait_status(run_id, {"completed", "error", "cancelled"})
+    agent = json.loads((dr.DEEP_RUNS_DIR / run_id / "run.json").read_text(encoding="utf-8"))
+    assert agent["status"] == "awaiting_human" and agent["followup_in_progress"]
+    shut = data["followup"]
+    assert shut["can_message"] is False and f"--resume {dr.DEEP_RUNS_DIR / run_id} --abandon" in shut["reason"]
+    assert "decide on it first" not in shut["reason"] and "start a new task" not in shut["reason"]
+
+
+def test_the_budget_card_shows_todays_remainder(fake_agent):
+    """A stop may have waited for a long time: the buttons block on the day that is left now."""
+    from tfl_deep_agent.middleware import budget as budget_mod
+
+    run_id, _ = _finished_fake(fake_agent)
+    fake_agent["followup"] = "followup_stop"
+    dr.api_message(run_id, {"text": "вопрос"})
+    wait_status(run_id, {"awaiting_human"})
+    path = dr.DEEP_RUNS_DIR / run_id / "run.json"
+    agent = json.loads(path.read_text(encoding="utf-8"))
+    args = agent["pending"]["request"]["action_requests"][0]["args"]
+    args["day_left_usd"] = 15.0  # what was left when the agent asked
+    agent["pending"]["card"] = {"point": "budget", "title": "Бюджет задачи заканчивается", "editable": ["add_usd"],
+                                "summary": ["Потрачено $1.00 из $2.00 · доступно $1.00", "На сегодня осталось $15.00"]}
+    agent["mode"] = "live"
+    agent.setdefault("settings", {}).setdefault("budget", {})["per_day_usd"] = 20.0
+    path.write_text(json.dumps(agent), encoding="utf-8")
+    log = budget_mod.DailySpendLog(dr.spend_dir() / budget_mod.SPEND_LOG_NAME)
+    per_day = 20.0
+    left = log.remaining(per_day)
+    assert left != 15.0
+    data = dr.api_detail(run_id, after=0)
+    pending = data["hitl"]["pending"]
+    assert pending["actions"][0]["args"]["day_left_usd"] == left and pending["args"]["day_left_usd"] == left
+    today = f"На сегодня осталось ${left:.2f}"
+    assert pending["summary_card"]["summary"][1] == today and data["pending_point"]["summary"][1] == today
+
+
+# ---------------------------------------------------------------------------
+# A cancel that lands as the follow-up finishes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rc", [0, 4294967295])
+def test_a_cancel_landing_as_the_follow_up_finishes_settles_from_the_disk(fake_agent, monkeypatch, rc):
+    run_id, _ = _finished_fake(fake_agent)
+    run_dir = dr.DEEP_RUNS_DIR / run_id
+
+    def finished_as_the_cancel_landed(_run_id, _cmd, *_a, **_k):
+        agent = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        agent.update(status="incomplete", result={"status": "incomplete"})
+        (run_dir / "run.json").write_text(json.dumps(agent), encoding="utf-8")
+        return rc, "cancelled", []
+
+    monkeypatch.setattr(dr, "_spawn_and_wait", finished_as_the_cancel_landed)
+    dr.api_message(run_id, {"text": "вопрос"})
+    data = wait_status(run_id, {"completed", "error", "cancelled"})
+    assert data["run"]["status"] == "completed" and data["run"]["result_status"] == "incomplete"
+    assert not dr._runs[run_id].get("followup_from") and not dr._runs[run_id].get("cancel_requested")
+    assert data["followup"]["error"] is None and data["followup"]["can_message"] is True
+
+
+def test_a_cancel_before_the_follow_up_finished_still_restores(fake_agent):
+    run_id, first = _finished_fake(fake_agent)
+    fake_agent["followup"] = "followup_sleep"
+    dr.api_message(run_id, {"text": "вопрос"})
+    _wait_for_snapshot(run_id)
+    dr.api_cancel(run_id)
+    data = wait_status(run_id, {"completed", "error", "cancelled"})
+    assert data["run"]["status"] == "completed" and data["run"]["result_status"] == first["run"]["result_status"]
+    assert (dr.DEEP_RUNS_DIR / run_id / "result.md").read_text(encoding="utf-8") == "# report"
+    assert data["followup"]["error"] is None
+
+
+# ---------------------------------------------------------------------------
+# The contract of the routes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("preset", [["lean"], {"a": 1}, 1, "unknown"])
+def test_a_preset_of_any_shape_is_a_bad_request(fake_agent, preset):
+    run_id, _ = _finished_fake(fake_agent)
+    status, body = _post_message(run_id, {"preset": preset})
+    assert status == 400 and "preset" in body["error"]
+    assert not fake_agent["followup_argv"]
+
+
+def test_the_detail_says_whether_the_budget_stop_is_on(fake_agent):
+    run_id, _ = _finished_fake(fake_agent)
+    agent_file = dr.DEEP_RUNS_DIR / run_id / "run.json"
+    agent = json.loads(agent_file.read_text(encoding="utf-8"))
+    agent_file.write_text(json.dumps({**agent, "budget_stop": True, "budget_declined": True}), encoding="utf-8")
+    assert dr.api_detail(run_id)["hitl"]["budget_stop"] is True
+    agent_file.write_text(json.dumps({**agent, "budget_stop": False}), encoding="utf-8")
+    assert dr.api_detail(run_id)["hitl"]["budget_stop"] is False

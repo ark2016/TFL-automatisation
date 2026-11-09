@@ -55,6 +55,7 @@ from typing import Any
 from pydantic import BaseModel, Field, PrivateAttr
 
 from . import config
+from .evidence.ledger import entry_fingerprint, ir_admissible, lean_proof_side
 from .settings import report_reserve
 from .roles import MAIN_TOOL_GROUPS, PKG_DIR, ROLES, SANDBOX_ONLY_TOOLS, load_prompt, role_model_request
 
@@ -549,6 +550,12 @@ class RunLimits:
             self.model_calls += 1
             return True, self.max_model_calls - self.model_calls
 
+    def give_back_model_call(self) -> None:
+        """Undo :meth:`take_model_call`: the call stopped at an interrupt before
+        reaching the model, and the node takes it again when it is resumed."""
+        with self.lock:
+            self.model_calls = max(0, self.model_calls - 1)
+
     def take_tool_call(self, name: str | None) -> str | None:
         """``None`` (allowed) or the refusal reason."""
         with self.lock:
@@ -617,12 +624,28 @@ def call_limit_middleware(limits: RunLimits, *, role: str) -> Any:
             return request, None
 
         def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+            from langgraph.errors import GraphInterrupt
+
             request, refused = self._before(request)
-            return refused if refused is not None else handler(request)
+            if refused is not None:
+                return refused
+            try:
+                return handler(request)
+            except GraphInterrupt:  # the budget stop: no call was made, the resumed node takes it again
+                self.limits.give_back_model_call()
+                raise
 
         async def awrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+            from langgraph.errors import GraphInterrupt
+
             request, refused = self._before(request)
-            return refused if refused is not None else await handler(request)
+            if refused is not None:
+                return refused
+            try:
+                return await handler(request)
+            except GraphInterrupt:
+                self.limits.give_back_model_call()
+                raise
 
         def _tool_refusal(self, request: Any) -> Any:
             call = request.tool_call
@@ -830,8 +853,16 @@ def create_tfl_agent(
     task_source: Mapping[str, Any] | None = None,
     sandbox: Any = None,
     orchestration: bool = True,
+    request_budget_extension: Callable[[Any], float | None] | None = None,
+    skip_call_when_low: bool = False,
 ) -> Any:
     """Build the TFL Deep Agent graph.
+
+    ``request_budget_extension``: called before the main agent's call that would
+    enter wrap-up or be refused (``BudgetMiddleware``); a run with the budget stop
+    passes ``budget_stop.request_budget_extension``, a LangGraph interrupt, which
+    needs a ``checkpointer``. Without it a direct caller keeps the plain wrap-up.
+    ``skip_call_when_low``: ``BudgetMiddleware.skip_call_when_low`` of the main agent.
 
     Orchestration (P4, ``orchestration=True``): the main agent gets
     ``spawn_subagent``, ``run_workflow`` and ``budget_status``
@@ -947,6 +978,8 @@ def create_tfl_agent(
     if any(points.values()) and checkpointer is None:
         raise ValueError("HITL needs a checkpointer (hitl.start_run uses SQLite in the run dir); "
                          "pass checkpointer=..., or hitl=False")
+    if request_budget_extension is not None and checkpointer is None:
+        raise ValueError("the budget stop needs a checkpointer (hitl.start_run uses SQLite in the run dir)")
     scope_cm, node = _budget_scope(budget, cfg, budget_options)
     evidence_cm, ledger = _evidence_scope(evidence)
     sandbox_info = resolve_sandbox(sandbox, backend=backend, run_id=name)
@@ -957,7 +990,8 @@ def create_tfl_agent(
                 subagent_middleware=subagent_middleware, interrupt_on=interrupt_on, backend=backend,
                 template=template, roles=roles, extra_tools=extra_tools, store=store, name=name, debug=debug,
                 hitl=points, evidence_ledger=ledger, task_source=task_source, sandbox=sandbox_info,
-                orchestration=orchestration)
+                orchestration=orchestration, request_budget_extension=request_budget_extension,
+                skip_call_when_low=skip_call_when_low)
     except BaseException:
         sandbox_info.close()  # a container opened for a build that failed
         raise
@@ -1050,6 +1084,21 @@ def _with_subagent_budget(mw: list[Any]) -> list[Any]:
     return mw
 
 
+def _enable_budget_stop(mw: Sequence[Any], callback: Callable[[Any], float | None] | None,
+                        *, skip_call_when_low: bool = False) -> None:
+    """Give the main agent's ``BudgetMiddleware`` (the subagents have their own
+    instances, which never ask) the callback of the budget stop. A stop was asked for
+    and nothing would ever call it: :class:`ValueError`, not a run that silently never asks."""
+    from .middleware import budget as budget_mod
+
+    budgets = [m for m in mw if isinstance(m, budget_mod.BudgetMiddleware)]
+    if not budgets:
+        raise ValueError("a budget stop needs a BudgetMiddleware in the main agent's middleware")
+    for m in budgets:
+        m.request_budget_extension = callback
+        m.skip_call_when_low = skip_call_when_low
+
+
 def _build_agent(
     cfg: dict[str, Any], *, model_factory: ModelFactory | None, checkpointer: Any,
     middleware: Sequence[Any] | None,
@@ -1058,7 +1107,8 @@ def _build_agent(
     extra_tools: Sequence[Any], store: Any, name: str, debug: bool,
     hitl: Mapping[str, bool] | None = None, evidence_ledger: Any = None,
     task_source: Mapping[str, Any] | None = None, sandbox: SandboxInfo | None = None,
-    orchestration: bool = True,
+    orchestration: bool = True, request_budget_extension: Callable[[Any], float | None] | None = None,
+    skip_call_when_low: bool = False,
 ) -> Any:
     from deepagents import create_deep_agent
     from langchain.agents.middleware import TodoListMiddleware
@@ -1108,6 +1158,8 @@ def _build_agent(
     main_mw = (list(middleware) if middleware is not None
                else default_middleware(cfg, "main", run_semaphore=limits.semaphore))
     main_mw = _with_subagent_budget(main_mw)
+    if request_budget_extension is not None or skip_call_when_low:
+        _enable_budget_stop(main_mw, request_budget_extension, skip_call_when_low=skip_call_when_low)
     points = dict(hitl or {})
     hitl_mw: list[Any] = []
     all_interrupts: dict[str, Any] = {}
@@ -1296,18 +1348,6 @@ def _artifact_key(args: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _entry_fingerprint(entry: Mapping[str, Any]) -> str | None:
-    data = entry.get("data") or {}
-    if isinstance(data.get("ir_fingerprint"), str):
-        return data["ir_fingerprint"]
-    ir = (entry.get("args") or {}).get("ir")
-    if isinstance(ir, Mapping):
-        from .tools.ir import ir_fingerprint
-
-        return ir_fingerprint(ir)
-    return None
-
-
 def _is_task_definition_dfa(entry: Mapping[str, Any]) -> bool:
     """A ``regex_to_dfa`` result built from the IR's own regex / linear grammar
     (``regex_to_dfa(ir=...)``): the tool, not the model, read the definition."""
@@ -1353,14 +1393,10 @@ def _classify(entry: Mapping[str, Any], lang: str, verdict_k: int | None,
     data = entry.get("data") or {}
     args = entry.get("args") or {}
     if tool == "lean_check":
-        # R-Lean (docs/VERDICT_POLICY.md): a kernel-checked proof of the statement
-        # code generated from this task's IR (lean_statement) is a verified basis
-        # for its side; the tool already gives "verified" only for status proved
-        # with standard axioms. The IR binding is the fingerprint rule of verdict_gate.
-        if (lang in ("reg", "cfl", "dcfl") and data.get("cls") == lang and data.get("status") == "proved"
-                and trust == "verified" and data.get("side") in ("constructive", "destructive")):
-            return [(str(data["side"]), "verified")]
-        return []
+        # R-Lean: the predicate is shared with the Lean button; verdict_gate has applied
+        # its fingerprint rule to the entries before this, so no required IR is passed here.
+        side = lean_proof_side(entry, lang)
+        return [(side, "verified")] if side else []
     if lang == "reg":
         if tool == "dfa_vs_ir":
             return [("constructive", trust)]
@@ -1522,7 +1558,7 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
     out["required_ir_fingerprint"] = report_fp
     usable = [e for e in entries if e.get("ok")]
     if report_fp:
-        mismatch = [e for e in usable if _entry_fingerprint(e) not in (None, report_fp)]
+        mismatch = [e for e in usable if not ir_admissible(e, report_fp)]
         if mismatch:
             out["excluded_ir_mismatch"] = [e["id"] for e in mismatch]
             gate.append(f"results for another IR than {whose} {report_fp} excluded: "
@@ -1576,7 +1612,7 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
         best = max((t for _, t in candidates), key=trust_rank, default=None)
         gate.append(rule + (f" (best: {best})" if best else " (none found)"))
         return finish("not_verified", CONFIDENCE_CAPS["not_verified"])
-    fps = {_entry_fingerprint(e) for e, _ in admissible} - {None}
+    fps = {entry_fingerprint(e) for e, _ in admissible} - {None}
     if not report_fp and len(fps) > 1:
         gate.append(f"the {direction} results refer to {len(fps)} different IRs and the report names none "
                     "(ir_fingerprint)")
@@ -1617,7 +1653,8 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
 def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewed",
                    ledger: Any = None, evidence: Any = None,
                    pending_report: Mapping[str, Any] | None = None,
-                   formalization: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                   formalization: Mapping[str, Any] | None = None,
+                   rating_evidence: Sequence[Any] | None = None) -> dict[str, Any]:
     """Report + evidence from the final state.
 
     ``evidence`` (the run's ``EvidenceLedger``, P3): the evidence list, the
@@ -1632,6 +1669,9 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
     ``formalization`` (``hitl.formalization_binding``; ``None`` = HITL 1 off):
     the IR approved at HITL 1 is the one the verdict's evidence must refer to
     (:func:`verdict_gate`); it is copied to ``result["formalization"]``.
+
+    ``rating_evidence``: the ledger records the report is rated by (``None``: all of
+    ``evidence``); ``result["evidence"]`` still lists all of ``evidence``.
 
     ``ledger`` (the run's ``BudgetLedger``, optional): a refused call anywhere
     in its tree makes a run without a report ``budget_exhausted`` even when the
@@ -1694,7 +1734,7 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
             data = art.get("data") if isinstance(art.get("data"), Mapping) else {}
             gate_entries.append({**evidence[msg.tool_call_id], "data": data,
                                  "args": call_args.get(msg.tool_call_id) or {}})
-            fp = _entry_fingerprint(gate_entries[-1])
+            fp = entry_fingerprint(gate_entries[-1])
             if fp:
                 evidence[msg.tool_call_id]["ir_fingerprint"] = fp
 
@@ -1708,7 +1748,7 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
                 "unknown_ids": unknown}
 
     status = "submitted" if report is not None else "incomplete"
-    if report is None and pending_report is not None:
+    if pending_report is not None:  # a draft under review wins over a report accepted earlier in the thread
         report, status = dict(pending_report), "awaiting_human"
     result: dict[str, Any] = {
         "status": status,
@@ -1725,7 +1765,8 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
         result["note"] = ("evidence from the run's evidence ledger (every tool call of the main agent and "
                           "the subagents); trust set by code")
     if report is not None and ledger_of_evidence is not None:
-        _rate_from_ledger(result, report, ledger_of_evidence, formalization=formalization)
+        _rate_from_ledger(result, report, ledger_of_evidence if rating_evidence is None else rating_evidence,
+                          formalization=formalization)
     elif report is not None:
         steps = []
         step_ids: list[str] = []
@@ -1797,8 +1838,8 @@ def ledger_evidence(evidence: Any) -> list[dict[str, Any]]:
         entry = {"id": rec["id"], "tool": rec.get("tool"), "ok": rec.get("ok"), "trust": rec.get("trust"),
                  "trust_reason": rec.get("trust_reason"), "bounds": rec.get("bounds"),
                  "error": rec.get("error"), "role": rec.get("role")}
-        fp = _entry_fingerprint({"data": rec.get("data") if isinstance(rec.get("data"), Mapping) else {},
-                                 "args": rec.get("args") if isinstance(rec.get("args"), Mapping) else {}})
+        fp = entry_fingerprint({"data": rec.get("data") if isinstance(rec.get("data"), Mapping) else {},
+                                "args": rec.get("args") if isinstance(rec.get("args"), Mapping) else {}})
         if fp:
             entry["ir_fingerprint"] = fp
         out.append(entry)

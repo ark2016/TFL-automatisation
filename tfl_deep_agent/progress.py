@@ -36,16 +36,26 @@ Events:
 * orchestration events as the P4 context emits them (``spawn_start``,
   ``spawn_end``, ``workflow_start``, ``workflow_step_start``, ...);
 * ``hitl_awaiting`` -- the run stops for a human: ``point``
-  (formalization / report / execute), ``interrupt_id``, ``card`` (the text of
-  ``hitl.md``), ``draft`` (HITL 2: verdict / trust / cap of the draft);
+  (formalization / report / execute / budget), ``interrupt_id``, ``card`` (the
+  text of ``hitl.md``), ``draft`` (HITL 2: verdict / trust / cap of the draft);
 * ``hitl_decision`` -- a decision on a stop: ``point``, ``decision``
-  (approved / edited / rejected / auto_approved), ``source``, ``comment``,
+  (approved / edited / rejected / auto_approved; at the budget stop extended /
+  declined, with ``add_usd`` and ``new_limit_usd``), ``source``, ``comment``,
   ``edited_fields``, ``interrupt_id``;
-* ``segment_end`` -- ``status`` of the segment (``awaiting_human`` or the
-  final status) and ``error``;
-* ``done`` -- the run ended: ``status`` (submitted / incomplete /
-  budget_exhausted / error), ``verdict``, ``trust``, ``confidence_cap``,
-  ``error``.
+* ``user_message`` -- a human's follow-up to a finished run: ``text``;
+* ``assistant_message`` -- the agent's text answer to a follow-up: ``text``, and
+  ``truncated: true`` when it was cut to the limit;
+* ``followup_unanswered`` -- a follow-up ended with no model call, because the human
+  did not extend the budget; the report stays: ``text``, the chat's note;
+* ``followup_abandoned`` -- a follow-up did not finish: ``status`` (the run is back
+  to it, with the previous report) and ``error`` (why; ``null``: it was cancelled);
+* ``segment_end`` -- the end signal of a segment: ``status`` of the segment
+  (``awaiting_human`` or the final status) and ``error``;
+* ``done`` -- a final report state to display: ``status`` (submitted / incomplete /
+  budget_exhausted / error), ``verdict``, ``trust``, ``confidence_cap``, ``error``.
+  It is not the end signal: that is ``segment_end``, which comes right before it.
+  After a follow-up it comes only when the report changed or the status is not
+  submitted.
 
 The emitter never raises into the run: a failed write or a broken record is
 dropped (the agent's accounting and the evidence ledger stay authoritative).
@@ -60,6 +70,8 @@ import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from .run_store import MAX_MESSAGE_CHARS
 
 PROGRESS_FILE = "progress.jsonl"
 ARGS_PREVIEW_CHARS = 300
@@ -246,9 +258,23 @@ class ProgressEmitter:
                   card=card[:CARD_CHARS], draft=(run or {}).get("draft") if _get(info, "point") == "report" else None)
 
     def hitl_decision(self, review: Mapping[str, Any]) -> None:
+        money = {k: review[k] for k in ("add_usd", "new_limit_usd") if k in review}  # the budget stop
         self.emit("hitl_decision", point=review.get("point"), decision=review.get("decision"),
                   source=review.get("source"), comment=review.get("comment"),
-                  edited_fields=list(review.get("edited_fields") or []), interrupt_id=review.get("interrupt_id"))
+                  edited_fields=list(review.get("edited_fields") or []), interrupt_id=review.get("interrupt_id"),
+                  **money)
+
+    def user_message(self, text: str) -> None:
+        """The human's follow-up message: a user bubble in the chat."""
+        self.emit("user_message", text=str(text)[:MAX_MESSAGE_CHARS])
+
+    def assistant_message(self, text: str) -> None:
+        """The agent's text answer to a follow-up, cut to the limit (``truncated``)."""
+        text = str(text)
+        if len(text) > MAX_MESSAGE_CHARS:
+            self.emit("assistant_message", text=text[:MAX_MESSAGE_CHARS], truncated=True)
+        else:
+            self.emit("assistant_message", text=text)
 
     def segment_end(self, status: str | None, error: str | None = None) -> None:
         self.emit("segment_end", status=status, error=error)

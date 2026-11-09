@@ -21,7 +21,6 @@ is ``well_formed``; an invalid one, the schema reference and anything else is
 from __future__ import annotations
 
 import functools
-import hashlib
 import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -29,6 +28,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from tfl_deep_agent.evidence.ledger import ir_fingerprint
 from tfl_deep_agent.tools.base import (
     Deadline,
     ToolArgs,
@@ -69,13 +69,6 @@ IR_DESCRIPTION = (
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-def ir_fingerprint(ir: Any) -> str:
-    """A short stable id of an IR (sha256 of its canonical JSON), so a report
-    can say which IR a check was made against ("проверено относительно IR …")."""
-    text = json.dumps(ir, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
-    return "ir-" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
-
 
 def _validator(cls: str) -> Callable[[Any], list[str]]:
     # The same dispatch as tfl_eval.runners.validate (tfl_eval may import

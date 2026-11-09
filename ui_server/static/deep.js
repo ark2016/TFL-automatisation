@@ -22,13 +22,14 @@ const DEEP_TEMPLATES_FALLBACK = ['full_proof', 'exam_solution', 'short_verdict',
 const DEEP_REVIEW_MODES = [
   ['all', 'Подтверждать всё'],
   ['formalization', 'Только формализацию'],
-  ['auto', 'Без остановок'],
+  ['auto', 'Без проверок'],
 ];
 // a review point: its name in a decision line and the past forms of the decisions
 const DEEP_POINT = {
   formalization: {title: 'Формализация', name: 'формализация', approved: 'принята', edited: 'исправлена', rejected: 'отклонена'},
   report: {title: 'Черновик отчёта', name: 'отчёт', approved: 'принят', edited: 'исправлен', rejected: 'отклонён'},
   execute: {title: 'Команда в песочнице', name: 'команда', approved: 'разрешена', edited: 'исправлена', rejected: 'отклонена'},
+  budget: {title: 'Бюджет задачи заканчивается', name: 'бюджет'},
 };
 const DEEP_STATUS_RU = {
   queued: 'в очереди', running: 'работает', awaiting_human: 'ждёт решения', completed: 'готово',
@@ -174,7 +175,7 @@ function deepCreateBody(form) {
   if (form.autoApprove && !live) body.auto_approve = true;
   if (live) {
     // a live run may choose review_mode "auto" explicitly; the older auto_approve flag stays mock-only
-    if (form.autoApprove) return {error: 'auto_approve — только для mock: в live выберите режим «Без остановок» явно'};
+    if (form.autoApprove) return {error: 'auto_approve — только для mock: в live выберите режим «Без проверок» явно'};
     const h = (form.override && form.override.hitl) || {};
     const off = Object.keys(h).filter(k => h[k] === false);
     if (off.length) return {error: `платный запуск сохраняет точки проверки (${off.join(', ')}): отключают их в настройках, не для одного запуска`};
@@ -382,8 +383,65 @@ function deepPendingView(detail) {
   };
 }
 
+// The body of POST /api/deep/runs/<id>/message, or {error}: the text, or {preset: 'lean'}.
+function deepMessageBody(text, opts) {
+  const o = opts || {};
+  const body = {};
+  if (o.preset) {
+    body.preset = o.preset;
+  } else {
+    const t = String(text || '').trim();
+    if (!t) return {error: 'напишите сообщение'};
+    body.text = t;
+  }
+  if (o.live) {
+    if (o.confirm !== true) return {error: 'live: сообщение тратит деньги на API, отправка только кнопкой'};
+    body.confirm_spend = true;
+  }
+  return {body};
+}
+
+// What the composer does with the run open now: {kind, live, placeholder, note}.
+//   new      a new task (no run open; a server without `followup` as well)
+//   message  a follow-up to this run;  busy  wait for the agent / for a decision;  closed  cannot be continued
+function deepComposerState(detail, runId) {
+  if (!runId) return {kind: 'new', live: false, placeholder: '', note: ''};
+  const d = detail || {};
+  const run = d.run;
+  if (!run) return {kind: 'busy', live: false, placeholder: '', note: ''};
+  const f = d.followup;
+  if (!f || typeof f !== 'object') return {kind: 'new', live: false, placeholder: '', note: ''};
+  const live = !!run.live;
+  if (f.can_message) {
+    const b = d.budget || {};
+    const money = num(b.limit_usd) !== null ? ` · потрачено ${deepUsdShort(b.spent_usd ?? 0)} из ${deepUsdShort(b.limit_usd)}` : '';
+    return {kind: 'message', live, placeholder: 'Спросите агента или попросите доработать…',
+      note: live ? `live: сообщение платное, отправка только кнопкой${money}` : ''};
+  }
+  if (deepIsActive(run.status)) return {kind: 'busy', live, placeholder: 'Агент работает…', note: ''};
+  if (run.status === 'awaiting_human') return {kind: 'busy', live, placeholder: 'Агент ждёт вашего решения…', note: ''};
+  return {kind: 'closed', live, placeholder: 'Этот запуск не продолжить',
+    note: f.reason || 'Запуск не продолжить: он остановлен или прерван. Новая задача — кнопка «Новая».'};
+}
+
+// The dollars to add at the budget stop, from a button or the number input: {add} or {error}.
+function deepParseBudgetAdd(value, dayLeft) {
+  const add = Number(String(value ?? '').trim().replace(',', '.'));
+  if (!Number.isFinite(add) || add <= 0) return {error: 'укажите сумму больше нуля'};
+  const day = num(dayLeft);
+  if (day !== null && add > day + 1e-9) return {error: `на сегодня осталось только ${deepUsdShort(day)}`};
+  return {add};
+}
+
 // A decision line: "✓ формализация принята · вы", with the edited fields / the comment.
 function deepDecisionText(x) {
+  if (x.point === 'budget') {
+    const who = /auto/.test(String(x.source || '')) ? 'автоматически' : 'вы';
+    if (x.decision === 'extended') {
+      return {text: `✓ бюджет: +${deepUsdShort(x.add_usd)}, лимит ${deepUsdShort(x.new_limit_usd)} · ${who}`, kind: 'edited'};
+    }
+    return {text: `✓ бюджет: завершить с тем, что есть · ${who}`, kind: 'approved'};
+  }
   const meta = DEEP_POINT[x.point] || {name: String(x.point || 'решение'), approved: 'принято', edited: 'исправлено', rejected: 'отклонено'};
   const dec = String(x.decision || '');
   const kind = /^auto/.test(dec) ? 'auto' : (/^edit/.test(dec) ? 'edited' : (/^reject/.test(dec) ? 'rejected' : 'approved'));
@@ -408,6 +466,7 @@ function deepToolName(ev) {
 //   agent     a subagent scope (subagent_start ... end), a spawned agent or a workflow
 //   plan      where the agent first wrote its plan (the latest todos are shown there)
 //   decision  a review decision;  note  a budget signal or an error;  done  the end of the run
+//   user / assistant  a follow-up message and the agent's text answer
 function deepChatItems(events) {
   const items = [];
   let act = null;
@@ -543,6 +602,24 @@ function deepChatItems(events) {
         items.push({type: 'note', key: 'n' + i, cls: 'warn',
           text: (k === 'budget_refused' ? 'бюджет: вызов отклонён' : 'субагент не запущен') + (ev.reason ? ' — ' + deepClip(ev.reason, 140) : '')});
         break;
+      case 'user_message':
+        act = null;
+        items.push({type: 'user', key: 'u' + i, text: String(ev.text || '')});
+        break;
+      case 'assistant_message':
+        act = null;
+        items.push({type: 'assistant', key: 'm' + i, text: String(ev.text || '') + (ev.truncated ? '\n\n… (ответ обрезан)' : '')});
+        break;
+      case 'followup_unanswered':
+        act = null;
+        items.push({type: 'note', key: 'n' + i, cls: 'warn', text: String(ev.text || '')});
+        break;
+      case 'followup_abandoned':
+        act = null;
+        items.push(ev.error
+          ? {type: 'note', key: 'n' + i, cls: 'warn', text: 'сообщение не выполнено, отчёт прежний: ' + deepClip(ev.error, 400)}
+          : {type: 'note', key: 'n' + i, cls: '', text: 'сообщение отменено, отчёт прежний'});
+        break;
       case 'segment_start':
         act = null;
         break;
@@ -662,6 +739,8 @@ const deep = {
   estTimer: null,
   estimate: null,
   dispatching: false,
+  leanAsk: false,        // live: the Lean button's inline confirmation is open
+  pendingMessage: null,  // {text, at}: a follow-up on its way, shown until its user_message event
   baseTitle: document.title,
 };
 
@@ -838,7 +917,7 @@ function deepSyncControls() {
   const m = deepModeValue();
   const live = m.mode === 'live';
   deepMockInline.classList.toggle('show', m.mode === 'inline');
-  // an older server has no review_mode: there "no stops" means auto_approve, which is mock-only
+  // an older server has no review_mode: there «Без проверок» means auto_approve, which is mock-only
   const autoOpt = Array.from(deepReviewSel.options).find(o => o.value === 'auto');
   if (autoOpt) {
     autoOpt.disabled = live && deep.legacyCreate;
@@ -846,7 +925,7 @@ function deepSyncControls() {
   }
   deepReviewSel.classList.toggle('live', live && deepReviewSel.value === 'auto');
   deepReviewSel.title = live && deepReviewSel.value === 'auto'
-    ? 'live без остановок: агент не ждёт ваших решений, расходы идут до конца задачи'
+    ? 'без проверок: формализация и отчёт идут без вас, но денег сверх бюджета агент всё равно спросит'
     : 'когда агент останавливается и ждёт вашего решения';
   $('deep-live-group').classList.toggle('show', live);
   $('deep-live-group').classList.toggle('armed', live && deepConfirm.checked);
@@ -859,6 +938,27 @@ function deepSyncControls() {
   const est = deepEstimateLine(deep.estimate, m);
   deepEstimateEl.textContent = est.text;
   deepEstimateEl.className = 'dk-estimate' + (est.cls ? ' ' + est.cls : '');
+  const c = deepComposerNow();
+  if (c.kind !== 'new') {   // the form's mode applies only to a new task: the run has its own
+    deepRunBtn.classList.toggle('live', c.live);
+    deepRunBtn.title = c.live ? 'Отправить (платно; Ctrl+Enter не отправляет live)' : 'Отправить (Ctrl+Enter)';
+    deepRunBtn.disabled = deep.dispatching || c.kind !== 'message';
+  }
+}
+
+function deepComposerNow() { return deepComposerState(deep.detail, deep.runId); }
+
+// The composer continues the open run; only a new task has a file, a template and a mode.
+const DEEP_TASK_PLACEHOLDER = deepText.placeholder;
+function deepRenderComposer() {
+  const c = deepComposerNow();
+  $('deep-composer').classList.toggle('followup', c.kind !== 'new');
+  deepText.placeholder = c.placeholder || DEEP_TASK_PLACEHOLDER;
+  deepText.disabled = c.kind === 'busy' || c.kind === 'closed';
+  const note = $('deep-composer-note');
+  note.textContent = c.note;
+  note.classList.toggle('live', c.live);
+  deepSyncControls();
 }
 
 function deepRefreshEstimateSoon() {
@@ -914,6 +1014,7 @@ function deepClearFile() {
 }
 function deepSetFile(file) {
   if (!file) return;
+  if (deepComposerNow().kind !== 'new') { deepMsg('файл можно приложить только к новой задаче (кнопка «Новая»)', 'warn'); return; }
   const kind = deepFileKind(file.name, file.type);
   const maxMb = deep.settings && deep.settings.intake ? deep.settings.intake.max_file_mb : null;
   const problem = deepFileProblem(file.name, file.type, file.size, maxMb);
@@ -1017,17 +1118,60 @@ async function deepStartRun() {
     deepSyncControls();
   }
 }
-// Ctrl/Cmd+Enter sends a mock task; a live run needs the button
-function deepRunShortcut() {
-  if (deepModeValue().mode === 'live') { deepMsg('live-запуск — только кнопкой отправки (Ctrl+Enter запускает mock)', 'warn'); return; }
-  deepStartRun();
+// A follow-up to the open run: `body` from deepMessageBody. True when the server took it.
+async function deepPostMessage(body) {
+  if (deep.dispatching) return false;
+  deep.dispatching = true;
+  deepSyncControls();
+  deepMsg('');
+  const id = deep.runId;
+  try {
+    await sendJson(`/deep/runs/${encodeURIComponent(id)}/message`, body);
+    if (id !== deep.runId) return true;
+    deep.leanAsk = false;
+    deep.pendingMessage = {text: body.text || '', at: deep.events.length};
+    deepStartPolling();
+    deepRefreshRuns();
+    return true;
+  } catch (e) {
+    deepMsg(e.message, 'err');
+    return false;
+  } finally {
+    deep.dispatching = false;
+    deepSyncControls();
+  }
 }
-deepRunBtn.addEventListener('click', deepStartRun);
+
+async function deepSendFollowup() {
+  // a click on the button is the confirmation of a paid message; Ctrl+Enter never gets here on a live run
+  const res = deepMessageBody(deepText.value, {live: deepComposerNow().live, confirm: true});
+  if (res.error) { deepMsg(res.error, 'err'); return; }
+  if (await deepPostMessage(res.body)) {
+    deepText.value = '';
+    deepAutoGrow();
+  }
+}
+
+function deepSend() {
+  const kind = deepComposerNow().kind;
+  if (kind === 'message') deepSendFollowup();
+  else if (kind === 'new') deepStartRun();
+}
+
+// Ctrl/Cmd+Enter sends a mock task or a mock follow-up; anything live needs the button
+function deepRunShortcut() {
+  const c = deepComposerNow();
+  if (c.kind === 'message' && c.live) { deepMsg('live: сообщение — только кнопкой отправки', 'warn'); return; }
+  if (c.kind === 'new' && deepModeValue().mode === 'live') { deepMsg('live-запуск — только кнопкой отправки (Ctrl+Enter запускает mock)', 'warn'); return; }
+  deepSend();
+}
+deepRunBtn.addEventListener('click', deepSend);
 
 async function deepCancelRun() {
   const r = deep.detail && deep.detail.run;
   if (!r) return;
-  if (r.status === 'awaiting_human'
+  const followup = !!(deep.detail.followup && deep.detail.followup.in_progress);
+  if (r.status === 'awaiting_human' && !followup
       && !window.confirm('Остановить запуск? Запуск, ждущий решения, потом нельзя продолжить.')) return;
   deepCancelBtn.disabled = true;
   try {
@@ -1045,7 +1189,7 @@ deepCancelBtn.addEventListener('click', deepCancelRun);
 function deepNewTask() {
   deepStopPolling();
   Object.assign(deep, {runId: null, detail: null, events: [], cursor: 0, feedKey: null, cardKey: null, panelKey: null,
-    reportClosed: false, viewTpl: null});
+    reportClosed: false, viewTpl: null, leanAsk: false, pendingMessage: null});
   deep.open = new Set();
   deepRenderRuns();
   deepRenderAll();
@@ -1120,7 +1264,7 @@ function deepStopPolling() {
 function deepOpenRun(id) {
   deepStopPolling();
   Object.assign(deep, {runId: id, detail: null, events: [], cursor: 0, feedKey: null, cardKey: null, panelKey: null,
-    reportClosed: false, viewTpl: null, panelView: 'report'});
+    reportClosed: false, viewTpl: null, panelView: 'report', leanAsk: false, pendingMessage: null});
   deep.open = new Set();
   deepRunList.querySelectorAll('.dk-run').forEach(n => n.classList.toggle('active', n.dataset.id === id));
   deepRenderAll();
@@ -1148,7 +1292,16 @@ async function deepPollOnce(gen) {
   const evs = Array.isArray(d.events) ? d.events : [];
   if (evs.length) deep.events = deep.events.concat(evs);
   deep.cursor = num(d.next) ?? (deep.cursor + evs.length);
-  const prev = deep.detail && deep.detail.run ? deep.detail.run.status : null;
+  const before = deep.detail;
+  const prev = before && before.run ? before.run.status : null;
+  // a follow-up replaced the report: show the new one (a view of the old one is gone with it)
+  const revBefore = before && before.result ? before.result.report_revision : null;
+  const rev = d.result ? d.result.report_revision : null;
+  if (revBefore !== null && revBefore !== undefined && rev !== null && rev !== undefined && rev !== revBefore) {
+    deep.viewTpl = null;
+    deep.reportClosed = false;
+    deep.panelKey = null;
+  }
   deep.detail = d;
   const st = d.run ? d.run.status : null;
   if (st !== prev && prev !== null) deepRefreshRuns();
@@ -1162,6 +1315,7 @@ function deepRenderAll() {
   deepRenderFeed();
   deepRenderTail();
   deepRenderPanel();
+  deepRenderComposer();
 }
 
 //---------------------------------------------------------------------------
@@ -1202,8 +1356,13 @@ function deepAtBottom() {
 function deepScrollDown() { deepStream.scrollTop = deepStream.scrollHeight; }
 
 function deepRenderFeed(force) {
+  const fu = deep.detail && deep.detail.followup;
+  const stillSent = deep.pendingMessage && deepIsActive(deep.detail && deep.detail.run ? deep.detail.run.status : 'queued')
+    && !deep.events.slice(deep.pendingMessage.at).some(e => e.event === 'user_message');
+  if (!stillSent) deep.pendingMessage = null;
   const key = `${deep.runId}:${deep.events.length}:${[...deep.open].join(',')}:${deep.detail ? (deep.detail.todos || []).length : -1}`
-    + `:${deep.detail && deep.detail.result ? 'r' : ''}:${deep.taskText[deep.runId] ? 't' : ''}`;
+    + `:${deep.detail && deep.detail.result ? 'r' + deep.detail.result.report_revision : ''}:${deep.taskText[deep.runId] ? 't' : ''}`
+    + `:${fu && fu.lean && fu.lean.available ? 'lean' : ''}:${deep.leanAsk ? 'ask' : ''}:${deep.pendingMessage ? 'sent' : ''}`;
   if (!force && key === deep.feedKey) return;
   const wasBottom = deepAtBottom();
   deep.feedKey = key;
@@ -1214,6 +1373,9 @@ function deepRenderFeed(force) {
   }
   deepFeed.appendChild(deepUserMessage());
   const items = deepChatItems(deep.events);
+  const lastDone = items.filter(it => it.type === 'done').pop();
+  if (lastDone) lastDone.last = true;
+  if (deep.pendingMessage && deep.pendingMessage.text) items.push({type: 'user', key: 'sent', text: deep.pendingMessage.text});
   const frag = document.createDocumentFragment();
   items.forEach(it => {
     const n = deepItemNode(it);
@@ -1310,6 +1472,18 @@ function deepItemNode(it) {
       return n;
     }
     case 'done': return deepDoneNode(it);
+    case 'user': {
+      const msg = el('div', 'dk-msg-user');
+      const bubble = el('div', 'dk-bubble');
+      bubble.appendChild(el('div', 'dk-bubble-text', it.text));
+      msg.appendChild(bubble);
+      return msg;
+    }
+    case 'assistant': {
+      const box = el('div', 'md-render dk-agent-text');
+      deepRenderMarkdownInto(box, it.text);
+      return box;
+    }
     default: return null;
   }
 }
@@ -1388,14 +1562,39 @@ function deepPlanNode() {
   return box;
 }
 
+// «Формально верифицировать (Lean)» under the last final card. Live: a second click confirms, inline.
+function deepLeanAction() {
+  const d = deep.detail || {};
+  const lean = d.followup && d.followup.lean;
+  if (!lean || !lean.available) return null;
+  const live = !!(d.run && d.run.live);
+  const go = () => {
+    const res = deepMessageBody('', {preset: 'lean', live, confirm: true});
+    if (res.error) deepMsg(res.error, 'err'); else deepPostMessage(res.body);
+  };
+  const box = el('div', 'dk-card-actions dk-lean');
+  if (live && deep.leanAsk) {
+    const limit = num(lean.subagent_limit_usd);
+    box.appendChild(el('span', 'dk-lean-ask', `Модель ${deepShortModel(deepModelName(lean.model)) || lean.model || '?'}`
+      + (limit !== null ? `, лимит субагента ${deepUsdShort(limit)}` : '')));
+    box.appendChild(deepBtn('Запустить', 'primary', go));
+    box.appendChild(deepBtn('Отмена', 'ghost', () => { deep.leanAsk = false; deepRenderFeed(true); }));
+  } else {
+    box.appendChild(deepBtn('Формально верифицировать (Lean)', null,
+      live ? () => { deep.leanAsk = true; deepRenderFeed(true); } : go));
+  }
+  return box;
+}
+
 function deepDoneNode(it) {
   const d = deep.detail || {};
-  const res = d.result || null;
+  // an earlier final card keeps what it said then; only the last one is the current report
+  const res = it.last ? (d.result || null) : null;
   const ok = it.status === 'submitted';
   const card = el('div', 'dk-card done' + (ok ? '' : ' bad'));
   const head = el('div', 'dk-card-head');
   head.appendChild(el('span', 'dk-card-title', ok ? 'Отчёт готов' : ({incomplete: 'Отчёт не принят', budget_exhausted: 'Бюджет исчерпан', error: 'Ошибка'}[it.status] || 'Запуск завершён')));
-  const spent = firstNum(d.budget && d.budget.spent_usd, d.run && d.run.spent_usd);
+  const spent = it.last ? firstNum(d.budget && d.budget.spent_usd, d.run && d.run.spent_usd) : null;
   if (spent !== null) head.appendChild(el('span', 'dk-card-meta', fmtUsd(spent)));
   card.appendChild(head);
   const line = el('div', 'dk-card-line');
@@ -1418,6 +1617,8 @@ function deepDoneNode(it) {
     acts.appendChild(deepBtn('Открыть отчёт', 'primary', () => deepShowPanel('report')));
     card.appendChild(acts);
   }
+  const lean = it.last ? deepLeanAction() : null;
+  if (lean) card.appendChild(lean);
   return card;
 }
 
@@ -1428,21 +1629,34 @@ function deepRenderTail() {
   const d = deep.detail;
   const run = d && d.run;
   const pv = deepPendingView(d);
-  const key = pv ? `${deep.runId}:${pv.interruptId}:${pv.point}` : `${deep.runId}:${run ? run.status : ''}:${run ? (run.error || '') : ''}`;
+  const lastError = d && d.followup ? d.followup.error : null;
+  const key = pv ? `${deep.runId}:${pv.interruptId}:${pv.point}`
+    : `${deep.runId}:${run ? run.status : ''}:${run ? (run.error || '') : ''}:${lastError || ''}`;
   const wasBottom = deepAtBottom();
   if (key !== deep.cardKey) {
     deep.cardKey = key;
     deepTail.textContent = '';
     if (pv) {
-      deepTail.appendChild(deepReviewCard(pv, run));
+      deepTail.appendChild(pv.point === 'budget' ? deepBudgetCard(pv, run) : deepReviewCard(pv, run));
       if (pv.point === 'report' && !deep.reportClosed) deep.panelKey = null;
     } else if (run && !deepIsActive(run.status)) {
-      const hasDone = deep.events.some(e => e.event === 'done');
+      const inFeed = deep.events.some(e => (e.event === 'done' || e.event === 'segment_end') && e.error === run.error);
       if (run.status === 'cancelled') deepTail.appendChild(el('div', 'dk-line note', 'запуск остановлен'));
       else if (run.status === 'interrupted') deepTail.appendChild(el('div', 'dk-line note warn', 'запуск прерван (сервер перезапускался); результат — в журнале'));
       else if (run.status === 'awaiting_human') deepTail.appendChild(el('div', 'dk-line note warn', 'запуск ждёт решения, но точка остановки не найдена'));
-      if (run.error && !hasDone) {
+      if (run.error && !inFeed) {
         const n = el('div', 'dk-line note err', 'ошибка: ' + deepClip(run.error, 400));
+        const lb = el('button', 'dk-linkbtn', 'журнал');
+        lb.type = 'button';
+        lb.addEventListener('click', () => deepShowPanel('log'));
+        n.appendChild(lb);
+        deepTail.appendChild(n);
+      }
+      // a follow-up the CLI refused has no event of its own
+      if (lastError && !deep.events.some(e => e.error === lastError)) {
+        // a follow-up that could not be restored closes the composer: the report may not be the previous one
+        const said = d.followup.can_message ? 'сообщение не выполнено, отчёт прежний: ' : 'сообщение не выполнено: ';
+        const n = el('div', 'dk-line note warn', said + deepClip(lastError, 400));
         const lb = el('button', 'dk-linkbtn', 'журнал');
         lb.type = 'button';
         lb.addEventListener('click', () => deepShowPanel('log'));
@@ -1462,6 +1676,67 @@ function deepRenderTail() {
     working.style.display = active ? '' : 'none';
     if (active) working.lastChild.textContent = (run.status === 'queued' ? 'в очереди…' : 'агент работает…') + (num(run.elapsed) !== null ? ' ' + fmtDur(run.elapsed) : '');
   }
+}
+
+// Send a decision from a card: the controls are off meanwhile, a refusal brings them back.
+async function deepSubmitDecision(card, body, setMsg, describeError) {
+  const controls = [...card.querySelectorAll('button, input, textarea')].filter(c => !c.disabled);
+  controls.forEach(c => { c.disabled = true; });
+  setMsg('отправляю…');
+  try {
+    await sendJson(`/deep/runs/${encodeURIComponent(deep.runId)}/resume`, body);
+    setMsg('отправлено, агент продолжает', 'ok');
+    card.classList.add('sent');
+    deepStartPolling();
+    deepRefreshRuns();
+  } catch (e) {
+    controls.forEach(c => { c.disabled = false; });
+    setMsg(describeError ? describeError(e) : e.message, 'err');
+  }
+}
+
+// The budget stop: spent / limit, +$1, +$5, an amount of your own, finish with what is left.
+// The click is the decision about money, so a live run needs no separate confirmation here.
+function deepBudgetCard(pv, run) {
+  const card = el('div', 'dk-card review');
+  const head = el('div', 'dk-card-head');
+  head.appendChild(el('span', 'dk-card-title', pv.title));
+  head.appendChild(el('span', 'dk-card-meta', deepTimeOf(pv.askedAt)));
+  card.appendChild(head);
+  pv.summary.forEach(s => card.appendChild(el('div', 'dk-card-line', s)));
+  const args = (deepPendingActions(pv.raw)[0] || {}).args || {};
+  const msg = el('span', 'dk-card-msg');
+  const setMsg = (t, cls) => { msg.textContent = t || ''; msg.className = 'dk-card-msg' + (cls ? ' ' + cls : ''); };
+  const send = async (decision, payload) => {
+    const res = deepResumeBody(decision, {payload, live: !!(run && run.live), confirm: true, allowed: pv.allowed});
+    if (res.error) { setMsg(res.error, 'err'); return; }
+    await deepSubmitDecision(card, res.body, setMsg);
+  };
+  const addMoney = (value) => {
+    const a = deepParseBudgetAdd(value, args.day_left_usd);
+    if (a.error) setMsg(a.error, 'err'); else send('edit', {add_usd: a.add});
+  };
+  const actions = el('div', 'dk-card-actions');
+  [1, 5].forEach(x => {
+    const b = deepBtn('+$' + x, 'primary', () => addMoney(x));
+    if (deepParseBudgetAdd(x, args.day_left_usd).error) b.disabled = true;
+    actions.appendChild(b);
+  });
+  const own = el('label', 'dk-money');
+  own.appendChild(document.createTextNode('$'));
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0.01';
+  input.step = '0.5';
+  input.setAttribute('aria-label', 'сумма, которую добавить, $');
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addMoney(input.value); } });
+  own.appendChild(input);
+  actions.appendChild(own);
+  actions.appendChild(deepBtn('Добавить', null, () => addMoney(input.value)));
+  actions.appendChild(deepBtn('Завершить с тем, что есть', 'ghost', () => send('approve')));
+  card.appendChild(actions);
+  card.appendChild(msg);
+  return card;
 }
 
 // Inline review card: title, ≤ 4 summary lines, Принять / Изменить / Отклонить, "Принять всё до конца".
@@ -1495,19 +1770,8 @@ function deepReviewCard(pv, run) {
     const res = deepResumeBody(decision, {payload: o.payload, comment: o.comment, approveRest: o.approveRest, live,
       confirm: confirm ? confirm.checked : false, allowed: pv.allowed});
     if (res.error) { setMsg(res.error, 'err'); return; }
-    card.querySelectorAll('button').forEach(b => { b.disabled = true; });
-    setMsg('отправляю…');
-    try {
-      await sendJson(`/deep/runs/${encodeURIComponent(deep.runId)}/resume`, res.body);
-      setMsg('отправлено, агент продолжает', 'ok');
-      card.classList.add('sent');
-      deepStartPolling();
-      deepRefreshRuns();
-    } catch (e) {
-      card.querySelectorAll('button').forEach(b => { b.disabled = false; });
-      setMsg(o.approveRest && e.status === 400 && /approve_rest/.test(e.message)
-        ? 'сервер не поддерживает «принять всё до конца»: принимайте по одной точке' : e.message, 'err');
-    }
+    await deepSubmitDecision(card, res.body, setMsg, (e) => (o.approveRest && e.status === 400 && /approve_rest/.test(e.message)
+      ? 'сервер не поддерживает «принять всё до конца»: принимайте по одной точке' : e.message));
   };
   const can = (x) => pv.allowed.includes(x);
   const showZone = (node) => { zone.textContent = ''; if (node) zone.appendChild(node); };
@@ -1703,7 +1967,8 @@ function deepPanelSource() {
   if (!res || res.draft) return null;
   const urls = res.urls || {};
   if (!urls.html && !urls.md) return null;
-  return {urls, draft: false, template: deepReportTemplate(res, null), canRender: !!res.can_render, views: res.views || {}};
+  return {urls, draft: false, template: deepReportTemplate(res, null), canRender: !!res.can_render, views: res.views || {},
+    reportRevision: res.report_revision};
 }
 function deepPanelVisible() { return deepView.classList.contains('has-panel'); }
 function deepShowPanel(view) {
@@ -1723,8 +1988,13 @@ function deepRenderPanel() {
   if (!show) { deep.panelKey = null; return; }
   const viewing = src && !src.draft && deep.viewTpl && deep.viewTpl.runId === deep.runId ? deep.viewTpl : null;
   const view = wantLog ? 'log' : 'report';
+  // the same report object keeps its panel: a follow-up swaps its URLs to a snapshot and back, a text reply re-renders the files
+  const what = src && !src.draft && src.reportRevision !== null && src.reportRevision !== undefined
+    ? 'r' + src.reportRevision : Object.values(src ? src.urls : {}).join(',');
+  const fu = deep.detail && deep.detail.followup;
+  const controls = src && (src.canRender || (fu && fu.in_progress)) ? 'tpl' : '';
   const key = view === 'log' ? `${deep.runId}:log:${(deep.detail && deep.detail.log_tail || []).length}`
-    : `${deep.runId}:${src.draft}:${Object.values(src.urls).join(',')}:${src.template}:${viewing ? viewing.template : ''}`;
+    : `${deep.runId}:${src.draft}:${what}:${src.template}:${viewing ? viewing.template : ''}:${controls}`;
   if (key === deep.panelKey) return;
   deep.panelKey = key;
   $('deep-panel-title').textContent = view === 'log' ? 'Журнал' : (src.draft ? 'Черновик отчёта' : 'Отчёт');

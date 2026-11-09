@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -82,7 +83,7 @@ def test_deep_js_is_loaded_after_app_js():
 
 def test_deep_frontend_calls_every_deep_endpoint():
     for path in ("'/deep/settings'", "'/deep/mock-scripts'", "'/deep/runs'", "/deep/estimate",
-                 "/resume`", "/cancel`", "/render`", "/files/"):
+                 "/resume`", "/message`", "/cancel`", "/render`", "/files/"):
         assert path in DEEP, path
     assert "'PUT'" in DEEP
     # fields of POST /api/deep/runs the tab sends are accepted by the backend (or are the new contract)
@@ -137,8 +138,12 @@ const out = calls.map(([fn, ...args]) => {
 });
 process.stdout.write(JSON.stringify(out));
 """
-    r = subprocess.run(["node", "-e", script], input=json.dumps(calls), capture_output=True,
-                       text=True, encoding="utf-8")
+    # through a file: the helpers do not fit in a Windows command line (32767 characters)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "deep_helpers.js"
+        path.write_text(script, encoding="utf-8")
+        r = subprocess.run(["node", str(path)], input=json.dumps(calls), capture_output=True,
+                           text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -620,3 +625,119 @@ def test_static_files_served_with_deep_section():
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# ---------------------------------------------------------------------------
+# Follow-up messages and the budget stop
+# ---------------------------------------------------------------------------
+
+def test_followup_markup_and_contract():
+    assert 'id="deep-composer-note"' in INDEX
+    assert "/message`" in DEEP and "deepBudgetCard(pv, run)" in DEEP
+    assert ".dk-composer.followup" in CSS and ".dk-agent-text" in CSS
+    assert {"text", "preset", "confirm_spend"} == set(dr.MESSAGE_KEYS)
+    assert "window.confirm" not in DEEP[DEEP.index("function deepLeanAction"):DEEP.index("function deepDoneNode")]
+    # the report during a follow-up comes from the server, so a reload shows it too
+    poll = DEEP[DEEP.index("async function deepPollOnce"):DEEP.index("function deepRenderAll")]
+    assert "d.result =" not in poll
+    # both cards send a decision the same way
+    assert DEEP.count("/resume`") == 1 and DEEP.count("deepSubmitDecision(card,") == 3
+
+
+FOLLOWUP_OPEN = {"can_message": True, "reason": None, "in_progress": False, "lean": {"available": True}}
+FOLLOWUP_SHUT = {"can_message": False, "reason": "x", "in_progress": False, "lean": {"available": False}}
+
+
+@needs_node
+def test_composer_state():
+    money = {"spent_usd": 1.25, "limit_usd": 10}
+    r = _js([
+        ["deepComposerState", None, None],
+        ["deepComposerState", None, "r1"],
+        ["deepComposerState", {"run": {"status": "completed"}}, "r1"],  # an older server: no followup key
+        ["deepComposerState", {"run": {"status": "completed"}, "followup": FOLLOWUP_OPEN, "budget": money}, "r1"],
+        ["deepComposerState", {"run": {"status": "completed", "live": True}, "followup": FOLLOWUP_OPEN, "budget": money}, "r1"],
+        ["deepComposerState", {"run": {"status": "running"}, "followup": FOLLOWUP_SHUT}, "r1"],
+        ["deepComposerState", {"run": {"status": "awaiting_human"}, "followup": FOLLOWUP_SHUT}, "r1"],
+        ["deepComposerState", {"run": {"status": "cancelled"}, "followup": FOLLOWUP_SHUT}, "r1"],
+    ])
+    assert [x["kind"] for x in r] == ["new", "busy", "new", "message", "message", "busy", "busy", "closed"]
+    assert r[3]["placeholder"].startswith("Спросите агента") and r[3]["note"] == "" and r[3]["live"] is False
+    assert r[4]["live"] is True and "только кнопкой" in r[4]["note"] and "$1.25" in r[4]["note"] and "$10" in r[4]["note"]
+    assert "работает" in r[5]["placeholder"] and "решения" in r[6]["placeholder"]
+    assert r[7]["note"] == "x"  # the server's reason
+    no_reason = {"can_message": False, "reason": None, "in_progress": False}
+    fallback = _one("deepComposerState", {"run": {"status": "cancelled"}, "followup": no_reason}, "r1")
+    assert fallback["kind"] == "closed" and "кнопка «Новая»" in fallback["note"]
+
+
+@needs_node
+def test_message_body():
+    r = _js([
+        ["deepMessageBody", "  вопрос \n", {}],
+        ["deepMessageBody", "   ", {}],
+        ["deepMessageBody", "", {"preset": "lean"}],
+        ["deepMessageBody", "вопрос", {"live": True}],
+        ["deepMessageBody", "вопрос", {"live": True, "confirm": True}],
+        ["deepMessageBody", "", {"preset": "lean", "live": True, "confirm": True}],
+    ])
+    assert r[0] == {"body": {"text": "вопрос"}}
+    assert "error" in r[1]
+    assert r[2] == {"body": {"preset": "lean"}}
+    assert "кнопкой" in r[3]["error"]
+    assert r[4] == {"body": {"text": "вопрос", "confirm_spend": True}}
+    assert r[5] == {"body": {"preset": "lean", "confirm_spend": True}}
+
+
+@needs_node
+def test_budget_add():
+    r = _js([
+        ["deepParseBudgetAdd", 5],
+        ["deepParseBudgetAdd", "2,5"],
+        ["deepParseBudgetAdd", ""],
+        ["deepParseBudgetAdd", "-1"],
+        ["deepParseBudgetAdd", "много"],
+        ["deepParseBudgetAdd", 5, 3],
+        ["deepParseBudgetAdd", 3, 3],
+    ])
+    assert r[0] == {"add": 5} and r[1] == {"add": 2.5}
+    assert all("error" in x for x in r[2:5])
+    assert "$3" in r[5]["error"] and r[6] == {"add": 3}
+
+
+@needs_node
+def test_budget_decision_lines():
+    r = _js([
+        ["deepDecisionText", {"point": "budget", "decision": "extended", "add_usd": 5, "new_limit_usd": 15, "source": "resume"}],
+        ["deepDecisionText", {"point": "budget", "decision": "declined", "source": "resume"}],
+    ])
+    assert "+$5" in r[0]["text"] and "$15" in r[0]["text"] and "вы" in r[0]["text"]
+    assert "завершить с тем, что есть" in r[1]["text"]
+
+
+@needs_node
+def test_followup_chat_items():
+    items = _one("deepChatItems", [
+        {"event": "done", "status": "submitted"},
+        {"event": "user_message", "text": "Почему?"},
+        {"event": "assistant_message", "text": "**Потому что.**"},
+        {"event": "followup_abandoned"},
+        {"event": "followup_abandoned", "error": "ValueError: boom"},
+        {"event": "done", "status": "submitted"},
+    ])
+    assert [i["type"] for i in items] == ["done", "user", "assistant", "note", "note", "done"]
+    assert items[1]["text"] == "Почему?" and items[2]["text"] == "**Потому что.**"
+    assert "отменено" in items[3]["text"] and items[3]["cls"] == ""
+    assert "не выполнено" in items[4]["text"] and "boom" in items[4]["text"] and items[4]["cls"] == "warn"
+    assert len({i["key"] for i in items}) == len(items)
+
+
+@needs_node
+def test_a_message_with_no_model_call_is_a_note():
+    note = "сообщение без ответа: бюджет не продлён, отчёт прежний"
+    items = _one("deepChatItems", [{"event": "done", "status": "submitted"},
+                                   {"event": "user_message", "text": "Почему?"},
+                                   {"event": "followup_unanswered", "text": note},
+                                   {"event": "segment_end", "status": "submitted"}])
+    assert [i["type"] for i in items] == ["done", "user", "note"]
+    assert items[2]["text"] == note and items[2]["cls"] == "warn"

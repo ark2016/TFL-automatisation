@@ -3243,3 +3243,148 @@ Fixed after reading the reports:
 
 Still open: no live reject at HITL 2 (the report was approved), no live `spawn_subagent` / `run_workflow`, no step of the
 five reports cites an evidence id (Haiku cites at report level only, so the "(проверено: tool ✓)" marks do not appear).
+
+## 2026-11-09: follow-up messages, the Lean button, the budget stop (user request)
+
+A finished run takes more messages in the same conversation, and a task that runs out of money asks for more instead of
+ending. Entry points: `hitl.send_followup`, `--resume RUN_DIR --message TEXT|@FILE`, `POST /api/deep/runs/<id>/message`
+`{text | preset: "lean", confirm_spend}`, and the budget stop (`budget_stop.request_budget_extension`, point `budget`, decisions
+`edit {"add_usd": X}` = `extended` / `approve` = `declined`). Tests: `tests/test_followup.py`, the follow-up blocks of
+`ui_server/tests/test_deep_routes.py` and `test_deep_frontend.py`. Mock script for the UI: `examples/mock/reg_followup.json`.
+
+Decisions and deviations:
+- The extended limit lives in `run["budget_limit_usd"]`, not in `run["settings"]["budget"]["per_task_usd"]`: a task limit above
+  `per_day_usd` would fail `validate_settings`. `_budget_ledger` applies it. The settings snapshot stays what the run started with.
+- `run["limits"]` (model-call and subagent counters) start again for each follow-up. Money stays capped by the ledger.
+- A stop in progress is given back to the call limit (`RunLimits.give_back_model_call`): the node re-executes on resume.
+- `start_run(budget_stop=None)` means `not auto_approve`. A `--auto-approve` run has no one to ask and keeps the old wrap-up. Review mode
+  `auto` chosen in the UI is about reviews only: money still asks. `approve_rest` is refused at the budget stop and does not
+  remove a later one.
+- "Finish with what is left" sets `budget_declined`, so a new process does not ask again; a new message clears it.
+- An extension too small for the next call goes on to wrap-up, with no second question in that step.
+- No stop when the day's remainder is what binds: more task budget buys nothing. Live extensions are checked against the
+  remainder at decision time (`with_todays_day_left`), not the one on the card.
+- Each message forks from `stable_checkpoint_id`, so a failed or cancelled follow-up leaves no half-finished branch (a tool
+  call without a result would break the next model call). Errors restore `report_history/<n>/` and set `followup_error`.
+  Budget extensions survive a failed follow-up: that money was granted.
+- `report_revision` / `report_digest`: a final card and a new revision only when the report really changed. From the second revision
+  the report URLs carry `?v=<revision>`, and the panel key contains the revision, so the panel reloads. A text answer re-renders `result.*`
+  with the run's money (the budget section changes), the `report` object and the revision do not.
+- The server's `followup_from` record gives a killed or crashed follow-up its finished state back; a crash is shown as
+  `followup.error` on a run that stays `completed`, and `run.error` stays for failures of the run itself.
+  `followup.in_progress` was added beyond the plan: the frontend needs it to skip the "cannot be continued" warning when a
+  follow-up waiting at HITL 2 is cancelled.
+- Lean is offered when the report is accepted and the class is not LL, unless this report already cites a `proved`
+  `lean_check` (`followup.lean_refusal`). Plain `verified` from other tools does not hide it: the human asked for this button,
+  and a REG run approved by a human was exactly the case that lost it (changed in review iteration 2, the coordinator's call).
+- `app.js loadScript`: `async = false`. Parallel loading let KaTeX's auto-render run before `katex` and capture `undefined`, which
+  left `$...$` unrendered and threw in the Markdown path, in the pipelines' tab as well.
+- `ui_server/tests/test_deep_frontend.py` runs the helpers from a temp file: they outgrew the Windows command line (32767 characters).
+
+Review iteration 2 (fixes, with a reproduction first):
+- Module split: `followup.py`, `budget_stop.py` and `run_store.py` (run.json, statuses, exit codes, `MAX_MESSAGE_CHARS`). They import
+  without langchain, so `ui_server` imports them at module level; `send_followup` and `request_budget_extension` import the heavy
+  parts where they are used. `run_store.py` was not in the review's list: both new modules and `hitl` need its constants, and
+  `hitl` importing them from a module that imports `hitl` would be a cycle.
+- `hitl.POINTS` (title, auto_approvable, shows_args, editable) replaces the switches that read those facts. The pre-existing
+  resume logic stays as it was.
+- A follow-up record that survives its process means the process did not finish. Exit code 1 is also "no report", so the record
+  decides, not the code: `_restore_dead_followup` restores the report outside `_lock` and `_settle_followup_locked` runs first.
+- `guarded_segment` catches `BaseException`; `--resume RUN_DIR --abandon` handles a process killed hard.
+- During a follow-up the detail's `result` comes from the newest `report_history/<n>/` (immutable, no Windows sharing violation).
+  At HITL 2 of a follow-up it is the draft. The client copy in `deepPollOnce` is gone, so a reload shows the same thing. The panel's
+  key is the revision, so swapping the URLs to a snapshot and back does not reload the iframe.
+- Message files have unique names; the send that loses the race removes its own.
+- HITL 2 skips a report with leaked tool-call markup too (the coordinator's addition): the human saw that report and the tool
+  refused it only after the approval. `when` now skips invalid fields, unknown ids when it has the ledger, and leaked markup. A
+  report refused for unknown ids with no ledger in the config still stops first.
+
+Known gaps: a summarization step may enter wrap-up without asking (it runs inside another node). A summary made in the call that
+then hits the budget stop is made and charged again after the resume, exactly once per stop: the node re-executes from its start
+(mock: $0.0006 more, `test_a_summary_before_the_stop_is_paid_for_once_more_and_the_cap_holds`; the money cap holds, reviewer's option B).
+A killed follow-up's evidence stays in `evidence.jsonl`, and mock cursors are not rewound after a cancel. The preset's message is
+shown in full in the chat.
+
+Checked: mock mode only, no API calls. Playwright on an isolated server (port 8791, no key, temp runs dir): follow-up answer
+with math, Lean in mock, a new report revision, the budget card with a custom amount. The live look of the composer and the
+Lean confirmation was checked by marking the run live in the page's memory, not by a live run; nothing was sent in that state.
+No live run covers any of this yet.
+
+Checked in review iteration 2, Playwright on the same kind of isolated server, mock only: the Lean button on a run a human
+approved (`verified`); a reload during a follow-up keeps the report (served from `report_history/2`); cancel at HITL 2 of a
+follow-up gives "сообщение отменено, отчёт прежний"; a killed follow-up process gives "сообщение не выполнено, отчёт прежний: ..."
+with the previous report and `verified` kept (corrected in iteration 3: an exhausted mock script gave a red
+"ошибка: mock script: ..." at that point, not this note; iteration 3 made both paths one event shape); the budget card's +$1 and +$5 finish the
+run; «Завершить» at a stop before any spend gives `budget_exhausted` and the partial report; a cancelled first segment shows
+"Запуск не продолжить" and a disabled composer. «Завершить» after real work ran into the mock script's own `expect` (the wrap-up
+note is the last message) and ended with the script's error, so that path in the browser shows only that the wrap-up note reaches
+the model; the outcome is covered by tests only.
+
+Review iteration 3 (a reproduction first; 44 tests failed on the code before it):
+- A HITL 2 review stores `report_digest`; `review_summary(run, report)` takes the last review of the current report. A positional
+  `reviews[:n]` would break on the second message. Trust does not read this: `verdict_gate` reads HITL 1 reviews only. `report_rejections`
+  in the hitl block stays a count of history.
+- The review-mode switch moved into `resume_run` (`approve_rest`, `auto_approve_later`), applied after `resume_value` succeeds. The CLI
+  no longer edits those fields, so a refused command changes nothing. `budget_stop.review_switch_refusal` is the one rule for both.
+- `followup_in_progress.review_switch` saves `review_mode`, `auto_approve`, `initial_review_mode`, `approve_rest`; `fail_followup` restores
+  them. Budget extensions are not in it: that money was granted.
+- `run_store.retry_on_sharing_violation` serves `save_run` and `restore_report`. The record goes only after the restore. `followup.reason`
+  gives the `--abandon` command when the record is stuck (`followup.stuck_followup`); no new route.
+- One failure, one event shape: `followup_abandoned` (restored status, error), then `segment_end` (restored status, no error).
+- `evidence/ledger.lean_proof_side` is the per-entry predicate of the verdict gate, fingerprint rule included (`ir_admissible`,
+  `ir_fingerprint` moved there; `tools.ir` imports it). `followup._proved_in` is that predicate plus the result's `trust == "verified"`,
+  which is how the gate's multi-entry rules reach it. The gate's behaviour and its tests did not change.
+- `followup.day_refusal` serves the route and `hitl.send_followup`. `BudgetLedger.for_task` raises for a new run only, so the follow-up path
+  of the `RunError` branch in `_segment` could not run and is gone; the branch stays for a new run.
+- `send_followup` moved to `hitl.py`, `first_decision` to `run_store.py`: `followup.py` and `budget_stop.py` do not reference `hitl`.
+- `budget_stop_enabled` of a pre-field run reads `initial_review_mode` only, so a pre-field run after `approve_rest` still asks.
+
+Known gaps (not done, the coordinator's call): a pid liveness check for `--abandon`, a lab abandon route, the exit-code rename, the other
+API-019 renames, the remaining OO-011 / OO-001 repeats, `deepMessageBody`'s guard.
+
+Checked in review iteration 3, Playwright on an isolated server (port 8791, no key, temp runs dir, a script of its own), mock only:
+a rejected draft in a follow-up, then a text reply, keeps "approved by a human at HITL 2"; a new report in a follow-up gives a second
+final card and `?v=2` URLs with revision 2 on disk; an exhausted mock script gives one note, "сообщение не выполнено, отчёт прежний: ...",
+and no red line; the label «Без проверок». The closed composer's reason was seen on a `run.json` edited by hand to keep the record. A
+restore that really fails, a cancel landing as a follow-up finishes, the Lean predicate and the CLI's refusals are covered by tests only.
+
+Final fix round (user's decision; everything else from the reviews goes to the backlog):
+- OO-019. An accepted report is rated by what existed when it was accepted. `hitl._as_accepted` cuts the state at the first human
+  message after the report: the `tfl_hitl` records and reviews of later tool calls do not count for the rating or the task. It drops
+  records of later calls rather than keeping records of earlier ones, so a message summarized away cannot lose an old record, and a
+  first run has no human message after its report, so it does not change. `resume_value` stores `reviewed_call_id` in a HITL 1 review.
+- The gate does not ignore later evidence: it takes results the report never cited (R4'), and `ir_admissible` lets a record that
+  names no IR through. A later `nerode_probe(ir=A)` moved the cap from 0.98 to 0.85 and the revision to 2 on the old code; a later
+  `ll_table(grammar=G)` counts too, up to `bounded_pass` next to a matching `grammar_vs_ir`
+  (`test_the_gate_itself_counts_a_later_record_that_names_no_ir`). So the rating takes only the first `run.json`
+  `accepted_report.evidence_count` records of the ledger, kept with the report's `call_id` when it is accepted. The ledger is
+  append-only, so the count is exact, and the evidence of a failed follow-up is cut as well. `collect_result(rating_evidence=...)`
+  carries it; the gate and `VERDICT_POLICY.md` did not change. `result["evidence"]` and the report's appendix still list all records.
+- CA-015. `BudgetMiddleware.skip_call_when_low`, on for a follow-up of a run with a budget stop whose previous status is `submitted`
+  (`budget_stop.declining_skips_the_call`), also after a new process where `budget_declined` already removed the question. After the
+  question, a main call that still would enter wrap-up or be refused gets a text reply marked `run_store.UNANSWERED_REPLY` with no
+  reservation and no charge. `followup.last_reply` skips that message, `followup_unanswered` carries the chat's note, the CLI prints it
+  on stderr (`RunOutcome.followup_note`). The text stays in the conversation, so a later turn reads that the message had no answer.
+  `prompts/main.md` stays: no sentence in it became false. Left as they were, as decided: no accepted report, no budget stop. Also
+  left: the day's remainder is what binds (no stop, the call goes to wrap-up), and a scope already in wrap-up.
+- API-021: `_hitl_view` and `pending_card` apply today's remainder, and the card's summary line is rebuilt from it. API-022: the
+  tooltip and the docs say «Без проверок». API-023 / OO-022: a record the lab is not waiting for gives the `--abandon` command,
+  whatever the agent's status. CA-018: `_proved_in` reads `gate_entry()`.
+
+Two fixes on top of it:
+
+- A HITL 2 draft in a follow-up: `collect_result` gives `pending_report`, when passed, priority over a report accepted earlier in
+  the thread, so `result.*` and `run.json` `draft` show the text and the rating the human is deciding on. Approve gives a new
+  revision; reject keeps the old report, its rating and its revision. `hitl.md` and the card show the draft's verdict, rating and
+  steps, not its `summary`, as in a first run; the text is in `result.md`, which the card links.
+- `final_result` passes `run_binding` a copy of the run without the reviews of later calls: a report is rated by what existed when
+  accepted, and a later human approval of the same IR fingerprint does not move it from `bounded_pass` to `verified`. An IR already
+  approved in the thread has no stop (`unchanged`), so the only way to that human record is an edit back to that IR; the test does this.
+
+Two gaps in that baseline (`accepted_report`), both reproduced first (R1 went from 0.98 to 0.85 with revision 2):
+
+- `followup_in_progress` keeps `previous_accepted_report`, and `fail_followup` restores it, or drops the key when there was none. A
+  follow-up whose report was accepted but whose result failed to write no longer leaves that report's count behind.
+- `send_followup` takes the baseline before `begin_followup`, through `_take_report_baseline`: a report in the state with no matching
+  `accepted_report` is fixed at the ledger's current count. It reads the state with `run_state`, which calls no model, and that adds
+  one agent build per message. A read that fails raises before anything changes in the run; the segment would have failed on it too.

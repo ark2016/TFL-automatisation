@@ -57,11 +57,12 @@ Docker is optional. It is needed for two things only, see [Sandbox and Lean](#sa
 ## Quick start (mock mode, free)
 
 Mock mode is the default. The agent runs its real loop with its real tools, but every model reply is replayed
-from a script, so no request reaches the Anthropic API. Three scripts ship in [`examples/mock/`](examples/mock/):
+from a script, so no request reaches the Anthropic API. Four scripts ship in [`examples/mock/`](examples/mock/):
 
 | script | task | template |
 |---|---|---|
 | `reg_regex_regular.json` | `(ab)*a\|b` is regular | `full_proof` |
+| `reg_followup.json` | the same task, with replies for follow-up messages (a text answer, then a new report) | `full_proof` |
 | `cfl_anbmcm.json` | `{a^n b^m c^m}` is context-free | `full_proof` |
 | `ll_simple_ll1.json` | `S -> aAb \| bBa; A -> aA \| ε; B -> bB \| ε` is LL(1) | `short_verdict` |
 
@@ -97,18 +98,21 @@ tfl-deep --resume RUN_DIR --decision approve|edit|reject
 | `--live` | real `ChatAnthropic` models; **spends money**. It needs `ANTHROPIC_API_KEY` in the environment; `tfl-deep` never loads `.env`. It excludes `--mock-script`. |
 | `--save DIR` | the run directory. Default: `<runs dir>/deep-<timestamp>-<hex>`, where the runs dir is `$TFL_DEEP_RUNS_DIR` or `.tfl_lab_runs`. |
 | `--template T` | the report template. Default: the mock script's template, else `full_proof`. The agent may pick another one in `submit_report`. |
-| `--review-mode M` | which HITL stops wait for a human, see [Review modes](#review-modes): `all` (default), `formalization` (HITL 1 waits, the report is auto-approved) or `auto` (every stop is auto-approved). |
-| `--auto-approve` | an alias of `--review-mode auto`: approve every HITL stop in the same process (for eval and tests). The report says "без проверки человеком". With `--resume`, the decision given is yours and every later stop is auto-approved. |
+| `--review-mode M` | which HITL stops wait for a human, see [Review modes](#review-modes): `all` (default), `formalization` (HITL 1 waits, the report is auto-approved) or `auto` (every review is auto-approved). |
+| `--auto-approve` | review mode `auto` plus no budget stop: approve every review in the same process and do not ask for money (for eval and tests). The report says "без проверки человеком". With `--resume --decision`, the decision given is yours, every later review is auto-approved, and the run keeps its budget stop. It does not go with `--message`. |
 | `--no-dialog` | never ask on the terminal; stop with `awaiting_human` (exit 3) instead. A run whose stdin or stdout is not a TTY behaves the same way. |
 | `--settings F` | a settings file instead of the default one, see [Settings](#settings). The file must exist. |
-| `--resume DIR` | continue a run that waits for a human decision. It takes only `--decision`, `--payload`, `--comment`, `--approve-rest`, `--live`, `--no-dialog` and `--auto-approve`; the task, script, template, settings and review mode are the run's own. |
+| `--resume DIR` | continue a run that waits for a human decision, or send a finished run a `--message`. It takes only `--decision`, `--payload`, `--comment`, `--approve-rest`, `--message`, `--abandon`, `--live`, `--no-dialog` and `--auto-approve`; the task, script, template, settings and review mode are the run's own. |
 | `--decision D` | `approve`, `edit` or `reject` |
-| `--payload P` | for `edit`, a JSON object with the fields to change; for `reject`, the comment (a JSON string or `{"comment": ...}`). `@FILE` reads the payload from a file. |
+| `--payload P` | for `edit`, a JSON object with the fields to change; for `reject`, the comment (a JSON string or `{"comment": ...}`). `@FILE` reads the payload from a file, `@@text` is the literal `@text`. |
 | `--comment C` | the comment for the agent; required with `reject` |
-| `--approve-rest` | only with `--decision approve`: approve this stop as your decision, then auto-approve every later stop of the run (its review mode becomes `auto`, stored in `run.json`) |
+| `--approve-rest` | only with `--decision approve`: approve this stop as your decision, then auto-approve every later review of the run (its review mode becomes `auto`, stored in `run.json`). The budget stop stays, and this flag is refused at it. |
+| `--message TEXT` | with `--resume` on a finished run: a follow-up in the same conversation, see [Follow-up messages](#follow-up-messages). `@FILE` reads the text from a file, `@@text` is the literal `@text`. Excludes `--decision`, `--payload`, `--comment`, `--approve-rest` and `--auto-approve`. |
+| `--abandon` | with `--resume`: drop a follow-up, whether its process was killed or it waits at a stop (a draft waiting for a decision is thrown away); the previous report, status and reviews come back. The process must be gone; this is not checked. It takes no other flag. |
 
 Exit codes: `0` the report was accepted, `1` the run ended without a report (a partial result is written: `incomplete`,
-`error` or `budget_exhausted`), `2` usage or setup error, `3` waiting for a human decision.
+`error` or `budget_exhausted`) or a follow-up failed (the previous report stays),
+`2` usage or setup error, `3` waiting for a human decision.
 
 **Live runs.** By the repository rules (root `CLAUDE.md`), a live run happens only on the user's explicit request,
 with a budget agreed beforehand. Use Haiku only (`TFL_MODEL_OVERRIDE=claude-haiku-5-5 ... --live`), state the estimated
@@ -120,14 +124,30 @@ refuses `--live` on resume.
 
 | file | contents |
 |---|---|
-| `run.json` | status, task, settings snapshot, mode, HITL history, pending request, budget spent with the call records, call counters |
+| `run.json` | status, task, settings snapshot, mode, HITL history, pending request, budget spent with the call records, call counters; the keys below |
 | `checkpoints.sqlite` | the LangGraph checkpoints (`thread_id` = run id); a resume in a new process continues from them |
+| `report_history/<n>/` | the report before follow-up message `n`; restored when that message fails or is cancelled, and shown by TFL Lab while it is in progress |
 | `evidence.jsonl` | the evidence ledger: every tool result with its trust, scope and role, continued on resume |
 | `progress.jsonl` | the live event stream for TFL Lab (model calls, tool calls with trust, subagents, budget, HITL) |
 | `mock_script.json`, `mock_cursors.json` | mock mode only: a copy of the script and the replies used per role |
 | `input/task.*` | the task file as the human gave it |
 | `hitl.md` | the pending HITL card |
 | `result.{json,md,html}` | the rendered report; a draft while HITL 2 waits |
+
+Keys of `run.json` that the sections below rely on:
+
+| key | meaning |
+|---|---|
+| `review_mode` | the effective review mode; `initial_review_mode` is the one the run started with |
+| `auto_approve` | the legacy mirror of `review_mode == "auto"`; read `review_mode` |
+| `approve_rest` | the human's `--approve-rest` decision, when one was made |
+| `budget_stop` | whether the run asks for money when it runs out; authoritative, it does not follow `auto_approve` |
+| `budget_limit_usd`, `budget_extensions` | the task limit raised at budget stops, and the record of each extension |
+| `budget_declined` | the human chose to finish with what is left; a new message clears it |
+| `accepted_report` | the accepted report's `call_id` and `evidence_count`: how much of the ledger rates it |
+| `report_revision`, `stable_checkpoint_id` | the accepted report's revision; the state the next message starts from |
+| `followup_in_progress` | what restores the run while a follow-up runs; a record that outlives its process means it did not finish |
+| `followup_error` | why the last follow-up did not finish |
 
 ### Mock scripts
 
@@ -181,7 +201,8 @@ How the decision is given:
   resume commands and exits with code 3. `tfl-deep --resume DIR --decision ...` then continues the run in a new
   process. The budget, the call counters, the evidence ledger and the mock cursors are restored from the run
   directory.
-- `--review-mode auto` (or `--auto-approve`) answers every stop with approve, see below.
+- `--review-mode auto` (or `--auto-approve`) answers every review with approve, see below. In review mode `auto` a budget stop on a terminal still exits with
+  code 3 and waits for `--resume`, because money is never auto-approved.
 
 ### Review modes
 
@@ -193,7 +214,7 @@ A run has one review mode (`run.json` `review_mode`), chosen at start (`--review
 | `formalization` | waits for a human | auto-approved | waits for a human |
 | `auto` (`--auto-approve`) | auto-approved | auto-approved | auto-approved |
 
-Only enabled points stop at all (`settings.hitl`). An auto-approved stop is recorded with `source: auto` and decision
+Only enabled points stop at all (`settings.hitl`). An auto-approved review is recorded with `source: auto` and decision
 `auto_approved`, and an auto-approved report says "без проверки человеком". An auto-approved formalization is not a
 human approval: the verdict gate treats it like HITL 1 off, so `regex_to_dfa(ir=...)` stays `bounded_pass`.
 `--resume ... --decision approve --approve-rest` approves the pending stop as the human's decision and switches the
@@ -204,6 +225,62 @@ tfl-deep --resume out/reg --decision edit --payload '{"transcription": "...", "i
 tfl-deep --resume out/reg --decision edit --payload @edit.json                               # HITL 2
 tfl-deep --resume out/reg --decision reject --comment "step 3 uses an uninstantiated p"
 ```
+
+### The budget stop
+
+When the main agent's next call would enter wrap-up or be refused, the run stops and asks for money instead of
+ending. `--decision edit --payload '{"add_usd": 5}'` raises this run's limit (stored in `run.json`, the settings do not
+change; live, it must fit in the day's remainder) and is recorded as `extended`. `--decision approve` finishes with what
+is left, as wrap-up always did, and is recorded as `declined`. The report's run section lists the extensions. If the
+day's remainder is what binds, there is no stop, because more task budget would buy nothing. A subagent or a
+summarization never stops the run. The stop does not depend on `settings.hitl`: with both review points off it still
+asks; only `auto_approve` or `budget_stop=False` turns it off.
+
+Inside a follow-up on a run with an accepted report, declining makes no model call, and neither does a top-up too small
+for the call: nothing is charged, the report, status and revision stay, and the chat gets a note (`followup_unanswered`:
+"сообщение без ответа: бюджет не продлён, отчёт прежний"). Evidence already paid for stays in `evidence.jsonl`. A
+follow-up with no accepted report keeps wrap-up, which is how it gets its first report; so does a run with no budget
+stop.
+
+`auto_approve` means review mode `auto` plus no budget stop, so only a run started with `--auto-approve` goes straight
+to the report. Review mode `auto` on its own, and `--approve-rest`, concern reviews and still stop for money.
+`hitl.start_run(..., budget_stop=...)` sets it apart from those; the default `None` means `not auto_approve`.
+
+### Follow-up messages
+
+A finished run (`submitted`, `incomplete`, `budget_exhausted` or `error`) continues on its own conversation:
+
+```bash
+tfl-deep --resume out/reg --message "Почему состояние q2 принимающее?"
+```
+
+The agent answers in text: `result.*` is re-rendered from the last accepted report, so with an accepted report the
+report and the status `submitted` stay, and without one the status is what the run's state gives. If it changes the answer, a proof or the evidence, it calls
+`submit_report` again, and HITL 2 stops as usual. The previous report is kept in `report_history/<n>/`. Each message
+starts from the last finished state (`stable_checkpoint_id` in `run.json`) with fresh call limits; money stays capped.
+A follow-up that ends in an error, or is cancelled, restores the previous report and status, and the next message
+works as if it never happened. An error exits with code 1, `RunOutcome.followup_error` and `followup_error` in `run.json`
+hold it, and `RunOutcome.result` is the previous result. While a follow-up is in progress, `followup_in_progress` in `run.json` holds
+what restores the run, including its review mode: `--approve-rest` given at a stop inside a follow-up is undone when that
+follow-up fails or is cancelled, so the next one stops for a human. A budget extension stays, because it was granted. A record that outlives its process means that process did not finish: `--resume DIR --abandon`
+restores the run, and TFL Lab does it by itself and shows why in `followup.error` (`run.error` stays for failures of
+the run itself). A restore that fails keeps the record: TFL Lab closes the composer, and `followup.reason` gives the
+`--abandon` command.
+
+A HITL 2 review record stores `report_digest`, the digest of the report it decided (for an edit, of the edited report).
+`human_review` in the result comes from the last review whose digest matches the current report, so a rejected draft
+followed by a text reply leaves "approved by a human" on the report that was approved. Older runs, with no digest, read
+the last review.
+
+An accepted report is rated by what existed when it was accepted. A new IR reviewed in a follow-up, or a tool run after
+the report, moves neither its trust, cap and verdict token nor its task. A report submitted after them binds to them as
+usual. The later results are still listed in the report's evidence appendix and in `evidence.jsonl`.
+
+`report_revision` in `run.json` tracks the report object, not the files: a text answer re-renders `result.*` with the
+run's money and keeps the revision. The chat events: `user_message`, `assistant_message` (`truncated: true` when the
+text was cut to the limit), `followup_abandoned` (`error` says why; `null`: it was cancelled). `segment_end` is the end
+signal of a segment; `done` is a final report state to display. A failed follow-up emits `followup_abandoned` with the
+restored status and the error, then `segment_end` with the restored status and no error, whichever way it failed.
 
 ## Settings
 
@@ -396,7 +473,7 @@ the report on the right.
   (`GET` / `PUT /api/deep/settings`).
 - **Composer** (bottom of the chat). Text, or a PDF / image by drag-and-drop, the attach button or paste; Ctrl+Enter
   sends a mock run. Chips under it: review mode (`review_mode`: Подтверждать всё / Только формализацию / Без
-  остановок), budget $, main model, report template, and mock script / inline script / live. Live shows a one-line
+  проверок), budget $, main model, report template, and mock script / inline script / live. Live shows a one-line
   cost note and needs the "подтверждаю расходы API" tick; it may only lower the money limits.
 - **Conversation.** The task as a user message; consecutive model / tool calls folded into one row
   ("▸ 4 инструмента · haiku · $0.004", expands to tool, trust chip, one-line reason); the plan (`todos`) as a
@@ -405,13 +482,22 @@ the report on the right.
   `pending_point` (title, ≤ 4 summary lines, Принять / Изменить / Отклонить, "Принять всё до конца" =
   `approve_rest`, "подробнее" = `details_md`); Изменить opens the IR / transcription or the report fields inline.
   The header carries a slim budget line (task and day).
+- **After the report.** The composer sends the next message into the same conversation (`POST .../message`). The
+  button «Формально верифицировать (Lean)» under the last final card sends the preset `lean`; live, a second click
+  confirms the spend.
+- **Budget card.** At the budget stop: spent / limit, +$1, +$5, an amount of your own, «Завершить с тем, что есть». A
+  live run's buttons block on today's remainder of the day log, and the click is the decision about money.
 - **Report.** The finished report (or the draft at the report stop) in a sandboxed iframe; another template can be
   viewed for an accepted report; closable, widenable; the raw log is behind "журнал".
 
 API additions (2026-11-08; the full list is in the `ui_server/deep_routes.py` docstring):
 - `POST /api/deep/runs` takes `"review_mode": "all" | "formalization" | "auto"` (live runs too; live still needs
-  `confirm_spend`). `"auto_approve": true` stays a mock-only alias of `"auto"`.
+  `confirm_spend`). `"auto_approve": true` (mock only) means review mode `auto` plus no budget stop; `"review_mode":
+  "auto"` on its own concerns reviews, so the run still asks for money.
 - `POST /api/deep/runs/<id>/resume` takes `"approve_rest": true`, only with `"decision": "approve"`.
+- `POST /api/deep/runs/<id>/message` takes `{"text": ... | "preset": "lean", "confirm_spend": true}`: a follow-up on a
+  finished run (409 while it cannot take one, 400 for a bad body). `GET /api/deep/runs/<id>` carries `followup`:
+  `{can_message, reason, in_progress, error, lean}`, and `hitl.budget_stop`.
 - `GET /api/deep/runs/<id>` and the runs list carry `review_mode` (the effective one: `auto` after `approve_rest`)
   and `pending_point`. `pending_point` is `null` unless the run is `awaiting_human`; then it is the stop's card,
   made by code (no model call), also at the top level of the detail response:

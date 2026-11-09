@@ -174,6 +174,67 @@ def record_digest(d: Mapping[str, Any]) -> str:
     return digest_of({k: v for k, v in d.items() if k != "digest"})
 
 
+def cited_evidence_ids(report: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """``[(id, where)]`` of every evidence id the report cites: ``evidence_ids``,
+    ``claims[i].evidence_ids``, ``steps[i].evidence_ids``, ``lean.evidence_ids``."""
+    out: list[tuple[str, str]] = []
+
+    def add(ids: Any, where: str) -> None:
+        for i in ids or []:
+            if isinstance(i, str) and i.strip():
+                out.append((i.strip(), where))
+
+    add(report.get("evidence_ids"), "evidence_ids")
+    for n, claim in enumerate(report.get("claims") or []):
+        if isinstance(claim, Mapping):
+            add(claim.get("evidence_ids"), f"claims[{n}]")
+    for n, step in enumerate(report.get("steps") or []):
+        if isinstance(step, Mapping):
+            add(step.get("evidence_ids"), f"steps[{n}]")
+    lean = report.get("lean")
+    if isinstance(lean, Mapping):
+        add(lean.get("evidence_ids"), "lean")
+    return out
+
+
+def ir_fingerprint(ir: Any) -> str:
+    """A short stable id of an IR (sha256 of its canonical JSON), so a report
+    can say which IR a check was made against ("проверено относительно IR …")."""
+    return "ir-" + hashlib.sha256(canonical_json(ir).encode("utf-8")).hexdigest()[:12]
+
+
+def entry_fingerprint(entry: Mapping[str, Any]) -> str | None:
+    """The IR a record of the gate's shape was made against: what its result names,
+    else the IR it was called with; ``None`` when it says nothing about an IR."""
+    data = entry.get("data") or {}
+    if isinstance(data.get("ir_fingerprint"), str):
+        return data["ir_fingerprint"]
+    ir = (entry.get("args") or {}).get("ir")
+    return ir_fingerprint(ir) if isinstance(ir, Mapping) else None
+
+
+def ir_admissible(entry: Mapping[str, Any], required: str | None) -> bool:
+    """The verdict gate's fingerprint rule: when an IR is required, a record made
+    against another one does not count (a record that names no IR does)."""
+    return not required or entry_fingerprint(entry) in (None, required)
+
+
+def lean_proof_side(entry: Mapping[str, Any], lang: str, *, required_fingerprint: str | None = None) -> str | None:
+    """The side of the verdict a ``lean_check`` record of the gate's shape proves for a
+    task of class ``lang``, or ``None`` when the gate would not count it.
+
+    R-Lean (docs/VERDICT_POLICY.md): a kernel-checked proof of the statement code
+    generated from this task's IR (``lean_statement``) is a verified basis for its side;
+    the tool gives ``verified`` only for status ``proved`` with standard axioms. Class ``ll``
+    has no Lean path. ``required_fingerprint``: the IR the gate requires, or ``None``."""
+    data = entry.get("data") or {}
+    side = data.get("side")
+    counted = (entry.get("tool") == "lean_check" and entry.get("ok") and lang in ("reg", "cfl", "dcfl")
+               and data.get("cls") == lang and data.get("status") == "proved" and entry.get("trust") == "verified"
+               and side in ("constructive", "destructive") and ir_admissible(entry, required_fingerprint))
+    return str(side) if counted else None
+
+
 class EvidenceLedger:
     """The evidence of one run. Thread-safe; ``append`` is the only way in."""
 

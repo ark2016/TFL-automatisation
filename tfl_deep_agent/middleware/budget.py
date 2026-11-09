@@ -89,6 +89,7 @@ from types import SimpleNamespace
 from typing import Any, Literal
 
 from .. import config
+from ..run_store import UNANSWERED_REPLY
 
 try:  # the [deep] extra; the ledger works without it
     from langchain.agents.middleware import AgentMiddleware as _AgentMiddleware
@@ -437,6 +438,11 @@ class BudgetNode:
         self._emit_admission(adm)
         return adm
 
+    def would_enter_wrap_up_locked(self, worst_case_usd: float, *, enter_wrap_up: bool = False) -> bool:
+        """Whether a call with this worst case starts wrap-up here (ledger lock held):
+        not in wrap-up yet, and the caller says so or it does not fit above the reserve."""
+        return not self.in_wrap_up() and (enter_wrap_up or float(worst_case_usd) > self._available() - self.reserve + EPS)
+
     def _admit_locked(self, worst_case_usd: float, *, enter_wrap_up: bool = False) -> Admission:
         """:meth:`admit` without the listener events (call with the ledger
         lock held, then :meth:`_emit_admission` after releasing it).
@@ -450,7 +456,7 @@ class BudgetNode:
             ok = False
         else:
             avail = self._available()
-            if not self.in_wrap_up() and (enter_wrap_up or x > avail - self.reserve + EPS):
+            if self.would_enter_wrap_up_locked(x, enter_wrap_up=enter_wrap_up):
                 self.wrap_up = True
                 entered = True
             wrap = self.in_wrap_up()
@@ -606,6 +612,17 @@ class BudgetLedger:
         if self.spend_log is not None:
             self.spend_log.append({"task_id": self.task_id, **record.to_dict()})
         self._emit({"event": "call", **record.to_dict()})
+
+    def raise_limit(self, new_limit: float) -> float:
+        """Raise the task's limit to ``new_limit``. It only ever grows, so applying the
+        same answer again (a re-executed node, a new process) changes nothing. Returns
+        the limit now."""
+        with self.lock:
+            before = self.root.limit
+            limit = self.root.limit = max(before, float(new_limit))
+        if limit > before:
+            self._emit({"event": "limit_raised", "node": self.root.path, "previous_usd": before, "limit_usd": limit})
+        return limit
 
     def _emit(self, event: dict[str, Any]) -> None:
         for fn in self.listeners:
@@ -867,6 +884,9 @@ WRAP_UP_INSTRUCTION = (
     "({tools}) are disabled."
 )
 
+#: the reply of a follow-up that made no model call; later turns read it in the conversation
+UNANSWERED_TEXT = "(No answer to this message: the human did not extend the budget. The report stands.)"
+
 REFUSAL_TEXT = (
     "BUDGET: model call refused before it was made. Worst case ${worst:.4f} "
     "({model}: ~{input_tokens} input tokens + max_tokens {max_tokens}) does not fit in ${available:.4f} "
@@ -874,6 +894,17 @@ REFUSAL_TEXT = (
     "reserve ${reserve:.2f}{day}). No further model calls are made in this scope; the run ends with "
     "status budget_exhausted and a partial report is produced from the evidence collected so far."
 )
+
+
+@dataclass(frozen=True)
+class BudgetLow:
+    """The root scope's money when its next call would enter wrap-up or be refused."""
+
+    spent_usd: float
+    limit_usd: float
+    available_usd: float
+    reserve_usd: float
+    day_left_usd: float | None  # None: a run with no day log (mock)
 
 
 class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
@@ -892,6 +923,19 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
     that cannot get ``min_output_tokens`` is refused (module docstring).
     ``False`` keeps the fixed ceiling (the call is refused when the ceiling's
     worst case does not fit); only tests that pin that arithmetic use it.
+
+    ``request_budget_extension`` (the main agent of a run with the budget stop, off
+    by default): called with a :class:`BudgetLow` before a call of the root scope
+    would enter wrap-up or be refused, with nothing reserved yet. It may raise
+    LangGraph's ``GraphInterrupt`` (``budget_stop.request_budget_extension``); what
+    it returns is the task's new absolute limit, or ``None`` to finish with what is
+    left (:meth:`BudgetLedger.raise_limit`).
+
+    ``skip_call_when_low`` (a follow-up on a run with an accepted report, off by default;
+    ``budget_stop.declining_skips_the_call``): when, after that question, such a call still
+    would enter wrap-up or be refused, no model is called and nothing is reserved or
+    charged; the agent's reply is a text marked ``run_store.UNANSWERED_REPLY``, so its
+    segment ends.
     """
 
     def __init__(
@@ -925,6 +969,9 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
         if int(min_output_tokens) < 1:
             raise ValueError(f"min_output_tokens must be >= 1, got {min_output_tokens!r}")
         self.min_output_tokens = int(min_output_tokens)
+        #: the budget stop's callback; the main agent's build sets it, a subagent's never asks
+        self.request_budget_extension: Callable[[BudgetLow], float | None] | None = None
+        self.skip_call_when_low = False
         self._scale = 1.0
         self._scale_lock = threading.Lock()
         self.tools = []
@@ -1043,11 +1090,54 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
 
     # -- shared pre / post ----------------------------------------------------
 
-    def _before(self, request: Any) -> tuple[Any, CallEstimate, Admission]:
+    def _budget_low_locked(self, est: CallEstimate, node: BudgetNode) -> BudgetLow | None:
+        """The numbers of ``node`` when a call with ``est`` would enter wrap-up or be
+        refused (ledger lock held, nothing reserved), else ``None``. Also ``None`` when
+        the day's remainder is what binds: raising the task's limit cannot buy anything
+        then, so the old wrap-up behaviour applies."""
+        if node.closed:
+            return None
+        probe, enter = self.derive(est, node) if self.fit_max_tokens else (est, False)
+        if not node.would_enter_wrap_up_locked(probe.worst_case_usd, enter_wrap_up=enter):
+            return None
+        day = node.ledger._day_remaining()
+        if day is not None and day <= node._own() + EPS:
+            return None
+        return BudgetLow(spent_usd=node.spent, limit_usd=node.limit, available_usd=max(node._available(), 0.0),
+                         reserve_usd=node.reserve, day_left_usd=None if day is None else max(day, 0.0))
+
+    def _is_main_call(self, node: BudgetNode) -> bool:
+        """The main agent's own call on the root scope: never a summarization (it is a
+        step inside another node) or a subagent."""
+        return node is self._base_node and node.parent is None and _CALL_KIND.get() != "summary"
+
+    def _skips_the_call(self, est: CallEstimate, node: BudgetNode) -> bool:
+        if not self.skip_call_when_low or not self._is_main_call(node):
+            return False
+        with node.ledger.lock:
+            return self._budget_low_locked(est, node) is not None
+
+    def _ask_for_budget(self, est: CallEstimate, node: BudgetNode) -> None:
+        """The budget stop."""
+        if self.request_budget_extension is None or not self._is_main_call(node):
+            return
+        with node.ledger.lock:
+            low = self._budget_low_locked(est, node)
+        if low is None:
+            return
+        new_limit = self.request_budget_extension(low)  # may raise GraphInterrupt: nothing is reserved yet
+        if new_limit is not None:
+            node.ledger.raise_limit(new_limit)
+
+    def _before(self, request: Any) -> tuple[Any, CallEstimate, Admission | None]:
+        """What the hook goes on with; the admission is ``None`` when the call is skipped."""
         est = self.estimate(request)
         ceiling = est.max_tokens
         node = self.node
         enter = False
+        self._ask_for_budget(est, node)  # asks at most once in one execution of the node
+        if self._skips_the_call(est, node):
+            return request, est, None
         with node.ledger.lock:  # cap and reservation in one step; listeners run after the lock
             if self.fit_max_tokens:
                 est, enter = self.derive(est, node)
@@ -1070,6 +1160,13 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
             reserve=adm.reserve_usd, tools=", ".join(sorted(self.spawning_tools)))
         msg = HumanMessage(content=text, additional_kwargs={"tfl_budget": "wrap_up"})
         return request.override(messages=[*request.messages, msg])
+
+    def _unanswered(self) -> Any:
+        from langchain.agents.middleware.types import ModelResponse
+        from langchain_core.messages import AIMessage
+
+        return ModelResponse(result=[AIMessage(content=UNANSWERED_TEXT,
+                                               additional_kwargs={"tfl_budget": UNANSWERED_REPLY})])
 
     def _refusal(self, est: CallEstimate, adm: Admission) -> Any:
         from langchain.agents.middleware.types import ModelResponse
@@ -1157,6 +1254,8 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
 
     def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         request, est, adm = self._before(request)
+        if adm is None:
+            return self._unanswered()
         if not adm.ok:
             return self._refusal(est, adm)
         try:
@@ -1169,6 +1268,8 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
 
     async def awrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         request, est, adm = self._before(request)
+        if adm is None:
+            return self._unanswered()
         if not adm.ok:
             return self._refusal(est, adm)
         try:
@@ -1547,6 +1648,7 @@ def budgeted_summarizer(model: Any, budget_mw: BudgetMiddleware, *, wrappers: Se
 
 
 __all__: Sequence[str] = (
+    "BudgetLow",
     "DEFAULT_SPAWNING_TOOLS",
     "MIN_OUTPUT_TOKENS",
     "SUMMARY_MAX_TOKENS",

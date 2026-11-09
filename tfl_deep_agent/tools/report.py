@@ -24,12 +24,16 @@ Evidence ids (2026-11-08): when the tool has the run's evidence ledger
 citing an id that is not in the ledger -- in ``evidence_ids``,
 ``claims[].evidence_ids``, ``steps[].evidence_ids`` or ``lean.evidence_ids``
 -- is NOT accepted: the tool returns an error result (status ``error``, no
-artifact, so no report is recorded and HITL 2 does not stop for it) that lists
-the unknown ids and the valid ids grouped by tool name with their trust and IR
+artifact, so no report is recorded) that lists the unknown ids and the valid ids grouped by tool name with their trust and IR
 fingerprint (:func:`evidence_id_error`), and asks for a resubmission with the
 exact ids. A tool name is never resolved to an id by code. The renderer and
 the verdict gate still lower trust for an id without a record (a run without a
 ledger, a report rated outside a run): that is the second line of defence.
+
+HITL 2 skips the refusals it can foresee (``hitl.report_interrupt_config``): invalid
+fields, unknown ids when it has the ledger, leaked tool-call markup. The tool refuses
+those straight away and the model resubmits, with no card. A report refused for
+unknown ids with no ledger in that config still stops first.
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ from pydantic import (
     model_validator,
 )
 
+from ..evidence.ledger import cited_evidence_ids
 from ..reports.render import (
     SELECTABLE_TEMPLATES,
     TEMPLATE_INFO,
@@ -221,29 +226,6 @@ def _error_text(exc: Exception) -> str:
 
 #: valid ids listed in an unknown-id error at most (the newest are kept)
 MAX_LISTED_IDS = 60
-
-
-def cited_evidence_ids(report: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """``[(id, where)]`` of every evidence id the report cites: ``evidence_ids``,
-    ``claims[i].evidence_ids``, ``steps[i].evidence_ids``, ``lean.evidence_ids``."""
-    out: list[tuple[str, str]] = []
-
-    def add(ids: Any, where: str) -> None:
-        for i in ids or []:
-            if isinstance(i, str) and i.strip():
-                out.append((i.strip(), where))
-
-    add(report.get("evidence_ids"), "evidence_ids")
-    for n, claim in enumerate(report.get("claims") or []):
-        if isinstance(claim, Mapping):
-            add(claim.get("evidence_ids"), f"claims[{n}]")
-    for n, step in enumerate(report.get("steps") or []):
-        if isinstance(step, Mapping):
-            add(step.get("evidence_ids"), f"steps[{n}]")
-    lean = report.get("lean")
-    if isinstance(lean, Mapping):
-        add(lean.get("evidence_ids"), "lean")
-    return out
 
 
 def unknown_evidence_ids(report: Mapping[str, Any], evidence: Any) -> dict[str, list[str]]:

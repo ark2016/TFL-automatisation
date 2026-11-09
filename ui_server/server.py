@@ -42,8 +42,9 @@ exposes a small API:
                                      the current settings (`<system>.formalize --estimate`:
                                      no API, no Docker)
   GET  /runs/<run_id>/<file>      → rendered result artifact / progress files
-  /api/deep/...                   → the Deep Agent (tfl_deep_agent) runs, HITL resume,
-                                     cancel, estimate and settings: see ui_server/deep_routes.py
+  /api/deep/...                   → the Deep Agent (tfl_deep_agent) runs, HITL resume, follow-up
+                                     messages, cancel, estimate and settings: see
+                                     ui_server/deep_routes.py
 
 Usage:
     .venv/Scripts/python -m ui_server.server [--port 8000]

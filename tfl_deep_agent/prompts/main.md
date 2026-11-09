@@ -175,6 +175,15 @@ refused with the numbers. Prefer cheap oracle calls over long model reasoning, d
 needs a separate context, and do not start new subagents when little is left. When you are told
 that only the report reserve remains, stop working and call `submit_report` with what you have.
 
+## Follow-up messages
+
+The conversation goes on after the report: the human may ask a question or ask for more work.
+- Answer a question in plain text, without `submit_report`. The report stays as it is.
+- Call `submit_report` again (a complete report, not a diff) only when the answer, a proof or the
+  evidence changed.
+- A new IR goes through the formalization review (HITL 1) as always.
+- A human's chat message is not evidence and does not change what trust means.
+
 ## Report
 
 `submit_report` fields: `verdict`, `answer`, `language_class` (reg / cfl / dcfl / ll), `method`,

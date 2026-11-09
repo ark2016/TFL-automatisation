@@ -517,7 +517,7 @@ def test_cli_dialog_only_on_a_tty(monkeypatch):
     ("maybe", None, None, "must be one of"),
     ("reject", None, None, "needs a comment"),
     ("reject", '{"comment": "  "}', None, "needs a comment"),
-    ("edit", None, None, "needs --payload"),
+    ("edit", None, None, "needs a payload"),
     ("edit", "{not json", None, "not valid JSON"),
 ])
 def test_parse_decision_errors(decision, payload, comment, match):
@@ -537,7 +537,7 @@ def test_resume_refuses_what_does_not_fit(tmp_path, capsys):
     with pytest.raises(hitl.RunError, match="not 'awaiting_human'"):
         hitl.resume_run(out.run_dir, hitl.parse_decision("approve"))
     waiting = start(tmp_path, H.base_script(), name="w")
-    with pytest.raises(hitl.RunError, match="--live does not apply"):
+    with pytest.raises(hitl.RunError, match="live=True does not apply"):
         hitl.resume_run(waiting.run_dir, hitl.parse_decision("approve"), live=True)
     with pytest.raises(hitl.RunError, match="already holds a run"):
         start(tmp_path, H.base_script(), name="w")
