@@ -235,12 +235,18 @@ def pid_alive(pid: Any) -> bool:
     if os.name == "nt":
         import ctypes
 
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
-            return ctypes.get_last_error() == 5 or kernel32.GetLastError() == 5  # access denied: it exists
+            return ctypes.get_last_error() == 5  # access denied: it exists
         try:
-            code = ctypes.c_ulong()
+            code = wintypes.DWORD()
             if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
                 return True
             return code.value == 259  # STILL_ACTIVE
@@ -273,7 +279,9 @@ def abandon_followup(run_dir: str | Path, *, error: str | None = None,
     if check_alive:
         pid = current["followup_in_progress"].get("pid")
         if pid != os.getpid() and pid_alive(pid):
-            raise RunError(f"{d}: the follow-up's process (pid {pid}) is still alive; wait for it or stop it first")
+            raise RunError(f"{d}: a process with the pid {pid} recorded for the follow-up exists; if it is the "
+                           "follow-up, wait for it; if the follow-up was killed and the pid now belongs to another "
+                           "process, repeat with --force")
     fail_followup(d, current, error)
     save_run(d, current)
     try:

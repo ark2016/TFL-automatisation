@@ -96,7 +96,8 @@ continued.
 ``result`` during a follow-up: the view of the newest ``report_history/<n>/`` (immutable,
 so reading it never gets in the way of the agent's writes), or of the draft while HITL 2
 waits. ``result.report_revision`` tracks the report object, not the files: a text reply
-re-renders ``result.*`` and keeps it. From revision 2 on the URLs carry ``?v=<n>``.
+re-renders ``result.*`` and keeps it (a follow-up bumps it only when status, verdict, trust, confidence cap
+or ``report_digest`` changes). From revision 2 on the URLs carry ``?v=<n>``.
 
 Run directory: ``<DEEP_RUNS_DIR>/<12 hex>/`` (``.tfl_lab_runs/deep``; the
 pipeline registry in ``server.py`` only lists 12-hex directories directly under
@@ -522,6 +523,18 @@ def _settle_cancelled(run: dict[str, Any], error: str, *, rc: int | None = None)
         _persist_locked(run)
 
 
+def _fresh_agent_error(run: dict[str, Any], agent: dict[str, Any]) -> bool:
+    """The agent's ``followup_error`` belongs to this follow-up: it is new since the message
+    was sent, or the agent started a segment for it. ``run.json`` keeps the error of an earlier
+    follow-up until ``begin_followup`` clears it, which a CLI that refused the message never reaches."""
+    error = agent.get("followup_error")
+    if not error:
+        return False
+    before = run.get("followup_from") or {}
+    return (error != before.get("agent_error")
+            or len(agent.get("segments") or []) > int(before.get("agent_segments") or 0))
+
+
 def _settle_followup_locked(run: dict[str, Any], agent: dict[str, Any], *, rc: int | None, tail: str,
                             dead_note: str | None) -> bool:
     """Handle a follow-up before the run's own statuses. Returns whether it settled the
@@ -533,7 +546,7 @@ def _settle_followup_locked(run: dict[str, Any], agent: dict[str, Any], *, rc: i
         _followup_back_locked(run, dead_note)
     elif agent.get("status") == WAITING_STATUS and agent.get("pending"):
         return False
-    elif agent.get("followup_error"):  # the agent failed and has restored the report itself; its reason beats rc
+    elif _fresh_agent_error(run, agent):  # the agent failed and has restored the report itself; its reason beats rc
         _followup_back_locked(run, str(agent["followup_error"]))
     elif rc not in (None, EXIT_SUBMITTED, EXIT_NO_REPORT):  # the CLI refused it: nothing has changed
         _followup_back_locked(run, f"the follow-up did not run (exit code {rc}); the previous report stays"
@@ -1197,6 +1210,8 @@ def api_message(run_id: str, payload: Any) -> dict[str, Any]:
         if not conflict:
             current["followup_from"] = {"status": current["status"], "result_status": current.get("result_status"),
                                         "error": current.get("error"), "report_revision": agent.get("report_revision"),
+                                        "agent_error": agent.get("followup_error"),
+                                        "agent_segments": len(agent.get("segments") or []),
                                         "snapshots_before": snapshots_before}
             current["followup_error"] = None
             current["status"] = "queued"

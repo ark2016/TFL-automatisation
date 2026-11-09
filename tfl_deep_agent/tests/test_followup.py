@@ -607,7 +607,7 @@ def test_abandon_refused_while_recording_process_alive(tmp_path):
     try:
         run["followup_in_progress"]["pid"] = child.pid
         run_store.save_run(d, run)
-        with pytest.raises(run_store.RunError, match="still alive"):
+        with pytest.raises(run_store.RunError, match="--force"):
             followup.abandon_followup(d, check_alive=True)
     finally:
         child.kill()
@@ -1882,3 +1882,57 @@ def test_a_message_with_no_accepted_report_keeps_the_old_wrap_up():
     assert not BS.declining_skips_the_call({"budget_stop": True})  # the run itself: wrap-up writes its report
     assert not BS.declining_skips_the_call({"budget_stop": False,  # no stop, nobody declined
                                             "followup_in_progress": {"previous_status": "submitted"}})
+
+
+def test_a_resumed_followup_records_its_own_pid(tmp_path, monkeypatch):
+    new = H.report_call(H.base_script(), call_id="call-report-2", summary="Отчёт после вопроса в чате.")
+    d = finished(tmp_path, new)
+    hitl.send_followup(d, "Перепиши сводку")
+    run = hitl.load_run(d)
+    run["followup_in_progress"]["pid"] = 999999  # the first process is gone
+    run_store.save_run(d, run)
+    seen = []
+    real = hitl.save_run
+
+    def spy(path, data):
+        if data.get("followup_in_progress"):
+            seen.append(data["followup_in_progress"].get("pid"))
+        return real(path, data)
+
+    monkeypatch.setattr(hitl, "save_run", spy)
+    hitl.resume_run(d, APPROVE)
+    assert os.getpid() in seen and 999999 in seen[:1]  # an earlier save may still carry the old pid; the segment's own save does not
+    assert seen[-1] == os.getpid()
+
+
+def test_abandon_force_skips_the_pid_check(tmp_path, capsys):
+    from tfl_deep_agent import cli
+
+    d = tmp_path / "r"
+    d.mkdir()
+    (d / "result.json").write_text("{}", encoding="utf-8")
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        run_store.save_run(d, {"run_id": "x", "status": "running", "reviews": [], "followup_in_progress": {
+            "snapshot": followup.snapshot_report(d), "previous_status": "submitted", "pid": child.pid,
+            "n_reviews": 0, "review_switch": {}}})
+        assert cli.main(["--resume", str(d), "--abandon"]) == 2
+        assert "--force" in capsys.readouterr().err
+        assert cli.main(["--resume", str(d), "--abandon", "--force"]) == 0
+    finally:
+        child.kill()
+        child.wait()
+    assert "followup_in_progress" not in run_store.load_run(d)
+
+
+def test_resume_exits_2_when_the_follow_up_cannot_start(tmp_path, monkeypatch, capsys):
+    from tfl_deep_agent import cli
+
+    d = finished(tmp_path)
+
+    def boom(*_a, **_k):
+        raise ImportError("no module named deepagents")
+
+    monkeypatch.setattr(hitl, "send_followup", boom)
+    assert cli.main(["--resume", str(d), "--message", "hi"]) == 2
+    assert "no module named deepagents" in capsys.readouterr().err

@@ -1446,3 +1446,26 @@ def test_the_detail_says_whether_the_budget_stop_is_on(fake_agent):
     assert dr.api_detail(run_id)["hitl"]["budget_stop"] is True
     agent_file.write_text(json.dumps({**agent, "budget_stop": False}), encoding="utf-8")
     assert dr.api_detail(run_id)["hitl"]["budget_stop"] is False
+
+
+@pytest.mark.parametrize("agent_error, before, segments_before, segments_now, shown", [
+    ("boom", None, 0, 1, "boom"),                                   # a new error with rc=2 wins
+    ("boom", "boom", 1, 2, "boom"),                                 # same text, but a segment ran for this message
+    ("boom", "boom", 1, 1, "the follow-up did not run (exit code 2)"),  # stale error, the CLI refused the message
+])
+def test_followup_error_beats_the_exit_code_only_when_fresh(tmp_path, monkeypatch, agent_error, before,
+                                                           segments_before, segments_now, shown):
+    monkeypatch.setattr(dr, "_persist_locked", lambda _run: None)
+    d = tmp_path / "r"
+    d.mkdir()
+    (d / "run.json").write_text(json.dumps({
+        "run_id": "r", "status": "submitted", "followup_error": agent_error,
+        "segments": [{}] * segments_now}), encoding="utf-8")
+    run = {"run_id": "r", "run_dir": str(d), "status": "running", "segments": [], "error": None,
+           "followup_from": {"status": "completed", "result_status": "submitted", "error": None,
+                             "agent_error": before, "agent_segments": segments_before}}
+    dr._settle_process_end(run, rc=2, tail="stderr tail")
+    assert run["status"] == "completed" and not run.get("followup_from")
+    assert shown in run["followup_error"]
+    if shown != agent_error:
+        assert "stderr tail" in run["followup_error"] and "boom" not in run["followup_error"]
