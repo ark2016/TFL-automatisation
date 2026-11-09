@@ -260,6 +260,8 @@ def _check_live_key(args: argparse.Namespace, run: dict[str, Any]) -> str | None
 def _resume(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from . import followup, hitl
 
+    if args.force and not args.abandon:
+        parser.error("--force goes only with --abandon")
     if args.abandon:
         return _abandon(args, parser)
     if (args.text or args.file or args.mock_script or args.template or args.settings or args.save

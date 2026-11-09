@@ -459,7 +459,7 @@ def parse_text_to_ir(text: str, runner: Any) -> dict:
     if not isinstance(ir, dict) or not ir.get("language_spec"):
         raise RuntimeError("--text parsing failed: input_parser returned no IR object")
     ir = dict(ir)
-    ir.setdefault("source_text", text)
+    ir["source_text"] = text  # the user's text is authoritative, not the parser's retyped copy
     ir_errors = validate_ir(ir)
     if ir_errors:
         raise RuntimeError(f"--text produced an invalid IR: {'; '.join(ir_errors)}")
@@ -509,6 +509,9 @@ def main() -> None:
                              "disabled while Lean templates are in progress)")
 
     args = parser.parse_args()
+
+    if args.text and args.ir_json:
+        parser.error("give either an IR JSON path or --text, not both")
 
     # Load IR
     live_llm = None

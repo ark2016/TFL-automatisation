@@ -63,3 +63,16 @@ def test_cli_needs_input(monkeypatch, capsys):
     with pytest.raises(SystemExit) as e:
         main()
     assert e.value.code == 1
+
+
+def test_user_text_overrides_parsers_copy():
+    out = parse_text_to_ir("my text", _Runner({"evidence": dict(_IR, source_text="retyped")}))
+    assert out["source_text"] == "my text"
+
+
+def test_cli_rejects_path_and_text(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["agent_system", "ir.json", "--text", "L"])
+    with pytest.raises(SystemExit) as e:
+        main()
+    assert e.value.code == 2
+    assert "not both" in capsys.readouterr().err

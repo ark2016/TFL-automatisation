@@ -186,7 +186,9 @@ def grammar_oracle(grammar: dict) -> Callable[[str], bool]:
 
     Converts grammar to CNF once, then uses CYK for each membership query.
     """
-    cnf = to_cnf(grammar)
+    from cfl_system.lib.grammar_membership import normalize_epsilon_grammar
+
+    cnf = to_cnf(normalize_epsilon_grammar(grammar))
 
     def oracle(word: str) -> bool:
         return cyk_parse(cnf, word)

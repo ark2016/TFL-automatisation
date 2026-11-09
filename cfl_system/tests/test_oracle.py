@@ -461,3 +461,10 @@ class TestEdgeCases:
         oracle = pda_oracle(_anbn_pda())
         assert oracle("a") is False
         assert oracle("b") is False
+
+
+def test_grammar_oracle_accepts_epsilon_spelling():
+    g = {"terminals": ["a"], "nonterminals": ["S"], "start": "S",
+         "rules": [{"lhs": "S", "rhs": ["a", "S"]}, {"lhs": "S", "rhs": ["ε"]}]}
+    o = grammar_oracle(g)
+    assert o("") and o("aaa")

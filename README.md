@@ -584,7 +584,7 @@ use their `lean_formalizer` agents for this role. This exists because
   Known gaps: a set-builder CFL that is not a closure image of a known language still needs a grammar with
   `g.language = L` proved by hand (no compiled example); the exam_04 grammar case (DCFL by a grammar) has no
   grammar->DPDA bridge (only REG ⊆ DCFL, `TflLean.isDCF_of_isRegular`), so the mock is an honest refusal;
-  nested exponents (`a^(2^n)`) are not translated.
+  nested exponents (`a^(2^n)`) are translated into Lean statements (`(2 ^ n)`), but the membership oracle still returns `None` for them.
 - **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0` (resolves to commit
   `db584cd6d46c92f209a44c0f1c829460d327499d`), langlib pinned at commit
   `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — verified against langlib's *own* `lake-manifest.json` at that

@@ -328,3 +328,18 @@ class TestPowOracleNotWrong:
         assert p is not None
         # 2^2 == 4 != 3: the affine solver must not accept 'aaa'.
         assert p("aaa") is not True
+
+    def test_pow_pattern_accepts_members(self):
+        p = parse_exponent_pattern("{a^(2^n) | n >= 0}", allow_pow=True)
+        assert p is not None
+        for k in (1, 2, 4, 8, 16):
+            assert p("a" * k) is not False
+        assert p("a" * 3) is not True
+
+    def test_square_pattern_accepts_members_only(self):
+        p = parse_exponent_pattern("{a^(n*n) | n>=0}")
+        if p is None:
+            return
+        for k in range(0, 40):
+            member = int(k ** 0.5) ** 2 == k
+            assert p("a" * k) is member, k

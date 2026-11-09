@@ -1953,3 +1953,12 @@ def test_snapshot_report_takes_a_run_dir_as_text(tmp_path):
     assert F.latest_snapshot(str(tmp_path)) == 0
     assert F.snapshot_report(str(tmp_path)) == "report_history/1"
     assert F.latest_snapshot(tmp_path) == 1
+
+
+@pytest.mark.parametrize("extra", [["--message", "x"], ["--decision", "approve"]])
+def test_cli_resume_rejects_force_without_abandon(tmp_path, capsys, extra):
+    from tfl_deep_agent import cli
+
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["--resume", str(tmp_path), "--force", *extra])
+    assert stop.value.code == run_store.EXIT_USAGE and "--force" in capsys.readouterr().err

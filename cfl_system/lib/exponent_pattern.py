@@ -306,18 +306,30 @@ def _solve_affine(expr: tuple, var: str, target: int, env: dict[str, int]) -> in
         return None
     slope = f1 - f0
     if slope == 0:
-        return 0 if f0 == target else None
+        return 0 if f0 == target else _solve_by_search(expr, var, target, env)
     diff = target - f0
     if diff % slope != 0:
-        return None
+        return _solve_by_search(expr, var, target, env)
     val = diff // slope
     # Guard against non-affine expressions (e.g. ``2 ^ n``): the linear
     # inversion is only valid if the candidate really satisfies the equation.
     env_v = dict(env)
     env_v[var] = val
     if _eval_arith(expr, env_v) != target:
-        return None
+        return _solve_by_search(expr, var, target, env)
     return val
+
+
+def _solve_by_search(expr: tuple, var: str, target: int, env: dict[str, int]) -> int | None:
+    """Non-affine fallback (``n*n``, ``2 ^ n``): smallest ``val >= 0`` with
+    ``expr(val) == target`` found by direct evaluation, so a returned value is
+    always verified. Searches a bounded window; ``None`` if nothing fits."""
+    env_v = dict(env)
+    for val in range(0, max(target, 0) + 65):
+        env_v[var] = val
+        if _eval_arith(expr, env_v) == target:
+            return val
+    return None
 
 
 # ---------------------------------------------------------------------------

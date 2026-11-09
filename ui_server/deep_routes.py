@@ -1263,7 +1263,12 @@ def api_abandon(run_id: str) -> dict[str, Any]:
         raise Conflict("a process of the run is still alive")
     if not (_agent_run(Path(run["run_dir"])) or {}).get("followup_in_progress"):
         raise Conflict("this run has no follow-up in progress")
-    if not _abandon_agent_followup(run):
+    try:
+        followup.abandon_followup(run["run_dir"], check_alive=True)
+    except RunError as exc:
+        raise Conflict(str(exc)) from exc
+    except Exception:  # noqa: BLE001
+        logger.exception("could not restore the report of the follow-up of %s", run.get("run_id"))
         raise Conflict(_not_restored_note(run))
     with _lock:
         run["followup_from"] = None

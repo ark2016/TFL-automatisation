@@ -159,12 +159,15 @@ Choices and why:
 `wAα`, two rules `A → β ≠ γ`, two terminal derivations with equal `take k`. The proof is
 mechanical (the example above): rule membership by `Finset.mem_insert_self` /
 `Finset.mem_insert_of_mem`, steps by `ContextFreeRule.rewrites_of_exists_parts`, leftmost steps
-by unfolding `ProducesLeftmost` with explicit `w`, `s`. `ll_system`'s full test already produces
-these witnesses (`ll_table_builder.check_ll_k` → `ll_conflicts`), so a renderer of the conflict
-into such a proof body is the shortest path to a first `proved` LL verdict. Caveat: a
+by unfolding `ProducesLeftmost` with explicit `w`, `s`. `ll_system`'s full test
+(`ll_table_builder.check_ll_k` → `ll_conflicts`) gives only the conflicting rule pair, the
+lookahead and the `σ(A)` context; a renderer must still build a leftmost derivation to some `wAα`
+with `FIRST_k(α)` in that context, plus the terminal completions `x` and `y`. That renderer is
+the shortest path to a first `proved` LL verdict. Caveat: a
 `strong`-test conflict (`conflicts`, global FOLLOW_k) is **not** an LL(k) conflict for `k ≥ 2`
 (THEORY.md §3.1 example `S → aAaa | bAba`); only `ll_conflicts` from the full test, or the strong
-conflicts at `k = 1`, may be rendered.
+conflicts at `k = 1` for a reduced grammar (reachable, productive `A`; an unreachable
+nonterminal has no `IsLLk` witness), may be rendered.
 
 **(b) `IsLLk g k`: needs one soundness theorem.** The definition quantifies over infinitely many
 derivations, so a positive proof needs a finite certificate. Plan:

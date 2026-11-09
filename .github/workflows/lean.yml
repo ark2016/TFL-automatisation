@@ -55,6 +55,9 @@ jobs:
           cache-from: type=gha,scope=tfl-lean4
           cache-to: type=gha,scope=tfl-lean4,mode=max
 
+      - name: Check the image is loaded (the compile tests skip without it)
+        run: docker image inspect tfl-lean4
+
       - name: Compile generated statements (sorry-closed)
         env:
           ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
@@ -62,4 +65,4 @@ jobs:
           python -m pytest -q --color=yes \
             agent_system/tests/test_lean_ir.py \
             cfl_system/tests/test_lean_ir.py \
-            dcfl_system/tests/test_lean_ir.py
+            dcfl_system/tests/test_lean_ir.py             agent_system/tests/test_lean_examples.py             cfl_system/tests/test_lean_examples_cfl.py             dcfl_system/tests/test_lean_examples_dcfl.py             agent_system/tests/test_lean_llk_doc.py

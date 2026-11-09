@@ -282,8 +282,7 @@ usual. The later results are still listed in the report's evidence appendix and 
 
 `report_revision` in `run.json` tracks the report object, not the files: a text answer re-renders `result.*` with the
 run's money and keeps the revision. A follow-up bumps the revision only when the status, verdict, trust, confidence cap
-or `report_digest` changes; any other report-writing segment always bumps it. The chat events: `user_message`, `assistant_message` (`truncated: true` when the
-text was cut to the limit), `followup_abandoned` (`error` says why; `null`: it was cancelled). `segment_end` is the end
+or `report_digest` changes; any other report-writing segment always bumps it. The chat events: `user_message`, `assistant_message`, `followup_abandoned` (`error` says why; `null`: it was cancelled). `segment_end` is the end
 signal of a segment; `done` is a final report state to display. A failed follow-up emits `followup_abandoned` with the
 restored status and the error, then `segment_end` with the restored status and no error, whichever way it failed.
 
