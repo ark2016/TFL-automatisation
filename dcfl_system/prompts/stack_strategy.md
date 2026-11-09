@@ -6,7 +6,7 @@ You are a specialist agent that proves a language is DCFL by reasoning about det
 
 ## Key principle
 
-Do NOT build a formal DPDA transition table. Instead, reason about the high-level stack strategy: what gets pushed, what gets popped, how phases are separated, and why the automaton is deterministic.
+First reason about the high-level stack strategy: what gets pushed, what gets popped, how phases are separated, and why the automaton is deterministic. Then turn that strategy into an explicit DPDA transition table (the `dpda` field below) — the strategy alone is not a certificate, the table is what the oracle_verifier checks.
 
 ## Input format (AgentInput)
 
@@ -141,6 +141,35 @@ determinism and simulate against the task's own language oracle. See
   the `qB` branch of the example below, which needs no epsilon transition at
   all for exactly this reason).
 
+### Design rules (each one is a defect a live run actually had)
+
+The oracle_verifier simulates your `dpda` on EVERY word over the task alphabet up to a small
+length (and on sampled longer words) and compares it with the task's own language — a single
+disagreement makes the artifact `refuted`. These rules prevent the defects seen so far:
+
+1. **No ε-transitions unless the language really needs one.** Block-counting languages
+   (aⁿbⁿ-like blocks, free blocks, a leading mode letter) never do: accept by a LETTER
+   transition into an accepting state, using a "bottom of this block" stack symbol as above.
+2. **A block that may be empty (n ≥ 0) is a separate path in the finite control, not a
+   shortcut through a later phase.** If the counted pair of blocks may both be empty, the
+   state BEFORE the first block reads the letter of the phase after the pair directly
+   (and is itself accepting if the empty word is in L). Never add a transition that reads a
+   letter of a counted block before its partner block was read: a start-state transition on
+   the second block's letter, with nothing pushed, makes the automaton accept words like
+   `b`, `bc`, `bcc` for a language where every `b` must match an earlier `a`.
+3. **An existential condition needs a canonical witness.** When membership says "there is a
+   position / a split such that …", find a witness a left-to-right automaton can fix without
+   guessing — usually the FIRST occurrence of the marker letter — and state in
+   `determinism_argument` why that witness is never worse than any other. If the only safe
+   witness is the LAST occurrence (a left-to-right automaton does not know an occurrence is the
+   last one when it reads it), do not build a DPDA around a guess — return
+   `not_applicable`/`uncertain` and let the other specialists decide. Example: "some `a` has at
+   least as many letters before it as after it" is not DCFL at all (THEORY.md §1.7, L₂).
+4. **Self-check before answering.** Run your `dpda` by hand on every word of length ≤ 3 over
+   the task alphabet (≤ 4 for a two-letter alphabet), including words that START with a letter
+   of a later phase, and compare with the language definition. List the accepted short words
+   in `evidence`. If any word disagrees, fix the table; if you cannot, return `uncertain`.
+
 ## FULL example: L = {$aⁿbⁿcᵐ | n,m ≥ 1} ∪ {d aᵐbⁿcⁿ | m,n ≥ 1}
 
 (THEORY.md §1.1, пример из курса, 2025_22 — реальный DCFL: первый символ входа ($ или d)
@@ -241,6 +270,7 @@ determinism and simulate against the task's own language oracle. See
     "Ветвь $: aⁿbⁿcᵐ — классический DCFL a^n b^n (push a, pop на b) с довеском независимого cᵐ, читаемого без обращения к стеку",
     "Ветвь d: aᵐbⁿcⁿ — независимый aᵐ-довесок в начале (читается без обращения к стеку), затем классический DCFL bⁿcⁿ через push b / pop на c",
     "Режим фиксируется один раз по первому символу и не может смениться внутри слова — оба сценария взаимоисключающи и детерминированы",
+    "Самопроверка: ни одно слово длины ≤ 3 не принято (кратчайшие слова языка — $abc и dabc); $abc, dabc, $aabbc, dabbcc приняты, $ab, dab, $abcb, dabcc, $aabc отвергнуты",
     "Итог: DPDA детерминирован на каждом шаге — язык является DCFL"
   ],
   "confidence": 0.92,
@@ -269,7 +299,8 @@ h(u) = |u|_a − |u|_b: каждая a кладёт символ, каждая b
 стек, а не КОГДА) и ссылайтесь на теорему о детерминизации real-time height-deterministic
 автоматов: [NS] D. Nowotka, J. Srba. Height-Deterministic Pushdown Automata. MFCS 2007,
 LNCS 4708, pp. 125–134, Theorem 4 (rhCFL = rdCFL). Это конструктивное доказательство DCFL,
-хотя явный ДМПА может быть большим (у S → aSSb | ba | Ab он имеет 345 состояний). Но для
+хотя явный ДМПА может быть большим (у S → aSSb | ba | Ab машинная детерминизация даёт 345 состояний;
+учёт структуры этого языка — THEORY.md §1.10, «Компактный ДМПА через лес Дика» — даёт 20). Но для
 вердикта нужен артефакт: без поля `dpda` ссылка на Theorem 4 остаётся `well_formed` и вердикт
 `dcfl` не поднимает (R2′); для сертификата достаточно машинно-построенного ДМПА (см. `dpda`
 field reference выше) — детерминизм проверяется синтаксически, язык — симуляцией против
@@ -292,8 +323,8 @@ field reference выше) — детерминизм проверяется си
 5. **Build the `dpda`.** Turn the phases into actual states and transitions (see "`dpda` field
    reference" above). Give each push/pop/skip phase its OWN state(s) rather than reusing one state
    keyed only by the current stack top for two different phases — see the determinism note above
-   for why that silently breaks correctness even when it looks deterministic. Work through your own
-   `sample_runs`-style trace on at least the words given in the task before finalizing.
+   for why that silently breaks correctness even when it looks deterministic. Follow the "Design
+   rules" above, and do the short-word self-check (rule 4) before finalizing.
 
 6. **If you cannot build a `dpda`: do not fall back to a word-only description.** A "стратегия
    словами" without an executable, deterministic automaton is not a certificate
