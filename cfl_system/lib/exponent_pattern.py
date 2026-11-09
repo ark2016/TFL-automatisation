@@ -310,7 +310,14 @@ def _solve_affine(expr: tuple, var: str, target: int, env: dict[str, int]) -> in
     diff = target - f0
     if diff % slope != 0:
         return None
-    return diff // slope
+    val = diff // slope
+    # Guard against non-affine expressions (e.g. ``2 ^ n``): the linear
+    # inversion is only valid if the candidate really satisfies the equation.
+    env_v = dict(env)
+    env_v[var] = val
+    if _eval_arith(expr, env_v) != target:
+        return None
+    return val
 
 
 # ---------------------------------------------------------------------------

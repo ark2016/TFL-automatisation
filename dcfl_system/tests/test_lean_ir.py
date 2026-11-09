@@ -334,7 +334,6 @@ def _need(oracle):
     return call
 
 
-@unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
 class TestNestedExponentWordPattern(unittest.TestCase):
     """A word_pattern carrying ``a^(2^n)`` notation goes through the full
     exponent parser with the deterministic ``2 ^ n`` translation."""
@@ -353,6 +352,7 @@ class TestNestedExponentWordPattern(unittest.TestCase):
         self.assertIn("List.replicate (2 ^ n) Letter.b", stmt.language_decl)
 
 
+@unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
 class TestNewKindsCompile(unittest.TestCase):
 
     def _assert_valid_with_sorry(self, ir: dict, direction: str) -> None:

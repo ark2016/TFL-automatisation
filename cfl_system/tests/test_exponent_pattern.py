@@ -320,3 +320,11 @@ class TestPowerInExponent:
     def test_flag_does_not_leak_between_calls(self):
         assert parse_exponent_pattern("a^(2^n)", allow_pow=True) is not None
         assert parse_exponent_pattern("a^(2^n)") is None
+
+
+class TestPowOracleNotWrong:
+    def test_pow_pattern_never_accepts_wrong_word(self):
+        p = parse_exponent_pattern("{a^(2^n) | n >= 0}", allow_pow=True)
+        assert p is not None
+        # 2^2 == 4 != 3: the affine solver must not accept 'aaa'.
+        assert p("aaa") is not True
