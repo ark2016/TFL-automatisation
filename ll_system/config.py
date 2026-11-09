@@ -11,6 +11,11 @@ import os
 # Model assignments per agent
 # ---------------------------------------------------------------------------
 
+# Lean: ll_system has NO R-Lean path (no lean_formalizer / lean_formalizer_retry
+# entries on purpose). Its "formalizer" below is the ordinary result-formalizer
+# agent, not the Lean proof-body writer. The Lean model names in the other
+# projects are: agent_system "formalizer"/"formalizer_retry", cfl_system and
+# dcfl_system "lean_formalizer"/"lean_formalizer_retry" (Opus first, Sonnet retry).
 MODELS: dict[str, str] = {
     # Fast / structured → Sonnet
     "input_parser":         "claude-sonnet-5-5",
