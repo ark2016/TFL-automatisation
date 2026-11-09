@@ -43,8 +43,8 @@ Events:
   declined, with ``add_usd`` and ``new_limit_usd``), ``source``, ``comment``,
   ``edited_fields``, ``interrupt_id``;
 * ``user_message`` -- a human's follow-up to a finished run: ``text``;
-* ``assistant_message`` -- the agent's text answer to a follow-up: ``text``, and
-  ``truncated: true`` when it was cut to the limit;
+* ``assistant_message`` -- the agent's text answer to a follow-up: ``text``, kept
+  whole (the limit applies to the human's own messages only);
 * ``followup_unanswered`` -- a follow-up ended with no model call, because the human
   did not extend the budget; the report stays: ``text``, the chat's note;
 * ``followup_abandoned`` -- a follow-up did not finish: ``status`` (the run is back
@@ -269,12 +269,8 @@ class ProgressEmitter:
         self.emit("user_message", text=str(text)[:MAX_MESSAGE_CHARS])
 
     def assistant_message(self, text: str) -> None:
-        """The agent's text answer to a follow-up, cut to the limit (``truncated``)."""
-        text = str(text)
-        if len(text) > MAX_MESSAGE_CHARS:
-            self.emit("assistant_message", text=text[:MAX_MESSAGE_CHARS], truncated=True)
-        else:
-            self.emit("assistant_message", text=text)
+        """The agent's text answer to a follow-up, kept whole."""
+        self.emit("assistant_message", text=str(text))
 
     def segment_end(self, status: str | None, error: str | None = None) -> None:
         self.emit("segment_end", status=status, error=error)

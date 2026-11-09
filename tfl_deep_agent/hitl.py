@@ -1872,11 +1872,15 @@ def _task_text(run: Mapping[str, Any], state: Mapping[str, Any], later_calls: Co
     """The task as the report states it: the text as the human corrected it at
     HITL 1, else the given text, else (a file) the intake transcription.
     ``later_calls``: tool calls whose reviews came after the report (:func:`_as_accepted`)."""
+    msgs0 = list(state.get("messages") or [])
+    # The run's own first message (for a file: the harness instruction). A review's task_text equal
+    # to it is not a new task: the transcription / intake answer below stays the source.
+    first = next((_text_of(m) for m in msgs0 if _is_task_message(m)), None)
     for r in reversed(run.get("reviews") or []):
         if (r.get("point") == FORMALIZATION and r.get("transcription")
                 and r.get("reviewed_call_id") not in later_calls):
             return str(r["transcription"])
-        if (r.get("point") == FORMALIZATION and r.get("task_text")
+        if (r.get("point") == FORMALIZATION and r.get("task_text") and str(r["task_text"]) != first
                 and r.get("reviewed_call_id") not in later_calls):
             return str(r["task_text"])
     if run.get("task_text"):

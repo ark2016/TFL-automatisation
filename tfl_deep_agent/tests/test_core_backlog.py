@@ -34,11 +34,40 @@ def test_report_names_the_task_of_the_latest_reviewed_ir():
     assert hitl._task_text(edited, {"messages": []}) == "Fixed A"
 
 
+def test_plain_approval_after_an_edited_transcription_keeps_the_correction():
+    run = {"task_text": "orig", "reviews": [
+        {"point": FORMALIZATION, "reviewed_call_id": "c1", "transcription": "Fixed"},
+        {"point": FORMALIZATION, "reviewed_call_id": "c2", "task_text": "orig"}]}
+    state = {"messages": [HumanMessage(content="orig")]}
+    assert hitl._task_text(run, state) == "Fixed"
+    # a new task stated later still wins
+    run["reviews"][1]["task_text"] = "new task"
+    assert hitl._task_text(run, state) == "new task"
+
+
+def test_pdf_task_plain_approval_reports_the_transcription_not_the_harness_instruction(tmp_path, capsys):
+    from tfl_deep_agent import cli
+    from tfl_deep_agent.tests import hitl_scripts as H
+
+    pdf = tmp_path / "t.pdf"
+    pdf.write_bytes(H.make_pdf())
+    script = H.write_script(tmp_path, H.pdf_script())
+    d = tmp_path / "run"
+    assert cli.main(["--file", str(pdf), "--mock-script", str(script), "--save", str(d),
+                     "--settings", str(H.SETTINGS_EXAMPLE), "--no-dialog"]) == hitl.EXIT_AWAITING
+    assert cli.main(["--resume", str(d), "--decision", "approve"]) == hitl.EXIT_AWAITING
+    assert cli.main(["--resume", str(d), "--decision", "approve"]) == 0, capsys.readouterr().err
+    import json
+    assert json.loads((d / "result.json").read_text(encoding="utf-8"))["task"] == H.INTAKE_TRANSCRIPTION
+
+
 def test_lean_prompt_does_not_send_the_model_to_a_missing_skill_file():
     from pathlib import Path
 
     text = (Path(hitl.__file__).parent / "prompts" / "lean.md").read_text(encoding="utf-8")
     assert "exists, read it" not in text and "/skills/lean/SKILL.md" not in text
+    main = (Path(hitl.__file__).parent / "prompts" / "main.md").read_text(encoding="utf-8")
+    assert "`lean`," not in main and "no Lean skill file" in main
 
 
 def test_gate_predicates_live_in_rules_and_ledger_reexports_them():
