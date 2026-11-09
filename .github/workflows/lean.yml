@@ -1,0 +1,65 @@
+name: lean-compile
+
+# Full Lean compilation of the generated theorem statements (IR -> Lean, then
+# `lake env lean` in the tfl-lean4 image). Heavy (Mathlib + langlib image), so it
+# is NOT part of every push/PR: manual or weekly. The blocking, fast part --
+# statement generation without compiling -- is the `lean-ir-units` job in
+# tests.yml.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'  # Mondays 03:17 UTC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lean-compile:
+    name: compile generated Lean statements (tfl-lean4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install project + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Layer cache in the GitHub Actions cache: the expensive layers
+      # (`lake exe cache get`, `lake build TflLean.*`, i.e. the image's .lake)
+      # are restored while lean-toolchain / lakefile.toml / lake-manifest.json
+      # and the Lean sources stay unchanged.
+      - name: Build tfl-lean4 image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: agent_system/docker
+          file: agent_system/docker/Dockerfile.lean4
+          tags: tfl-lean4
+          load: true
+          push: false
+          cache-from: type=gha,scope=tfl-lean4
+          cache-to: type=gha,scope=tfl-lean4,mode=max
+
+      - name: Compile generated statements (sorry-closed)
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
+        run: |
+          python -m pytest -q --color=yes \
+            agent_system/tests/test_lean_ir.py \
+            cfl_system/tests/test_lean_ir.py \
+            dcfl_system/tests/test_lean_ir.py
