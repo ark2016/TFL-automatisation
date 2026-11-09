@@ -265,8 +265,9 @@ def latest_snapshot(run_dir: str | Path) -> int:
     return max((int(p.name) for p in hist.iterdir() if p.is_dir() and p.name.isdigit()), default=0)
 
 
-def snapshot_report(d: Path) -> str:
-    """Copy ``result.*`` to a new ``report_history/<n>/``; its path relative to ``d``."""
+def snapshot_report(run_dir: str | Path) -> str:
+    """Copy ``result.*`` to a new ``report_history/<n>/``; its path (as text) relative to ``run_dir``."""
+    d = Path(run_dir)
     dst = d / REPORT_HISTORY_DIR / str(latest_snapshot(d) + 1)
     dst.mkdir(parents=True)
     for name in RESULT_FILES:

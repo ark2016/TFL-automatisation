@@ -1859,3 +1859,20 @@ def test_a_message_with_no_accepted_report_keeps_the_old_wrap_up():
     assert not BS.declining_skips_the_call({"budget_stop": True})  # the run itself: wrap-up writes its report
     assert not BS.declining_skips_the_call({"budget_stop": False,  # no stop, nobody declined
                                             "followup_in_progress": {"previous_status": "submitted"}})
+
+
+def test_budget_stop_helper_names():
+    assert BS.format_usd(2) == "$2.00" and BS.format_usd(0.0123) == "$0.0123"
+    assert BS.parse_add_usd({"add_usd": "1.5"}) == 1.5
+    with pytest.raises(BS.DecisionError):
+        BS.parse_add_usd({"add_usd": 0})
+    assert not hasattr(BS, "usd") and not hasattr(BS, "budget_add") and not hasattr(BS, "budget_resume")
+
+
+def test_snapshot_report_takes_a_run_dir_as_text(tmp_path):
+    from tfl_deep_agent import followup as F
+
+    (tmp_path / "result.json").write_text("{}", encoding="utf-8")
+    assert F.latest_snapshot(str(tmp_path)) == 0
+    assert F.snapshot_report(str(tmp_path)) == "report_history/1"
+    assert F.latest_snapshot(tmp_path) == 1

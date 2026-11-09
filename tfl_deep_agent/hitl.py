@@ -995,7 +995,7 @@ def resume_value(request: Mapping[str, Any], decision: Decision, *,
     configs = {_get(c, "action_name"): c for c in _get(request, "review_configs") or []}
     point = request_point(request)
     if point == BUDGET:
-        return budget_stop_mod.budget_resume(actions[0], decision)
+        return budget_stop_mod.budget_decision_response(actions[0], decision)
     if decision.type == "edit" and len(actions) != 1:
         raise DecisionError(f"edit needs exactly one pending action, there are {len(actions)}")
     decisions: list[dict[str, Any]] = []
@@ -1388,8 +1388,6 @@ def resume_run(
     request = budget_stop_mod.with_todays_day_left(run, pending["request"]) if at_budget else pending["request"]
     value, review = resume_value(request, decision, evidence=_run_evidence(d))
     review["interrupt_id"] = pending["interrupt_id"]
-    if at_budget:
-        budget_stop_mod.apply_budget_review(run, review)
     if approve_rest or auto_approve_later:
         run.setdefault("initial_review_mode", review_mode_of(run))
         run["review_mode"] = REVIEW_AUTO
@@ -1399,10 +1397,7 @@ def resume_run(
         run["approve_rest"] = {"at": review["at"], "point": review["point"],
                                "interrupt_id": pending["interrupt_id"], "source": decision.source,
                                "reviewer": decision.reviewer}
-    run["reviews"].append(review)
-    run["pending"] = None
-    run["status"] = "running"
-    save_run(d, run)
+    _record_review(d, run, review, at_budget=at_budget)
     return guarded_segment(d, run, Command(resume={pending["interrupt_id"]: value}), model_factory=model_factory,
                            dialog=dialog, resumed_with=review)
 
@@ -1441,6 +1436,19 @@ def send_followup(
     save_run(d, run)
     return guarded_segment(d, run, {"messages": [HumanMessage(content=text)]}, model_factory=model_factory,
                            dialog=dialog, resumed_with=None, message=text)
+
+
+def _record_review(d: Path, run: dict[str, Any], review: dict[str, Any], *, at_budget: bool,
+                   budget: Any = None) -> None:
+    """A decision is taken: apply a budget stop's decision (``budget``: the running
+    segment's ledger, none on a resume), add the review, clear ``pending``, mark the run
+    running and save ``run.json``."""
+    if at_budget:
+        budget_stop_mod.apply_budget_review(run, review, budget)
+    run["reviews"].append(review)
+    run["pending"] = None
+    run["status"] = "running"
+    save_run(d, run)
 
 
 def check_run_mode(d: Path, run: Mapping[str, Any], model_factory: Any, live: bool, doing: str) -> None:
@@ -1656,12 +1664,7 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
                     break
             resume, review = resume_value(request, decision, evidence=evidence)
             review["interrupt_id"] = intr.id
-            if info.point == BUDGET:
-                budget_stop_mod.apply_budget_review(run, review, budget)
-            run["reviews"].append(review)
-            run["pending"] = None
-            run["status"] = "running"
-            save_run(d, run)
+            _record_review(d, run, review, at_budget=info.point == BUDGET, budget=budget)
             progress.hitl_decision(review)
             value = Command(resume={intr.id: resume})
     except Exception as exc:  # noqa: BLE001 - a build / checkpoint failure ends the segment as an error
@@ -2065,7 +2068,7 @@ class TTYDialog:
             if choice == "a":
                 amount = self.input("How many dollars to add: ").strip()
                 try:
-                    return Decision("edit", args={"add_usd": budget_stop_mod.budget_add({"add_usd": amount})},
+                    return Decision("edit", args={"add_usd": budget_stop_mod.parse_add_usd({"add_usd": amount})},
                                     source="dialog", reviewer=self.reviewer)
                 except DecisionError as exc:
                     self.print(str(exc))

@@ -42,7 +42,7 @@ BUDGET = "budget"
 EXTENDED, DECLINED = "extended", "declined"
 
 
-def usd(value: Any) -> str:
+def format_usd(value: Any) -> str:
     x = float(value or 0.0)
     return f"${x:.2f}" if abs(x) >= 0.1 else f"${x:.4f}"
 
@@ -50,9 +50,9 @@ def usd(value: Any) -> str:
 def budget_request(low: BudgetLow) -> dict[str, Any]:
     """The interrupt value of the budget stop."""
     args = {k: (None if v is None else round(float(v), 6)) for k, v in dataclasses.asdict(low).items()}
-    day = "" if args["day_left_usd"] is None else f" На сегодня осталось {usd(args['day_left_usd'])}."
-    text = (f"Бюджет задачи заканчивается: потрачено {usd(args['spent_usd'])} из {usd(args['limit_usd'])}, "
-            f"доступно {usd(args['available_usd'])}.{day} Добавить денег или завершить с тем, что есть?")
+    day = "" if args["day_left_usd"] is None else f" На сегодня осталось {format_usd(args['day_left_usd'])}."
+    text = (f"Бюджет задачи заканчивается: потрачено {format_usd(args['spent_usd'])} из {format_usd(args['limit_usd'])}, "
+            f"доступно {format_usd(args['available_usd'])}.{day} Добавить денег или завершить с тем, что есть?")
     return {"action_requests": [{"name": BUDGET, "args": args, "description": text}],
             "review_configs": [{"action_name": BUDGET, "allowed_decisions": ["approve", "edit"]}]}
 
@@ -104,7 +104,7 @@ def review_switch_refusal(point: str | None, switch: str = "approve_rest") -> st
     return None
 
 
-def budget_add(args: Mapping[str, Any] | None) -> float:
+def parse_add_usd(args: Mapping[str, Any] | None) -> float:
     """The dollars of an ``edit`` decision; :class:`DecisionError` when they do not fit."""
     fields = dict(args or {})
     unknown = sorted(set(fields) - {"add_usd"})
@@ -122,7 +122,7 @@ def budget_add(args: Mapping[str, Any] | None) -> float:
     return add
 
 
-def budget_resume(action: Any, decision: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+def budget_decision_response(action: Any, decision: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """``(HITLResponse, review record)`` of a decision at the budget stop."""
     args = dict(get_field(action, "args") or {})
     limit = float(args.get("limit_usd") or 0.0)
@@ -134,7 +134,7 @@ def budget_resume(action: Any, decision: Any) -> tuple[dict[str, Any], dict[str,
     if decision.type == "approve":
         return {"decisions": [{"type": "approve"}]}, {**review, "decision": DECLINED, "add_usd": 0.0,
                                                       "new_limit_usd": limit}
-    add = budget_add(decision.args)
+    add = parse_add_usd(decision.args)
     day = args.get("day_left_usd")
     if day is not None and add > float(day) + 1e-9:
         raise DecisionError(f"budget stop: ${add:.2f} does not fit in the day's remainder "
@@ -183,15 +183,15 @@ def with_todays_day_left(run: Mapping[str, Any], request: Mapping[str, Any], *,
 
 def budget_summary(args: Mapping[str, Any]) -> list[str]:
     """The lines of the stop's short card."""
-    out = [f"Потрачено {usd(args.get('spent_usd'))} из {usd(args.get('limit_usd'))} · "
-           f"доступно {usd(args.get('available_usd'))}"]
+    out = [f"Потрачено {format_usd(args.get('spent_usd'))} из {format_usd(args.get('limit_usd'))} · "
+           f"доступно {format_usd(args.get('available_usd'))}"]
     if args.get("day_left_usd") is not None:
-        out.append(f"На сегодня осталось {usd(args['day_left_usd'])}")
+        out.append(f"На сегодня осталось {format_usd(args['day_left_usd'])}")
     return out
 
 
 __all__ = [
-    "BUDGET", "DECLINED", "EXTENDED", "apply_budget_review", "budget_add", "budget_request", "budget_resume",
-    "budget_stop_enabled", "budget_stop_on", "budget_summary", "declining_skips_the_call", "per_day_usd", "request_budget_extension", "review_switch_refusal", "usd",
+    "BUDGET", "DECLINED", "EXTENDED", "apply_budget_review", "parse_add_usd", "budget_request", "budget_decision_response",
+    "budget_stop_enabled", "budget_stop_on", "budget_summary", "declining_skips_the_call", "per_day_usd", "request_budget_extension", "review_switch_refusal", "format_usd",
     "with_todays_day_left",
 ]

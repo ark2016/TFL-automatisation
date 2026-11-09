@@ -244,14 +244,10 @@ def _abandon(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 0
 
 
-def _check_live_flag(args: argparse.Namespace, run: dict[str, Any]) -> str | None:
-    """Why this run cannot go on with these flags, in the CLI's own words."""
-    live = run.get("mode") == "live"
-    if live and not args.live:
-        return f"{args.resume} is a live run: going on makes real API calls; pass --live to confirm"
-    if args.live and not live:
-        return f"{args.resume} is a {run.get('mode')} run: --live does not apply"
-    if live and not os.environ.get("ANTHROPIC_API_KEY"):
+def _check_live_key(args: argparse.Namespace, run: dict[str, Any]) -> str | None:
+    """Why a live resume cannot start from this environment. The mode / ``--live`` mismatch
+    is ``hitl.check_run_mode``'s to refuse."""
+    if run.get("mode") == "live" and args.live and not os.environ.get("ANTHROPIC_API_KEY"):
         return "--live needs ANTHROPIC_API_KEY in the environment (tfl-deep never loads .env)"
     return None
 
@@ -278,7 +274,7 @@ def _resume(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("--approve-rest goes only with --decision approve")
     try:
         run = hitl.load_run(args.resume)
-        problem = _check_live_flag(args, run)
+        problem = _check_live_key(args, run)
         if problem:
             return _fail(problem)
         if followup.stuck_followup(run):
