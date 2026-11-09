@@ -3409,3 +3409,32 @@ Two gaps in that baseline (`accepted_report`), both reproduced first (R1 went fr
 
 - Lean prompt no longer points at a missing /skills/lean/SKILL.md. Follow-up replies are kept whole (no truncated flag; progress.assistant_message no longer cuts). HITL 1 feedback messages carry additional_kwargs tfl_hitl; the card's task_text is the task stated before the reviewed call and the review stores task_text, so a new report names the new task. _as_accepted cuts at the next task message, not at a HITL note. A non-HITL-2 stop drops a stale rejected draft from result.*. Verdict-gate predicates moved to evidence/rules.py (ledger re-exports them). CA-015 for runs with no budget stop left as decided earlier (needs the user).
 - OPEN, needs the user: `_task_text` names the report task after the newest HITL 1 review `task_text`, i.e. the last plain human message before the reviewed call. In a follow-up that is the chat message, so a correction such as "typo: a^n b^2n" becomes the report task instead of the original. Options: (1) keep (right when the follow-up states a whole new task); (2) store the follow-up text in `review['followup_text']` and keep the original as the task; (3) record both in the report. Not changed.
+
+## 2026-11-09: backlog round (ultracode)
+
+Mock-mode work on branch `feat/backlog-ultracode`; no live calls.
+
+- TFL Lab: the continuation timer counts from the latest segment's start; `POST /api/deep/runs/<id>/abandon` and the
+  «Отменить продолжение» button (`followup.can_abandon`, 409 while a process is alive); the lab's `review_mode` copy is
+  re-read from the agent's `run.json` when a continuation settles; `_watch_orphan` handles a cancel that lands as an adopted
+  follow-up finishes; only a button click asks for confirmation (`deepSend*` take `viaButton`); `followup_error` beats the
+  exit code only when it is fresh (`agent_error` / `agent_segments` stored at send time).
+- CLI: `--abandon` refuses while the pid in `followup_in_progress` is alive (a resumed segment records its own pid);
+  `--abandon --force` skips the check; `--force` without `--abandon` is a parser error. `--resume` that cannot start (`OSError`,
+  `ImportError`) exits 2 with the reason on stderr. `_check_live_flag` became `_check_live_key`; the mode/`--live` mismatch is
+  refused by `hitl.check_run_mode`.
+- HITL cards: user text is markdown-escaped (`hitl.md_escape`) so `*` survives; the HITL 2 card and `hitl.md` show the draft
+  `summary`. The final report's task statement is not escaped (see decisions).
+- Core: no truncation of chat replies (`progress.assistant_message`); `/lean/SKILL.md` no longer referenced; `_task_text` uses
+  a review's `task_text` only when it differs from the run's first task message; gate predicates in `evidence/rules.py`.
+- Refactors: `budget_add` -> `parse_add_usd`, `budget_resume` -> `budget_decision_response`, `usd` -> `format_usd`;
+  `hitl._record_review`, `deep_routes._mark_process_gone`, `_lean_off`, `deepLogNote`, `deepIsAutoSource`.
+- Docs: README, `tfl_deep_agent/README.md` and `docs/kb` (`run-lifecycle.md`, `tfl-lab.md`) describe `--force`, the abandon route
+  and `report_revision` as implemented.
+
+Open decisions (options and recommendations in TODO.md): exit code for a failed follow-up (keep 1, add alias); TTY dialog at a
+budget stop in auto mode (keep exit 3); byte-identical rejected report vs `review_summary` (skip rejected when filtering by
+digest); accepted report replaced by a truncated one without a budget stop (drop the `budget_stop_on` condition); escaping `*`
+in the rendered report task (only outside `$...$`); follow-up chat message becoming the report task (see the OPEN item above).
+Deferred: end-to-end mock test for a rejected draft followed by a new IR; `_is_task_message` for checkpoints without `tfl_hitl`.
+Follow-up: the compact exam_04 DPDA (356 transitions) fits the 2000-transition `dpda_vs_ir` limit, unlike the old 5835-transition one.
