@@ -139,7 +139,7 @@ def _natural_leaf(spec: dict, sym_map: dict[str, str], suffix: str) -> LangDef |
     description = spec.get("description")
     if not isinstance(description, str):
         return None
-    pattern = parse_exponent_pattern(description)
+    pattern = parse_exponent_pattern(description, allow_pow=True)
     if pattern is not None:
         body = pattern_tree_body(pattern, sym_map)
         if body is None:
@@ -312,7 +312,7 @@ def _render_natural_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanS
     ld = build_language(lang_spec, sym_map, "", _cfl_leaf)
     if ld is not None:
         return _statement(alpha_decl, ld, negate), None
-    if parse_exponent_pattern(description) is None:
+    if parse_exponent_pattern(description, allow_pow=True) is None:
         return None, (
             "natural-language description is not exponent notation "
             "(cfl_system.lib.exponent_pattern.parse_exponent_pattern "
@@ -337,7 +337,16 @@ def _render_generic_case(ir: dict, lang_spec: dict, negate: bool) -> tuple[LeanS
     alpha_decl, sym_map = alpha
     ld = build_language(lang_spec, sym_map, "", _cfl_leaf)
     if ld is None:
-        if kind == "grammar_filter":
+        filt = lang_spec.get("filter") if kind == "grammar_filter" else None
+        if isinstance(filt, dict) and (
+            filt.get("kind") == "natural_language_filter" or "natural_language_filter" in filt
+        ):
+            why = (
+                "the filter is a natural_language_filter (prose): no unambiguous "
+                "formal statement exists and the statement may not be produced by an LLM, "
+                "so no Lean formulation is rendered"
+            )
+        elif kind == "grammar_filter":
             why = (
                 "the filter is a natural-language filter or uses a predicate/"
                 "expression shape agent_system.lib.lean_ir.predicate_to_lean "

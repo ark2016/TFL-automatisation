@@ -58,6 +58,38 @@ jobs:
             --cov=ll_system --cov=ui_server --cov=tfl_eval \
             --cov-report=term-missing
 
+  # IR -> Lean statement generation (no compilation): deterministic string
+  # output, fast, blocking. Compile-checking against the tfl-lean4 image is
+  # the separate manual/weekly workflow lean.yml; without the image the
+  # Docker-gated tests in these files skip.
+  lean-ir-units:
+    name: lean_ir statement generation (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install project + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run lean_ir unit tests
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
+        run: |
+          python -m pytest -q --color=yes -m "not slow" \
+            agent_system/tests/test_lean_ir.py \
+            cfl_system/tests/test_lean_ir.py \
+            dcfl_system/tests/test_lean_ir.py \
+            cfl_system/tests/test_exponent_pattern.py
+
   pytest-slow:
     name: pytest (slow, marked)
     runs-on: ubuntu-latest

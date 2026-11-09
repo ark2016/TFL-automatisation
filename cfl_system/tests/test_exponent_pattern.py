@@ -296,3 +296,27 @@ class TestBudgetExceededReturnsNone:
             segments=p.segments, condition=p.condition, step_budget=1,
         )
         assert tiny("aaa") is None
+
+
+class TestPowerInExponent:
+    """``^`` in an exponent is parsed only for the Lean translators
+    (``allow_pow=True``); the membership oracle keeps rejecting it."""
+
+    def test_default_parse_still_rejects_pow(self):
+        assert parse_exponent_pattern("{a^(2^n) | n >= 0}") is None
+
+    def test_allow_pow_parses_nested_exponent(self):
+        p = parse_exponent_pattern("{a^(2^n) | n >= 0}", allow_pow=True)
+        assert p is not None
+        assert p.segments == [{"unit": "a", "expr": ("bin", "^", ("num", 2), ("var", "n"))}]
+
+    def test_pow_is_right_associative_and_binds_tighter_than_mul(self):
+        p = parse_exponent_pattern("a^(2*3^n)", allow_pow=True)
+        assert p.segments[0]["expr"] == ("bin", "*", ("num", 2), ("bin", "^", ("num", 3), ("var", "n")))
+        q = parse_exponent_pattern("a^(2^n^2)", allow_pow=True)
+        assert q.segments[0]["expr"] == (
+            "bin", "^", ("num", 2), ("bin", "^", ("var", "n"), ("num", 2)))
+
+    def test_flag_does_not_leak_between_calls(self):
+        assert parse_exponent_pattern("a^(2^n)", allow_pow=True) is not None
+        assert parse_exponent_pattern("a^(2^n)") is None

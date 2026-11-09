@@ -265,6 +265,7 @@ class TestGrammarFilter(unittest.TestCase):
             stmt, reason = render_statement_verbose(ir, "cfl")
             self.assertIsNone(stmt)
             self.assertIn("grammar_filter", reason)
+            self.assertIn("natural_language_filter", reason)  # specific, honest reason
 
     def test_unsupported_filter_or_grammar_is_none(self):
         base = _load("task_grammar_filter_49.json")
@@ -278,6 +279,76 @@ class TestGrammarFilter(unittest.TestCase):
             ir = json.loads(json.dumps(base))
             mutate(ir["language_spec"])
             self.assertIsNone(render_statement(ir, "cfl"))
+
+
+class TestNestedExponents(unittest.TestCase):
+    """``a^(2^n)`` (cfl-10) and friends: deterministic ``2 ^ n`` in the exponent."""
+
+    def test_cfl10_golden(self):
+        stmt, reason = render_statement_verbose(_load("eval/cfl-10.json"), "non_cfl")
+        self.assertIsNone(reason)
+        self.assertEqual(
+            stmt.language_decl,
+            "def L : Language Letter := {w : List Letter | "
+            "∃ n : ℕ, w = List.replicate (2 ^ n) Letter.a ∧ n ≥ 0}",
+        )
+        self.assertEqual(stmt.theorem_decl, "theorem tfl_main : ¬ L.IsContextFree")
+
+    def test_decidable_companion_bounds_the_variable_for_literal_base(self):
+        stmt, _ = render_statement_verbose(_load("eval/cfl-10.json"), "cfl")
+        self.assertIn("n < w.length + 1", stmt.decidable_decl)
+
+    def test_pow_in_condition_and_next_to_other_blocks(self):
+        stmt, reason = render_statement_verbose(_natural_ir("{a^n b^m | m = 2^n}"), "non_cfl")
+        self.assertIsNone(reason)
+        self.assertIn("m = (2 ^ n)", stmt.language_decl)
+        stmt, _ = render_statement_verbose(_natural_ir("{a^n b^(2^(n+1))}"), "non_cfl")
+        self.assertIn("List.replicate (2 ^ (n + 1)) Letter.b", stmt.language_decl)
+
+    def test_variable_base_has_no_decidable_companion(self):
+        stmt, _ = render_statement_verbose(_natural_ir("{a^(n^2) | n >= 0}"), "non_cfl")
+        self.assertIn("(n ^ 2)", stmt.language_decl)
+        self.assertIsNone(stmt.decidable_decl)
+
+    def test_union_with_pow_branch(self):
+        stmt, _ = render_statement_verbose(_natural_ir("{a^(3^n) | n>=1} union {b^n | n>=0}"), "non_cfl")
+        self.assertIn("3 ^ n", stmt.language_decl)
+        self.assertIn(" ∨ ", stmt.language_decl)
+
+    def test_idempotent(self):
+        a = render_statement(_load("eval/cfl-10.json"), "non_cfl")
+        b = render_statement(_load("eval/cfl-10.json"), "non_cfl")
+        self.assertEqual(a, b)
+
+
+class TestNestedBooleanCombinations(unittest.TestCase):
+
+    def test_deeply_nested_filter_predicate(self):
+        inner = {"op": "or", "operands": [
+            {"op": "eq", "left": _length(), "right": _const(2)},
+            {"op": "not", "operands": [{"op": "eq", "left": _cnt("a"), "right": _cnt("b")}]},
+        ]}
+        filt = {"op": "and", "operands": [
+            {"op": "not", "operands": [inner]},
+            {"op": "or", "operands": [
+                {"op": "eq", "left": _cnt("a"), "right": _const(1)},
+                {"op": "and", "operands": [inner, inner]},
+            ]},
+        ]}
+        ir = _load("task_grammar_filter_49.json")
+        ir["language_spec"]["filter"] = filt
+        stmt, reason = render_statement_verbose(ir, "cfl")
+        self.assertIsNone(reason)
+        self.assertIn("¬ ((", stmt.language_decl)
+        self.assertEqual(stmt.language_decl.count("("), stmt.language_decl.count(")"))
+
+    def test_nested_condition_in_exponent_notation(self):
+        stmt, reason = render_statement_verbose(
+            _natural_ir("{a^i b^j c^k | (i = j or (j = k and not i = 0)) and k >= 1}", "abc"), "non_cfl")
+        self.assertIsNone(reason)
+        self.assertEqual(stmt.language_decl.count("("), stmt.language_decl.count(")"))
+        self.assertIn("∨", stmt.language_decl)
+        self.assertIn("¬", stmt.language_decl)
 
 
 class TestExistsDecomposition(unittest.TestCase):
@@ -479,6 +550,12 @@ class TestNewKindsCompile(unittest.TestCase):
             (EXAMPLES_DIR.parent.parent / "dcfl_system" / "examples" / "task_grammar_aSSb.json").read_text(encoding="utf-8")
         )
         self._assert_valid_with_sorry(ir, "cfl")
+
+    def test_nested_exponent_cfl10(self):
+        self._assert_valid_with_sorry(_load("eval/cfl-10.json"), "non_cfl")
+
+    def test_nested_exponent_with_other_blocks(self):
+        self._assert_valid_with_sorry(_natural_ir("{a^n b^(2^(n+1)) | n >= 0}"), "non_cfl")
 
     def test_ww_non_cfl(self):
         self._assert_valid_with_sorry(_load("eval/cfl-03.json"), "non_cfl")
