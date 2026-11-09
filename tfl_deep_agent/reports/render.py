@@ -808,6 +808,8 @@ def _review_short(ctx: _Ctx) -> str:
                     else "формализацию проверил человек, " + report_part)
         if form.get("status") == "approved":
             return report_part + "; формализация одобрена автоматически"
+        if form.get("status") == "ambiguous":
+            return report_part + "; отчёт не назвал, какой из утверждённых IR он использует"
         return report_part + "; формализация не утверждена человеком"
     if dec == "auto_approved" and form is not None and form.get("status") == "approved" and not form.get("auto"):
         return "формализацию проверил человек, отчёт принят автоматически"
@@ -855,6 +857,9 @@ def formalization_label(result: Mapping[str, Any]) -> str | None:
                 "не утверждён; вердикт `not_verified`")
     if status == "no_ir":
         return "**формализация утверждена без IR**: результаты оракулов не к чему привязать; вердикт `not_verified`"
+    if status == "ambiguous":
+        irs = ", ".join(_code(ir.get("ir_fingerprint")) for ir in form.get("approved_irs") or [])
+        return f"**утверждено несколько IR** ({irs}), а отчёт не назвал ни один из них; вердикт `not_verified`"
     how = ("утверждена автоматически (`--auto-approve`), **без проверки человеком**" if form.get("auto")
            else "утверждена человеком с правками" if form.get("decision") == "edited"
            else "утверждена человеком")

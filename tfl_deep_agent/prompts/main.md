@@ -81,9 +81,10 @@ L ∉ DCFL gives L ∉ LL(k) for every k (§3.3 (A)) and L ∉ REG; L ∉ CFL gi
    `evidence_ids`; do not list those ids in the verdict's `evidence_ids`. The summary states the
    whole answer (for example «DCFL; не LL(k) ни при каком k; не регулярен»). Code rates only the
    verdict of `language_class`; the steps of other classes do not change its trust.
-6. Code judges the verdict against the IR approved last at HITL 1. If you formalized another class
-   after the class of the verdict, call `validate_ir` on the verdict's IR once more before
-   `submit_report`. An IR that was already approved passes HITL 1 without a new stop.
+6. Code judges the verdict against the IR approved at HITL 1. Once two or more IRs are approved in
+   this thread (another class, or a new task in the chat), set the report's `ir_fingerprint` to the
+   approved IR the verdict is about: a report that names none of them is `not_verified`. An IR that
+   was already approved passes HITL 1 without a new stop.
 
 ## Roles (`task` tool)
 

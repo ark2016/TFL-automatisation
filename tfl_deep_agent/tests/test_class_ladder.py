@@ -117,5 +117,5 @@ def test_revalidating_an_approved_ir_makes_it_the_last_one_again():
                _rec("v3", "unchanged", "fp-ll")]  # what HITL 1 records for an already approved IR
     binding = hitl.formalization_binding(records, on=True)
     assert binding["status"] == "approved" and binding["ir_fingerprint"] == "fp-ll"
-    assert "call `validate_ir` on the verdict's IR once more before `submit_report`" in FLAT
+    assert "set the report's `ir_fingerprint` to the approved IR the verdict is about" in FLAT
     assert "An IR that was already approved passes HITL 1 without a new stop." in FLAT

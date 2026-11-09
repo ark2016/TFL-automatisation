@@ -1475,7 +1475,27 @@ _FORMALIZATION_BLOCKS = {
                  "reached HITL 1): no human-approved IR"),
     "rejected": "the last HITL 1 decision rejected the formalization and no IR was approved after it",
     "no_ir": "the formalization approved at HITL 1 has no IR (no fingerprint)",
+    "ambiguous": "several IRs are approved at HITL 1 and the report names none of them in ir_fingerprint",
 }
+
+
+def binding_for_report(formalization: Mapping[str, Any] | None,
+                       report: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The HITL 1 binding that rates ``report`` (VERDICT_POLICY R-IR).
+
+    With two or more approved IRs (``approved_irs``) the last one says nothing about
+    what the report is on: the report's ``ir_fingerprint`` picks one of them, and naming
+    none gives the status ``ambiguous``. Any other binding is returned as it is."""
+    if formalization is None or formalization.get("status") != "approved":
+        return formalization
+    irs = formalization.get("approved_irs")
+    if not irs:
+        return formalization
+    named = report.get("ir_fingerprint")
+    for ir in irs:
+        if ir["ir_fingerprint"] == named:
+            return {**formalization, **ir}
+    return {**formalization, "status": "ambiguous", "decision": None, "ir_fingerprint": None, "review_id": None}
 
 
 def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]],
@@ -1506,9 +1526,9 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
       the human approved or edited at HITL 1 is the required one, whatever the
       report names -- results for another IR are excluded, and a report
       fingerprint that differs is a downgrade line. A rejected, missing or
-      IR-less formalization gives no basis at all (``not_verified``): the
-      model's own field never decides which IR its evidence is measured
-      against.
+      IR-less formalization gives no basis at all (``not_verified``). The
+      model's own field does not choose the IR unless several stand approved:
+      then it must name one of them (:func:`binding_for_report`, R-IR).
 
     Returns ``trust``, ``confidence_cap``, ``direction``, ``verdict_token``,
     ``basis`` (ids), ``verdict_gate`` (the downgrade reasons, R4),
@@ -1516,6 +1536,7 @@ def verdict_gate(report: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
     (the fingerprint results were filtered by, if any) and ``formalization``."""
     from .tools.base import CONFIDENCE_CAPS, TRUST_LEVELS, confidence_cap, trust_at_least, trust_rank
 
+    formalization = binding_for_report(formalization, report)
     lang = report.get("language_class") or ""
     direction, note = verdict_direction(str(report.get("verdict") or ""), report.get("answer"))
     tokens = VERDICT_TOKENS.get(lang, {})
@@ -1758,6 +1779,8 @@ def collect_result(state: Mapping[str, Any], *, human_review: str = "not reviewe
         "tool_calls": tool_calls,
         "note": "P2 result: evidence from the main thread's tool results (no evidence ledger given).",
     }
+    if report is not None:
+        formalization = binding_for_report(formalization, report)
     if formalization is not None:
         result["formalization"] = dict(formalization)
     if ledger_of_evidence is not None:

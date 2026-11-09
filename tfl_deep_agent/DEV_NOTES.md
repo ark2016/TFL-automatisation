@@ -3388,3 +3388,19 @@ Two gaps in that baseline (`accepted_report`), both reproduced first (R1 went fr
 - `send_followup` takes the baseline before `begin_followup`, through `_take_report_baseline`: a report in the state with no matching
   `accepted_report` is fixed at the ledger's current count. It reads the state with `run_state`, which calls no model, and that adds
   one agent build per message. A read that fails raises before anything changes in the run; the segment would have failed on it too.
+
+## 2026-11-09: several approved IRs (R-IR) and the browser live check
+
+- A new report in a follow-up was rated against the IR approved last, whatever it was about, so a report on A could get
+  `verified` on B's results. Rule R-IR in `docs/VERDICT_POLICY.md`: with two or more IRs standing approved, the report's
+  `ir_fingerprint` picks one (`agent.binding_for_report`), with that IR's own human / auto mark; naming none is the status
+  `ambiguous`, `not_verified`. With one approved IR nothing changes. The rule covers the class ladder too, so `prompts/main.md`
+  step 6 asks for the field instead of a second `validate_ir`. Both live Haiku reports named their IR unprompted.
+- Limits: a model that names the wrong approved IR is not caught (the report's formalization line shows it), and a rejected
+  last IR still blocks a report on an older approved one (`rejected`, the safe side).
+- Live check in TFL Lab, Haiku, $0.058 over two runs: `6fa17e6f5c7e` (`(a|b)*abb`, $0.0354) and `d9b21fc183a2` (`a*b`, $0.0225).
+  Passed: a question keeps the report; a draft shows as itself and hides the Lean button; a rejected draft keeps the old report,
+  rating and human mark; an approved one gives revision 2 and `result.html?v=2`; the Lean button ends in an honest failure with the
+  report and rating unchanged (Haiku wrote `exact?` three times, `lean_check` ran in Docker); the budget card at the start of a run
+  with a $0.01 limit, top-up to $0.04 and the run continuing; declining inside a follow-up makes no model call, shows the chat note
+  and keeps the report. R-IR itself is covered by mock tests only. A proof that passes `lean_check` was not seen live: that needs Opus.

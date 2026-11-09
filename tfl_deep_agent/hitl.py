@@ -672,6 +672,9 @@ def _valid_report(args: Any) -> dict[str, Any] | None:
         return None
 
 
+_APPROVING_DECISIONS = ("approved", "edited", "unchanged")
+
+
 def formalization_binding(records: Sequence[Mapping[str, Any]] | None, *, on: bool,
                           auto: bool = False) -> dict[str, Any] | None:
     """What HITL 1 decided, as the verdict gate reads it (``None`` when HITL 1
@@ -685,7 +688,11 @@ def formalization_binding(records: Sequence[Mapping[str, Any]] | None, *, on: bo
     * ``no_ir`` -- approved, but there was no IR to approve;
     * ``not_held`` -- HITL 1 is on and no formalization reached it.
 
-    ``auto``: the run answers every review automatically (``--auto-approve``)."""
+    ``auto``: the run answers every review automatically (``--auto-approve``).
+
+    ``approved_irs`` (only when ``approved`` and two or more IRs stand approved): each
+    such IR with its own ``decision``, ``review_id`` and ``auto``, oldest first. Which of
+    them rates a report is decided by the report (``agent.binding_for_report``, R-IR)."""
     if not on:
         return None
     recs = [r for r in records or [] if _get(r, "point") == FORMALIZATION and _get(r, "decision") != "superseded"]
@@ -695,11 +702,22 @@ def formalization_binding(records: Sequence[Mapping[str, Any]] | None, *, on: bo
     last = recs[-1]
     decision = _get(last, "decision")
     fp = _get(last, "ir_fingerprint")
-    status = "approved" if decision in ("approved", "edited", "unchanged") else "rejected"
+    status = "approved" if decision in _APPROVING_DECISIONS else "rejected"
     if status == "approved" and not fp:
         status = "no_ir"
-    return {"status": status, "decision": decision, "ir_fingerprint": fp, "review_id": _get(last, "id"),
-            "auto": bool(auto)}
+    binding = {"status": status, "decision": decision, "ir_fingerprint": fp, "review_id": _get(last, "id"),
+               "auto": bool(auto)}
+    if status == "approved":
+        latest = {}
+        for rec in recs:  # re-inserted, so the order is that of each IR's latest decision
+            latest.pop(_get(rec, "ir_fingerprint"), None)
+            latest[_get(rec, "ir_fingerprint")] = rec
+        irs = [{"ir_fingerprint": ir, "decision": _get(rec, "decision"), "review_id": _get(rec, "id"),
+                "auto": bool(auto)}
+               for ir, rec in latest.items() if ir and _get(rec, "decision") in _APPROVING_DECISIONS]
+        if len(irs) > 1:
+            binding["approved_irs"] = irs
+    return binding
 
 
 def formalization_note(binding: Mapping[str, Any] | None, report: Mapping[str, Any] | None = None,
@@ -707,7 +725,15 @@ def formalization_note(binding: Mapping[str, Any] | None, report: Mapping[str, A
     """One line on HITL 1 for the HITL 2 card (``None`` when HITL 1 is off)."""
     if binding is None:
         return None
+    if report is not None:
+        from .agent import binding_for_report
+
+        binding = binding_for_report(binding, report)
     status, fp = binding.get("status"), binding.get("ir_fingerprint")
+    if status == "ambiguous":
+        irs = [ir["ir_fingerprint"] for ir in binding.get("approved_irs") or []]
+        return (f"Formalization (HITL 1): several IRs are approved ({irs}) and the report names none of them in "
+                "ir_fingerprint; the verdict is not_verified.")
     if status == "not_held":
         return ("Formalization (HITL 1): NOT REVIEWED -- no formalization reached HITL 1 (no ir-builder answer "
                 "or validate_ir call); no human-approved IR, so the verdict is not_verified.")
@@ -1795,11 +1821,14 @@ def run_binding(run: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, A
     binding = formalization_binding(state.get(STATE_KEY), on=bool((run.get("hitl") or {}).get(FORMALIZATION)),
                                     auto=review_mode_of(run) == REVIEW_AUTO)
     if binding is not None and binding.get("status") == "approved":
-        fp = binding.get("ir_fingerprint")
-        human = any(r.get("point") == FORMALIZATION and r.get("source") != "auto"
-                    and r.get("decision") in ("approved", "edited") and r.get("ir_fingerprint") == fp
-                    for r in run.get("reviews") or [])
-        binding["auto"] = not human
+        def by_a_human(fp: Any) -> bool:
+            return any(r.get("point") == FORMALIZATION and r.get("source") != "auto"
+                       and r.get("decision") in ("approved", "edited") and r.get("ir_fingerprint") == fp
+                       for r in run.get("reviews") or [])
+
+        binding["auto"] = not by_a_human(binding.get("ir_fingerprint"))
+        for ir in binding.get("approved_irs") or []:
+            ir["auto"] = not by_a_human(ir["ir_fingerprint"])
     return binding
 
 

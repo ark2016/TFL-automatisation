@@ -23,6 +23,7 @@ from tfl_deep_agent import followup, hitl, run_store  # noqa: E402
 from tfl_deep_agent.evidence.ledger import EvidenceLedger  # noqa: E402
 from tfl_deep_agent.middleware import budget as B  # noqa: E402
 from tfl_deep_agent.progress import ProgressEmitter  # noqa: E402
+from tfl_deep_agent.tools.ir import ir_fingerprint  # noqa: E402
 
 from . import hitl_scripts as H  # noqa: E402
 
@@ -1470,7 +1471,7 @@ def test_the_gate_itself_counts_a_later_record_that_names_no_ir():
 def test_a_new_report_after_a_new_ir_binds_to_it_and_gets_a_revision(tmp_path):
     script = H.base_script()
     new_report = H.report_call(script, call_id="call-report-b", verdict="LL(1)", summary="Отчёт по новой грамматике.",
-                               evidence_ids=["ev-table-b"])
+                               evidence_ids=["ev-table-b"], ir_fingerprint=ir_fingerprint(LL_IR_B))
     add_ir_b(script, LL_IR_B, "ll",
              {"tool_calls": [{"name": "ll_table", "id": "ev-table-b", "args": {"ir": LL_IR_B, "k": 1}}]}, new_report)
     out = start(tmp_path, script)
@@ -1488,6 +1489,90 @@ def test_a_new_report_after_a_new_ir_binds_to_it_and_gets_a_revision(tmp_path):
     assert after["revision"] == before["revision"] + 1 and after["digest"] != before["digest"]
     assert result["basis"] == ["ev-table-b"]
     assert hitl.load_run(d)["accepted_report"]["call_id"] == "call-report-b"
+
+
+def report_after_ir_b(tmp_path, *, decision=APPROVE, **report_fields):
+    """A finished LL run, IR B reviewed in a follow-up, then a rewritten report with ``report_fields``."""
+    script = H.base_script()
+    rewritten = H.report_call(script, call_id="call-report-2", summary="Отчёт переписан.", **report_fields)
+    add_ir_b(script, LL_IR_B, "ll",
+             {"tool_calls": [{"name": "ll_table", "id": "ev-table-b", "args": {"ir": LL_IR_B, "k": 1}}]}, rewritten)
+    out = start(tmp_path, script)
+    a_fp = out.pending.request["action_requests"][0]["args"]["ir_fingerprint"]
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    d = hitl.resume_run(out.run_dir, APPROVE).run_dir
+    before = rating(d)
+    to_ir_b_review(d)
+    out = hitl.resume_run(d, decision)
+    assert out.pending.point == hitl.REPORT
+    card = out.pending.card
+    out = hitl.resume_run(d, APPROVE)
+    assert out.status == "submitted", out.result
+    return d, a_fp, before, card
+
+
+def test_a_report_on_the_old_ir_after_a_new_one_is_rated_by_the_old_ir(tmp_path):
+    a_fp = ir_fingerprint(H.base_script()["defs"]["ir"])
+    d, seen, before, _ = report_after_ir_b(tmp_path, ir_fingerprint=a_fp)
+    assert seen == a_fp
+    result = result_json(d)
+    assert result["required_ir_fingerprint"] == a_fp and result["formalization"]["ir_fingerprint"] == a_fp
+    assert result["trust"] == before["trust"] != "not_verified"
+    assert "ev-table-b" in result["excluded_ir_mismatch"] and "ev-table-b" not in result["basis"]
+
+
+def test_a_report_naming_no_approved_ir_has_no_basis_when_several_stand(tmp_path):
+    d, _, _, card = report_after_ir_b(tmp_path, ir_fingerprint=None)
+    result = result_json(d)
+    assert result["trust"] == "not_verified" and result["basis"] == []
+    assert result["formalization"]["status"] == "ambiguous"
+    assert any("names none of them" in g for g in result["verdict_gate"])
+    assert "names none of them" in card
+    assert "утверждено несколько IR" in (d / "result.md").read_text(encoding="utf-8")
+
+
+def test_a_report_naming_an_unknown_ir_has_no_basis_when_several_stand(tmp_path):
+    d, _, _, _ = report_after_ir_b(tmp_path, ir_fingerprint="ir-nobody-approved")
+    result = result_json(d)
+    assert result["trust"] == "not_verified" and result["formalization"]["status"] == "ambiguous"
+
+
+def test_a_rejected_new_ir_still_blocks_a_new_report_that_names_the_old_one(tmp_path):
+    """The last decision rejected: stays ``not_verified``, the safe side of R-IR."""
+    a_fp = ir_fingerprint(H.base_script()["defs"]["ir"])
+    d, _, _, _ = report_after_ir_b(tmp_path, decision=REJECT, ir_fingerprint=a_fp)
+    result = result_json(d)
+    assert result["trust"] == "not_verified" and result["formalization"]["status"] == "rejected"
+
+
+def _ir_rec(call_id, decision, fp):
+    return {"id": call_id, "point": hitl.FORMALIZATION, "decision": decision, "ir_fingerprint": fp}
+
+
+def test_one_approved_ir_lists_nothing_and_a_rejected_one_is_not_listed():
+    one = hitl.formalization_binding([_ir_rec("1", "approved", "a"), _ir_rec("2", "unchanged", "a")], on=True)
+    assert "approved_irs" not in one
+    dropped = hitl.formalization_binding(
+        [_ir_rec("1", "approved", "a"), _ir_rec("2", "rejected", "b"), _ir_rec("3", "unchanged", "a")], on=True)
+    assert "approved_irs" not in dropped
+    two = hitl.formalization_binding(
+        [_ir_rec("1", "approved", "a"), _ir_rec("2", "approved", "b"), _ir_rec("3", "unchanged", "a")], on=True)
+    assert [ir["ir_fingerprint"] for ir in two["approved_irs"]] == ["b", "a"]
+
+
+def test_the_named_ir_brings_its_own_human_review():
+    """A human approved only B: a report on auto-approved A is not "human-approved"."""
+    state = {hitl.STATE_KEY: [_ir_rec("1", "approved", "a"), _ir_rec("2", "approved", "b")]}
+    run = {"hitl": {hitl.FORMALIZATION: True},
+           "reviews": [{"point": hitl.FORMALIZATION, "source": "auto", "decision": "approved", "ir_fingerprint": "a"},
+                       {"point": hitl.FORMALIZATION, "source": "human", "decision": "approved", "ir_fingerprint": "b"}]}
+    binding = hitl.run_binding(run, state)
+    assert binding["auto"] is False  # the last IR
+    on_a = A.binding_for_report(binding, {"ir_fingerprint": "a"})
+    assert on_a["auto"] is True and on_a["ir_fingerprint"] == "a" and on_a["review_id"] == "1"
+    on_b = A.binding_for_report(binding, {"ir_fingerprint": "b"})
+    assert on_b["auto"] is False and on_b["ir_fingerprint"] == "b"
+    assert A.binding_for_report(on_a, {"ir_fingerprint": "a"}) == on_a  # the gate narrows it again
 
 
 def test_review_mode_auto_keeps_the_old_reports_rating_too(tmp_path):
