@@ -477,8 +477,17 @@ def formalization_request(state: Mapping[str, Any], target: Any, *, evidence: An
     }
 
 
+_MD_SPECIALS = re.compile(r"([\\`*_<>\[\]~])")
+
+
+def md_escape(text: Any) -> str:
+    """User text for a Markdown card as literal characters: ``(ab)*`` and ``{a,b}*`` must not turn
+    the text between two stars into italics."""
+    return _MD_SPECIALS.sub(r"\\\1", str(text))
+
+
 def _words(ws: Sequence[str] | None) -> str:
-    return ", ".join(w if w else "ε" for w in ws or []) or "—"
+    return ", ".join(md_escape(w) if w else "ε" for w in ws or []) or "—"
 
 
 def formalization_card(args: Mapping[str, Any]) -> str:
@@ -490,9 +499,9 @@ def formalization_card(args: Mapping[str, Any]) -> str:
         where = src.get("stored_as") or src.get("input_path")
         lines += [f"Source: {src.get('kind')} «{src.get('name')}»{extra} ({where}).", ""]
     if args.get("transcription"):
-        lines += ["### Transcription (intake)", "", str(args["transcription"]), ""]
+        lines += ["### Transcription (intake)", "", md_escape(args["transcription"]), ""]
     else:
-        lines += ["### Task text", "", str(args.get("task_text") or "—"), ""]
+        lines += ["### Task text", "", md_escape(args.get("task_text") or "—"), ""]
     head = f"### IR (class {args.get('class') or '?'}"
     head += f", {args['ir_fingerprint']}" if args.get("ir_fingerprint") else ""
     head += ", valid)" if args.get("valid") else ", NOT valid)"
@@ -507,7 +516,7 @@ def formalization_card(args: Mapping[str, Any]) -> str:
     if args.get("warnings"):
         lines += ["Warnings: " + "; ".join(str(w) for w in args["warnings"]), ""]
     if args.get("restatement"):
-        lines += ["### Restatement of the IR (ir_to_text, code)", "", str(args["restatement"]), ""]
+        lines += ["### Restatement of the IR (ir_to_text, code)", "", md_escape(args["restatement"]), ""]
     ex = args.get("examples") or {}
     if ex:
         lines += [f"### Words (labels: {ex.get('labels_from')}, length ≤ {ex.get('max_len')})", "",
@@ -752,6 +761,19 @@ def formalization_note(binding: Mapping[str, Any] | None, report: Mapping[str, A
     return line
 
 
+DRAFT_SUMMARY_CHARS = 600
+
+
+def _draft_summary_quote(summary: Any) -> list[str]:
+    """The draft's ``summary`` as a short Markdown quote (clipped), or ``[]``."""
+    text = str(summary or "").strip()
+    if not text:
+        return []
+    if len(text) > DRAFT_SUMMARY_CHARS:
+        text = text[:DRAFT_SUMMARY_CHARS - 1].rstrip() + "…"
+    return ["> " + md_escape(line) if line.strip() else ">" for line in text.splitlines()]
+
+
 def report_review_text(report: Mapping[str, Any], evidence: Any = None,
                        state: Mapping[str, Any] | None = None, *, formalization_on: bool = False) -> str:
     """The HITL 2 description: the verdict and the trust labels computed by
@@ -766,6 +788,9 @@ def report_review_text(report: Mapping[str, Any], evidence: Any = None,
              f"Verdict: «{report.get('verdict')}» (class {report.get('language_class')}"
              + (f", answer {report.get('answer')}" if report.get("answer") else "") + f"). "
              f"Method: {report.get('method')}.", ""]
+    draft_summary = _draft_summary_quote(report.get("summary"))
+    if draft_summary:
+        lines += ["Draft summary (the model's text):", "", *draft_summary, ""]
     try:
         ev = evaluate_report(report, records, formalization=binding)
     except Exception as exc:  # noqa: BLE001 - the review must still be shown
@@ -1202,6 +1227,8 @@ def _report_summary(args: Mapping[str, Any], draft: Mapping[str, Any] | None) ->
     out.append(f"Шагов: {len(args.get('steps') or [])} · утверждений: {len(args.get('claims') or [])}")
     if draft.get("unknown_ids"):
         out.append(_short(f"Ссылки без записи в журнале: {len(draft['unknown_ids'])}"))
+    elif str(args.get("summary") or "").strip():
+        out.append(_short(f"Черновик: {args['summary']}", 88))  # the full text is in the folded details
     return out[:4]
 
 
