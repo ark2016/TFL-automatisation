@@ -18,7 +18,7 @@ from collections import deque
 from random import Random
 from typing import Any
 
-from cfl_system.lib.cfl_oracle import grammar_oracle
+from cfl_system.lib.grammar_membership import grammar_membership
 from cfl_system.lib.exponent_pattern import parse_exponent_pattern
 from dcfl_system.lib.constraints import Constraint, evaluate_constraints, parse_constraints
 
@@ -253,8 +253,8 @@ def build_grammar_membership_oracle(
 ) -> Any:
     """Build a membership oracle ``word -> bool | None`` for a ``grammar``
     ``language_spec`` (docs/VERDICT_POLICY.md R2'/§4 "оракул грамматики"),
-    via CYK on the grammar's CNF form: ``cfl_system.lib.cfl_oracle
-    .grammar_oracle`` (dcfl_system MAY import from cfl_system, root
+    via CYK on the grammar's CNF form: ``cfl_system.lib.grammar_membership
+    .grammar_membership`` (dcfl_system MAY import from cfl_system, root
     CLAUDE.md). Mirrors ``build_set_builder_membership_oracle``'s contract:
     ``None`` (never a guess) when the spec has no usable rules/start symbol,
     when CNF conversion fails (malformed grammar), or when the word exceeds
@@ -264,7 +264,7 @@ def build_grammar_membership_oracle(
     if not spec.get("rules") or not spec.get("start"):
         return None
     try:
-        cyk_oracle = grammar_oracle(spec)
+        cyk_oracle = grammar_membership(spec)
     except Exception:
         return None
 
