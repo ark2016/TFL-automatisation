@@ -146,7 +146,7 @@ def test_specialist_prompt_documents_every_input_key(filename):
     """`_build_specialist_input` keys (+ `prior_oracle_test` on retry)."""
     text = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
     for key in ("ir", "hypothesis", "classifier_hint", "preprocess", "retry_params", "prior_oracle_test"):
-        assert key in text, f"{filename}: input key {key!r} is not documented"
+        assert f'"{key}"' in text or f"`{key}`" in text, f"{filename}: input key {key!r} is not documented"
 
 
 def test_reasoning_prompt_documents_every_input_key():

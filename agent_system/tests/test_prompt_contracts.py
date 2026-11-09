@@ -7,8 +7,9 @@ Mirrors cfl_system/tests/test_prompt_contracts.py:
 2. Every parseable block that is an example of the agent's own output
    (`"module": <agent>`) carries all keys of the agent's output contract
    (`agent_system.lib.agent_output_schema.REQUIRED_KEYS`).
-3. Every input key `graph.py` really builds for an agent is mentioned in that
-   agent's prompt, so the Input Format section cannot silently drift.
+3. Every input key listed in `_INPUT_KEYS` (a hand-maintained copy of what
+   `graph.py` builds for each agent; update it together with graph.py) is
+   mentioned, quoted or backticked, in that agent's prompt.
 """
 from __future__ import annotations
 
@@ -23,10 +24,6 @@ from agent_system.lib.agent_output_schema import REQUIRED_KEYS, _NO_FIXED_CONTRA
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 PROMPT_FILES = sorted(p.name for p in PROMPTS_DIR.glob("*.md"))
 _STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
-
-# agent name (REQUIRED_KEYS key) -> prompt file stem; they coincide here.
-_OUTPUT_MODULE = {"closure_agent": "closure_agent"}
-
 
 def _iter_json_blocks(path: Path) -> list[tuple[str, str]]:
     lines = path.read_text(encoding="utf-8").split("\n")
@@ -80,16 +77,7 @@ def test_agent_examples_have_required_keys(agent):
     path = PROMPTS_DIR / f"{agent}.md"
     assert path.exists(), f"prompt file missing: {path}"
     required = REQUIRED_KEYS[agent]
-    blocks = _iter_json_blocks(path)
-    parsed_any = []
-    for heading, raw in blocks:
-        try:
-            obj = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
-            parsed_any.append((heading, obj))
-    own = [(h, o) for h, o in parsed_any if o.get("module") == agent]
+    own = _own_examples(agent, path)
     # Contract: no block that claims to be this agent's output may miss keys.
     missing = [f"{h!r}: missing {sorted(required - o.keys())}" for h, o in own if required - o.keys()]
     assert not missing, f"{path.name}: example(s) missing contract keys:\n" + "\n".join(missing)
@@ -119,5 +107,5 @@ _INPUT_KEYS = {
 @pytest.mark.parametrize("agent,keys", sorted(_INPUT_KEYS.items()))
 def test_input_keys_built_by_graph_are_mentioned_in_prompt(agent, keys):
     text = (PROMPTS_DIR / f"{agent}.md").read_text(encoding="utf-8")
-    missing = sorted(k for k in keys if k not in text)
+    missing = sorted(k for k in keys if f'"{k}"' not in text and f"`{k}`" not in text)
     assert not missing, f"{agent}.md does not mention input key(s) {missing}"
