@@ -161,14 +161,23 @@ homomorphism / intersection with a regular language, and moves them onto any alp
 - `TflLean.fin3Map x y z : Fin 3 → β`, `TflLean.fin3Map_injective`, `TflLean.mem_map_iff`, and langlib's
   `DCF_of_map_injective_DCF (hf : Function.Injective f) (L) : is_DCF L → is_DCF (Language.map f L)` — for moving another
   langlib `Fin 3` result yourself (`DCFLIntersection.DCF_lang_eq_any`, `DCF_lang_eq_any_pos` are the ones in the image).
+- `TflLean.isDCF_anbn [Fintype β] (hab : a ≠ b) : is_DCF {w | ∃ n : ℕ, w = List.replicate n a ++ List.replicate n b}`
+  (langlib's DPDA for `{aⁿbⁿ}` over `Bool`, renamed; compiled: `Examples/AnBn_DCF.lean`),
+  `TflLean.isDCF_of_isRegular [Fintype T] (h : L.IsRegular) : is_DCF L` (REG ⊆ DCFL),
+  `TflLean.isDCF_inf_isRegular [Fintype T] (hL : is_DCF L) (hR : R.IsRegular) : is_DCF (L ⊓ R)`,
+  `TflLean.not_isDCF_of_inf_isRegular [Fintype T] (hR : R.IsRegular) (h : ¬ is_DCF (L ⊓ R)) : ¬ is_DCF L`;
+  regular filters `TflLean.isRegular_length_mod`, `TflLean.isRegular_count_mod`,
+  `TflLean.isRegular_replicate_append_replicate` (`a*b*`), `TflLean.isRegular_of_dfa`.
 
 ### What the image supports
 
 Only the langlib modules that `TflLean` imports are compiled in the image (`object file … does not exist` for any other),
-and a proof body cannot `import` anything. **Not available**: `is_DCF_of_is_RG`, langlib's other DCFL `Examples/*`. So:
+and a proof body cannot `import` anything. **Not available**: langlib's DCFL `Examples/*` other than `{aⁿbⁿ}` and
+`{aⁿbⁿcᵐ}` (use the `TflLean.` wrappers above for those two). So:
 
-- `dcfl` direction: if `L` is `{aⁿbⁿcᵐ}` (either range) up to renaming, use the transfer lemma (worked example 2);
-  otherwise prove it with an explicit DPDA (the recipe below).
+- `dcfl` direction: if `L` is `{aⁿbⁿcᵐ}` (either range) or `{aⁿbⁿ}` up to renaming, use the transfer lemma (worked
+  example 2, `TflLean.isDCF_anbn`); if `L` is regular, `TflLean.isDCF_of_isRegular`; a DCFL cut by a regular filter,
+  `TflLean.isDCF_inf_isRegular`; otherwise prove it with an explicit DPDA (the recipe below).
 - `non_dcfl` direction: the route is "a DCFL-preserving operation turns `L` into something that is not even context-free".
   Available: complement (`DCF_closedUnderComplement L h : is_DCF Lᶜ`), intersection with a regular language
   (`DCF_inter_regular`), then `TflLean.isContextFree_of_isDCF` and a non-CF refutation — `TflLean.not_isContextFree_of_slice`

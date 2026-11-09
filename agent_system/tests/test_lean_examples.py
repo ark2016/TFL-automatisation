@@ -30,7 +30,11 @@ which agent_system must not import (root CLAUDE.md, "Import direction"); they
 are spelled out here and ``cfl_system/tests/test_lean_examples_cfl.py`` /
 ``dcfl_system/tests/test_lean_examples_dcfl.py`` check them against
 ``render_statement(IR, direction)`` and against the few-shot examples of the
-``cfl_lean_formalizer`` / ``dcfl_lean_formalizer`` prompts.
+``cfl_lean_formalizer`` / ``dcfl_lean_formalizer`` prompts. The
+``CLOSURE_EXAMPLES`` (Lemmas.lean's Closure / RegularFilters / TransferAnBn
+sections: CFL ∩ REG, a union of homomorphic images, {aⁿbⁿ} as a DCFL, the
+intersection method for REG) are checked the same way except that the prompts
+only name their files instead of quoting them.
 """
 
 from __future__ import annotations
@@ -179,11 +183,80 @@ TRANSFER_EXAMPLES: dict[str, tuple[str, str, str, LeanStatement]] = {
     ),
 }
 
+_LETTER_AB_FINTYPE = (
+    f"{_LETTER_AB}\n\n"
+    "instance : Fintype Letter where\n  elems := {Letter.a, Letter.b}\n"
+    "  complete := by intro x; cases x <;> decide"
+)
+_REG10_IR = json.loads((ROOT / "examples" / "eval" / "reg-10.json").read_text(encoding="utf-8"))
+_REG10_STMT = render_statement(_REG10_IR, "non_regular")
+assert _REG10_STMT is not None
+
+# Reference examples for the Closure / RegularFilters / TransferAnBn sections of
+# Lemmas.lean -- same tuple shape as TRANSFER_EXAMPLES, compiled (Docker) and
+# checked against the renderer (cfl/dcfl test modules; reg here), but not quoted
+# as few-shots in the prompts, which only name the files.
+CLOSURE_EXAMPLES: dict[str, tuple[str, str, str, LeanStatement]] = {
+    # cfl-17: S → aSb | ε cut by |w| ≡ 0 (mod 4): CFL ∩ REG
+    # (TflLean.isContextFree_inf_isRegular + isRegular_length_mod).
+    "AnBnMod4Filter_CF.lean": (
+        "cfl_system/examples/eval/cfl-17.json", "cfl", "cfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_AB,
+            language_decl=(
+                "inductive NT\n  | S\n  deriving DecidableEq, Repr\n\n"
+                "def g : ContextFreeGrammar Letter :=\n"
+                "  { NT := NT, initial := NT.S, rules := {⟨NT.S, [Symbol.terminal Letter.a, "
+                "Symbol.nonterminal NT.S, Symbol.terminal Letter.b]⟩, ⟨NT.S, []⟩} }\n\n"
+                "def L : Language Letter := g.language ⊓ ({w : List Letter | (w.length) % 4 = 0}"
+                " : Language Letter)"
+            ),
+            theorem_decl="theorem tfl_main : L.IsContextFree",
+            imports=_CFL_IMPORTS,
+        ),
+    ),
+    # cfl-18: {aⁿbⁿ} ∪ {aⁿb²ⁿ} (set-builder, no grammar): union of two
+    # homomorphic images of langlib's {aⁿbⁿ} (TflLean.isContextFree_anbn_mul).
+    "AnBnUnionAnB2n_CF.lean": (
+        "cfl_system/examples/eval/cfl-18.json", "cfl", "cfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_AB,
+            language_decl=(
+                "def L : Language Letter := {w : List Letter | (∃ n : ℕ, w = List.replicate n Letter.a"
+                " ++ List.replicate n Letter.b ∧ n ≥ 0) ∨ (∃ n : ℕ, w = List.replicate n Letter.a"
+                " ++ List.replicate (2 * n) Letter.b ∧ n ≥ 0)}"
+            ),
+            theorem_decl="theorem tfl_main : L.IsContextFree",
+            imports=_CFL_IMPORTS,
+        ),
+    ),
+    # dcfl-01: {aⁿbⁿ} is DCF: langlib's anbn_is_DCF renamed (TflLean.isDCF_anbn).
+    "AnBn_DCF.lean": (
+        "dcfl_system/examples/eval/dcfl-01.json", "dcfl", "dcfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_AB_FINTYPE,
+            language_decl=(
+                "def L : Language Letter := {w : List Letter | ∃ n : ℕ, w = List.replicate n Letter.a"
+                " ++ List.replicate n Letter.b ∧ n ≥ 0}"
+            ),
+            theorem_decl="theorem tfl_main : is_DCF L",
+            imports=_DCFL_IMPORTS,
+        ),
+    ),
+    # reg-10: {aⁱbʲ | i ≠ j} is not regular: Lᶜ ∩ a*b* = {aⁿbⁿ}
+    # (TflLean.isRegular_replicate_append_replicate + not_isRegular_anbn).
+    "AiBjNeq_NotRegular.lean": (
+        "agent_system/examples/eval/reg-10.json", "reg", "non_regular", _REG10_STMT,
+    ),
+}
+
 
 def _statement(name: str) -> LeanStatement:
     """The statement each example file must start with."""
     if name in TRANSFER_EXAMPLES:
         return TRANSFER_EXAMPLES[name][3]
+    if name in CLOSURE_EXAMPLES:
+        return CLOSURE_EXAMPLES[name][3]
     if name == "AnBnNotRegular.lean":
         stmt = render_statement(_ANBN_IR, "non_regular")
         assert stmt is not None
@@ -238,6 +311,7 @@ EXAMPLE_NAMES = [
     "AnBnCnPumpingCore.lean",
     "AnBnCnNotCF.lean",
     *TRANSFER_EXAMPLES,
+    *CLOSURE_EXAMPLES,
 ]
 FEW_SHOT = ["AnBnNotRegular.lean", "EvenA_Regular.lean"]
 
@@ -256,6 +330,24 @@ TRANSFER_LEMMA_NAMES = [
     "replicate_append_replicate_append_replicate_inj", "isContextFree_of_isDCF",
     "not_isDCF_of_not_isContextFree", "not_isContextFree_of_slice",
     "isDCF_anbncm", "isDCF_anbncm_pos",
+]
+# The Closure / RegularFilters / TransferAnBn sections of Lemmas.lean.
+CLOSURE_LEMMA_NAMES = [
+    "isContextFree_inf_isRegular", "not_isContextFree_of_inf_isRegular",
+    "not_isRegular_of_inf_isRegular", "isDCF_inf_isRegular", "not_isDCF_of_inf_isRegular",
+    "isDCF_of_isRegular", "isContextFree_of_isRegular", "isContextFree_add",
+    "isContextFree_subst", "mem_homomorphicImage_iff", "isContextFree_homomorphicImage",
+    "not_isContextFree_of_homomorphicImage", "isContextFree_map",
+    "isContextFree_inverseHomomorphicImage", "isRegular_length_mod", "isRegular_count_mod",
+    "isRegular_replicate_append_replicate", "boolMap_injective", "map_anbn",
+    "isContextFree_anbn", "isContextFree_anbn_mul", "isDCF_anbn", "not_isRegular_anbn",
+    "not_isContextFree_pow2",
+]
+# Which prompt names which closure lemma (checked by each package's test module;
+# agent_system's here).
+REG_PROMPT_CLOSURE_LEMMAS = [
+    "not_isRegular_of_inf_isRegular", "not_isRegular_anbn",
+    "isRegular_replicate_append_replicate", "isRegular_length_mod", "isRegular_count_mod",
 ]
 
 
@@ -346,8 +438,32 @@ def test_prompt_lists_lemmas_that_exist_in_lemmas_file():
 
 def test_transfer_lemmas_exist_in_lemmas_file():
     lemmas = LEMMAS.read_text(encoding="utf-8")
-    for name in [*TRANSFER_LEMMA_NAMES, "fin3Map"]:
+    for name in [*TRANSFER_LEMMA_NAMES, *CLOSURE_LEMMA_NAMES, "fin3Map", "boolMap"]:
         assert (f"theorem {name} " in lemmas) or (f"def {name} " in lemmas), name
+
+
+def test_prompt_names_the_regular_closure_lemmas():
+    prompt = PROMPT.read_text(encoding="utf-8")
+    for name in REG_PROMPT_CLOSURE_LEMMAS:
+        assert name in CLOSURE_LEMMA_NAMES
+        assert f"TflLean.{name}" in prompt, name
+    assert "Examples/AiBjNeq_NotRegular.lean" in prompt
+
+
+def test_lemmas_doc_names_only_existing_example_files():
+    """The module doc of Lemmas.lean points at Examples/*.lean files; each must exist."""
+    doc = LEMMAS.read_text(encoding="utf-8").split("-/", 1)[0]
+    named = set(re.findall(r"Examples/(\w+\.lean)", doc))
+    assert named, "Lemmas.lean's module doc names no example files"
+    assert named <= set(EXAMPLE_NAMES), named - set(EXAMPLE_NAMES)
+
+
+def test_reg_closure_example_statement_is_the_renderers():
+    """reg-10 is rendered by agent_system's own lean_ir (no import-direction issue)."""
+    ir_path, system, direction, stmt = CLOSURE_EXAMPLES["AiBjNeq_NotRegular.lean"]
+    assert system == "reg"
+    ir = json.loads((ROOT.parent / ir_path).read_text(encoding="utf-8"))
+    assert render_statement(ir, direction) == stmt
 
 
 def test_transfer_example_irs_exist():
@@ -355,6 +471,10 @@ def test_transfer_example_irs_exist():
     for name, (ir_path, system, direction, _stmt) in TRANSFER_EXAMPLES.items():
         assert (repo / ir_path).is_file(), (name, ir_path)
         assert system in ("cfl", "dcfl") and direction in ("cfl", "non_cfl", "dcfl", "non_dcfl")
+    for name, (ir_path, system, direction, _stmt) in CLOSURE_EXAMPLES.items():
+        assert (repo / ir_path).is_file(), (name, ir_path)
+        assert system in ("reg", "cfl", "dcfl"), name
+        assert direction in ("regular", "non_regular", "cfl", "non_cfl", "dcfl", "non_dcfl"), name
 
 
 def test_lemmas_file_has_no_escape_hatches():
@@ -414,11 +534,26 @@ def _transfer_lemmas_in_image() -> bool:
     return check_lean_file(probe, timeout=300)["status"] == "proved"
 
 
+@functools.lru_cache(maxsize=1)
+def _closure_lemmas_in_image() -> bool:
+    probe = (
+        "import TflLean\n\n"
+        "#check @TflLean.isContextFree_inf_isRegular\n"
+        "#check @TflLean.isRegular_replicate_append_replicate\n"
+        "#check @TflLean.isDCF_anbn\n\n"
+        "theorem tfl_main : True := trivial\n\n"
+        "#print axioms tfl_main\n"
+    )
+    return check_lean_file(probe, timeout=300)["status"] == "proved"
+
+
 @docker
 @pytest.mark.parametrize("name", EXAMPLE_NAMES)
 def test_example_proved(name):
     if name in TRANSFER_EXAMPLES and not _transfer_lemmas_in_image():
         pytest.skip("tfl-lean4 image predates TflLean.Lemmas' Transfer section; rebuild it (README, Lean section)")
+    if name in CLOSURE_EXAMPLES and not _closure_lemmas_in_image():
+        pytest.skip("tfl-lean4 image predates TflLean.Lemmas' Closure section; rebuild it (README, Lean section)")
     result = check_lean_file(_read(name), timeout=600)
     _assert_proved(result, name)
     assert result["axioms"], f"{name}: `#print axioms tfl_main` output missing"
@@ -427,7 +562,8 @@ def test_example_proved(name):
 @docker
 def test_lemmas_file_compiles():
     text = LEMMAS.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + "\n".join(
-        f"#print axioms TflLean.{n}" for n in [*LEMMA_NAMES, *TRANSFER_LEMMA_NAMES]
+        f"#print axioms TflLean.{n}"
+        for n in [*LEMMA_NAMES, *TRANSFER_LEMMA_NAMES, *CLOSURE_LEMMA_NAMES]
     ) + "\n"
     # check_lean_file reads the axiom list of the first `#print axioms` target;
     # any `sorry` anywhere would still surface as a warning -> has_sorry.

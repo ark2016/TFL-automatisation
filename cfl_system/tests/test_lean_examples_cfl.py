@@ -14,11 +14,17 @@ itself (``check_lean_file`` -> ``proved``) is
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from agent_system.tests.test_lean_examples import TRANSFER_EXAMPLES, TRANSFER_LEMMA_NAMES
+from agent_system.tests.test_lean_examples import (
+    CLOSURE_EXAMPLES,
+    CLOSURE_LEMMA_NAMES,
+    TRANSFER_EXAMPLES,
+    TRANSFER_LEMMA_NAMES,
+)
 from agent_system.tests.test_lean_examples import _proof_body as example_proof_body
 from agent_system.tests.test_lean_examples import _statement as example_statement
 from cfl_system.lib.lean_ir import render_statement
@@ -28,6 +34,8 @@ REPO = ROOT.parent
 PROMPT = ROOT / "prompts" / "cfl_lean_formalizer.md"
 
 CFL_EXAMPLES = [name for name, spec in TRANSFER_EXAMPLES.items() if spec[1] == "cfl"]
+# Compiled reference examples the prompt names by file (not quoted as few-shots).
+CFL_CLOSURE_EXAMPLES = [name for name, spec in CLOSURE_EXAMPLES.items() if spec[1] == "cfl"]
 
 
 def test_there_are_examples_for_both_directions():
@@ -35,9 +43,9 @@ def test_there_are_examples_for_both_directions():
     assert directions == {"cfl", "non_cfl"}
 
 
-@pytest.mark.parametrize("name", CFL_EXAMPLES)
+@pytest.mark.parametrize("name", [*CFL_EXAMPLES, *CFL_CLOSURE_EXAMPLES])
 def test_example_statement_is_the_renderers(name):
-    ir_path, _system, direction, _stmt = TRANSFER_EXAMPLES[name]
+    ir_path, _system, direction, _stmt = {**TRANSFER_EXAMPLES, **CLOSURE_EXAMPLES}[name]
     ir = json.loads((REPO / ir_path).read_text(encoding="utf-8"))
     rendered = render_statement(ir, direction)
     assert rendered is not None, ir_path
@@ -61,3 +69,21 @@ def test_prompt_names_the_transfer_lemmas_cfl_proofs_use():
     for name in ("not_isContextFree_of_slice", "replicate_append_inj", "fin3Map_injective"):
         assert name in TRANSFER_LEMMA_NAMES
         assert f"TflLean.{name}" in prompt, name
+
+
+def test_prompt_names_the_closure_lemmas_and_reference_examples():
+    prompt = PROMPT.read_text(encoding="utf-8")
+    for name in ("isContextFree_inf_isRegular", "not_isContextFree_of_inf_isRegular",
+                 "isContextFree_add", "isContextFree_subst", "isContextFree_homomorphicImage",
+                 "not_isContextFree_of_homomorphicImage", "isContextFree_map",
+                 "isContextFree_anbn", "isContextFree_anbn_mul", "not_isContextFree_pow2",
+                 "isRegular_length_mod", "isRegular_count_mod",
+                 "isRegular_replicate_append_replicate", "isContextFree_of_isRegular"):
+        assert name in CLOSURE_LEMMA_NAMES
+        assert f"TflLean.{name}" in prompt, name
+    for name in CFL_CLOSURE_EXAMPLES:
+        assert f"Examples/{name}" in prompt, name
+    # the reference bodies use only lemmas the prompt names
+    for name in CFL_CLOSURE_EXAMPLES:
+        for used in re.findall(r"TflLean\.(\w+)", example_proof_body(name)):
+            assert f"TflLean.{used}" in prompt, (name, used)
