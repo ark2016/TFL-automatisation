@@ -767,8 +767,8 @@ def is_grammar_equivalent_sample(
 
 def _grammar_membership(grammar: dict) -> Callable[[str], bool]:
     """Build an exact membership check; conversion/parsing failures propagate."""
-    from cfl_system.lib.cnf import to_cnf
-    from cfl_system.lib.cyk import cyk_parse
+    # Thin wrapper: the shared oracle lives in cfl_system (same CNF+CYK path
+    # as cfl_system and dcfl_system, ε spelling normalized there).
+    from cfl_system.lib.grammar_membership import grammar_membership
 
-    cnf = to_cnf(_normalize_grammar(grammar))
-    return lambda word: cyk_parse(cnf, word)
+    return grammar_membership(grammar)

@@ -16,12 +16,16 @@ See the [theorem and source registry](docs/THEORY_REFERENCE.md) for exact hypoth
 
 ## At a glance
 
+<!-- BEGIN capabilities-glance -->
 | Pipeline | Language class | Agents | Flagship theorems |
 |---|---|---|---|
 | **REG** — `agent_system/` | Regular | 12 | Myhill–Nerode, pumping lemma (reg), closure under ⋃ ⋂ ¬ · * |
 | **CFL** — `cfl_system/` | Context-free | 15 | Bar-Hillel pumping, Ogden's lemma, Parikh's theorem, interchange lemma, CFL ∩ REG |
 | **DCFL** — `dcfl_system/` | Deterministic CFL | 8 | DCFL pumping, Shallit's lemma, inherent ambiguity |
 | **LL** — `ll_system/` | LL(k) grammars | 10 | FIRST / FOLLOW, LL(k) conflict detection, left-recursion and factoring transforms |
+<!-- END capabilities-glance -->
+
+(The two capability tables in this README are generated: edit `docs/pipeline_capabilities.json`, then run `python scripts/gen_capability_table.py --write`.)
 
 Each pipeline runs its specialist agents **in parallel**, checks their artifacts against deterministic oracles, and fuses the evidence through a reasoning agent into a verdict and a structured report. REG and CFL also run an independent LLM proof-checker; its self-assessment alone does not establish `proof_verified`. See [Architecture](#architecture) below.
 
@@ -165,6 +169,7 @@ and closure verification follows oracle construction.
 
 ### Pipeline differences
 
+<!-- BEGIN capabilities-differences -->
 | Stage | REG | CFL | DCFL | LL |
 |---|:-:|:-:|:-:|:-:|
 | Classifier (advisory) | ✓ | ✓ | ✓ | ✓ |
@@ -174,6 +179,9 @@ and closure verification follows oracle construction.
 | Retry | LLM planner | LLM planner | rule-based | reasoning-driven |
 | Hypothesis inversion | ✓ | ✓ | — | — |
 | Proof output / formalization | Lean proof body from IR-fixed statement (opt-in) | Structured `proof_document`; optional Lean step | Optional Lean step only | Structured/plain-language proof; no Lean |
+<!-- END capabilities-differences -->
+
+(Generated from `docs/pipeline_capabilities.json`; see above.)
 
 ### Live-runner reliability layer
 
