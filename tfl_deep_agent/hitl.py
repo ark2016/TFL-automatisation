@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import shutil
 import uuid
@@ -1622,6 +1623,9 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
     settings_obj = settings_mod.validate_settings(json.loads(json.dumps(cfg)))
     segment = {"started_at": _now(), "resumed_with": dict(resumed_with) if resumed_with else None}
     run["segments"].append(segment)
+    if run.get("followup_in_progress"):  # this process now owns the follow-up (a resume after a stop)
+        run["followup_in_progress"]["pid"] = os.getpid()
+        save_run(d, run)
     factory = _factory(d, run, model_factory)
     try:
         budget = _budget_ledger(run, settings_obj, factory)

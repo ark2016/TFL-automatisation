@@ -111,7 +111,7 @@ tfl-deep --resume RUN_DIR --decision approve|edit|reject
 | `--comment C` | the comment for the agent; required with `reject` |
 | `--approve-rest` | only with `--decision approve`: approve this stop as your decision, then auto-approve every later review of the run (its review mode becomes `auto`, stored in `run.json`). The budget stop stays, and this flag is refused at it. |
 | `--message TEXT` | with `--resume` on a finished run: a follow-up in the same conversation, see [Follow-up messages](#follow-up-messages). `@FILE` reads the text from a file, `@@text` is the literal `@text`. Excludes `--decision`, `--payload`, `--comment`, `--approve-rest` and `--auto-approve`. |
-| `--abandon` | with `--resume`: drop a follow-up, whether its process was killed or it waits at a stop (a draft waiting for a decision is thrown away); the previous report, status and reviews come back. The process must be gone; this is not checked. It takes no other flag. |
+| `--abandon` | with `--resume`: drop a follow-up, whether its process was killed or it waits at a stop (a draft waiting for a decision is thrown away); the previous report, status and reviews come back. It is refused while the pid recorded in `followup_in_progress` is alive (a resume after a stop records its own pid); `--force` skips that check, for a pid reused by an unrelated process after a hard kill. It takes no other flag. |
 
 Exit codes: `0` the report was accepted, `1` the run ended without a report (a partial result is written: `incomplete`,
 `error` or `budget_exhausted`) or a follow-up failed (the previous report stays),
@@ -281,7 +281,8 @@ the report, moves neither its trust, cap and verdict token nor its task. A repor
 usual. The later results are still listed in the report's evidence appendix and in `evidence.jsonl`.
 
 `report_revision` in `run.json` tracks the report object, not the files: a text answer re-renders `result.*` with the
-run's money and keeps the revision. The chat events: `user_message`, `assistant_message` (`truncated: true` when the
+run's money and keeps the revision. A follow-up bumps the revision only when the status, verdict, trust, confidence cap
+or `report_digest` changes; any other report-writing segment always bumps it. The chat events: `user_message`, `assistant_message` (`truncated: true` when the
 text was cut to the limit), `followup_abandoned` (`error` says why; `null`: it was cancelled). `segment_end` is the end
 signal of a segment; `done` is a final report state to display. A failed follow-up emits `followup_abandoned` with the
 restored status and the error, then `segment_end` with the restored status and no error, whichever way it failed.
