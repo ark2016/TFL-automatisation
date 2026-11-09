@@ -17,6 +17,7 @@ tags: [deep-agent, reports, render, diagrams, evidence]
 | Рендерер, `safe_text` / `safe_block`, `markdown_to_html`, `write_report` | `tfl_deep_agent/reports/render.py` |
 | Диаграммы состояний | `tfl_deep_agent/reports/diagrams.py` |
 | Шаблоны и инструкция модели | `tfl_deep_agent/skills/report-templates/` (`SKILL.md`, `*.md`) |
+| Версии отчёта при сообщениях к завершённому запуску | `tfl_deep_agent/followup.py` (`report_history/<n>/`, `report_digest`), `run.json` `report_revision` |
 | Тесты | `tfl_deep_agent/tests/test_reports.py` |
 
 ## submit_report: поля и проверка
@@ -32,7 +33,7 @@ tags: [deep-agent, reports, render, diagrams, evidence]
 1. **Схема.** Ошибка pydantic превращается в JSON `error_kind: "invalid_input"` с текстом (до 1500 символов). Отчёт не записывается, модель получает ещё ход.
 2. **Идентификаторы теорем.** Валидатор модели сверяет `lemmas[].theorem_id` и `steps[].theorem_ids` с `docs/THEORY.md` через `tools/theory.py` (`load_theory`). Неизвестный id отклоняется как `invalid_input`: это часть проверки схемы, а не отдельный вид ошибки. Если файла теории нет (нет checkout), проверка пропускается, а рендерер помечает id, которые не смог разрешить.
 3. **Разметка вызова внутри полей.** `leaked_markup_fields` ищет в любом строковом поле `<parameter`, `<invoke`, `<function_calls` (с префиксом `antml:` или без) и закрывающие теги вида `</hypothesis>`, `</steps>`. Так выглядит сломанный вызов, где одно поле «проглотило» следующее. Отчёт отклоняется, текст ошибки называет поля и просит подать заново.
-4. **Идентификаторы доказательств.** Только если у инструмента есть журнал: его передают в `make_submit_report_tool(evidence=...)`, иначе берётся журнал окружающего блока `use_evidence`. `cited_evidence_ids` собирает id из `evidence_ids`, `claims[].evidence_ids`, `steps[].evidence_ids` и `lean.evidence_ids`; `unknown_evidence_ids` находит те, которых нет в журнале. Один неизвестный id отклоняет весь отчёт. Без журнала id здесь не проверяются.
+4. **Идентификаторы доказательств.** Только если у инструмента есть журнал: его передают в `make_submit_report_tool(evidence=...)`, иначе берётся журнал окружающего блока `use_evidence`. `cited_evidence_ids` (определена в `evidence/ledger.py`, `tools/report.py` её импортирует) собирает id из `evidence_ids`, `claims[].evidence_ids`, `steps[].evidence_ids` и `lean.evidence_ids`; `unknown_evidence_ids` находит те, которых нет в журнале. Один неизвестный id отклоняет весь отчёт. Без журнала id здесь не проверяются.
 
 > [!warning] Что значит отказ
 > Отказ по пунктам 3 и 4 возвращается как `ToolException`: ToolMessage без артефакта. Поэтому отчёт не фиксируется, а шлюз отчёта в `agent.py` его не видит. HITL 2 срабатывает раньше инструмента и решает отдельно (`when` в `hitl.report_interrupt_config`): не останавливается на отчёте, не прошедшем схему, и на неизвестных id, если конфигурации передан журнал. Разметку вызова (пункт 3) он не проверяет, поэтому человек увидит такой черновик, а отказ придёт после одобрения. Успешный вызов возвращает артефакт `{"tool": "submit_report", "ok": true, "report": {...}}`; именно его читает `agent._is_submitted_report`.
@@ -76,6 +77,17 @@ tags: [deep-agent, reports, render, diagrams, evidence]
 `result.json` содержит исходный результат и блок `rendered` (шаблон, вердикт с доверием, утверждения, шаги, леммы, использование id, целостность журнала, бюджет). Поля `data` и `args` записей журнала в `rendered.evidence` не дублируются.
 
 HTML строит собственный `markdown_to_html` (поднабор Markdown, всё экранируется, формулы `$...$` оставляются для KaTeX; KaTeX подключается, только если в тексте есть формулы).
+
+## Версии отчёта при сообщениях
+
+Источники: `tfl_deep_agent/followup.py`, `hitl._finish_segment`, `reports/render.py` (`normalize_budget`, `_evidence_block`).
+
+Завершённый запуск принимает сообщения ([[run-lifecycle]]), и отчёт может меняться:
+
+- Перед каждым сообщением `result.{json,md,html}` копируется в `report_history/<n>/`. Сообщение, которое не закончилось, возвращает последнюю копию (`restore_report`).
+- `run.json` `report_revision` считает версии отчёта как объекта, а не файлов. Текстовый ответ перерисовывает `result.*` (меняется раздел о бюджете), но версию оставляет; новая версия появляется, когда изменились статус, вердикт, доверие, потолок уверенности или `report_digest` (хеш объекта отчёта). Для версий со второй URL отчёта в TFL Lab получают `?v=<версия>`.
+- Если на остановке по бюджету человек добавил денег, приложение «Проверка» дописывает строку «Бюджет добавлен» с суммой, новым лимитом, решившим и временем (`budget["extensions"]`).
+- Просмотр принятого отчёта в другом шаблоне (`POST .../render`, TFL Lab) пишет в `views/<шаблон>.{md,html}` и `result.*` не трогает: [[tfl-lab]].
 
 ## Диаграммы состояний
 

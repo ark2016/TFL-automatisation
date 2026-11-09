@@ -29,7 +29,7 @@ Mock script - JSON-файл с заранее записанными ответ�
 - `usage` - необязательно; если не задан, токены оцениваются по длине (символов на 4);
 - `expect.last_message_contains` - необязательная проверка: последнее сообщение, пришедшее модели, должно содержать подстроку, иначе `ScriptError`. Так сценарий закрепляет порядок обмена (например, что критик получил слова проверки).
 
-Поставляются сценарии в `examples/mock/`: `reg_regex_regular.json`, `cfl_anbmcm.json`, `ll_simple_ll1.json`, плюс `examples/mock/eval/<id>.json` для задач eval-набора (`cfl-04`, `dcfl-04`, `ll-17`, `reg-04`, `reg-13`). Тест `test_docs.py::test_readme_lists_every_shipped_mock_script` требует, чтобы каждый файл `examples/mock/*.json` был упомянут в таблице `README.md`.
+Поставляются сценарии в `examples/mock/`: `reg_regex_regular.json`, `reg_followup.json` (та же задача плюс ответы на сообщения к завершённому запуску: текстовый, затем новый отчёт), `cfl_anbmcm.json`, `ll_simple_ll1.json`, плюс `examples/mock/eval/<id>.json` для задач eval-набора (`cfl-04`, `dcfl-04`, `ll-17`, `reg-04`, `reg-13`). Тест `test_docs.py::test_readme_lists_every_shipped_mock_script` требует, чтобы каждый файл `examples/mock/*.json` был упомянут в таблице `README.md`.
 
 > [!note] Инструменты в mock-режиме настоящие
 > Скрипт подменяет только модель. Инструменты (`regex_to_dfa`, `run_dfa`, `validate_ir` и т. д.) работают по-настоящему, поэтому уровни доверия и итоговый вердикт приходят из кода, а не из сценария (подробнее [[tools-and-evidence]], [[verdict-gate]]). Тестовые сценарии HITL (`tests/hitl_scripts.py`) собраны как варианты `ll_simple_ll1.json` именно ради этого.

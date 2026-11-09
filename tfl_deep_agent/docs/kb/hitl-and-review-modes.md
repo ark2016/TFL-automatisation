@@ -18,7 +18,9 @@ tags: [deep-agent, hitl, review-modes]
 | HITL 1, `formalization` | перед следующим вызовом модели главным агентом после ответа `ir-builder` или после принятого `validate_ir` самого главного агента | `FormalizationReviewMiddleware.before_model` (LangGraph `interrupt`) |
 | HITL 2, `report` | перед выполнением `submit_report` | `report_interrupt_config()` для `interrupt_on` deepagents (`HumanInTheLoopMiddleware`) |
 | `execute` | перед командой песочницы роли `coder` | `execute_interrupt_config()` |
+| `budget` (остановка по бюджету) | перед вызовом главного агента, который вошёл бы в wrap-up или был бы отказан | `budget_stop.request_budget_extension` (LangGraph `interrupt`), см. [[budget]] |
 
+Остановка по бюджету не проверка: она спрашивает про деньги. Её решения `edit {"add_usd": X}` (добавить денег) и `approve` (завершить с тем, что есть); `reject` отвергается. Режимы проверки её не автоодобряют (`POINTS[BUDGET].auto_approvable` ложно), `--approve-rest` и `--auto-approve` на ней отвергаются (`budget_stop.review_switch_refusal`). Включена она по `run.json` `budget_stop`.
 Оба запроса имеют форму `HITLRequest` (`action_requests`, `review_configs`), ответ имеет форму `HITLResponse` (`{"decisions": [...]}`). Поэтому CLI, TFL Lab и адаптер оценки обрабатывают их одним кодом. `request_point()` определяет точку по имени действия (`formalization`, `submit_report`, `execute`, иначе `other`).
 
 ### HITL 1: формализация
@@ -97,13 +99,13 @@ tags: [deep-agent, hitl, review-modes]
 | `auto` | автоматически | автоматически | автоматически |
 
 Тонкости:
-- `auto_approve=True` / `--auto-approve` является псевдонимом `auto`. Сочетание с другим явным режимом даёт `RunError`; неизвестный режим тоже.
+- `auto_approve=True` / `--auto-approve` это режим `auto` плюс запуск без остановки по бюджету (`budget_stop` = `not auto_approve` при старте), то есть не псевдоним: `review_mode: auto`, выбранный отдельно, деньги по-прежнему спрашивает (CLI без диалога выходит с кодом 3). Сочетание с другим явным режимом даёт `RunError`; неизвестный режим тоже. С `--resume --decision` флаг включает автоодобрение следующих проверок (`auto_approve_later`) и `budget_stop` не меняет; с `--message` не сочетается.
 - Старый `run.json` без поля `review_mode` читается как `auto` при `auto_approve`, иначе как `all` (`review_mode_of`).
 - Решение принимает `auto_approves(mode, point)`; цикл `_segment` вызывает её на каждом прерывании. Автоматическое решение это `Decision("approve", source="auto")`, оно проходит через тот же `resume_value`, что и человеческое.
 - Включены ли точки, решает `settings.hitl` (в `start_run` параметр `hitl`: `True` значит настройки, словарь точек или `False`).
 
 > [!note]
-> Режим только отвечает на остановку без человека. Он не меняет бюджет и не отключает проверок кодом. Изменение лимитов и отключение точки HITL, по CLAUDE.md проекта, решение пользователя.
+> Режим только отвечает на остановку без человека. Он не меняет лимиты бюджета и не отключает проверок кодом; остановка по бюджету от него не зависит (кроме `--auto-approve`, см. выше). Изменение лимитов и отключение точки HITL, по CLAUDE.md проекта, решение пользователя.
 
 ## approve_rest
 
@@ -113,7 +115,7 @@ tags: [deep-agent, hitl, review-modes]
 
 1. Текущая остановка утверждается как решение человека (в записи `review["approve_rest"] = True`).
 2. В `run.json` `review_mode` становится `auto`, `auto_approve` становится `True`, `initial_review_mode` сохраняет прежний режим, `approve_rest` получает время, точку, `interrupt_id`, источник и ревьюера.
-3. Все последующие остановки утверждаются автоматически с `source: auto`. Режим хранится в `run.json`, поэтому его помнит и следующий процесс.
+3. Все последующие проверки утверждаются автоматически с `source: auto`. Режим хранится в `run.json`, поэтому его помнит и следующий процесс. Остановка по бюджету остаётся: `approve_rest` на ней отвергается и последующую не убирает.
 
 Утверждение формализации через `approve_rest` по-прежнему считается человеческим (README, `run_binding`).
 
@@ -140,6 +142,15 @@ tags: [deep-agent, hitl, review-modes]
 - `dialog` (в CLI это `TTYDialog`: approve / edit / reject / later) спрашивает в том же процессе. Ответ `None` (later) оставляет запуск в ожидании. Решение, не подходящее запросу, в диалоге не принимается, вопрос повторяется.
 - Живой запуск при `resume` требует `live=True`, mock-запуск `live` отвергает; кастомная фабрика моделей передаётся заново. См. [[budget]] и [[testing-and-mock]].
 - Короткая карточка для TFL Lab: `pending_card()`, лежит в `run.json` как `pending.card` (не более 4 строк короче 90 символов, `details_md`, `editable`); строится кодом без вызова модели.
+
+## Сообщения к завершённому запуску
+
+Источники: `hitl.py` (`send_followup`, `review_summary`, `_as_accepted`), `followup.py`. Полная картина: [[run-lifecycle]].
+
+- Новый отчёт в сообщении проходит HITL 2 по режиму запуска так же, как первый. Решение на HITL 2 хранит `report_digest`, а `review_summary(run, report)` берёт последнюю проверку именно текущего отчёта, поэтому текстовый ответ после отклонённого черновика не сбрасывает «одобрено человеком на HITL 2».
+- Черновик HITL 2 в сообщении показывается и оценивается как он сам (`pending_report` имеет приоритет над прежним принятым отчётом); одобрение даёт новую версию, отклонение оставляет прежний отчёт, его оценку и версию.
+- Что сообщение переключило на остановке (`review_mode`, `auto_approve`, `initial_review_mode`, `approve_rest`), запись `followup_in_progress.review_switch` возвращает, если сообщение не закончилось.
+- Решение HITL 1 записывает `reviewed_call_id`: принятый отчёт оценивается по тому, что существовало к его принятию, и позднее одобрение того же IR отчёт не поднимает ([[verdict-gate]]).
 
 ## Что менять и где
 

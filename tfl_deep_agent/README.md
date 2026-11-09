@@ -66,6 +66,9 @@ from a script, so no request reaches the Anthropic API. Four scripts ship in [`e
 | `cfl_anbmcm.json` | `{a^n b^m c^m}` is context-free | `full_proof` |
 | `ll_simple_ll1.json` | `S -> aAb \| bBa; A -> aA \| ε; B -> bB \| ε` is LL(1) | `short_verdict` |
 
+Scripts for the eval entries `cfl-04`, `dcfl-04`, `ll-17`, `reg-04` and `reg-13` are in `examples/mock/eval/<id>.json`;
+`tfl-eval --systems deep` uses them (see [Eval](#eval)), and TFL Lab's script list does not offer them.
+
 ```bash
 # Both review points answered "approve" automatically (marked in the report as not reviewed by a human)
 .venv/Scripts/python -m tfl_deep_agent --mock-script tfl_deep_agent/examples/mock/ll_simple_ll1.json \
@@ -133,6 +136,7 @@ refuses `--live` on resume.
 | `input/task.*` | the task file as the human gave it |
 | `hitl.md` | the pending HITL card |
 | `result.{json,md,html}` | the rendered report; a draft while HITL 2 waits |
+| `run.log`, `upload/`, `views/` | TFL Lab only, not written by the agent: the child process's stderr, the uploaded task file, and the accepted report rendered with another template (`views/<template>.{md,html}`; `result.*` is never rewritten) |
 
 Keys of `run.json` that the sections below rely on:
 
@@ -403,6 +407,13 @@ shape of `AnthropicClient.build_request_kwargs` (adaptive thinking plus effort, 
   most `well_formed` (`non_regular` ≤ 0.55, R6); a split that stays in L at every claimed exit (exact oracle)
   makes it `refuted`, and a cited refuted claim blocks `non_regular`.
   `reg_regex_regular.json` takes the first route (HITL 1 off there, so 0.85).
+- **State diagrams.** For a DFA a cited tool call returned (`regex_to_dfa`, `dfa_vs_ir`, `run_dfa`, `nerode_probe`)
+  and for a DPDA passed to a cited `dpda_vs_ir` / `dpda_run`, the renderer draws a state diagram in the "Конструкция"
+  part. `reports/diagrams.py` builds the DOT source in code (`dfa_to_dot`, `dpda_to_dot`), and `dot_to_svg` renders it
+  with the Graphviz `dot` binary (`dot -Tsvg`, found on `PATH`). Only DOT made by code is drawn; a `dot` block written by
+  the model stays plain code. Automata above 30 states or 120 edges get no diagram. Without `dot`, or if it fails or
+  times out, the HTML keeps the DOT source as a code block next to the transition table, and `result.md` always has
+  the `dot` block. Graphviz is optional; the diagram tests skip without it.
 - **Templates** (`skills/report-templates/`): `full_proof`, `exam_solution`, `short_verdict` and `lean_appendix`.
   Their structure follows the golden reports in `docs/examples/reg_grammar_SaSb_lean_proved/` and
   `docs/examples/cfl_ticket50_w1bw2w3_lean_proved/`: Условие, Ответ, Решение (idea, construction, steps with
@@ -498,6 +509,13 @@ API additions (2026-11-08; the full list is in the `ui_server/deep_routes.py` do
 - `POST /api/deep/runs/<id>/message` takes `{"text": ... | "preset": "lean", "confirm_spend": true}`: a follow-up on a
   finished run (409 while it cannot take one, 400 for a bad body). `GET /api/deep/runs/<id>` carries `followup`:
   `{can_message, reason, in_progress, error, lean}`, and `hitl.budget_stop`.
+- Endpoints the list above does not cover (all under `/api/deep/`): `POST /runs/<id>/cancel` kills the run's process,
+  or cancels a run waiting at a stop; a follow-up that is waiting or running goes back to its previous report instead
+  and the run can take another message. `POST /runs/<id>/render {"template"}` shows the accepted report of a finished
+  run in another template as `views/<template>.{md,html}` (no model call, `result.*` untouched). `GET /estimate`
+  returns the money limits, today's spend and the measured cost of past live deep runs. `GET /mock-scripts` lists
+  `examples/mock/*.json`. `GET /runs/<id>/files/<path>` serves a fixed set only: `result.{json,md,html}`, `hitl.md`,
+  `evidence.jsonl`, `progress.jsonl`, `run.log` and the directories `input/`, `upload/`, `views/`, `report_history/`.
 - `GET /api/deep/runs/<id>` and the runs list carry `review_mode` (the effective one: `auto` after `approve_rest`)
   and `pending_point`. `pending_point` is `null` unless the run is `awaiting_human`; then it is the stop's card,
   made by code (no model call), also at the top level of the detail response:
@@ -560,7 +578,17 @@ The metrics are the pipelines' (root `README.md`, "`tfl-eval`"). The adapter's n
 - `tests/guard.py` strips `ANTHROPIC_API_KEY`, makes `.env` loading a no-op and stubs `anthropic.Client` /
   `AsyncClient`, which langchain-anthropic uses. Any other test directory that builds the agent must import it
   (`test_network_guard.py` checks that).
-- The real-Docker sandbox and Lean tests skip with a reason when Docker is unavailable.
+- The real-Docker sandbox and Lean tests skip with a reason when Docker is unavailable, and the diagram tests when
+  Graphviz `dot` is not on `PATH`.
+- `tests/test_docs.py` keeps this README in step with the parser, the settings defaults, the run directory table,
+  the shipped mock scripts and the package layout; update the README when you change one of them.
+- Follow-up messages, the budget stop and the Lean button: `tests/test_followup.py`. TFL Lab's side:
+  `ui_server/tests/test_deep_routes.py` and `ui_server/tests/test_deep_frontend.py` (its pure-helper tests run under
+  node and skip without it). They use mock scripts only:
+
+  ```bash
+  .venv/Scripts/python -m pytest -q ui_server/tests/test_deep_routes.py ui_server/tests/test_deep_frontend.py
+  ```
 
 ## Package layout
 
@@ -568,7 +596,10 @@ The metrics are the pipelines' (root `README.md`, "`tfl-eval`"). The adapter's n
 tfl_deep_agent/
 ├── cli.py, __main__.py   # tfl-deep / python -m tfl_deep_agent
 ├── agent.py              # create_tfl_agent, scripted mock models, collect_result, verdict gate
-├── hitl.py               # HITL 1/2 middleware, start_run / resume_run, run.json, TTY dialog
+├── hitl.py               # HITL 1/2 middleware, start_run / resume_run / send_followup, TTY dialog
+├── followup.py           # follow-up messages: what a run allows, report history, the Lean button rule
+├── budget_stop.py        # the budget stop: asking for more money
+├── run_store.py          # run.json, statuses, exit codes (stdlib only)
 ├── roles.py, prompts/    # fixed roles and their system prompts
 ├── skills/               # read-only skills per class + report templates
 ├── settings.py           # settings schema, loading, overrides (settings.example.json = defaults)
@@ -578,7 +609,7 @@ tfl_deep_agent/
 ├── middleware/           # budget, concurrency, evidence middleware
 ├── orchestration/        # spawn_subagent, run_workflow, model policy
 ├── intake/files.py       # text / PDF / image -> content blocks
-├── reports/render.py     # result.{json,md,html}
+├── reports/              # render.py: result.{json,md,html}; diagrams.py: DFA / DPDA state diagrams (DOT, SVG)
 ├── progress.py           # progress.jsonl for TFL Lab
 ├── sandbox/              # DockerSandbox, Dockerfile.sandbox, build scripts, /workspace adapter
 ├── examples/mock/        # mock replay scripts

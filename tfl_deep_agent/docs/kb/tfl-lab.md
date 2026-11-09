@@ -28,7 +28,8 @@ TFL Lab (`python -m ui_server.server --port 8765`) - локальный веб-�
 | `GET /runs`, `POST /runs` | список (новые первыми) / создание запуска |
 | `GET /runs/<id>?after=N&limit=M` | деталь запуска плюс события `progress.jsonl` с индекса N |
 | `GET /runs/<id>/files/<path>` | отдача файлов запуска (белый список, ниже) |
-| `POST /runs/<id>/resume` | решение по HITL-остановке |
+| `POST /runs/<id>/resume` | решение по HITL-остановке (в том числе по остановке по бюджету) |
+| `POST /runs/<id>/message` | сообщение к завершённому запуску, в том же разговоре |
 | `POST /runs/<id>/cancel` | отмена |
 | `POST /runs/<id>/render` | показать принятый отчёт в другом шаблоне |
 | `GET /estimate` | лимиты, расход за день, измеренная цена прошлых live-запусков |
@@ -44,7 +45,7 @@ TFL Lab (`python -m ui_server.server --port 8765`) - локальный веб-�
 - **Деньги.** Режим по умолчанию mock: нужен `mock_script` (имя из `/mock-scripts` или объект с непустым `models`).
   `live: true` требует `confirm_spend: true` и исключает `mock_script`. Сервер не читает `.env`: ключ должен быть в его окружении.
   Mock-потомок получает окружение без `ANTHROPIC_API_KEY` (`_child_env`).
-- `auto_approve` - только mock, это псевдоним `review_mode: "auto"`; вместе с другим `review_mode` - 400.
+- `auto_approve` - только mock: режим `auto` плюс запуск без остановки по бюджету (eval и тесты); вместе с другим `review_mode` - 400. `review_mode: "auto"` сам по себе деньги спрашивает.
   Живой запуск выбирает `review_mode` явно.
 - `settings_override` накладывается на сохранённые настройки через `apply_overrides`. Для **live** действует ограничение
   `_live_override_problems`: лимиты `per_day_usd`, `per_task_usd`, `per_subagent_max_usd` можно только понижать, а точки
@@ -60,11 +61,11 @@ TFL Lab (`python -m ui_server.server --port 8765`) - локальный веб-�
 под `.tfl_lab_runs`, поэтому эти запуски не видит. Владельцы файлов разделены:
 
 - агент: `run.json`, `checkpoints.sqlite`, `evidence.jsonl`, `progress.jsonl`, `result.*`, `hitl.md`;
-- `deep_routes.py`: `lab.json` (статус процесса, pid, сегменты), `run.log` (stderr потомка), `upload/` (файл задачи),
-  `ui_settings.json` (снимок настроек запуска), `ui_mock_script.json`, `ui_decisions/`, `views/`.
+- `deep_routes.py`: `lab.json` (статус процесса, pid, сегменты, `followup_from`, `followup_error`), `run.log` (stderr потомка), `upload/` (файл задачи),
+  `ui_settings.json` (снимок настроек запуска), `ui_mock_script.json`, `ui_decisions/` (решения и файлы сообщений `message-<8 hex>.txt`), `views/`.
 
 Через `GET .../files/<path>` отдаются только `result.{json,md,html}`, `hitl.md`, `evidence.jsonl`, `progress.jsonl`,
-`run.log` и каталоги `input/`, `upload/`, `views/` (`SERVED_FILES`, `SERVED_DIRS`). Новый файл для UI надо добавить туда.
+`run.log` и каталоги `input/`, `upload/`, `views/`, `report_history/` (`SERVED_FILES`, `SERVED_DIRS`). Новый файл для UI надо добавить туда.
 
 Снимок настроек (`ui_settings.json`) передаётся потомку как `--settings`, поэтому правка настроек во время запуска
 на него не влияет.
@@ -75,7 +76,7 @@ TFL Lab (`python -m ui_server.server --port 8765`) - локальный веб-�
 `stdin=DEVNULL`, читает stderr (в `run.log`, буфер хранит 20 строк, но в сообщение об ошибке идут последние 10) и stdout (с префиксом `[stdout]`).
 Команды собирают `build_start_command` (`--file ... --save ... --settings ... --no-dialog`, плюс `--template`, `--live` или
 `--mock-script`, `--auto-approve` или `--review-mode`) и `build_resume_command` (`--resume ... --decision ... --payload @file`,
-`--approve-rest`, `--live`).
+`--approve-rest`, `--live`) и `build_followup_command` (`--resume ... --message @файл`, `--live`).
 
 **Слоты** (`_acquire_slot` / `_release_slot`, условие `_slots`):
 
@@ -104,16 +105,26 @@ TFL Lab (`python -m ui_server.server --port 8765`) - локальный веб-�
 > а живой запуск показывается по `progress.jsonl` (append-only). То же правило в `_past_live_costs`.
 
 **Отмена** (`api_cancel`): активный запуск - `cancel_requested` и `_kill` (на Windows `taskkill /T /F`, убивает дерево).
-Запуск в `awaiting_human` отменяется сразу без процесса и **потом продолжить его нельзя**. На терминальном статусе идемпотентна.
+Запуск в `awaiting_human` отменяется сразу без процесса и **потом продолжить его нельзя**; исключение - остановка внутри сообщения (HITL 2 или бюджет): отмена возвращает прежний отчёт, и запуск принимает следующее сообщение. Отмена сообщения в процессе делает то же. На терминальном статусе идемпотентна.
 
-**Продолжение** (`api_resume`):
+**Продолжение после остановки** (`api_resume`):
 
 1. Тело ограничено `RESUME_KEYS`; `decision` одно из `approve`, `edit`, `reject`; `approve_rest` только вместе с `approve`.
 2. Запуск должен быть в `awaiting_human` и в `run.json` должен быть `pending`, иначе 409. Для live снова нужен `confirm_spend`.
 3. `reject` требует комментарий. `_prevalidate` проверяет решение в этом же процессе (`hitl.parse_decision`, `hitl.resume_value`,
    в том числе id доказательств правки отчёта по `evidence.jsonl`): несоответствие даёт 400, а запуск продолжает ждать.
 4. Полезная нагрузка пишется в `ui_decisions/NNN-<point>-<decision>.json` и передаётся как `--payload @файл`.
-5. `approve_rest` переводит запуск в `review_mode = auto`; агент записывает то же в свой `run.json` (источник истины).
+5. `approve_rest` переводит запуск в `review_mode = auto`; агент записывает то же в свой `run.json` (источник истины). На остановке по бюджету `approve_rest` отвергается.
+
+На остановке по бюджету (`point: budget`) `edit` с `payload {"add_usd": X}` добавляет денег, `approve` завершает с тем, что есть, `reject` недопустим. Для live сервер сверяет добавку с остатком дня на момент решения (`with_todays_day_left`).
+
+**Сообщение к завершённому запуску** (`api_message`, `POST /runs/<id>/message`):
+
+1. Тело ограничено `MESSAGE_KEYS` = `text`, `preset`, `confirm_spend`. Ровно одно из `text` или `preset` (сейчас единственный `preset` - `"lean"`, фиксированный текст `followup.LEAN_REQUEST`; см. [[lean]]). Пустой текст и больше 20000 символов - 400.
+2. Разрешает ли запуск сообщение, решают `followup.followup_refusal` и случаи лаборатории (`_followup_view`): работает, ждёт решения, отменён или прерван, запись `followup_in_progress` без процесса - 409 с причиной. Для `preset: lean` ещё `followup.lean_refusal`.
+3. Для live нужен `confirm_spend` и непустой остаток дня (`followup.day_refusal`), иначе 400 / 409.
+4. Текст пишется в `ui_decisions/message-<id>.txt`, запись лаборатории получает `followup_from` (статус, с которого началось сообщение, версия отчёта, число копий в `report_history/`) и статус `queued`; потомок запускается как `--resume --message @файл`.
+5. Сообщение, которое не закончилось (отмена, смерть процесса, отказ CLI, ошибка агента), не завершает запуск: агент возвращает прежний отчёт (`followup.abandon_followup`), запись лаборатории возвращается к прежнему статусу, причина кладётся в `followup_error` (отмена ошибкой не считается), `run.error` остаётся для сбоев самого запуска. Если откат не удался, `followup.reason` называет команду `--abandon`; маршрута для неё в лаборатории нет.
 
 **Рестарт сервера** (`restore_runs`): запуски перечитываются из `lab.json`. Запись `queued`/`running` без живого процесса
 оседает через тот же `_settle_from_disk_locked` с кодом `None` (правила выше: остановка HITL остаётся `awaiting_human`,
@@ -128,16 +139,18 @@ TFL Lab (`python -m ui_server.server --port 8765`) - локальный веб-�
 поздно, всё равно получает план (`todos`), счётчики инструментов по доверию (`tools`), дерево субагентов с моделями и ценой
 (`subagents`), бюджет, сигналы бюджета и историю решений. Ключи ответа: `run`, `pending_point`, `review_mode`, `events`,
 `next`, `total`, `usage`, `todos`, `tools`, `subagents`, `orchestration`, `budget` (с блоком `day`), `budget_signals`,
-`hitl`, `result` (`null`, пока запуск активен), `done`, `log_tail` (последние 50 строк).
+`hitl`, `result` (`null`, пока запуск активен), `done`, `log_tail` (последние 50 строк), `followup`.
 
 **`pending_point`** - карточка остановки, строится кодом без вызова модели (`pending_card`). Источники по порядку:
 `pending.card` из `run.json`; карточка из `hitl.pending_card` по ожидающему запросу; кэш `pending_card`, записанный при
 оседании; минимальная карточка из последнего события `hitl_awaiting` и `hitl.md`. Для запуска не в `awaiting_human` - `null`.
-Поля: `point` (`formalization` | `report` | `execute`), `title`, `summary` (до 4 строк), `details_md`, `editable`.
+Поля: `point` (`formalization` | `report` | `execute` | `budget`), `title`, `summary` (до 4 строк), `details_md`, `editable`.
 
 В `hitl.pending` лежат все вызовы инструментов остановки: один interrupt может нести несколько вызовов, решение
 применяется ко всем, поэтому `allowed_decisions` - пересечение разрешённых по каждому, а при нескольких вызовах `edit`
 убирается (`resume_value` требует ровно одно действие). Детали политики - в [[hitl-and-review-modes]].
+
+**`followup`** - можно ли сейчас отправить сообщение: `can_message`, `reason`, `in_progress`, `error` (почему последнее сообщение не закончилось), `lean` (`available`, `reason`, `model`, `subagent_limit_usd`). Решает `tfl_deep_agent.followup` плюс случаи лаборатории. Пока идёт сообщение, `result` - это снимок самой новой `report_history/<n>/` (неизменный, чтение не мешает записи агента) или черновик, пока ждёт HITL 2; ссылки на отчёт с версии 2 несут `?v=<версия>`.
 
 `review_mode` берётся из `run.json` агента, иначе из записи лаборатории (`_review_mode`).
 
@@ -196,6 +209,14 @@ TFL Lab (`python -m ui_server.server --port 8765`) - локальный веб-�
 
 Вызов `write_todos` и вызов `task`, для которого уже есть строка агента, в ленту отдельно не попадают.
 Перерисовка ленты пропускается, пока не изменился ключ (`feedKey`: число событий, раскрытые строки, наличие результата).
+
+### Композер и сообщения
+
+Открытый запуск продолжает композер: для завершённого запуска он отправляет сообщение (`deepMessageBody`, `POST .../message`), новая задача (файл, шаблон, режим) - только когда запуск не открыт. Состояние композера считает чистая функция по `followup` из деталей: закрыт с причиной, пока агент работает, ждёт решения, отменён или прерван. Чат показывает `user_message` и `assistant_message` как реплики, `followup_unanswered` и `followup_abandoned` - как заметки («сообщение без ответа: бюджет не продлён, отчёт прежний», «сообщение не выполнено, отчёт прежний: ...»). Под последней итоговой карточкой стоит кнопка «Формально верифицировать (Lean)» (`deepLeanAction`): видна, только если `followup.lean.available`; для live требует второго нажатия и показывает модель и лимит субагента. Новая итоговая карточка появляется, когда отчёт изменился.
+
+### Остановка по бюджету
+
+Карточка точки `budget` (`deepBudgetCard`) показывает потрачено / лимит / доступно / осталось на сегодня и кнопки «+$1», «+$5», свою сумму и «Завершить с тем, что есть»: это `edit {add_usd}` и `approve` на `/resume`. Кнопки «Принять всё до конца» на ней нет; для live отдельного флажка расходов нет: нажатие и есть решение о деньгах (клиент сам шлёт `confirm_spend`). См. [[budget]].
 
 ### Карточка проверки
 

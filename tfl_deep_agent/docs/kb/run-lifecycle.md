@@ -7,7 +7,7 @@ tags: [deep-agent, run, cli, hitl, progress]
 
 Как устроен каталог запуска, что хранится в `run.json`, как запуск делится на сегменты (процессы), как он продолжается после остановки на HITL и что пишется в `progress.jsonl`. Связанные заметки: [[hitl-and-review-modes]], [[budget]], [[reports]], [[tfl-lab]], [[testing-and-mock]], [[index]].
 
-Источники: `tfl_deep_agent/hitl.py` (логика запуска), `tfl_deep_agent/cli.py` (команда `tfl-deep`), `tfl_deep_agent/progress.py` (события).
+Источники: `tfl_deep_agent/hitl.py` (логика запуска), `tfl_deep_agent/cli.py` (команда `tfl-deep`), `tfl_deep_agent/progress.py` (события), `tfl_deep_agent/run_store.py` (`run.json`, статусы, коды выхода), `tfl_deep_agent/followup.py` (продолжение завершённого запуска).
 
 ## Каталог запуска
 
@@ -25,11 +25,12 @@ tags: [deep-agent, run, cli, hitl, progress]
 | `input/task.<ext>` | файл задачи как его дал человек (только для pdf / изображений) |
 | `hitl.md` | карточка текущей остановки |
 | `result.json` / `result.md` / `result.html` | отчёт; пока ждёт HITL 2, это черновик со статусом `awaiting_human` |
+| `report_history/<n>/` | копии `result.*`, снятые перед каждым сообщением-продолжением (см. «Продолжение завершённого запуска») |
 
-Имена файлов заданы константами в `hitl.py` (`RUN_FILE`, `CHECKPOINT_FILE`, `MOCK_SCRIPT_FILE`, `MOCK_CURSORS_FILE`, `CARD_FILE`, `INPUT_DIR`) и `progress.PROGRESS_FILE`.
+Имена файлов заданы константами в `hitl.py` (`MOCK_SCRIPT_FILE`, `MOCK_CURSORS_FILE`, `CARD_FILE`, `INPUT_DIR`), `run_store.py` (`RUN_FILE`, `CHECKPOINT_FILE`, `REPORT_HISTORY_DIR`, `RESULT_FILES`) и `progress.PROGRESS_FILE`. Файлы `lab.json`, `run.log`, `upload/`, `views/` и прочее принадлежат TFL Lab, не агенту ([[tfl-lab]]).
 
 > [!warning]
-> `start_run` отказывается работать в каталоге, где уже есть `run.json` (`RunError`: возобновляйте через `--resume` или возьмите новый каталог). Продолжить уже завершённый запуск нельзя: `resume_run` требует статус `awaiting_human` и непустой `pending`.
+> `start_run` отказывается работать в каталоге, где уже есть `run.json` (`RunError`: возобновляйте через `--resume` или возьмите новый каталог). `resume_run` отвечает на остановку: он требует статус `awaiting_human` и непустой `pending`. Завершённый запуск (`submitted`, `incomplete`, `budget_exhausted`, `error`) принимает сообщение через `send_followup` (`--resume RUN_DIR --message`), см. «Продолжение завершённого запуска».
 
 ## Поля run.json
 
@@ -51,6 +52,15 @@ tags: [deep-agent, run, cli, hitl, progress]
 - `segments`: список сегментов; `result`, `error`.
 
 Добавляются позже: `draft` (при остановке на HITL 2: `verdict`, `trust`, `confidence_cap`, `unknown_ids`; удаляется при завершении), `approve_rest` (при `--approve-rest`).
+
+Поля остановки по бюджету и продолжения (`run_store.py`, `budget_stop.py`, `followup.py`, `hitl.py`):
+
+- `budget_stop`: спрашивает ли запуск денег; задаётся при старте и главнее любого режима проверок ([[budget]]); `budget_limit_usd`, `budget_extensions`, `budget_declined` хранят ответ на остановке;
+- `stable_checkpoint_id`: чекпоинт последнего законченного сегмента, с которого начинается следующее сообщение;
+- `report_revision`: номер версии отчёта как объекта (не файлов), растёт только когда отчёт сказал что-то новое;
+- `accepted_report` (`call_id`, `evidence_count`): какой отчёт принят и сколько записей журнала существовало в этот момент (по ним он оценивается, см. [[verdict-gate]]);
+- `followup_in_progress`: запись, по которой запуск восстанавливается, пока сообщение не закончилось; `followup_error`: почему последнее сообщение не закончилось (поля нет, если его отменили);
+- `limits` при каждом сообщении обнуляется; деньги ограничены ledger'ом.
 
 `save_run` пишет через временный файл и `replace`. На Windows замена файла, открытого другим процессом (например, TFL Lab опрашивает запуск), может падать с `PermissionError`; функция повторяет попытку до 40 раз с паузой 0,05 с.
 
@@ -88,6 +98,19 @@ tags: [deep-agent, run, cli, hitl, progress]
 > [!note]
 > `hitl.run_state(run_dir)` читает последнее состояние основного потока из `checkpoints.sqlite` свежим агентом на пустых ответах моделей: ни одного вызова модели, бюджет без дневного лога. Нужно для UI и тестов.
 
+## Продолжение завершённого запуска
+
+Источники: `tfl_deep_agent/followup.py`, `hitl.send_followup`, `hitl.guarded_segment`, `hitl._finish_segment`.
+
+Завершённый запуск принимает сообщения в том же разговоре: `tfl-deep --resume RUN_DIR --message TEXT|@FILE`, в TFL Lab `POST /api/deep/runs/<id>/message` и поле ввода ([[tfl-lab]]). Нового чата не открывается: тот же `thread_id`, те же чекпоинты.
+
+- **Когда можно** (`followup_refusal`): статус из `FINAL_STATUSES` (`submitted`, `incomplete`, `budget_exhausted`, `error`) и есть `checkpoints.sqlite`. Запуск на остановке (`awaiting_human`) сначала ждёт решения; запись `followup_in_progress` без ожидающей остановки закрывает продолжение (`STUCK_REFUSAL`), выход через `--abandon`. Живой запуск отвергается (`RunError`) без `--live` и при исчерпанном дне ([[budget]]); пустой текст и длиннее 20000 символов тоже.
+- **С чего начинается.** Каждое сообщение ветвится от `stable_checkpoint_id`, поэтому упавшее или убитое сообщение не оставляет в разговоре вызова инструмента без результата. Перед сообщением `result.*` копируется в `report_history/<n>/`, а `run.json` получает `followup_in_progress` (снимок, прежние статус, результат, `accepted_report`, число проверок и значения переключателей режима проверки). `_take_report_baseline` фиксирует, по скольким записям журнала оценён уже принятый отчёт, до первой записи сообщения.
+- **Чем заканчивается.** Агент отвечает текстом (отчёт, статус и оценка остаются; `assistant_message`) или присылает новый полный отчёт через `submit_report` (HITL 2 по режиму запуска; новая `report_revision`, если отчёт изменился). Сообщение без вызова модели, потому что бюджет не продлён, описано в [[budget]].
+- **Если не закончилось.** Исключение, прерывание клавиатурой, выход интерпретатора и ошибка агента (`guarded_segment`) возвращают прежний отчёт, статус, проверки и режим проверки (`fail_followup`), `followup_error` говорит почему, код выхода 1; запуск принимает следующее сообщение. Деньги остаются потраченными, добавка на остановке по бюджету остаётся выданной. Убитый жёстко процесс запись не снимает: её снимает `--abandon` или TFL Lab. Если откат не удался, запись остаётся и откат можно повторить.
+- **Кнопка Lean** - это заготовка сообщения: [[lean]].
+- **Оценка принятого отчёта** при сообщениях: [[verdict-gate]].
+
 ## Коды выхода
 
 Источник: `tfl_deep_agent/cli.py`, `hitl.py` (`EXIT_*`).
@@ -95,7 +118,7 @@ tags: [deep-agent, run, cli, hitl, progress]
 | Код | Значение |
 |---|---|
 | 0 | отчёт принят (`status == submitted`) |
-| 1 | запуск закончился без отчёта (`incomplete`, `budget_exhausted`, `error`); частичный результат записан |
+| 1 | запуск закончился без отчёта (`incomplete`, `budget_exhausted`, `error`); частичный результат записан. Также сообщение-продолжение не закончилось: прежний отчёт и статус остались, причина в `followup_error` |
 | 2 | ошибка использования или настройки (`cli._fail`, `parser.error`) |
 | 3 | запуск ждёт решения человека (`awaiting_human`) |
 
@@ -105,16 +128,17 @@ tags: [deep-agent, run, cli, hitl, progress]
 
 Источник: `tfl_deep_agent/cli.py`.
 
-Два режима вызова: новый запуск (`TEXT` или `--file`) и `--resume RUN_DIR --decision ...`.
+Три режима вызова: новый запуск (`TEXT` или `--file`), `--resume RUN_DIR --decision ...` (ответ на остановку) и `--resume RUN_DIR --message TEXT|@FILE` (сообщение к завершённому запуску); отдельно `--resume RUN_DIR --abandon`.
 
 Правила, которые легко нарушить:
 
 - Mock это режим по умолчанию, но без `--mock-script` и без `--live` запуск отказывает с кодом 2: ничего не уходит в API. Подробнее о сценариях в [[testing-and-mock]].
 - `--live` и `--mock-script` взаимно исключаются; `TEXT` и `--file` тоже. Задача может прийти из поля `task` mock-сценария.
 - `--live` требует `ANTHROPIC_API_KEY` в окружении; `tfl-deep` никогда не читает `.env`. Живые запуски тратят деньги и допустимы только по явной просьбе с согласованным бюджетом (см. корневой `CLAUDE.md`).
-- `--auto-approve` это синоним `--review-mode auto`; вместе с другим `--review-mode` даёт ошибку. С `--resume` он означает «автоодобрять все последующие остановки», а текущее решение остаётся решением человека (в `run.json` записывается `initial_review_mode`).
-- С `--resume` допустимы только `--decision`, `--payload`, `--comment`, `--approve-rest`, `--live`, `--no-dialog`, `--auto-approve`. Задача, сценарий, шаблон, настройки и режим проверки берутся из `run.json`.
-- `--approve-rest` только с `--decision approve`.
+- `--auto-approve` это режим `auto` плюс отсутствие остановки по бюджету (`budget_stop` ложно); не просто синоним `--review-mode auto`, который деньги по-прежнему спрашивает. Вместе с другим `--review-mode` даёт ошибку. С `--resume --decision` он означает «автоодобрять все последующие проверки», а текущее решение остаётся решением человека (в `run.json` записывается `initial_review_mode`); `budget_stop` запуска при этом не меняется, и на остановке по бюджету флаг отвергается. С `--message` не сочетается.
+- С `--resume` допустимы только `--decision`, `--payload`, `--comment`, `--approve-rest`, `--message`, `--abandon`, `--live`, `--no-dialog`, `--auto-approve`. Задача, сценарий, шаблон, настройки и режим проверки берутся из `run.json`. `--message` исключает `--decision`, `--payload`, `--comment`, `--approve-rest`, `--auto-approve`; `--abandon` не берёт других флагов.
+- `--approve-rest` только с `--decision approve`, и не на остановке по бюджету.
+- `--message` принимает текст, `@FILE` (читается файл) или `@@текст` (буквальный `@текст`); длина до `MAX_MESSAGE_CHARS` = 20000. Живой запуск требует `--live` и `ANTHROPIC_API_KEY`, как и при `--decision`.
 - `--payload` принимает JSON-строку или `@FILE` (читается файл как текст); для `reject` это комментарий, для `edit` объект с изменяемыми полями.
 - Интерактивный диалог (`TTYDialog`) включается, только если и stdin, и stdout терминалы и не задано `--no-dialog`, `--auto-approve` или `--review-mode auto`. Иначе остановка даёт код 3.
 - Шаблоны: `full_proof`, `exam_solution`, `short_verdict`, `lean_appendix`. Допустимые типы файлов задачи: `.txt`, `.md`, `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp` (см. [[intake]]).
@@ -136,7 +160,9 @@ tags: [deep-agent, run, cli, hitl, progress]
 - `model_call`, `subagent_start`, `subagent_end`, `budget_wrap_up`, `budget_refused`, `subagent_refused`: из событий бюджета (`allocate` превращается в `subagent_start` с `allocated_usd`);
 - события оркестрации (`spawn_*`, `workflow_*` и т. п.) пробрасываются под своими именами;
 - `hitl_awaiting` (`point`, `interrupt_id`, `card` до 20 000 символов, `draft` только для `report`), `hitl_decision`;
-- `segment_end` (`status`, `error`); `done` (`status`, `verdict`, `language_class`, `trust`, `confidence_cap`, `error`). `done` сам вызывает `segment_end`, так что у последнего сегмента перед `done` стоит `segment_end` с итоговым статусом.
+- `user_message` (`text`), `assistant_message` (`text`, `truncated`): сообщение человека к завершённому запуску и текстовый ответ агента; `followup_unanswered` (`text`): сообщение закончилось без вызова модели, потому что бюджет не продлён; `followup_abandoned` (`status`, `error`): сообщение не закончилось, прежний отчёт вернулся (`error: null` - его отменили), сразу за ним идёт `segment_end` с восстановленным статусом;
+- решения на остановке по бюджету идут в `hitl_decision` (`extended` / `declined`, `add_usd`, `new_limit_usd`); `hitl_awaiting` получает `point: budget`;
+- `segment_end` (`status`, `error`); `done` (`status`, `verdict`, `language_class`, `trust`, `confidence_cap`, `error`). `done` сам вызывает `segment_end`, так что у последнего сегмента перед `done` стоит `segment_end` с итоговым статусом. После сообщения `done` пишется только если отчёт изменился или статус не `submitted`.
 
 > [!warning]
 > Эмиттер намеренно не бросает исключений в запуск: ошибка записи или неподдающаяся сериализации запись молча отбрасывается, а `open_emitter` при любой ошибке возвращает заглушку `_NullEmitter`. Поэтому `progress.jsonl` не источник истины: отсутствие строки не доказывает, что события не было. Авторитетны бюджет и `evidence.jsonl`.
@@ -145,7 +171,7 @@ tags: [deep-agent, run, cli, hitl, progress]
 
 ## Что проверить при отладке
 
-- Запуск «завис» со статусом `running` и нет живого процесса: процесс умер между `save_run` и концом сегмента; `pending` пуст, поэтому `--resume` откажет. Смотрите `progress.jsonl` и `segments` (у последнего нет `ended_at`).
+- Запуск «завис» со статусом `running` и нет живого процесса: процесс умер между `save_run` и концом сегмента; `pending` пуст, поэтому `--resume --decision` откажет. Если в `run.json` есть `followup_in_progress`, процесс умер на сообщении: `--resume RUN_DIR --abandon` возвращает прежний отчёт (процесс должен быть мёртв, это не проверяется). Смотрите `progress.jsonl` и `segments` (у последнего нет `ended_at`).
 - `--resume` отвечает «nothing to resume»: статус не `awaiting_human`.
 - «is a live run ... pass --live» или «is a mock run; --live does not apply»: режим запуска записан в `run.json["mode"]` и не меняется.
 - Ошибка агента не даёт код 2: она попадает в `run["error"]`, результат со статусом `error` пишется, код выхода 1.

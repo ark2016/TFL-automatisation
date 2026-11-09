@@ -362,7 +362,10 @@ autonomous [deepagents](https://pypi.org/project/deepagents/) (LangChain) agent 
   and that call's `max_tokens` comes from the reserve (see [`tfl_deep_agent/README.md`](tfl_deep_agent/README.md)
   "Budget semantics").
 - **Human review.** HITL 1 checks the transcription and the IR, HITL 2 approves the report. A stopped run is resumed
-  in a new process.
+  in a new process. `--review-mode all|formalization|auto` chooses which reviews wait for a human.
+- **Money questions and follow-ups.** When the task budget runs out, the run asks for more money instead of ending (a
+  "budget stop"; `--auto-approve` turns it off, review mode `auto` alone does not). A finished run takes further
+  messages in the same conversation (`--resume DIR --message TEXT`, or the composer in TFL Lab).
 - **Report.** The report comes from a template (`full_proof`, `exam_solution`, `short_verdict`, `lean_appendix`).
   Its trust labels and confidence ceiling are computed by code from the evidence ledger, with the same rules as
   the pipelines (`docs/VERDICT_POLICY.md`).
@@ -373,7 +376,10 @@ pip install -e ".[deep,dev]"        # the [deep] extra: deepagents, langchain, l
 # Mock mode (default, free): scripted model replies, real tools
 tfl-deep --mock-script tfl_deep_agent/examples/mock/ll_simple_ll1.json --save out/ll1 --auto-approve
 tfl-deep --mock-script tfl_deep_agent/examples/mock/reg_regex_regular.json --save out/reg --no-dialog  # exit 3 at HITL 1
-tfl-deep --resume out/reg --decision approve        # also: edit --payload JSON|@file, reject --comment TEXT
+tfl-deep --resume out/reg --decision approve        # also: edit --payload JSON|@file, reject --comment TEXT,
+                                                    # --approve-rest (approve this stop, auto-approve later reviews)
+tfl-deep --resume out/reg --message "Why is q2 accepting?"   # a follow-up to the finished run
+tfl-deep --mock-script tfl_deep_agent/examples/mock/reg_regex_regular.json --review-mode formalization --no-dialog  # only HITL 1 waits
 
 # Live (real money; only on explicit request, Haiku only, budget agreed first)
 TFL_MODEL_OVERRIDE=claude-haiku-5-5 tfl-deep --file task.pdf --live
@@ -388,8 +394,8 @@ TFL_MODEL_OVERRIDE=claude-haiku-5-5 tfl-deep --file task.pdf --live
   Both are optional.
 - **TFL Lab.** The UI has a **Deep Agent** workspace (top-bar switch, or `/#deep`).
 - **Eval.** `tfl-eval --systems deep` runs the eval set through the agent, see "`tfl-eval`" below.
-- **Exit codes:** `0` report accepted, `1` no report (a partial result is written), `2` usage, `3` waiting for a
-  human.
+- **Exit codes:** `0` report accepted, `1` no report (a partial result is written) or a follow-up failed (the previous
+  report stays), `2` usage, `3` waiting for a human.
 
 ---
 
@@ -460,8 +466,8 @@ Security model: binds to `127.0.0.1`, no auth. Requests are only answered for a 
 ├── ui_server/              # TFL Lab web UI
 │   ├── server.py           # stdlib http.server
 │   ├── deep_routes.py      # /api/deep/* for the Deep Agent workspace
-│   ├── static/index.html   # single-page frontend
-│   └── tests/              # guards, path confinement, CLI contract
+│   ├── static/             # single-page frontend (index.html, app.js, deep.js, lab.css)
+│   └── tests/              # guards, path confinement, CLI contract, /api/deep routes and frontend helpers
 ├── tfl_eval/               # tfl-eval: accuracy / calibration over docs/EVAL_SET.md
 ├── pumping_lemma/          # Legacy pumping-lemma checker (reference, not maintained)
 ├── reverse_morfism/        # Legacy inverse-homomorphism solver
@@ -488,11 +494,13 @@ Pure-function modules have pytest coverage; LLM-driven layers are covered by moc
 
 ```bash
 .venv/Scripts/python -m pytest -q
-# → 3447 passed, 161 skipped, 2 xfailed (with -n 4)
 ```
 
+The counts change with every commit, so none are recorded here; run the command for the current ones. `-n 4` runs it in
+parallel. Tests that need Docker, Graphviz `dot` or node skip with a reason when they are missing.
+
 The configured `testpaths` include `tfl_eval/tests` and exclude the legacy `pumping_lemma/tests`, which call the
-real Anthropic API. The 3 skipped tests type-check Lean 4 templates and need Docker with the `tfl-lean4` image.
+real Anthropic API. Tests that type-check Lean 4 templates need Docker with the `tfl-lean4` image and skip without it.
 
 The root `conftest.py` also strips `ANTHROPIC_API_KEY` and blocks live Anthropic client calls during test runs.
 
