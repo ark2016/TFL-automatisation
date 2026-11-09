@@ -47,6 +47,8 @@ certifies semilinearity by Parikh's theorem itself; an extra arbitrary filter re
 }
 ```
 
+On a retry round the input additionally carries `prior_oracle_test` (the previous round's oracle result, normalized: `status`, `counterexamples`, ...). It is absent on the first round.
+
 ## Output Format
 
 Return **only** valid JSON. No markdown fences, no extra text.

@@ -147,6 +147,7 @@ If the language appears non-regular and you cannot construct a correct DFA, **do
   "module": "dfa_builder",
   "status": "failure",
   "dfa": null,
+  "state_descriptions": null,
   "explanation": "Unable to construct a DFA. The language requires tracking unbounded information (e.g., matching counts of symbols), which is impossible with finitely many states.",
   "confidence": 0.0,
   "errors": ["Language appears non-regular: [specific reason]"]
