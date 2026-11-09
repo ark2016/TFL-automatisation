@@ -433,10 +433,15 @@ function deepParseBudgetAdd(value, dayLeft) {
   return {add};
 }
 
+// A decision source that says the run decided itself ("auto", "auto-approve", ...).
+function deepIsAutoSource(source) {
+  return /auto/.test(String(source || ''));
+}
+
 // A decision line: "✓ формализация принята · вы", with the edited fields / the comment.
 function deepDecisionText(x) {
   if (x.point === 'budget') {
-    const who = /auto/.test(String(x.source || '')) ? 'автоматически' : 'вы';
+    const who = deepIsAutoSource(x.source) ? 'автоматически' : 'вы';
     if (x.decision === 'extended') {
       return {text: `✓ бюджет: +${deepUsdShort(x.add_usd)}, лимит ${deepUsdShort(x.new_limit_usd)} · ${who}`, kind: 'edited'};
     }
@@ -449,7 +454,7 @@ function deepDecisionText(x) {
   const verb = kind === 'auto' ? meta.approved : meta[kind];
   const src = String(x.source || '');
   const who = /approve_rest/.test(src) ? 'вы, всё до конца'
-    : (kind === 'auto' || /auto/.test(src) ? 'автоматически' : (src && src !== 'human' ? src : 'вы'));
+    : (kind === 'auto' || deepIsAutoSource(src) ? 'автоматически' : (src && src !== 'human' ? src : 'вы'));
   let text = `${mark} ${meta.name} ${verb} · ${who}`;
   const edited = Array.isArray(x.edited_fields) ? x.edited_fields : [];
   if (kind === 'edited' && edited.length) text += ` (${edited.join(', ')})`;
@@ -1641,6 +1646,16 @@ function deepDoneNode(it) {
 //---------------------------------------------------------------------------
 // Feed tail: the review card, the "working" line, the end of a run without a done event
 //---------------------------------------------------------------------------
+// A note line ending with the «журнал» button that opens the log panel.
+function deepLogNote(cls, text) {
+  const n = el('div', cls, text);
+  const lb = el('button', 'dk-linkbtn', 'журнал');
+  lb.type = 'button';
+  lb.addEventListener('click', () => deepShowPanel('log'));
+  n.appendChild(lb);
+  return n;
+}
+
 function deepRenderTail() {
   const d = deep.detail;
   const run = d && d.run;
@@ -1661,23 +1676,13 @@ function deepRenderTail() {
       else if (run.status === 'interrupted') deepTail.appendChild(el('div', 'dk-line note warn', 'запуск прерван (сервер перезапускался); результат — в журнале'));
       else if (run.status === 'awaiting_human') deepTail.appendChild(el('div', 'dk-line note warn', 'запуск ждёт решения, но точка остановки не найдена'));
       if (run.error && !inFeed) {
-        const n = el('div', 'dk-line note err', 'ошибка: ' + deepClip(run.error, 400));
-        const lb = el('button', 'dk-linkbtn', 'журнал');
-        lb.type = 'button';
-        lb.addEventListener('click', () => deepShowPanel('log'));
-        n.appendChild(lb);
-        deepTail.appendChild(n);
+        deepTail.appendChild(deepLogNote('dk-line note err', 'ошибка: ' + deepClip(run.error, 400)));
       }
       // a follow-up the CLI refused has no event of its own
       if (lastError && !deep.events.some(e => e.error === lastError)) {
         // a follow-up that could not be restored closes the composer: the report may not be the previous one
         const said = d.followup.can_message ? 'сообщение не выполнено, отчёт прежний: ' : 'сообщение не выполнено: ';
-        const n = el('div', 'dk-line note warn', said + deepClip(lastError, 400));
-        const lb = el('button', 'dk-linkbtn', 'журнал');
-        lb.type = 'button';
-        lb.addEventListener('click', () => deepShowPanel('log'));
-        n.appendChild(lb);
-        deepTail.appendChild(n);
+        deepTail.appendChild(deepLogNote('dk-line note warn', said + deepClip(lastError, 400)));
       }
     }
     if (!pv && run && !deepIsActive(run.status) && d.followup && d.followup.can_abandon) {

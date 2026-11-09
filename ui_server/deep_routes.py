@@ -491,11 +491,16 @@ def _followup_back_locked(run: dict[str, Any], note: str | None = None) -> None:
     run["result_status"] = prev.get("result_status")
     run["error"] = prev.get("error")
     run["followup_error"] = note
+    _mark_process_gone(run)
+    run["cancel_requested"] = False
+
+
+def _mark_process_gone(run: dict[str, Any]) -> None:
+    """The run's process is over: stamp ``finished`` and forget pid, identity and orphan mark."""
     run["finished"] = _now()
     run["pid"] = None
     run["pid_identity"] = None
     run["orphan"] = False
-    run["cancel_requested"] = False
 
 
 def _settle_cancelled_locked(run: dict[str, Any], error: str, *, note: str | None = None) -> None:
@@ -507,10 +512,7 @@ def _settle_cancelled_locked(run: dict[str, Any], error: str, *, note: str | Non
     else:
         run["status"] = "cancelled"
         run["error"] = error
-        run["finished"] = _now()
-        run["pid"] = None
-        run["pid_identity"] = None
-        run["orphan"] = False
+        _mark_process_gone(run)
 
 
 def _settle_cancelled(run: dict[str, Any], error: str, *, rc: int | None = None) -> None:
@@ -575,10 +577,7 @@ def _settle_from_disk_locked(run: dict[str, Any], *, rc: int | None = None, tail
     error / interrupted. A follow-up is handled first (:func:`_settle_followup_locked`)."""
     agent = _agent_run(Path(run["run_dir"])) or {}
     _sync_review_mode_locked(run, agent)
-    run["finished"] = _now()
-    run["pid"] = None
-    run["pid_identity"] = None
-    run["orphan"] = False
+    _mark_process_gone(run)
     if not _settle_followup_locked(run, agent, rc=rc, tail=tail, dead_note=dead_followup_note):
         _settle_status_locked(run, agent, rc=rc, tail=tail, reason=reason)
     if run.get("followup_from") and run["status"] != WAITING_STATUS:  # the follow-up ran to its end
@@ -1537,22 +1536,24 @@ def _hitl_view(run: dict[str, Any], agent: dict[str, Any] | None) -> dict[str, A
     return out
 
 
+def _lean_off(reason: str) -> dict[str, Any]:
+    """The Lean button's view when it is not offered."""
+    return {"available": False, "reason": reason, "model": None, "subagent_limit_usd": None}
+
+
 def _lean_view(agent: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     """Whether the button «Формально верифицировать (Lean)» applies
     (``followup.lean_refusal``), and what it would run."""
-    def off(reason: str) -> dict[str, Any]:
-        return {"available": False, "reason": reason, "model": None, "subagent_limit_usd": None}
-
     refusal = followup.lean_refusal(agent, run_dir)
     if refusal:
-        return off(refusal)
+        return _lean_off(refusal)
     settings = agent.get("settings") if isinstance(agent.get("settings"), dict) else {}
     try:
         from tfl_deep_agent.agent import resolve_role_model
 
         model = resolve_role_model(settings, "lean")
     except Exception as exc:  # noqa: BLE001 - not offered when the model cannot be resolved
-        return off(f"the lean role has no usable model: {exc}")
+        return _lean_off(f"the lean role has no usable model: {exc}")
     limit = (settings.get("budget") or {}).get("per_subagent_max_usd")
     return {"available": True, "reason": None, "model": model, "subagent_limit_usd": limit}
 
@@ -1566,7 +1567,7 @@ def _followup_view(run: dict[str, Any], agent: dict[str, Any] | None) -> dict[st
 
     def closed(reason: str) -> dict[str, Any]:
         return {"can_message": False, "reason": reason, "in_progress": in_progress, "error": error,
-                "lean": {"available": False, "reason": reason, "model": None, "subagent_limit_usd": None}}
+                "lean": _lean_off(reason)}
 
     status = run.get("status")
     if status in ACTIVE_STATUSES:
