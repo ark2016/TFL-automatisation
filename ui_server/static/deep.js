@@ -1142,9 +1142,9 @@ async function deepPostMessage(body) {
   }
 }
 
-async function deepSendFollowup() {
-  // a click on the button is the confirmation of a paid message; Ctrl+Enter never gets here on a live run
-  const res = deepMessageBody(deepText.value, {live: deepComposerNow().live, confirm: true});
+async function deepSendFollowup(viaButton) {
+  // only a click on the button confirms a paid message
+  const res = deepMessageBody(deepText.value, {live: deepComposerNow().live, confirm: viaButton === true});
   if (res.error) { deepMsg(res.error, 'err'); return; }
   if (await deepPostMessage(res.body)) {
     deepText.value = '';
@@ -1152,9 +1152,9 @@ async function deepSendFollowup() {
   }
 }
 
-function deepSend() {
+function deepSend(viaButton) {
   const kind = deepComposerNow().kind;
-  if (kind === 'message') deepSendFollowup();
+  if (kind === 'message') deepSendFollowup(viaButton === true);
   else if (kind === 'new') deepStartRun();
 }
 
@@ -1163,9 +1163,25 @@ function deepRunShortcut() {
   const c = deepComposerNow();
   if (c.kind === 'message' && c.live) { deepMsg('live: сообщение — только кнопкой отправки', 'warn'); return; }
   if (c.kind === 'new' && deepModeValue().mode === 'live') { deepMsg('live-запуск — только кнопкой отправки (Ctrl+Enter запускает mock)', 'warn'); return; }
-  deepSend();
+  deepSend(false);
 }
-deepRunBtn.addEventListener('click', deepSend);
+deepRunBtn.addEventListener('click', () => deepSend(true));
+
+// Drop a continuation that is recorded as in progress while no process of the run is alive (CA-012):
+// the previous report comes back and the run takes messages again.
+async function deepAbandonFollowup(btn) {
+  const r = deep.detail && deep.detail.run;
+  if (!r) return;
+  if (btn) btn.disabled = true;
+  try {
+    await sendJson(`/deep/runs/${encodeURIComponent(r.run_id)}/abandon`, {});
+    deepStartPolling();
+    deepRefreshRuns();
+  } catch (e) {
+    deepMsg('не удалось отменить продолжение — ' + e.message, 'err');
+    if (btn) btn.disabled = false;
+  }
+}
 
 async function deepCancelRun() {
   const r = deep.detail && deep.detail.run;
@@ -1569,7 +1585,7 @@ function deepLeanAction() {
   if (!lean || !lean.available) return null;
   const live = !!(d.run && d.run.live);
   const go = () => {
-    const res = deepMessageBody('', {preset: 'lean', live, confirm: true});
+    const res = deepMessageBody('', {preset: 'lean', live, confirm: !live || deep.leanAsk});
     if (res.error) deepMsg(res.error, 'err'); else deepPostMessage(res.body);
   };
   const box = el('div', 'dk-card-actions dk-lean');
@@ -1631,7 +1647,7 @@ function deepRenderTail() {
   const pv = deepPendingView(d);
   const lastError = d && d.followup ? d.followup.error : null;
   const key = pv ? `${deep.runId}:${pv.interruptId}:${pv.point}`
-    : `${deep.runId}:${run ? run.status : ''}:${run ? (run.error || '') : ''}:${lastError || ''}`;
+    : `${deep.runId}:${run ? run.status : ''}:${run ? (run.error || '') : ''}:${lastError || ''}:${d && d.followup && d.followup.can_abandon ? 'abandon' : ''}`;
   const wasBottom = deepAtBottom();
   if (key !== deep.cardKey) {
     deep.cardKey = key;
@@ -1663,6 +1679,13 @@ function deepRenderTail() {
         n.appendChild(lb);
         deepTail.appendChild(n);
       }
+    }
+    if (!pv && run && !deepIsActive(run.status) && d.followup && d.followup.can_abandon) {
+      // a continuation nothing is finishing (its process is gone): the lab drops it, as `--abandon` does
+      const stuck = el('div', 'dk-line note warn', 'продолжение не завершено: ' + deepClip(d.followup.reason || '', 300));
+      const ab = deepBtn('Отменить продолжение', null, () => deepAbandonFollowup(ab));
+      stuck.appendChild(ab);
+      deepTail.appendChild(stuck);
     }
     const work = el('div', 'dk-working');
     work.appendChild(el('span', 'dk-live-dot'));

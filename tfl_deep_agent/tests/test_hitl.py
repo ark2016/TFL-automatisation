@@ -444,7 +444,8 @@ def test_pending_cards_are_short_and_made_by_code(tmp_path):
     out = hitl.resume_run(out.run_dir, hitl.parse_decision("approve"))
     card = hitl.load_run(out.run_dir)["pending"]["card"]
     assert card["point"] == "report"
-    assert card["summary"] == ["Ответ: regular", "Доверие: verified · потолок 0.98", "Шагов: 3 · утверждений: 0"]
+    assert card["summary"][:3] == ["Ответ: regular", "Доверие: verified · потолок 0.98", "Шагов: 3 · утверждений: 0"]
+    assert card["summary"][3].startswith("Черновик: ") and len(card["summary"]) == 4
     assert "steps" in card["editable"] and "verdict" in card["editable"]
     for c in (card, hitl.pending_card(out.pending.request)):
         assert len(c["summary"]) <= 4 and all(len(x) < 90 for x in c["summary"])
@@ -712,3 +713,19 @@ def test_fabricated_id_renders_as_not_verified_in_full_proof(tmp_path):
     assert steps[1]["trust"] == "verified"
     first = [ln for ln in rendered.markdown.splitlines() if "ev-made-up-step" in ln]
     assert first and "`not_verified`" in first[0] and "`verified`" not in first[0]
+
+
+def test_cards_show_user_text_literally_and_the_draft_summary():
+    card = hitl.formalization_card({"task_text": "L = (ab)* and {a,b}* over {a,b}", "class": "reg", "valid": True,
+                                    "restatement": "L = (ab)*, M = {a,b}*",
+                                    "examples": {"in_language": ["a*b"], "not_in_language": ["_x"]}})
+    assert "(ab)\\* and {a,b}\\* over" in card and "(ab)\\*, M = {a,b}\\*" in card
+    assert "a\\*b" in card and "\\_x" in card
+    assert hitl.md_escape("plain") == "plain"
+    report = {"verdict": "regular", "language_class": "reg", "method": "m", "summary": "line one\nline *two*"}
+    text = hitl.report_review_text(report, evidence=[], formalization_on=False)
+    assert "Draft summary" in text and "> line one\n> line \\*two\\*" in text
+    long = hitl.report_review_text({**report, "summary": "x" * 5000}, evidence=[])
+    assert "x" * 700 not in long
+    summary = hitl._report_summary({"verdict": "v", "summary": "short draft text"}, {})
+    assert any(s.startswith("Черновик: short draft") for s in summary) and len(summary) <= 4

@@ -269,7 +269,7 @@ what restores the run, including its review mode: `--approve-rest` given at a st
 follow-up fails or is cancelled, so the next one stops for a human. A budget extension stays, because it was granted. A record that outlives its process means that process did not finish: `--resume DIR --abandon`
 restores the run, and TFL Lab does it by itself and shows why in `followup.error` (`run.error` stays for failures of
 the run itself). A restore that fails keeps the record: TFL Lab closes the composer, and `followup.reason` gives the
-`--abandon` command.
+`--abandon` command, and the feed shows a button «Отменить продолжение» (`POST /api/deep/runs/<id>/abandon`, `followup.can_abandon`) that does the same while no process of the run is alive.
 
 A HITL 2 review record stores `report_digest`, the digest of the report it decided (for an edit, of the edited report).
 `human_review` in the result comes from the last review whose digest matches the current report, so a rejected draft

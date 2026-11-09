@@ -26,6 +26,8 @@
                                                  at the budget stop: edit {"add_usd": X} adds money
                                                  (recorded as extended), approve finishes with what
                                                  is left (recorded as declined)
+    POST /api/deep/runs/<id>/abandon          -> drops a follow-up recorded as in progress with no process alive
+                                                  (the CLI's --abandon); 409 otherwise
     POST /api/deep/runs/<id>/message          -> {text | preset: "lean", confirm_spend? (live runs)}:
                                                  a follow-up to a finished run, in the same conversation
     POST /api/deep/runs/<id>/cancel           -> {"run_id", "status"}
@@ -543,12 +545,23 @@ def _settle_followup_locked(run: dict[str, Any], agent: dict[str, Any], *, rc: i
     return True
 
 
+def _sync_review_mode_locked(run: dict[str, Any], agent: dict[str, Any]) -> None:
+    """The agent's ``run.json`` is the authority on the review mode: a continuation that
+    failed before it applied ``approve_rest`` would leave the lab's copy at ``auto``.
+    Caller holds ``_lock``."""
+    mode = agent.get("review_mode")
+    if mode in REVIEW_MODES:
+        run["review_mode"] = mode
+        run["auto_approve"] = mode == "auto"
+
+
 def _settle_from_disk_locked(run: dict[str, Any], *, rc: int | None = None, tail: str = "",
                              reason: str | None = None, dead_followup_note: str | None = None) -> None:
     """The lab status after the run's process ended (or vanished), read from
     the agent's ``run.json``: awaiting_human / completed (+ result_status) /
     error / interrupted. A follow-up is handled first (:func:`_settle_followup_locked`)."""
     agent = _agent_run(Path(run["run_dir"])) or {}
+    _sync_review_mode_locked(run, agent)
     run["finished"] = _now()
     run["pid"] = None
     run["pid_identity"] = None
@@ -742,7 +755,12 @@ def _spawn_and_wait(run_id: str, cmd: list[str], env: dict[str, str]) -> tuple[i
 def _followup_finished_as_cancel_landed(run: dict[str, Any], rc: int | None) -> bool:
     """A cancel reached a follow-up that had already finished: the process ran and left
     no record in ``run.json``, so there is nothing to abandon."""
-    return (rc is not None and bool(run.get("followup_from"))
+    return rc is not None and _followup_record_gone(run)
+
+
+def _followup_record_gone(run: dict[str, Any]) -> bool:
+    """The run is in a follow-up whose process left no record in ``run.json``."""
+    return (bool(run.get("followup_from"))
             and not (_agent_run(Path(run["run_dir"])) or {}).get("followup_in_progress"))
 
 
@@ -783,6 +801,7 @@ def _worker(run_id: str, cmd: list[str], live: bool, action: str) -> None:
         elif rc is None:
             with _lock:
                 agent = _agent_run(Path(run["run_dir"])) or {}
+                _sync_review_mode_locked(run, agent)
                 waiting = agent.get("status") == WAITING_STATUS and bool(agent.get("pending"))
                 if run.get("followup_from") and not waiting:
                     _followup_back_locked(run, outcome)  # the follow-up never started
@@ -1214,6 +1233,34 @@ def api_message(run_id: str, payload: Any) -> dict[str, Any]:
     return {"run_id": run_id, "status": "queued"}
 
 
+def api_abandon(run_id: str) -> dict[str, Any]:
+    """``POST runs/<id>/abandon``: drop a follow-up that is recorded as in progress while
+    no process of the run is alive (the CLI's ``--abandon``): the previous report comes
+    back and the run can take a message again. 409 while a process is alive or when
+    there is nothing to abandon."""
+    with _lock:
+        run = _get_run(run_id)
+        if run["status"] in ACTIVE_STATUSES or run["status"] == WAITING_STATUS:
+            raise Conflict(f"the run is {run['status']!r}: a follow-up can be abandoned only when nothing is running")
+        proc, pid, ident = run.get("proc"), run.get("pid"), run.get("pid_identity")
+    if proc is not None and proc.poll() is None:
+        raise Conflict("a process of the run is still alive")
+    if pid and _lab()._pid_matches(pid, ident):
+        raise Conflict("a process of the run is still alive")
+    if not (_agent_run(Path(run["run_dir"])) or {}).get("followup_in_progress"):
+        raise Conflict("this run has no follow-up in progress")
+    if not _abandon_agent_followup(run):
+        raise Conflict(_not_restored_note(run))
+    with _lock:
+        run["followup_from"] = None
+        run["followup_error"] = None
+        run["pid"] = None
+        run["pid_identity"] = None
+        run["orphan"] = False
+        _persist_locked(run)
+    return {"run_id": run_id, "status": run["status"]}
+
+
 def api_cancel(run_id: str) -> dict[str, Any]:
     """Cancel a queued / running run (kills its process) or a run waiting for
     a human (it then cannot be resumed). A follow-up goes back to its previous
@@ -1514,7 +1561,9 @@ def _followup_view(run: dict[str, Any], agent: dict[str, Any] | None) -> dict[st
     agent = agent or {}
     run_dir = Path(run["run_dir"])
     if agent.get("followup_in_progress"):  # the lab is not waiting for it: nothing here will finish it
-        return closed(f"{followup.STUCK_REFUSAL}: {followup.abandon_command(run_dir)}")
+        out = closed(f"{followup.STUCK_REFUSAL}: {followup.abandon_command(run_dir)}")
+        out["can_abandon"] = True  # POST runs/<id>/abandon does the same
+        return out
     if status in ("cancelled", "interrupted"):
         return closed(f"this run was {status}: start a new task")
     refusal = followup.followup_refusal(agent, run_dir)
@@ -1652,6 +1701,11 @@ def _summary_locked(run: dict[str, Any], agent: dict[str, Any] | None = None,
     budget = agent.get("budget") or {}
     result = agent.get("result") if isinstance(agent.get("result"), dict) else {}
     started = run.get("started") or run.get("created")
+    segments = run.get("segments") or []
+    if run["status"] in ACTIVE_STATUSES and segments:
+        # a continuation: the clock of "the agent is working" counts from its own start
+        # (none while it is still queued)
+        started = (segments[-1] or {}).get("started") if run["status"] == "running" else None
     end = run.get("finished") if run.get("finished") else (_now() if run["status"] in ACTIVE_STATUSES else None)
     return {
         "run_id": run["run_id"], "status": run["status"], "live": bool(run.get("live")),
@@ -1880,7 +1934,13 @@ def _watch_orphan(run_id: str) -> None:
             run = _runs.get(run_id)
             if run is None or run["status"] not in ACTIVE_STATUSES:
                 return
-            if cancel:
+            if cancel and _followup_record_gone(run):
+                # as in _worker: the cancel reached a follow-up that had already finished;
+                # what the process wrote is the truth (its exit code is unknown here)
+                with _lock:
+                    run["cancel_requested"] = False
+                _settle_process_end(run, reason="process ended while the server was restarted")
+            elif cancel:
                 _settle_cancelled(run, "cancelled by user")
             else:
                 _settle_process_end(run, reason="process ended while the server was restarted")
@@ -1914,6 +1974,8 @@ def _route(method: str, path: str, query: dict[str, list[str]], payload: Any) ->
             return api_resume(run_id, payload)
         if len(parts) == 3 and parts[2] == "message" and method == "POST":
             return api_message(run_id, payload)
+        if len(parts) == 3 and parts[2] == "abandon" and method == "POST":
+            return api_abandon(run_id)
         if len(parts) == 3 and parts[2] == "cancel" and method == "POST":
             return api_cancel(run_id)
         if len(parts) == 3 and parts[2] == "render" and method == "POST":
@@ -1949,7 +2011,7 @@ def dispatch(method: str, path: str, query: str = "", payload: Any = None) -> tu
         return 500, {"error": f"internal: {exc}"}
 
 
-__all__ = ["DEEP_RUNS_DIR", "FileResponse", "PREFIX", "api_cancel", "api_create", "api_detail", "api_estimate",
+__all__ = ["DEEP_RUNS_DIR", "FileResponse", "PREFIX", "api_abandon", "api_cancel", "api_create", "api_detail", "api_estimate",
            "api_get_settings", "api_message", "api_put_settings", "api_render", "api_resume",
            "build_followup_command", "build_resume_command", "build_start_command",
            "dispatch", "fold_events", "handles", "max_body_bytes", "restore_runs"]

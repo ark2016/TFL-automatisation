@@ -1446,3 +1446,72 @@ def test_the_detail_says_whether_the_budget_stop_is_on(fake_agent):
     assert dr.api_detail(run_id)["hitl"]["budget_stop"] is True
     agent_file.write_text(json.dumps({**agent, "budget_stop": False}), encoding="utf-8")
     assert dr.api_detail(run_id)["hitl"]["budget_stop"] is False
+
+
+def test_a_stuck_follow_up_can_be_abandoned_from_the_lab(fake_agent, monkeypatch):
+    run_id, _ = _finished_fake(fake_agent)
+    before = _read_report(run_id)
+    fake_agent["followup"] = "followup_sleep"
+    dr.api_message(run_id, {"text": "q"})
+    _wait_for_snapshot(run_id)
+
+    def fails(*_a, **_k):
+        raise OSError("the file is locked")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(dr.followup, "abandon_followup", fails)
+        dr.api_cancel(run_id)
+        data = wait_status(run_id, {"completed", "error"})
+    assert data["followup"]["can_abandon"] is True and data["followup"]["can_message"] is False
+    out = dr.api_abandon(run_id)
+    assert out["status"] == "completed"
+    data = dr.api_detail(run_id)
+    assert data["followup"]["can_message"] is True and not data["followup"].get("can_abandon")
+    assert _read_report(run_id) == before
+    with pytest.raises(dr.Conflict):  # nothing left to abandon
+        dr.api_abandon(run_id)
+
+
+def test_abandon_refuses_a_run_that_is_working(fake_agent):
+    run_id, _ = _finished_fake(fake_agent)
+    fake_agent["followup"] = "followup_sleep"
+    dr.api_message(run_id, {"text": "q"})
+    with pytest.raises(dr.Conflict):
+        dr.api_abandon(run_id)
+    dr.api_cancel(run_id)
+    wait_status(run_id, {"completed", "error"})
+
+
+def test_elapsed_of_a_continuation_counts_from_its_own_segment():
+    now = time.time()
+    run = {"run_id": "x" * 12, "run_dir": "nowhere", "status": "running", "started": now - 5000, "created": now - 5000,
+           "finished": None, "segments": [{"started": now - 5000, "finished": now - 4990}, {"started": now - 5}]}
+    out = dr._summary_locked(run, agent={})
+    assert out["elapsed"] is not None and out["elapsed"] < 1000
+    run["status"] = "queued"
+    assert dr._summary_locked(run, agent={})["elapsed"] is None
+
+
+def test_a_failed_approve_rest_does_not_keep_the_lab_copy_at_auto():
+    run = {"review_mode": "auto", "auto_approve": True}
+    with dr._lock:
+        dr._sync_review_mode_locked(run, {"review_mode": "all"})
+    assert run["review_mode"] == "all" and run["auto_approve"] is False
+    with dr._lock:
+        dr._sync_review_mode_locked(run, {})  # no record: nothing to take
+    assert run["review_mode"] == "all"
+
+
+def test_a_cancel_landing_as_an_adopted_follow_up_finishes_settles_from_disk(tmp_path, monkeypatch):
+    monkeypatch.setattr(dr, "_persist_locked", lambda _run: None)
+    d = tmp_path / "orphan2"
+    d.mkdir()
+    (d / "run.json").write_text(json.dumps({"run_id": "orphan2", "status": "submitted"}), encoding="utf-8")
+    run = {"run_id": "orphan2", "run_dir": str(d), "status": "running", "segments": [], "error": None,
+           "orphan": True, "pid": 1, "pid_identity": None, "cancel_requested": True,
+           "followup_from": {"status": "completed", "result_status": "submitted", "error": None}}
+    monkeypatch.setitem(dr._runs, "orphan2", run)
+    lab = dr._lab()
+    monkeypatch.setattr(lab, "_pid_matches", lambda *_a: False)
+    dr._watch_orphan("orphan2")
+    assert run["status"] == "completed" and run["cancel_requested"] is False
