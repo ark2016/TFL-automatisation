@@ -92,6 +92,11 @@ _NON_CFL_IMPORTS = [
 ]
 _DCFL_IMPORTS = ["import TflLean", "import Langlib.Classes.DeterministicContextFree.Definition"]
 _LETTER_AB = "inductive Letter\n  | a | b\n  deriving DecidableEq, Repr"
+_LETTER_AB_FINTYPE = (
+    "inductive Letter\n  | a | b\n  deriving DecidableEq, Repr\n\n"
+    "instance : Fintype Letter where\n  elems := {Letter.a, Letter.b}\n"
+    "  complete := by intro x; cases x <;> decide"
+)
 _LETTER_ABC_FINTYPE = (
     "inductive Letter\n  | a | b | c\n  deriving DecidableEq, Repr\n\n"
     "instance : Fintype Letter where\n  elems := {Letter.a, Letter.b, Letter.c}\n"
@@ -177,7 +182,36 @@ TRANSFER_EXAMPLES: dict[str, tuple[str, str, str, LeanStatement]] = {
             imports=_DCFL_IMPORTS,
         ),
     ),
+    # S → aSSb | ba | Ab, A → aAb | a (dcfl_exam_04) is DCF: the grammar's
+    # language is TflLean.ASSb.LangS (rule closure, TflLean.ASSb.den_of_mem_language),
+    # whose DPDA is TflLean.ASSb.isDCF_LangS (TflLean/GrammarASSb.lean,
+    # docs/THEORY.md §1.10).
+    "GrammarASSb_DCF.lean": (
+        "dcfl_system/examples/task_grammar_aSSb.json", "dcfl", "dcfl",
+        LeanStatement(
+            alphabet_decl=_LETTER_AB_FINTYPE,
+            language_decl=(
+                "inductive NT\n  | S | A\n  deriving DecidableEq, Repr\n\n"
+                "def g : ContextFreeGrammar Letter :=\n"
+                "  { NT := NT, initial := NT.S, rules := {"
+                "⟨NT.S, [Symbol.terminal Letter.a, Symbol.nonterminal NT.S, Symbol.nonterminal NT.S,"
+                " Symbol.terminal Letter.b]⟩, "
+                "⟨NT.S, [Symbol.terminal Letter.b, Symbol.terminal Letter.a]⟩, "
+                "⟨NT.S, [Symbol.nonterminal NT.A, Symbol.terminal Letter.b]⟩, "
+                "⟨NT.A, [Symbol.terminal Letter.a, Symbol.nonterminal NT.A, Symbol.terminal Letter.b]⟩, "
+                "⟨NT.A, [Symbol.terminal Letter.a]⟩} }\n\n"
+                "def L : Language Letter := g.language"
+            ),
+            theorem_decl="theorem tfl_main : is_DCF L",
+            imports=[*_DCFL_IMPORTS, "import Mathlib.Computability.ContextFreeGrammar"],
+        ),
+    ),
 }
+
+# Examples whose body needs a TflLean module newer than the Transfer section
+# (name -> a constant of that module, probed in the image before compiling).
+MODULE_EXAMPLES = {"GrammarASSb_DCF.lean": "TflLean.ASSb.isDCF_LangS"}
+GRAMMAR_ASSB = TFL_LEAN / "GrammarASSb.lean"
 
 
 def _statement(name: str) -> LeanStatement:
@@ -373,6 +407,26 @@ def test_image_recipe_ships_lemmas_behind_import_tfllean():
     assert "tfl_lean/TflLean/Lemmas.lean" in dockerfile
 
 
+def test_image_recipe_ships_grammar_assb_module():
+    """GrammarASSb_DCF.lean's body names `TflLean.ASSb.*` with nothing but
+    `import TflLean`: the module is re-exported and copied into the image."""
+    root = (DOCKER_DIR / "tfl_lean" / "TflLean.lean").read_text(encoding="utf-8")
+    assert "import TflLean.GrammarASSb" in root
+    dockerfile = (DOCKER_DIR / "Dockerfile.lean4").read_text(encoding="utf-8")
+    assert "tfl_lean/TflLean/GrammarASSb.lean" in dockerfile
+    body = _proof_body("GrammarASSb_DCF.lean")
+    assert MODULE_EXAMPLES["GrammarASSb_DCF.lean"] in body
+
+
+def test_grammar_assb_module_has_no_escape_hatches():
+    text = GRAMMAR_ASSB.read_text(encoding="utf-8")
+    code = text.split("-/", 1)[1]  # skip the module docstring
+    for bad in ("sorry", "admit", "native_decide", "ofReduceBool", "\naxiom "):
+        assert bad not in code, bad
+    for name in ("theorem isDCF_LangS ", "theorem den_of_mem_language ", "inductive LangS ", "inductive LangA "):
+        assert name in code, name
+
+
 # ---------------------------------------------------------------------------
 # Docker: the examples actually compile to `proved`
 # ---------------------------------------------------------------------------
@@ -414,11 +468,24 @@ def _transfer_lemmas_in_image() -> bool:
     return check_lean_file(probe, timeout=300)["status"] == "proved"
 
 
+@functools.lru_cache(maxsize=None)
+def _constant_in_image(constant: str) -> bool:
+    probe = (
+        "import TflLean\n\n"
+        f"#check @{constant}\n\n"
+        "theorem tfl_main : True := trivial\n\n"
+        "#print axioms tfl_main\n"
+    )
+    return check_lean_file(probe, timeout=300)["status"] == "proved"
+
+
 @docker
 @pytest.mark.parametrize("name", EXAMPLE_NAMES)
 def test_example_proved(name):
     if name in TRANSFER_EXAMPLES and not _transfer_lemmas_in_image():
         pytest.skip("tfl-lean4 image predates TflLean.Lemmas' Transfer section; rebuild it (README, Lean section)")
+    if name in MODULE_EXAMPLES and not _constant_in_image(MODULE_EXAMPLES[name]):
+        pytest.skip(f"tfl-lean4 image predates {MODULE_EXAMPLES[name]}; rebuild it (README, Lean section)")
     result = check_lean_file(_read(name), timeout=600)
     _assert_proved(result, name)
     assert result["axioms"], f"{name}: `#print axioms tfl_main` output missing"

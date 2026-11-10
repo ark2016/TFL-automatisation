@@ -77,6 +77,10 @@ RUN lake build TflLean.Langlib
 # editing it only rebuilds this small layer. TflLean.lean
 # re-exports it, so a harness file's `import TflLean` sees `TflLean.*`.
 COPY --chown=lean:lean tfl_lean/TflLean/Lemmas.lean ./TflLean/Lemmas.lean
+# TflLean.GrammarASSb: the DPDA proof for S → aSSb | ba | Ab, A → aAb | a
+# (dcfl_exam_04, Examples/GrammarASSb_DCF.lean). Imports only langlib modules
+# TflLean.Lemmas already pulls in, so it adds a few seconds to the last layer.
+COPY --chown=lean:lean tfl_lean/TflLean/GrammarASSb.lean ./TflLean/GrammarASSb.lean
 COPY --chown=lean:lean tfl_lean/TflLean.lean ./TflLean.lean
 RUN lake build
 WORKDIR /home/lean
