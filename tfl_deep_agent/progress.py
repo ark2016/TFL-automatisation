@@ -258,7 +258,7 @@ class ProgressEmitter:
                   card=card[:CARD_CHARS], draft=(run or {}).get("draft") if _get(info, "point") == "report" else None)
 
     def hitl_decision(self, review: Mapping[str, Any]) -> None:
-        money = {k: review[k] for k in ("add_usd", "new_limit_usd") if k in review}  # the budget stop
+        money = {k: review[k] for k in ("add_usd", "new_limit_usd", "new_day_limit_usd", "binds") if k in review}  # the budget stop
         self.emit("hitl_decision", point=review.get("point"), decision=review.get("decision"),
                   source=review.get("source"), comment=review.get("comment"),
                   edited_fields=list(review.get("edited_fields") or []), interrupt_id=review.get("interrupt_id"),

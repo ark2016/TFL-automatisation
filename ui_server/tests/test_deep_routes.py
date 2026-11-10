@@ -659,6 +659,15 @@ def test_fold_events_builds_the_tree_budget_and_todos():
     assert v["orchestration"][0]["workflow"] == "w" and v["hitl_decisions"][0]["decision"] == "approved"
 
 
+def test_fold_events_keeps_the_day_raise_of_a_decision():
+    evs = [{"event": "hitl_decision", "point": "budget", "decision": "extended", "binds": "day", "add_usd": 5,
+            "new_day_limit_usd": 25.0},
+           {"event": "hitl_decision", "point": "budget", "decision": "declined", "binds": "day"}]
+    got = dr.fold_events(evs)["hitl_decisions"]
+    assert got[0]["binds"] == "day" and got[0]["new_day_limit_usd"] == 25.0
+    assert got[1]["binds"] == "day" and got[1]["decision"] == "declined"
+
+
 def test_settings_get_put(tmp_path):
     got = dr.api_get_settings()
     assert got["settings"]["budget"]["per_task_usd"] == 10.0 and got["error"] is None
@@ -1004,8 +1013,9 @@ def test_live_message_needs_confirm_spend_and_money_left_today(fake_agent):
     from tfl_deep_agent.middleware import budget as budget_mod
 
     agent_file = dr.DEEP_RUNS_DIR / run_id / "run.json"
-    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "mode": "live"}),
-                          encoding="utf-8")  # what a live agent records; the fake does not
+    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "mode": "live",
+                                                    "budget_stop": False}),
+                          encoding="utf-8")  # what a live agent records; the fake does not; nobody to ask
     log = budget_mod.DailySpendLog(dr.spend_dir() / budget_mod.SPEND_LOG_NAME)
     log.append({"task": "other", "usd": 1000.0})
     status, body = _post_message(run_id, {"text": "вопрос", "confirm_spend": True})
@@ -1013,6 +1023,12 @@ def test_live_message_needs_confirm_spend_and_money_left_today(fake_agent):
     # one wording with the CLI, which refuses through followup.day_refusal too
     assert body["error"] == followup_mod.day_refusal(json.loads(agent_file.read_text(encoding="utf-8")), log)
     assert not fake_agent["followup_argv"]
+    # with the budget stop on, an accepted report's follow-up is not refused: the day question asks
+    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "budget_stop": True,
+                                      "status": "submitted"}), encoding="utf-8")
+    assert followup_mod.day_refusal(json.loads(agent_file.read_text(encoding="utf-8")), log) is None
+    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "budget_stop": False}),
+                          encoding="utf-8")
     log.path.unlink()
     assert dr.api_message(run_id, {"text": "вопрос", "confirm_spend": True})["status"] == "queued"
     wait_status(run_id, {"completed"})

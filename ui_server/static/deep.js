@@ -442,6 +442,12 @@ function deepIsAutoSource(source) {
 function deepDecisionText(x) {
   if (x.point === 'budget') {
     const who = deepIsAutoSource(x.source) ? 'автоматически' : 'вы';
+    if (x.decision === 'extended' && x.binds === 'day') {
+      return {text: `✓ бюджет: +${deepUsdShort(x.add_usd)}, дневной лимит ${deepUsdShort(x.new_day_limit_usd)} · ${who}`, kind: 'edited'};
+    }
+    if (x.decision === 'declined' && x.binds === 'day') {
+      return {text: `✓ бюджет: оставить отчёт как есть · ${who}`, kind: 'approved'};
+    }
     if (x.decision === 'extended') {
       return {text: `✓ бюджет: +${deepUsdShort(x.add_usd)}, лимит ${deepUsdShort(x.new_limit_usd)} · ${who}`, kind: 'edited'};
     }
@@ -1740,14 +1746,15 @@ function deepBudgetCard(pv, run) {
     if (res.error) { setMsg(res.error, 'err'); return; }
     await deepSubmitDecision(card, res.body, setMsg);
   };
+  const dayCap = args.binds === 'day' ? null : args.day_left_usd;  // a day extension raises the day limit: no cap
   const addMoney = (value) => {
-    const a = deepParseBudgetAdd(value, args.day_left_usd);
+    const a = deepParseBudgetAdd(value, dayCap);
     if (a.error) setMsg(a.error, 'err'); else send('edit', {add_usd: a.add});
   };
   const actions = el('div', 'dk-card-actions');
   [1, 5].forEach(x => {
     const b = deepBtn('+$' + x, 'primary', () => addMoney(x));
-    if (deepParseBudgetAdd(x, args.day_left_usd).error) b.disabled = true;
+    if (deepParseBudgetAdd(x, dayCap).error) b.disabled = true;
     actions.appendChild(b);
   });
   const own = el('label', 'dk-money');
@@ -1761,7 +1768,8 @@ function deepBudgetCard(pv, run) {
   own.appendChild(input);
   actions.appendChild(own);
   actions.appendChild(deepBtn('Добавить', null, () => addMoney(input.value)));
-  actions.appendChild(deepBtn('Завершить с тем, что есть', 'ghost', () => send('approve')));
+  actions.appendChild(deepBtn(args.binds === 'day' ? 'Оставить отчёт как есть' : 'Завершить с тем, что есть',
+    'ghost', () => send('approve')));
   card.appendChild(actions);
   card.appendChild(msg);
   return card;

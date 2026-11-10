@@ -3265,7 +3265,7 @@ Decisions and deviations:
   remove a later one.
 - "Finish with what is left" sets `budget_declined`, so a new process does not ask again; a new message clears it.
 - An extension too small for the next call goes on to wrap-up, with no second question in that step.
-- No stop when the day's remainder is what binds: more task budget buys nothing. Live extensions are checked against the
+- No stop when the day's remainder is what binds in a run's own call: more task budget buys nothing (a follow-up of an accepted report is the exception, CA-015 day case below). Live extensions are checked against the
   remainder at decision time (`with_todays_day_left`), not the one on the card.
 - Each message forks from `stable_checkpoint_id`, so a failed or cancelled follow-up leaves no half-finished branch (a tool
   call without a result would break the next model call). Errors restore `report_history/<n>/` and set `followup_error`.
@@ -3369,11 +3369,26 @@ Final fix round (user's decision; everything else from the reviews goes to the b
   reservation and no charge. `followup.last_reply` skips that message, `followup_unanswered` carries the chat's note, the CLI prints it
   on stderr (`RunOutcome.followup_note`). The text stays in the conversation, so a later turn reads that the message had no answer.
   `prompts/main.md` stays: no sentence in it became false. Left as they were, as decided: no accepted report. Also
-  left: the day's remainder is what binds (no stop, the call goes to wrap-up), and a scope already in wrap-up.
+  left: a scope already in wrap-up. The day case was left too, until the user decided on 2026-11-10 (see "CA-015 day case").
   CHANGED by the user on 2026-11-10: the earlier "leave it" for a run with no budget stop (`--auto-approve`) is withdrawn.
   `declining_skips_the_call` no longer asks for `budget_stop_on`: any follow-up of a run with an accepted report skips
   the call when the money does not cover it, so a truncated, auto-accepted report never replaces the accepted one
   (`test_an_auto_approved_run_keeps_its_accepted_report_when_the_follow_up_has_no_money`).
+- CA-015 day case (user, 2026-11-10). In a follow-up of an accepted report (`skip_call_when_low`) a main call short because of the
+  DAY's remainder no longer goes to wrap-up: `_budget_low_locked` returns `BudgetLow(binds="day", per_day_usd=...)` and the budget stop asks
+  about the day limit. `edit` `add_usd` raises `per_day_usd` of the run: `run.json` `budget_day_limit_usd` (`budget_stop.per_day_usd` and
+  `_budget_ledger` read it, `BudgetLedger.raise_day_limit` only grows), no cap by the remainder, the settings snapshot stays;
+  `budget_extensions` gets `{binds: day, new_day_limit_usd}` (report: "дневной лимит"). `approve`/auto: the call is skipped, accepted report
+  kept. Tests: `test_followup.py` `test_a_short_day_*`, `test_raising_the_day_limit_*`, `test_the_day_case_*`. deep.js: no day cap on the +$ buttons for `binds: day`.
+  Round 2: `request_budget_extension` returns `(kind, limit)` read from the decision's own key (a re-run node gets the earlier question's
+  stored answer back from `interrupt`, so indexing by `low.binds` raised KeyError); the middleware applies the kind it gets. A day raise holds
+  only on the day given (`budget_day_limit_day`, `day_limit_raise`). Day card title/button: «Дневной лимит заканчивается» / «Оставить отчёт как есть».
+  Round 3 (user decision 2026-11-10, no wrap-up for the day): `BudgetMiddleware._ask_for_budget` asks up to twice in one node, once per kind
+  (tracked by the kind of the applied answer, so a re-run node whose first `interrupt()` returns the earlier answer asks the other kind next);
+  `followup.day_refusal` is skipped for a run with status `submitted` and the budget stop on (TFL Lab 409 path too), so the day question asks
+  instead of a refusal; a declined day card carries `binds: day` and `progress.hitl_decision`/`fold_events` pass `binds`, `new_day_limit_usd`
+  (deep.js prints «дневной лимит $X» / «оставить отчёт как есть»). Tests: `test_both_limits_short_*`, `test_a_declined_day_card_*`,
+  `test_a_spent_day_asks_*`.
 - API-021: `_hitl_view` and `pending_card` apply today's remainder, and the card's summary line is rebuilt from it. API-022: the
   tooltip and the docs say «Без проверок». API-023 / OO-022: a record the lab is not waiting for gives the `--abandon` command,
   whatever the agent's status. CA-018: `_proved_in` reads `gate_entry()`.

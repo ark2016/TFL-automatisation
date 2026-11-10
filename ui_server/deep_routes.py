@@ -1396,7 +1396,8 @@ def fold_events(events: list[dict[str, Any]]) -> dict[str, Any]:
             awaiting = {k: ev.get(k) for k in ("point", "interrupt_id", "ts", "draft", "segment")}
         elif kind == "hitl_decision":
             decisions.append({k: ev.get(k) for k in ("point", "decision", "source", "comment", "edited_fields",
-                                                     "interrupt_id", "ts", "segment", "add_usd", "new_limit_usd")})
+                                                     "interrupt_id", "ts", "segment", "add_usd", "new_limit_usd",
+                                                     "new_day_limit_usd", "binds")})
         elif kind == "done":
             done = {k: ev.get(k) for k in ("status", "verdict", "language_class", "trust", "confidence_cap",
                                            "error", "ts")}

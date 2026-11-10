@@ -33,7 +33,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .budget_stop import per_day_usd
+from .budget_stop import budget_stop_on, per_day_usd
 from .evidence.ledger import EvidenceLedger, cited_evidence_ids, lean_proof_side
 from .run_store import (
     CHECKPOINT_FILE,
@@ -125,6 +125,8 @@ def day_refusal(run: Mapping[str, Any], spend_log: DailySpendLog | None = None) 
     per_day = per_day_usd(run)
     if run.get("mode") != "live" or per_day is None:
         return None
+    if run.get("status") == "submitted" and budget_stop_on(run):
+        return None  # an accepted report and somebody to ask: the day budget-stop question comes first
     if spend_log is None:
         from .middleware.budget import DailySpendLog
 
