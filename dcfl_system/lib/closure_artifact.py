@@ -19,8 +19,20 @@ inv_homomorphism    L = h⁻¹(S),  h: Σ → Δ*          h⁻¹(L) = S,  h: Δ
 
 Each side is a membership predicate: the side with L uses the task's own
 oracle (never the proof's claims), the other side uses the artifact. Both
-sides are compared on all words over the domain alphabet up to a bounded
-length (``oracle_verifier._verify_closure_reduction_artifact``).
+sides are compared on all words over the equation's core alphabet (Σ, or Δ
+for a destructive h⁻¹) up to the length that alphabet's own size allows, and,
+when the domain is wider (an intersection's Σ ∪ Δ ∪ alphabet(R)), on the
+words over the domain with a letter outside the core alphabet on top
+(``oracle_verifier._verify_closure_reduction_artifact``). Extra letters in the
+artifact therefore never shorten the check over Σ*, and only words over the
+core alphabet count toward the minimum of decided words.
+
+An exponent pattern for S that states no lower bound for a variable
+(``{a^n b^n}`` rather than ``{a^n b^n | n >= 1}``) reads two ways, n >= 0 and
+n >= 1. A word in S under the first reading but not under the second (each of
+its matches gives such a variable the value 0) gets no answer from S: it can
+neither refute nor confirm the equality, and it is listed in the details
+(``pattern_lower_bound``).
 
 The equality alone never shows the class of S: S = L with R = Σ* (or h the
 identity) satisfies it for every L, even a non-CFL one. So a constructive
@@ -66,11 +78,12 @@ leaves trust at ``well_formed``, as for a task without an oracle.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from agent_system.lib.dfa_builder import build_dfa_from_regex
 from agent_system.lib.dfa_runner import run_dfa
+from cfl_system.lib.exponent_pattern import ExponentPattern, parse_exponent_pattern
 from dcfl_system.lib.closure_table import get_required_artifact
 from dcfl_system.lib.dpda import dpda_run, prepare_dpda
 from dcfl_system.lib.word_sampler import build_membership_oracle_from_ir
@@ -276,30 +289,162 @@ def build_source(raw: Any, task_alphabet: list[str], direction: str) -> Source:
     if kind == "pattern":
         if not isinstance(raw["pattern"], str):
             raise ArtifactError("artifact.source.pattern must be a string")
-        ir = {
-            "input_format": "set_builder", "alphabet": alphabet,
-            "language_spec": {"kind": "set_builder", "word_pattern": raw["pattern"]},
-        }
-    else:
-        grammar = raw["grammar"]
-        if not isinstance(grammar, dict) or not isinstance(grammar.get("rules"), list):
-            raise ArtifactError("artifact.source.grammar must be {start, rules: [{lhs, rhs}]}")
-        rules = grammar["rules"]
-        for r in rules:
-            if not (isinstance(r, dict) and isinstance(r.get("lhs"), str)
-                    and isinstance(r.get("rhs"), list)
-                    and all(isinstance(s, str) for s in r["rhs"])):
-                raise ArtifactError(f"artifact.source.grammar rule {r!r} is not {{lhs, rhs: [symbols]}}")
-        ir = {
-            "input_format": "grammar", "alphabet": alphabet,
-            "language_spec": {
-                "kind": "grammar", "start": grammar.get("start"), "rules": rules,
-                "terminals": alphabet,
-                "nonterminals": sorted({r["lhs"] for r in rules}),
-            },
-        }
+        oracle, details = _pattern_oracle(raw["pattern"])
+        return Source(_guarded(oracle, alphabet) if oracle is not None else None, alphabet, kind, details)
+
+    grammar = raw["grammar"]
+    if not isinstance(grammar, dict) or not isinstance(grammar.get("rules"), list):
+        raise ArtifactError("artifact.source.grammar must be {start, rules: [{lhs, rhs}]}")
+    rules = grammar["rules"]
+    for r in rules:
+        if not (isinstance(r, dict) and isinstance(r.get("lhs"), str)
+                and isinstance(r.get("rhs"), list)
+                and all(isinstance(s, str) for s in r["rhs"])):
+            raise ArtifactError(f"artifact.source.grammar rule {r!r} is not {{lhs, rhs: [symbols]}}")
+    ir = {
+        "input_format": "grammar", "alphabet": alphabet,
+        "language_spec": {
+            "kind": "grammar", "start": grammar.get("start"), "rules": rules,
+            "terminals": alphabet,
+            "nonterminals": sorted({r["lhs"] for r in rules}),
+        },
+    }
     oracle = build_membership_oracle_from_ir(ir)
     return Source(_guarded(oracle, alphabet) if oracle is not None else None, alphabet, kind)
+
+
+# ---------------------------------------------------------------------------
+# S as an exponent pattern: the n >= 0 / n >= 1 reading of an unbounded variable
+# ---------------------------------------------------------------------------
+
+# How many abstained words the details list (the count covers all of them).
+_MAX_ABSTAINED_EXAMPLES = 10
+
+# Relations through which a number bounds the variables on their left from
+# below (n >= c, n > c, n = c), and the mirror ones for the right (c <= n).
+_LOWER_BOUND_LEFT = frozenset({">=", ">", "=="})
+_LOWER_BOUND_RIGHT = frozenset({"<=", "<", "=="})
+
+
+def _pattern_oracle(text: str) -> tuple[Oracle | None, dict[str, Any]]:
+    """S's membership oracle for the exponent pattern ``text``
+    (``cfl_system.lib.exponent_pattern``, the parser the task oracle uses for
+    the same notation), or ``(None, {})`` if it does not parse.
+
+    A variable whose lower bound the pattern does not state is read both ways:
+    ``>= 0`` (S₀, the parser's own reading) and ``>= 1`` (S₁ ⊆ S₀). On a word
+    of S₀ ∖ S₁ the oracle answers ``None`` and records the word in
+    ``details["pattern_lower_bound"]`` (a dict updated as words are asked)."""
+    pattern = parse_exponent_pattern(text)
+    if pattern is None:
+        return None, {}
+    parts = [pattern] if isinstance(pattern, ExponentPattern) else list(pattern.parts)
+    unstated = [_unstated_lower_bounds(part) for part in parts]
+    if not any(unstated):
+        return (lambda word: _union_member(parts, word)), {}
+
+    strict = [
+        replace(part, condition=_with_lower_bound_one(part.condition, names)) if names else part
+        for part, names in zip(parts, unstated)
+    ]
+    record: dict[str, Any] = {
+        "unstated_variables": sorted({v for names in unstated for v in names}),
+        "words_abstained": 0,
+        "examples": [],
+    }
+
+    def oracle(word: str) -> bool | None:
+        loose = _union_member(parts, word)
+        if loose is not True:
+            return loose            # not in S₀ (or unknown) decides S₁ ⊆ S₀ as well
+        tight = _union_member(strict, word)
+        if tight is False:
+            record["words_abstained"] += 1
+            if len(record["examples"]) < _MAX_ABSTAINED_EXAMPLES:
+                record["examples"].append(word)
+            return None
+        return tight
+
+    return oracle, {"pattern_lower_bound": record}
+
+
+def _union_member(parts: list[ExponentPattern], word: str) -> bool | None:
+    """Membership in the union of ``parts``: ``True`` if some part says so,
+    else ``None`` if some part does not know, else ``False``."""
+    unknown = False
+    for part in parts:
+        try:
+            result = part(word)
+        except Exception:
+            result = None
+        if result is True:
+            return True
+        unknown = unknown or result is None
+    return None if unknown else False
+
+
+def _expr_vars(expr: tuple) -> set[str]:
+    """Variables of an exponent-pattern arithmetic expression
+    (``('num', v) | ('var', name) | ('neg', e) | ('bin', op, l, r)``)."""
+    kind = expr[0]
+    if kind == "var":
+        return {expr[1]}
+    if kind == "neg":
+        return _expr_vars(expr[1])
+    if kind == "bin":
+        return _expr_vars(expr[2]) | _expr_vars(expr[3])
+    return set()
+
+
+def _top_level_conjuncts(condition: tuple | None) -> list[tuple]:
+    if condition is None:
+        return []
+    if condition[0] == "and":
+        return [c for node in condition[1] for c in _top_level_conjuncts(node)]
+    return [condition]
+
+
+def _unstated_lower_bounds(part: ExponentPattern) -> list[str]:
+    """The exponent variables of ``part`` whose lower bound no top-level
+    conjunct of its condition states: no comparison chain bounds the bare
+    variable below by a number (``n >= c``, ``n > c``, ``n = c``,
+    ``c <= ... <= n``, ``n, m >= 0``). A bound under ``or`` / ``not`` does not
+    count: it does not hold for every word of the pattern."""
+    variables: set[str] = set()
+    for seg in part.segments:
+        if "unit" in seg:
+            variables |= _expr_vars(seg["expr"])
+    stated: set[str] = set()
+    for node in _top_level_conjuncts(part.condition):
+        if node[0] != "chain":
+            continue
+        groups, ops = node[1], node[2]
+        numeric = [all(e[0] == "num" for e in group) for group in groups]
+        for i, group in enumerate(groups):
+            bare = {e[1] for e in group if e[0] == "var"}
+            if not bare:
+                continue
+            # A number to the right, reached through >=, >, = only ...
+            for j in range(i + 1, len(groups)):
+                if ops[j - 1] not in _LOWER_BOUND_LEFT:
+                    break
+                if numeric[j]:
+                    stated |= bare
+                    break
+            # ... or a number to the left, reached through <=, <, = only.
+            for j in range(i - 1, -1, -1):
+                if ops[j] not in _LOWER_BOUND_RIGHT:
+                    break
+                if numeric[j]:
+                    stated |= bare
+                    break
+    return sorted(variables - stated)
+
+
+def _with_lower_bound_one(condition: tuple | None, names: list[str]) -> tuple:
+    """``condition`` and ``v >= 1`` for each of ``names``."""
+    bounds = [("chain", [[("var", v)], [("num", 1)]], [">="]) for v in names]
+    return ("and", ([condition] if condition is not None else []) + bounds)
 
 
 def _guarded(oracle: Oracle, alphabet: list[str]) -> Oracle:
@@ -326,7 +471,11 @@ def guarded_task_oracle(oracle: Oracle, alphabet: list[str]) -> Oracle:
 @dataclass
 class Equation:
     """``left(w) == right(w)`` for every word ``w`` over ``domain`` is the
-    proof's claim; ``text`` states it for the report."""
+    proof's claim; ``text`` states it for the report. ``core`` is the part of
+    ``domain`` the claim is checked on in full (Σ, or Δ for a destructive
+    h⁻¹): its enumeration length is computed for ``core`` alone, the words
+    with a letter outside it are checked on top, and only words over ``core``
+    count toward the minimum of decided words."""
     domain: list[str]
     left: Callable[[str], "bool | None"]
     right: Callable[[str], "bool | None"]
@@ -335,6 +484,7 @@ class Equation:
     text: str
     with_samples: bool          # the domain contains Σ, so the task sampler's words apply
     checkable: bool             # False: the source is given, but no oracle can be built for it
+    core: list[str]
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -375,9 +525,9 @@ def build_equation(
     def in_s(w: str) -> bool | None:
         return s(w) if s is not None else None
 
-    def eq(domain, left, right, left_name, right_name, text, with_samples=True) -> Equation:
+    def eq(domain, left, right, left_name, right_name, text, with_samples=True, core=None) -> Equation:
         return Equation(domain, left, right, left_name, right_name, text,
-                        with_samples, checkable, details)
+                        with_samples, checkable, list(domain if core is None else core), details)
 
     if operation == "complement":
         if destructive:
@@ -390,13 +540,14 @@ def build_equation(
         in_r, r_alphabet, r_kind = build_regular(artifact.get("regular"))
         details["regular_kind"] = r_kind
         # Words with letters outside Σ are enumerated too: L has none, so the
-        # other side must have none either.
+        # other side must have none either. They come on top of Σ* (the core),
+        # never instead of it: extra letters must not shorten the check.
         domain = _union(task_alphabet, source.alphabet, r_alphabet)
         if destructive:
             return eq(domain, lambda w: _both(in_l(w), lambda: in_r(w)), in_s,
-                      "in(L∩R)", "in_S", "L ∩ R = S")
+                      "in(L∩R)", "in_S", "L ∩ R = S", core=task_alphabet)
         return eq(domain, in_l, lambda w: _both(in_r(w), lambda: in_s(w)),
-                  "in_L", "in(S∩R)", "L = S ∩ R")
+                  "in_L", "in(S∩R)", "L = S ∩ R", core=task_alphabet)
 
     if operation == "inv_homomorphism":
         if destructive:

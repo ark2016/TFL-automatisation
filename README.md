@@ -325,7 +325,12 @@ exponent pattern, a grammar or a DPDA), a DFA or regex for R, the homomorphism h
 `dcfl_system/lib/closure_artifact.py` turns the claimed equality into two membership predicates: the side with L
 uses the task's own oracle, the other side simulates the artifact (`agent_system.lib.dfa_runner` for R, the DPDA
 check of R2′ for a DPDA source). The oracle verifier compares them on the sampler's words and on every word over
-the alphabet up to the R2′ length bound. Agreement on ≥ 30 decided words with S given as a DPDA (its determinism
+Σ (Δ for a destructive h⁻¹) up to the R2′ length bound computed for that alphabet; letters the artifact adds (an
+intersection's domain is Σ ∪ Δ ∪ alphabet(R)) bring extra words on top and never shorten the check over Σ*. A word
+is decided when both sides answer it; only decided words over Σ count toward the minimum of 30. An exponent pattern
+for S that states no lower bound for a variable is read both as n ≥ 0 and as n ≥ 1, and a word whose membership
+depends on that choice is not compared (listed in `details.pattern_lower_bound`). Agreement on ≥ 30 decided words
+with S given as a DPDA (its determinism
 checked as in R2′, so S is a DCFL by construction) ⇒ `bounded_pass` (cap 0.85). With S as a pattern or a grammar,
 agreement leaves trust at most `well_formed`: the equality alone does not show that S is a DCFL (S = L with
 R = Σ*, or h the identity, passes it for any L, even a non-CFL one). A disagreeing word or a malformed artifact ⇒
