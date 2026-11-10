@@ -2171,3 +2171,51 @@ def test_the_day_case_is_asked_only_in_a_follow_up_of_an_accepted_report():
     low = mw._budget_low_locked(est, led.root)
     assert low.binds == "day" and low.per_day_usd == 0.002
     assert led.raise_day_limit(7.0) == 7.0 and led.raise_day_limit(1.0) == 7.0
+
+
+def test_a_day_raise_holds_only_on_the_day_it_was_given():
+    run = {"settings": {"budget": {"per_day_usd": 2.0}}}
+    BS.apply_budget_review(run, {"decision": BS.EXTENDED, "binds": "day", "new_day_limit_usd": 9.0, "add_usd": 7.0})
+    today = run["budget_day_limit_day"]
+    assert BS.per_day_usd(run) == 9.0 and BS.day_limit_raise(run, today) == 9.0
+    assert BS.day_limit_raise(run, "1999-01-01") == 0.0
+    run["budget_day_limit_day"] = "1999-01-01"  # given on an earlier day
+    assert BS.per_day_usd(run) == 2.0
+
+
+def test_the_day_card_is_titled_for_the_day(tmp_path):
+    d, live, _ = day_short_followup(tmp_path)
+    assert hitl.send_followup(d, QUESTION, model_factory=live(), live=True).pending.point == hitl.BUDGET
+    assert hitl.load_run(d)["pending"]["card"]["title"] == "Дневной лимит заканчивается"
+
+
+def _stored_answer(monkeypatch, edited_args):
+    import langgraph.types
+
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda value: {"decisions": [
+        {"type": "edit", "edited_action": {"name": "budget", "args": edited_args}}]})
+
+
+@pytest.mark.parametrize("asked, stored, expected", [
+    ("task", {"add_usd": 5, "new_day_limit_usd": 9.0}, ("day", 9.0)),  # day first, task after
+    ("day", {"add_usd": 5, "new_limit_usd": 6.0}, ("task", 6.0)),      # task first, day after
+])
+def test_a_resumed_answer_of_the_other_kind_is_applied_as_what_it_is(monkeypatch, asked, stored, expected):
+    """The re-run node's interrupt() returns the stored answer of the EARLIER question."""
+    _stored_answer(monkeypatch, stored)
+    low = B.BudgetLow(spent_usd=1.0, limit_usd=1.002, available_usd=0.001, reserve_usd=0.0001, day_left_usd=0.0005,
+                      binds=asked, per_day_usd=2.0 if asked == "day" else None)
+    assert BS.request_budget_extension(low) == expected
+
+
+def test_the_middleware_applies_the_kind_of_the_answer_not_of_the_question():
+    est = B.CallEstimate("claude-opus-5-5", 1000, 1000, 0.03)
+    led = B.BudgetLedger(0.05, reserve_for_report_usd=0.04, spend_log=B.DailySpendLog(), per_day_usd=0.002, task_id="t")
+    mw = B.BudgetMiddleware(led.root, fit_max_tokens=False)
+    mw.skip_call_when_low = True
+    mw.request_budget_extension = lambda low: ("task", 9.0)  # the question was about the day
+    mw._ask_for_budget(est, led.root)
+    assert led.root.limit == 9.0 and led.per_day_usd == 0.002
+    mw.request_budget_extension = lambda low: ("day", 7.0)
+    mw._ask_for_budget(est, led.root)
+    assert led.per_day_usd == 7.0

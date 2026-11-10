@@ -3380,6 +3380,11 @@ Final fix round (user's decision; everything else from the reviews goes to the b
   `_budget_ledger` read it, `BudgetLedger.raise_day_limit` only grows), no cap by the remainder, the settings snapshot stays;
   `budget_extensions` gets `{binds: day, new_day_limit_usd}` (report: "дневной лимит"). `approve`/auto: the call is skipped, accepted report
   kept. Tests: `test_followup.py` `test_a_short_day_*`, `test_raising_the_day_limit_*`, `test_the_day_case_*`. deep.js: no day cap on the +$ buttons for `binds: day`.
+  Round 2: `request_budget_extension` returns `(kind, limit)` read from the decision's own key (a re-run node gets the earlier question's
+  stored answer back from `interrupt`, so indexing by `low.binds` raised KeyError); the middleware applies the kind it gets. A day raise holds
+  only on the day given (`budget_day_limit_day`, `day_limit_raise`). Day card title/button: «Дневной лимит заканчивается» / «Оставить отчёт как есть».
+  OPEN (user): `followup.day_refusal` still refuses a live follow-up outright when the day's remainder is exactly used up (<= 1e-9), before any
+  question; routing that to the `binds: day` stop is a behaviour change left for the user's decision.
 - API-021: `_hitl_view` and `pending_card` apply today's remainder, and the card's summary line is rebuilt from it. API-022: the
   tooltip and the docs say «Без проверок». API-023 / OO-022: a record the lab is not waiting for gives the `--abandon` command,
   whatever the agent's status. CA-018: `_proved_in` reads `gate_entry()`.

@@ -987,7 +987,7 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
             raise ValueError(f"min_output_tokens must be >= 1, got {min_output_tokens!r}")
         self.min_output_tokens = int(min_output_tokens)
         #: the budget stop's callback; the main agent's build sets it, a subagent's never asks
-        self.request_budget_extension: Callable[[BudgetLow], float | None] | None = None
+        self.request_budget_extension: Callable[[BudgetLow], float | tuple[str, float] | None] | None = None
         self.skip_call_when_low = False
         self._scale = 1.0
         self._scale_lock = threading.Lock()
@@ -1148,9 +1148,12 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
             low = self._budget_low_locked(est, node)
         if low is None:
             return
-        new_limit = self.request_budget_extension(low)  # may raise GraphInterrupt: nothing is reserved yet
-        if new_limit is not None:  # the new absolute limit of what was short
-            (node.ledger.raise_day_limit if low.binds == "day" else node.ledger.raise_limit)(new_limit)
+        answer = self.request_budget_extension(low)  # may raise GraphInterrupt: nothing is reserved yet
+        if answer is None:
+            return
+        # (kind, new absolute limit); a bare number is the limit of what was short (low.binds)
+        kind, new_limit = answer if isinstance(answer, tuple) else (low.binds or "task", answer)
+        (node.ledger.raise_day_limit if kind == "day" else node.ledger.raise_limit)(new_limit)
 
     def _before(self, request: Any) -> tuple[Any, CallEstimate, Admission | None]:
         """What the hook goes on with; the admission is ``None`` when the call is skipped."""

@@ -19,7 +19,9 @@ A follow-up on a run that holds an accepted report, when the DAY's remainder is 
 short (user decision 2026-11-10, CA-015), asks the same question about the day limit
 (``binds`` ``day`` on the card): ``edit`` raises ``per_day_usd`` of this run by ``add_usd``
 (``budget_day_limit_usd`` in ``run.json``; the settings file is not touched), ``approve``
-leaves the report; with nobody to ask the call is skipped (below), never wrapped up.
+leaves the report, and the raise holds only on the day it was given. With ``--auto-approve``
+(no budget stop) the call is skipped (below), never wrapped up; with the stop on and no
+dialog the run waits (exit 3) as at the task stop.
 
 A follow-up on a run that holds an accepted report does not spend money the human did
 not give: declining, or a top-up too small for the call, ends the message without a
@@ -74,10 +76,16 @@ def budget_request(low: BudgetLow) -> dict[str, Any]:
             "review_configs": [{"action_name": BUDGET, "allowed_decisions": ["approve", "edit"]}]}
 
 
-def request_budget_extension(low: BudgetLow) -> float | None:
+def request_budget_extension(low: BudgetLow) -> tuple[str, float] | None:
     """``BudgetMiddleware.request_budget_extension`` of a run with the budget stop: a
-    LangGraph interrupt. Returns the new absolute limit (the day's, when ``low.binds`` is
-    ``"day"``), or ``None`` (finish).
+    LangGraph interrupt. Returns ``(kind, new absolute limit)`` with ``kind`` ``"day"`` or
+    ``"task"``, or ``None`` (finish).
+
+    The kind is the one the decision carries, not ``low.binds``: when a node asks twice
+    (one answer for the day, then a question about the task, or the other way round) the
+    re-run node gets the stored answer of the EARLIER question back from ``interrupt``.
+    Applying that raise again is harmless (limits only grow); the call is then admitted
+    or skipped and the next message asks again.
 
     A resumed node runs again from its start. The resume has raised the limit in
     ``run.json`` by then, so the condition is false and this is not reached; the
@@ -90,7 +98,9 @@ def request_budget_extension(low: BudgetLow) -> float | None:
     if decision.get("type") != "edit":
         return None
     args = get_field(decision.get("edited_action"), "args")
-    return float(args["new_day_limit_usd"] if low.binds == DAY else args["new_limit_usd"])
+    if args.get("new_day_limit_usd") is not None:
+        return DAY, float(args["new_day_limit_usd"])
+    return "task", float(args["new_limit_usd"])
 
 
 def budget_stop_on(run: Mapping[str, Any]) -> bool:
@@ -176,7 +186,8 @@ def apply_budget_review(run: dict[str, Any], review: Mapping[str, Any], budget: 
     the running segment (a new process builds it from the run)."""
     if review.get("decision") == EXTENDED and review.get("binds") == DAY:
         new_day = float(review["new_day_limit_usd"])
-        run["budget_day_limit_usd"] = max(float(run.get("budget_day_limit_usd") or 0.0), new_day)
+        run["budget_day_limit_usd"] = max(day_limit_raise(run), new_day)
+        run["budget_day_limit_day"] = _today()  # the raise is for the day it was given
         run.setdefault("budget_extensions", []).append(
             {k: review.get(k) for k in ("binds", "add_usd", "new_day_limit_usd", "at", "source", "reviewer")})
         if budget is not None:
@@ -192,13 +203,29 @@ def apply_budget_review(run: dict[str, Any], review: Mapping[str, Any], budget: 
         run["budget_declined"] = True
 
 
+def _today() -> str:
+    from .middleware.budget import DailySpendLog
+
+    return DailySpendLog().today()
+
+
+def day_limit_raise(run: Mapping[str, Any], today: str | None = None) -> float:
+    """The day limit a human gave this run at the stop (``budget_day_limit_usd``), but
+    only on the day it was given (``budget_day_limit_day``): the raise answers one day's
+    shortage and is not carried to later days. 0.0 when none applies."""
+    value = float(run.get("budget_day_limit_usd") or 0.0)
+    if value <= 0.0 or run.get("budget_day_limit_day") != (today or _today()):
+        return 0.0
+    return value
+
+
 def per_day_usd(run: Mapping[str, Any]) -> float | None:
     """The run's own ``budget.per_day_usd`` (raised by a day extension, ``budget_day_limit_usd``);
     ``None`` means no check against the day."""
     value = ((run.get("settings") or {}).get("budget") or {}).get("per_day_usd")
     if value is None:
         return None
-    return max(float(value), float(run.get("budget_day_limit_usd") or 0.0))
+    return max(float(value), day_limit_raise(run))
 
 
 def with_todays_day_left(run: Mapping[str, Any], request: Mapping[str, Any], *,
@@ -231,7 +258,7 @@ def budget_summary(args: Mapping[str, Any]) -> list[str]:
 
 
 __all__ = [
-    "BUDGET", "DAY", "DECLINED", "EXTENDED", "apply_budget_review", "parse_add_usd", "budget_request", "budget_decision_response",
+    "BUDGET", "DAY", "DECLINED", "EXTENDED", "apply_budget_review", "day_limit_raise", "parse_add_usd", "budget_request", "budget_decision_response",
     "budget_stop_enabled", "budget_stop_on", "budget_summary", "declining_skips_the_call", "per_day_usd", "request_budget_extension", "review_switch_refusal", "format_usd",
     "with_todays_day_left",
 ]

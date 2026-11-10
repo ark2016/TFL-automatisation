@@ -253,8 +253,11 @@ makes no model call, so the accepted report and its label are never replaced by 
 When the DAY's remainder is what is short in such a follow-up (user, 2026-11-10, CA-015), the stop asks to raise the day
 limit (`per_day_usd`) instead of wrapping up: the card names the day (`binds: day`), `--decision edit --payload
 '{"add_usd": 5}'` raises this run's day limit (`budget_day_limit_usd` in `run.json`; the settings file does not change; no
-cap by the remainder), `approve` keeps the accepted report. With nobody to ask (`--auto-approve`, no dialog) the call is
-skipped, never wrapped up into a truncated report.
+cap by the remainder), `approve` keeps the accepted report. With `--auto-approve` (no budget stop) the call is
+skipped, never wrapped up into a truncated report; with the stop on and nobody at the terminal the run waits (exit 3),
+as at the task stop. The day raise holds only on the day it was given (`budget_day_limit_day` in `run.json`). If one
+message meets both questions (the day, then the task, or the other way round), each answer is applied as the kind it
+carries, and the next question is asked again.
 
 `auto_approve` means review mode `auto` plus no budget stop, so only a run started with `--auto-approve` goes straight
 to the report. Review mode `auto` on its own, and `--approve-rest`, concern reviews and still stop for money.
@@ -514,7 +517,9 @@ the report on the right.
   button «Формально верифицировать (Lean)» under the last final card sends the preset `lean`; live, a second click
   confirms the spend.
 - **Budget card.** At the budget stop: spent / limit, +$1, +$5, an amount of your own, «Завершить с тем, что есть». A
-  live run's buttons block on today's remainder of the day log, and the click is the decision about money.
+  live run's buttons block on today's remainder of the day log (except when the card is about the day limit,
+  `binds: day`: there the +$ raises the limit and the remainder is no cap; its title is «Дневной лимит заканчивается»
+  and the last button «Оставить отчёт как есть»), and the click is the decision about money.
 - **Report.** The finished report (or the draft at the report stop) in a sandboxed iframe; another template can be
   viewed for an accepted report; closable, widenable; the raw log is behind "журнал".
 
