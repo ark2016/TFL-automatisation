@@ -199,3 +199,21 @@ def test_lean_workflow_uses_the_local_runner_and_does_not_skip():
         assert f in text, f
     assert "docker/build-push-action" not in text
     assert "is_docker_available()" in text and "skipped" in text
+
+
+def test_lean_workflow_pins_elan_like_the_dockerfile():
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    text = (root / ".github/workflows/lean.yml").read_text(encoding="utf-8")
+    dockerfile = (root / "agent_system/docker/Dockerfile.lean4").read_text(encoding="utf-8")
+    commit = "227caca133724d5516bee25c2aeb3e609478f2d8"
+    sha = "a620ff1641616222c8d37c54845492004bb84d6877cdbc944dd65c1aa685bf53"
+    # Same pin as the image recipe, so the two cannot drift apart silently.
+    assert f"leanprover/elan/{commit}/elan-init.sh" in dockerfile and sha in dockerfile
+    assert f"leanprover/elan/{commit}/elan-init.sh" in text
+    assert f'echo "{sha}  elan-init.sh" | sha256sum -c -' in text
+    assert "elan/master" not in text
+    # The script is downloaded to a file and checked, never piped into a shell.
+    assert not re.search(r"elan-init\.sh[^\n]*\\?\s*\n?\s*\|\s*sh\b", text)

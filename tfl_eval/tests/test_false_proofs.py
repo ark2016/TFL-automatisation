@@ -46,7 +46,9 @@ EXPECTED: dict[str, tuple[str, str | None, float]] = {
     "ll-substitution-concrete-words": ("bounded_pass", "not_ll", 0.85),
     "ll-substitution-template": ("bounded_pass", "not_ll", 0.85),
     "ll-builder-first-follow-conflict": ("refuted", "uncertain", 0.40),
-    "ll-builder-finite-approximation": ("bounded_pass", "ll", 0.85),
+    # R3′ (2026-11-10): an LL(k) claim without its parse table is capped at
+    # well_formed (it was bounded_pass on the step-2 sample before).
+    "ll-builder-finite-approximation": ("well_formed", "uncertain", 0.40),
     "ll-format3-false-ll1": ("refuted", "uncertain", 0.40),
 }
 
@@ -57,8 +59,8 @@ EXPECTED_SUMMARY: dict[str, tuple[int, ...]] = {
     "reg":  (4,    1,   1,  2,  0,   2,   3,     2),
     "cfl":  (4,    0,   2,  2,  0,   2,   3,     1),
     "dcfl": (9,    3,   3,  3,  0,   3,   6,     3),
-    "ll":   (5,    2,   0,  3,  0,   3,   3,     3),
-    "all":  (22,   6,   6,  10, 0,   10,  15,    9),
+    "ll":   (5,    2,   1,  2,  0,   2,   2,     2),
+    "all":  (22,   6,   7,  9,  0,   9,   14,    8),
 }
 
 

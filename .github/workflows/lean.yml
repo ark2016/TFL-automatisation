@@ -6,9 +6,10 @@ name: lean-compile
 # cache from `lake exe cache get`, and TFL_LEAN_RUNNER=local (type_check.py runs
 # `lake env lean --json` in the Lean project instead of `docker run`).
 #
-# Non-blocking by design: manual or weekly, never on push/PR (it is not a
-# required check). The blocking, fast part -- statement generation without
-# compiling -- is the `lean-ir-units` job in tests.yml.
+# Manual or weekly, never on push/PR (it is not a required PR check), but a
+# failing step fails the run (no continue-on-error). The fast part run on every
+# push/PR -- statement generation without compiling -- is the `lean-ir-units`
+# job in tests.yml.
 
 on:
   workflow_dispatch:
@@ -45,12 +46,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
+      # elan-init.sh is pinned to the same commit and checksum as in
+      # agent_system/docker/Dockerfile.lean4 (elan v4.2.4) and checked before it
+      # runs; bump both places together.
       - name: Install elan and the pinned Lean toolchain
         run: |
           toolchain="$(tr -d '[:space:]' < "$TFL_LEAN_PROJECT_DIR/lean-toolchain")"
           echo "toolchain: $toolchain"
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain "$toolchain"
+          curl -fsSL -o elan-init.sh \
+            https://raw.githubusercontent.com/leanprover/elan/227caca133724d5516bee25c2aeb3e609478f2d8/elan-init.sh
+          echo "a620ff1641616222c8d37c54845492004bb84d6877cdbc944dd65c1aa685bf53  elan-init.sh" | sha256sum -c -
+          sh elan-init.sh -y --default-toolchain "$toolchain"
+          rm elan-init.sh
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       # `.lake` holds the Mathlib/langlib checkouts and the built .olean files.

@@ -688,7 +688,8 @@ Notes:
   `lake env lean --json <file>` in the Lean project `TFL_LEAN_PROJECT_DIR` (default `agent_system/docker/tfl_lean`)
   with the same timeout and parsing; `is_docker_available()` then means "`lake` on PATH and the project's `.lake`
   built", so the Lean tests' skip gates keep working. `.github/workflows/lean.yml` (manual + weekly)
-  uses it: elan with the toolchain from `lean-toolchain`, cached `.lake`, `lake exe cache get`,
+  uses it: elan (installer pinned to the same commit and SHA-256 as `Dockerfile.lean4`, checked before it runs)
+  with the toolchain from `lean-toolchain`, cached `.lake`, `lake exe cache get`,
   `lake build`, then the Lean pytest files (`test_lean_ir`, `test_phase3` templates, the Examples tests,
   `test_lean_llk_doc`) with a step that fails if any of them was skipped for lack of Lean.
 - Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
@@ -744,7 +745,9 @@ structured-output fixes below. A full-74-task run and a re-run after those fixes
 `python -m tfl_eval.false_proofs [--pipeline P] [--json]` replays a corpus of 22 deliberately false agent proofs
 (`tfl_eval/false_proofs/corpus.py`, each with a concrete counterexample) through the pipelines' own verifiers and
 verdict gates, mock only. It reports per pipeline how many false proofs reach trust above `well_formed` and how many end
-in a confident wrong verdict; `tfl_eval/tests/test_false_proofs.py` pins those numbers. What a symbolic checker would
+in a confident wrong verdict; `tfl_eval/tests/test_false_proofs.py` pins those numbers. Now (after R3′/R2″,
+2026-11-10): 9 of 22 above `well_formed`, 14 wrong verdicts, 8 confident wrong (before R3′: 10 / 15 / 9; the LL(k)
+claim without a parse table dropped to `well_formed`). What a symbolic checker would
 change is in [`docs/SEMANTIC_CHECK.md`](docs/SEMANTIC_CHECK.md).
 
 ---
