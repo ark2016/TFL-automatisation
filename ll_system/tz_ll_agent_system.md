@@ -654,12 +654,12 @@ k (⋃_k LL(k) ⊆ DCFL). Это НЕ отдельная «LL-теорема Н�
 
 | Метод | Проверка |
 |-------|---------|
-| `ll_grammar_construction` | `first_follow_oracle` на предложенной грамматике |
+| `ll_grammar_construction` | `first_follow_oracle` на предложенной грамматике; таблица разбора `parse_table` исполняется предсказывающим анализатором на всех коротких словах против оракула языка (`lib/parse_table_check.py`, docs/VERDICT_POLICY.md R3′ (1)); зацикливание анализатора (левая рекурсия, распознаётся точно) — `refuted`; без таблицы или для грамматики LL(k), но не strong LL(k) (таблица не исполняется) — не выше `well_formed` |
 | `substitution` | Структурная проверка контракта (`branch_words`, `common_form_argument`, `deciding_nonterminal_argument`, `pigeonhole_argument`, `for_all_k`, `proof_explanation`); если доступен word-оракул для `set_builder`-языка — дополнительно проверить принадлежность `branch_words.word_1`/`word_2` языку L |
 | `essential_ambiguity` | Проверить, что предложенное слово действительно допускает два разбора |
 | `prefix_classes` | Структурная проверка контракта (`theorem`, `dead_class_finite`, `distinguishing_suffix`, `separation_argument`, `for_all_k`, `conclusion`, `proof_explanation`) |
-| `marker_detection` | `first_follow_oracle` на предложенной грамматике |
-| `grammar_transformation` | `first_follow_oracle` на трансформированной грамматике + проверить эквивалентность языков (через тестовые слова) |
+| `marker_detection` | `first_follow_oracle` на предложенной грамматике (если она есть) + прогон таблицы разбора, как для `ll_grammar_construction` (R3′ (1)) |
+| `grammar_transformation` | `first_follow_oracle` на трансформированной грамматике + проверить эквивалентность языков (через тестовые слова) + прогон таблицы разбора (R3′ (1)) |
 
 ### 5.4. word_generator
 

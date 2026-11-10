@@ -155,7 +155,7 @@ and closure verification follows oracle construction.
   | trust | meaning | confidence cap |
   |---|---|---|
   | `verified` | deterministic, complete check (LL(k) table, Lean proof w/o `sorry`, regex/DFA regularity) | 0.98 |
-  | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, sampled grammar equivalence) | 0.85 |
+  | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, sampled grammar equivalence, an executable artifact — DPDA, LL(k) parse table — run against the oracle on all short words) | 0.85 |
   | `well_formed` | structure only — fields present, JSON/words parsed | 0.55 |
   | `not_verified` | check impossible or fields missing (verdict must be `inconclusive`/`uncertain`) | 0.40 |
   | unresolved `contradiction` (constructive vs. destructive evidence) | — | 0.50 |
@@ -350,6 +350,21 @@ flowchart LR
   membership oracle built from the given grammar, constructive sample-equivalence and `prefix_classes` checks. `None` means
   unknown (no oracle, budget exhausted, or an inconclusive answer), never a definite verdict, and trust reaches at most
   `bounded_pass`.
+- **LL(k) parse table as an executable artifact (`docs/VERDICT_POLICY.md` R3′ (1)).** An "is LL(k)" claim of
+  `ll_grammar_builder` / `grammar_transformer` / `marker_analyzer` carries its strong LL(k) parse table
+  (`proof_sketch.parse_table`: `{A: {lookahead: rhs}}`, or the `{k, start, entries: [...]}` list that the
+  marker's structured-output schema uses). `ll_system/lib/parse_table_check.py` runs it with
+  `LLParser.from_table` on every word over the task alphabet up to the DPDA full-enumeration length
+  (Σ_{i≤k}|Σ|ⁱ ≤ 3000, k ≤ 10; `agent_system/lib/word_enumeration.py`) and compares it with the task oracle:
+  agreement on ≥ 30 decided words → `bounded_pass` (cap 0.85); a conflict cell, a table inconsistent with the
+  claimed grammar (a row, start or rule not in it), a word on which the parser never halts (`LLParser.parse`
+  detects the left-recursion loop exactly: a nonterminal back on top before its own expansion finished), or a
+  disagreement → `refuted` (counterexamples go to the retry hint); no table, or a claimed grammar that is LL(k)
+  but not strong LL(k) (no global table from its rules parses exactly its language; the table is not run) →
+  at most `well_formed`, even when the grammar passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
+  (Format 3, and the Format 2 grammar) stays `verified` and needs no table. The matching rule for dcfl
+  `closure_reduction` (a DFA for R in L ∩ R, or a transducer / homomorphism, simulated on short words) is in
+  the policy but not implemented yet.
 
 ---
 

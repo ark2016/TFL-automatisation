@@ -1,0 +1,42 @@
+{
+  "agent_name": "ll_grammar_builder",
+  "verdict": "ll",
+  "confidence": 0.9,
+  "proof_sketch": {
+    "method": "ll_grammar_construction",
+    "k": 1,
+    "grammar": {
+      "nonterminals": ["S", "T"],
+      "terminals": ["a", "b", "c"],
+      "start": "S",
+      "rules": [
+        {"lhs": "S", "rhs": ["a", "S", "a"]},
+        {"lhs": "S", "rhs": ["b", "T"]},
+        {"lhs": "T", "rhs": ["c"]},
+        {"lhs": "T", "rhs": ["a", "S", "a", "b"]},
+        {"lhs": "T", "rhs": ["b", "T", "b"]}
+      ]
+    },
+    "parse_table": {
+      "S": {"a": ["a", "S", "a"], "b": ["b", "T"]},
+      "T": {"c": ["c"], "b": ["b", "T", "b"]}
+    },
+    "explanation": "Таблица LL(1) для S → aSa | bT, T → c | aSab | bTb: S решает по первому символу (a → aSa, b → bT), T — по c и b. (Мок R3′: в таблице пропущена ячейка (T, a), анализатор отвергает слово babcab ∈ L, пайплайн опровергает таблицу.)"
+  },
+  "artifacts": {
+    "ll_grammar": {
+      "nonterminals": ["S", "T"],
+      "terminals": ["a", "b", "c"],
+      "start": "S",
+      "rules": [
+        {"lhs": "S", "rhs": ["a", "S", "a"]},
+        {"lhs": "S", "rhs": ["b", "T"]},
+        {"lhs": "T", "rhs": ["c"]},
+        {"lhs": "T", "rhs": ["a", "S", "a", "b"]},
+        {"lhs": "T", "rhs": ["b", "T", "b"]}
+      ]
+    },
+    "first_follow_table": null,
+    "counterexample_words": []
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_type": "ll_check_language",
+  "source_text": "L = {w b c wᴿ | w ∈ {a,b}*}. Is this language LL(k) for some k?",
+  "language_spec": {
+    "kind": "set_builder",
+    "alphabet": ["a", "b", "c"],
+    "variables": [
+      {"name": "w", "domain": {"type": "word", "alphabet": ["a", "b"]}}
+    ],
+    "template": ["w", "b", "c", "rev(w)"],
+    "constraints": []
+  },
+  "question": "is_ll"
+}

@@ -298,12 +298,25 @@ class TestClaimVerifierConstructiveStep2:
         "rules": [{"lhs": "S", "rhs": ["a"]}],
     }
 
+    CORRECT_TABLE = {"S": {"a": ["a", "S", "a"], "b": ["b", "S", "b"], "c": ["c"]}}
+
     def test_correct_grammar_is_bounded_pass(self):
+        result = verify_ll_grammar_claim(
+            {"method": "ll_grammar_construction", "k": 1, "grammar": self.CORRECT_GRAMMAR,
+             "parse_table": self.CORRECT_TABLE},
+            IR_WCWREV,
+        )
+        assert result["trust"] == "bounded_pass"
+
+    def test_correct_grammar_without_parse_table_is_well_formed(self):
+        """R3': the grammar passes check_ll_k and sample equivalence, but
+        without its parse table the claim cannot reach bounded_pass."""
         result = verify_ll_grammar_claim(
             {"method": "ll_grammar_construction", "k": 1, "grammar": self.CORRECT_GRAMMAR},
             IR_WCWREV,
         )
-        assert result["trust"] == "bounded_pass"
+        assert result["trust"] == "well_formed"
+        assert result["details"]["language_equivalence"]["method"] == "word_oracle_equivalence"
 
     def test_wrong_grammar_is_refuted(self):
         result = verify_ll_grammar_claim(

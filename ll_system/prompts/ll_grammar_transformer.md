@@ -86,8 +86,21 @@ If conflicts persist for all reasonable k → this transformation path failed.
 
 If LL(k) is verified, construct the parse table:
 - Row: nonterminal A
-- Column: lookahead string of length k
-- Entry: the unique production rule to apply
+- Column: lookahead string of at most k terminals (`"$"` pads the end of input, so for k = 2
+  `"a$"` means "the input is just `a`" and `"$$"` means "the input has ended"; a lookahead shorter
+  than k means the input ends after it)
+- Entry: the unique production rule to apply (`[]` or `["ε"]` for an ε-rule)
+
+`proof_sketch.parse_table` is **required** with `"ll"` (docs/VERDICT_POLICY.md R3′). The pipeline
+runs it as a table-driven predictive parser on every word over the task alphabet up to a bounded
+length and compares each answer with the task's membership oracle: agreement on all of them gives
+`trust: "bounded_pass"` (confidence ≤ 0.85); a cell with two different right-hand sides, a
+right-hand side that is not a rule of `transformed_grammar`, or one wrongly accepted or rejected
+word makes the claim `refuted`; with no table the claim stays at most `well_formed`
+(confidence ≤ 0.55). List every cell the parser needs: a missing cell means "error". The table is
+one global (nonterminal, lookahead) → rule map, a strong LL(k) table, so `transformed_grammar` must
+be strong LL(k) for this k (every LL(k) language has one, docs/THEORY.md §3.1); for a grammar that
+is LL(k) but not strong LL(k) the table is not run and the claim stays at most `well_formed`.
 
 ---
 
@@ -161,7 +174,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "first_sets": {},
     "follow_sets": {},
     "conflicts": [],
-    "parse_table": {},
+    "parse_table": { ... },
     "ll_justification": "Russian text: why the transformed grammar is LL(k).",
     "language_preserved": true,
     "language_preservation_argument": "Russian text: why L(G_transformed) = L(G_original)."
