@@ -11,71 +11,40 @@ statement would be ``verified``).
 
 Shared by ``agent_system``/``cfl_system``/``dcfl_system`` tests
 (``from agent_system.tests.lean_eval import ...``); needs the ``tfl-lean4``
-image, see ``agent_system.lib.type_check.is_docker_available``.
+image (or ``TFL_LEAN_RUNNER=local``), see ``agent_system.lib.type_check.is_docker_available``.
 """
 
 from __future__ import annotations
 
 import itertools
-import os
-import subprocess
 import tempfile
 from pathlib import Path
 
 from agent_system.lib.type_check import (
-    DOCKER_IMAGE,
-    LEAN_PROJECT_DIR,
+    START_ATTEMPTS,
     _parse_lean_json_messages,
-    _windows_docker_path,
+    run_lean_process,
 )
 
 
-# ``docker run`` exits 125 when the daemon fails to create or start the
-# container (seen on WSL2 as "runc did not terminate successfully: exit status
-# 139"); 126/127 when the command in the image cannot run. None of these is a
-# Lean result.
-_DOCKER_START_FAILURE = {125, 126, 127}
-
-
-def run_lean(text: str, timeout: int = 300, attempts: int = 3) -> list[dict]:
-    """Run ``lake env lean --json`` on *text* in the image, return the parsed
-    messages (``severity`` / ``data`` / ``pos``). A container that fails to
-    start is retried up to *attempts* times, then raises ``RuntimeError`` with
-    Docker's stderr, so a Docker fault never reads as "Lean printed nothing".
-    Lean errors are ordinary ``severity == "error"`` messages."""
-    last = ""
-    for _ in range(attempts):
-        rc, stdout, stderr = _run_lean_once(text, timeout)
-        if rc not in _DOCKER_START_FAILURE:
-            return _parse_lean_json_messages(stdout)
-        last = f"docker run exited {rc}: {stderr.strip()[-500:]}"
-    raise RuntimeError(f"Lean container did not start after {attempts} attempts; {last}")
-
-
-def _run_lean_once(text: str, timeout: int) -> tuple[int, str, str]:
-    """One ``docker run``; returns ``(returncode, stdout, stderr)``."""
+def run_lean(text: str, timeout: int = 300, attempts: int = START_ATTEMPTS) -> list[dict]:
+    """Run ``lake env lean --json`` on *text* through the shared runner
+    (``type_check.run_lean_process``: Docker image or ``TFL_LEAN_RUNNER=local``,
+    start failures retried) and return the parsed messages (``severity`` /
+    ``data`` / ``pos``). A container that never starts raises ``RuntimeError``
+    (``LeanStartError``) with Docker's stderr, so a Docker fault never reads as
+    "Lean printed nothing". Lean errors are ordinary ``severity == "error"``
+    messages."""
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".lean", delete=False, encoding="utf-8", newline="\n"
     ) as f:
         f.write(text)
         tmp = f.name
     try:
-        mount = _windows_docker_path(tmp) if os.name == "nt" else tmp
-        env = dict(os.environ)
-        env["MSYS_NO_PATHCONV"] = "1"
-        proc = subprocess.run(
-            [
-                "docker", "run", "--rm", "--memory=4g", "--cpus=2",
-                "-v", f"{mount}:/home/lean/check.lean:ro",
-                "-w", LEAN_PROJECT_DIR, DOCKER_IMAGE,
-                "timeout", str(timeout), "lake", "env", "lean", "--json",
-                "/home/lean/check.lean",
-            ],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout + 30, env=env,
-        )
-        return proc.returncode, proc.stdout, proc.stderr
+        proc = run_lean_process(tmp, timeout, attempts=attempts)
     finally:
         Path(tmp).unlink(missing_ok=True)
+    return _parse_lean_json_messages(proc.stdout)
 
 
 def all_words(alphabet: list[str], max_len: int) -> list[str]:

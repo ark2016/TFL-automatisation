@@ -638,6 +638,20 @@ agent_system/docker/run_check.sh path/to/file.lean          # bash
 Notes:
 - `agent_system/lib/type_check.py`'s `check_lean()` runs `docker run ... -w /home/lean/tfl_lean tfl-lean4 lake env lean /home/lean/check.lean`
   and is a no-op (`status: "skipped"`) when Docker or the image isn't available — mock-mode tests stay green without it.
+- **Docker start failures.** `check_lean_file` / `check_lean` go through `type_check.run_lean_process`: a
+  `docker run` that exits 125/126/127 (or exits non-zero with no output and a daemon message such as `OCI runtime
+  create failed`) never ran Lean, so it is retried 3 times (`START_ATTEMPTS`). If it still fails, `check_lean_file`
+  returns the terminal status `unavailable` with Docker's stderr as the message (the formalizer is not called again
+  and a correct proof is not recorded as `error`); legacy `check_lean` returns `skipped`. `lean_eval.run_lean`
+  (Docker/Lean test helper) uses the same runner and raises `RuntimeError` instead. `tfl_deep_agent/tools/lean.py`
+  imports the daemon detector (`is_daemon_failure`, `DAEMON_ERROR_RE`) from `type_check.py`.
+- **Local runner (CI without the image).** `TFL_LEAN_RUNNER=local` (default `docker`) makes the checks run
+  `lake env lean --json <file>` in the Lean project `TFL_LEAN_PROJECT_DIR` (default `agent_system/docker/tfl_lean`)
+  with the same timeout and parsing; `is_docker_available()` then means "`lake` on PATH and the project's `.lake`
+  built", so the Lean tests' skip gates keep working. `.github/workflows/lean.yml` (manual + weekly,
+  non-blocking) uses it: elan with the toolchain from `lean-toolchain`, cached `.lake`, `lake exe cache get`,
+  `lake build`, then the Lean pytest files (`test_lean_ir`, `test_phase3` templates, the Examples tests,
+  `test_lean_llk_doc`) with a step that fails if any of them was skipped for lack of Lean.
 - Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
   leading UTF-8 BOM. PowerShell's `Set-Content -Encoding utf8` adds one; use `-Encoding utf8NoBOM` (or write with a
   tool that doesn't add a BOM) instead.
