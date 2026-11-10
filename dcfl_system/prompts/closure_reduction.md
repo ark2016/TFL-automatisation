@@ -86,7 +86,9 @@ non-DCFL for a destructive one), and Δ is `source.alphabet`.
 
 - `source` describes S. Set **exactly one** of `pattern`, `grammar`, `dpda`; the other two are `null`.
   - `pattern` uses exponent notation with ASCII `^` and spaces between the blocks: `{a^n b^n c^m | n, m >= 1}`,
-    `{a^(2k) b^(2k) | k >= 1}`, `{a^n b^m | n != m}`. Superscript letters (`aⁿ`) are not parsed.
+    `{a^(2k) b^(2k) | k >= 1}`, `{a^n b^m | n, m >= 0 and n != m}`. Superscript letters (`aⁿ`) are not parsed.
+    State a lower bound for every variable (`n >= 0` or `n >= 1`). Without one, both readings are possible, and
+    a word whose membership in S depends on the choice is not checked.
   - `grammar` is a context-free grammar of S. An ε-rule has `"rhs": []`.
   - `dpda` is a deterministic automaton for S, in stack_strategy's `dpda` format. It is checked for determinism
     like stack_strategy's `dpda`, and it is what shows that S is a DCFL. A constructive proof gives S as a `dpda`:
@@ -114,6 +116,11 @@ How the pipeline treats the artifact:
   You are retried with the counterexample.
 - `artifact: null`, or the part the operation needs is missing: trust stays at most `well_formed`, which is not
   enough for a `dcfl` verdict.
+
+The equality is checked on every short word over Σ (over Δ for a destructive `inv_homomorphism`), up to the
+same length whatever other letters the artifact lists. Words with other letters of the artifact are checked in
+addition, but only words over Σ (Δ) count toward the minimum of 30 decided words. A word is decided when both
+sides of the equality give an answer on it.
 
 The artifact checks the equality on short words only. In a destructive proof, that S is a non-DCFL is still
 your claim: name S as a known language and say why it is one in `source_language`. In a constructive proof,

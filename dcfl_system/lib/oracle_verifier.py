@@ -417,6 +417,25 @@ def _simulation_words(
     return sorted(words, key=lambda w: (len(w), w))
 
 
+def _mixed_domain_words(core: list[str], domain: list[str]) -> list[str]:
+    """The words over ``domain`` with at least one letter outside ``core``,
+    up to the length ``_full_enumeration_max_len`` allows for ``domain``'s
+    own size (docs/VERDICT_POLICY.md R2″). They are checked on top of the
+    full enumeration over ``core`` (``_simulation_words``), never instead of
+    it: the length bound over ``core`` is computed for ``core`` alone, so
+    letters an artifact adds to the domain cannot shorten it."""
+    core_letters = set(core)
+    if not domain or set(domain) <= core_letters:
+        return []
+    return [
+        w for w in _enumerate_words_up_to_length(
+            domain, max_len=_full_enumeration_max_len(len(domain)),
+            limit=_DPDA_FULL_ENUM_WORD_BUDGET,
+        )
+        if not set(w) <= core_letters
+    ]
+
+
 def _compare_on_words(
     words: list[str],
     decide: Callable[[str], tuple[bool, bool] | None],
@@ -556,9 +575,14 @@ def _verify_closure_reduction_artifact(
     task's OWN oracle (``build_membership_oracle_from_ir``), the other side
     simulates the artifact (DFA / regex for R, the homomorphism h, the source
     language S given as an exponent pattern, a grammar or a DPDA). Both are
-    compared on the task sampler's words and on every word over the domain
-    alphabet up to the length ``_full_enumeration_max_len`` allows (the same
-    word set and the same ``_DPDA_MIN_WORDS`` threshold as for a dpda).
+    compared on the task sampler's words and on every word over the
+    equation's core alphabet (Σ, or Δ for a destructive h⁻¹) up to the length
+    ``_full_enumeration_max_len`` allows for that alphabet's size (the same
+    word set and the same ``_DPDA_MIN_WORDS`` threshold as for a dpda), plus
+    the words over the wider domain with a letter outside the core
+    (``_mixed_domain_words``). Only core words count toward
+    ``_DPDA_MIN_WORDS``: an artifact listing extra letters can neither
+    shorten the core enumeration nor fill the threshold with them.
 
     Returns ``(status, check_name, issue, details)``:
 
@@ -620,12 +644,19 @@ def _verify_closure_reduction_artifact(
         ), {**details, "artifact": "unchecked"}
 
     try:
-        words = _simulation_words(task_ir, equation.domain, with_samples=equation.with_samples)
+        words = _simulation_words(task_ir, equation.core, with_samples=equation.with_samples)
     except Exception as exc:
         # The full enumeration alone still checks the equality; only the
         # sampler's longer words are lost.
         details["sampler_error"] = str(exc)
-        words = _simulation_words(task_ir, equation.domain, with_samples=False)
+        words = _simulation_words(task_ir, equation.core, with_samples=False)
+    core_letters = set(equation.core)
+    core_words = [w for w in words if set(w) <= core_letters]
+    mixed_words = sorted(
+        set(_mixed_domain_words(equation.core, equation.domain)).union(
+            w for w in words if not set(w) <= core_letters),
+        key=lambda w: (len(w), w),
+    )
 
     def decide(word: str) -> tuple[bool, bool] | None:
         left = equation.left(word)
@@ -634,11 +665,13 @@ def _verify_closure_reduction_artifact(
         right = equation.right(word)
         return None if right is None else (left, right)
 
-    checked, mismatches = _compare_on_words(
-        words, decide,
-        f"{equation.left_name}={{0}}, {equation.right_name}={{1}}",
-    )
+    mismatch_format = f"{equation.left_name}={{0}}, {equation.right_name}={{1}}"
+    checked, mismatches = _compare_on_words(core_words, decide, mismatch_format)
     details["words_checked"] = checked
+    if mixed_words:
+        mixed_checked, mixed_mismatches = _compare_on_words(mixed_words, decide, mismatch_format)
+        details["mixed_words_checked"] = mixed_checked
+        mismatches = (mismatches + mixed_mismatches)[:5]
 
     if mismatches:
         return "refuted", check_name, (
@@ -648,8 +681,8 @@ def _verify_closure_reduction_artifact(
 
     if checked < _DPDA_MIN_WORDS:
         return None, "", (
-            f"only {checked} words could be decisively checked (< {_DPDA_MIN_WORDS}) "
-            "-- coverage incomplete, trust stays at most well_formed"
+            f"only {checked} words over the alphabet {equation.core} could be decisively "
+            f"checked (< {_DPDA_MIN_WORDS}) -- coverage incomplete, trust stays at most well_formed"
         ), {**details, "artifact": "unchecked"}
 
     details["artifact"] = "bounded_pass"   # the equality held on every checked word

@@ -419,6 +419,142 @@ def test_destructive_wrong_equality_is_refuted():
     assert entry["trust"] == "refuted", entry
 
 
+# ---------------------------------------------------------------------------
+# Extra letters in the artifact never shorten the check over Σ*
+# ---------------------------------------------------------------------------
+
+def _mock_with_extra_dfa_letters(extra: list[str]) -> dict:
+    output = _mock("dcfl_a2kb2k_closure_reduction.json")
+    dfa = output["proof_sketch"]["artifact"]["regular"]["dfa"]
+    dfa["alphabet"] = dfa["alphabet"] + extra
+    return output
+
+
+@pytest.mark.parametrize("extra", [["c", "d"], list("CDEFGHIJKLMNOPQRSTUVWXYZ")],
+                         ids=["two_letters", "many_letters"])
+def test_extra_letters_in_r_keep_full_coverage_of_sigma_star(extra):
+    # Σ = {a, b}: every word up to length 10 (2047 words) is checked however
+    # many letters the DFA lists; before, Σ ∪ {c, d} gave length 5 (63 words
+    # over Σ) and 26 letters gave length 2, the rest filled by foreign words.
+    plain = verify_agent_results(
+        {"closure_reduction": _mock("dcfl_a2kb2k_closure_reduction.json")}, A2KB2K_IR,
+    )["closure_reduction"]
+    entry = verify_agent_results(
+        {"closure_reduction": _mock_with_extra_dfa_letters(extra)}, A2KB2K_IR,
+    )["closure_reduction"]
+    assert entry["trust"] == "bounded_pass", entry
+    assert entry["details"]["words_checked"] == plain["details"]["words_checked"] >= 2047
+    assert entry["details"]["mixed_words_checked"] > 0
+    assert "mixed_words_checked" not in plain["details"]
+
+
+# R = (aa)?(bb)? over {a, b, c, d}: S ∩ R = {aabb}, but L also has aaaabbbb.
+SHORT_R_DFA = {
+    "states": ["s0", "s1", "s2", "t1", "t2"], "alphabet": ["a", "b", "c", "d"],
+    "start": "s0", "accept": ["s0", "s2", "t2"],
+    "transitions": [
+        {"from": "s0", "read": "a", "to": "s1"}, {"from": "s1", "read": "a", "to": "s2"},
+        {"from": "s0", "read": "b", "to": "t1"}, {"from": "s2", "read": "b", "to": "t1"},
+        {"from": "t1", "read": "b", "to": "t2"},
+    ],
+}
+
+
+def test_extra_letters_do_not_hide_a_counterexample_over_sigma(monkeypatch):
+    # Without sampler words, only the enumeration can find aaaabbbb (length 8).
+    from dcfl_system.lib import oracle_verifier
+    monkeypatch.setattr(oracle_verifier, "sample_words", lambda *a, **k: [])
+    entry = _verify("reg_intersection", {"source": ANBN_SOURCE, "regular": {"dfa": SHORT_R_DFA, "regex": None},
+                                         "homomorphism": None}, A2KB2K_IR)
+    assert entry["trust"] == "refuted", entry
+    assert entry["details"]["counterexamples"][0] == "word='aaaabbbb': in_L=True, in(S∩R)=False"
+
+
+A_STAR_DPDA = {
+    "states": ["q0"], "start": "q0", "accept_states": ["q0"], "accept_mode": "final_state",
+    "stack_alphabet": ["Z"], "initial_stack": ["Z"],
+    "transitions": [{"from": "q0", "read": "a", "top": "Z", "to": "q0", "push": ["Z"]}],
+}
+EVEN_A_DFA = {
+    "states": ["e", "o"], "alphabet": ["a", "b"], "start": "e", "accept": ["e"],
+    "transitions": [{"from": "e", "read": "a", "to": "o"}, {"from": "o", "read": "a", "to": "e"}],
+}
+
+
+def test_only_words_over_sigma_count_toward_the_minimum_of_30():
+    # Σ = {a}: 11 words up to length 10, fewer than 30. The 2036 words with a
+    # letter b that R's alphabet adds agree too, but they do not count.
+    even_a = _ir("{a^(2n) | n >= 0}", ["a"])
+    source = {"alphabet": ["a"], "pattern": None, "grammar": None, "dpda": A_STAR_DPDA}
+    entry = _verify("reg_intersection", {"source": source, "regular": {"dfa": EVEN_A_DFA, "regex": None},
+                                         "homomorphism": None}, even_a)
+    assert entry["trust"] == "well_formed", entry
+    assert entry["details"]["artifact"] == "unchecked"
+    assert entry["details"]["words_checked"] == 11
+    assert entry["details"]["mixed_words_checked"] > 30
+
+
+# ---------------------------------------------------------------------------
+# A pattern for S without a lower bound: n >= 0 and n >= 1 are both readings
+# ---------------------------------------------------------------------------
+
+def test_unbounded_pattern_variable_does_not_refute_on_its_zero_value():
+    # L ∩ a*b*c* = {a^n b^n c^n | n >= 1}; S read as n >= 0 also has ε, read
+    # as n >= 1 it does not. ε decides nothing, so it is not a counterexample.
+    source = {"alphabet": ["a", "b", "c"], "pattern": "{a^n b^n c^n}", "grammar": None, "dpda": None}
+    entry = _verify("reg_intersection", {"source": source, "regular": {"dfa": None, "regex": "a*b*c*"},
+                                         "homomorphism": None}, ANBNCN, direction="destructive")
+    assert entry["trust"] == "well_formed", entry
+    assert entry["details"]["artifact"] == "bounded_pass"
+    record = entry["details"]["pattern_lower_bound"]
+    assert record["unstated_variables"] == ["n"]
+    assert record["examples"] == [""] and record["words_abstained"] == 1
+
+
+def test_stated_lower_bound_zero_still_refutes():
+    source = {"alphabet": ["a", "b", "c"], "pattern": "{a^n b^n c^n | n >= 0}", "grammar": None, "dpda": None}
+    entry = _verify("reg_intersection", {"source": source, "regular": {"dfa": None, "regex": "a*b*c*"},
+                                         "homomorphism": None}, ANBNCN, direction="destructive")
+    assert entry["trust"] == "refuted", entry
+    assert entry["details"]["counterexamples"][0] == "word='': in(L∩R)=False, in_S=True"
+    assert "pattern_lower_bound" not in entry["details"]
+
+
+def test_unbounded_pattern_variable_still_refutes_on_a_nonzero_value():
+    # abc (n = 1) is in S under both readings but not in L.
+    from_two = _ir("{a^n b^n c^n | n >= 2}", ["a", "b", "c"])
+    source = {"alphabet": ["a", "b", "c"], "pattern": "{a^n b^n c^n}", "grammar": None, "dpda": None}
+    entry = _verify("reg_intersection", {"source": source, "regular": {"dfa": None, "regex": "a*b*c*"},
+                                         "homomorphism": None}, from_two, direction="destructive")
+    assert entry["trust"] == "refuted", entry
+    assert entry["details"]["counterexamples"][0] == "word='abc': in(L∩R)=False, in_S=True"
+
+
+@pytest.mark.parametrize("pattern,unstated", [
+    ("{a^n b^n}", ["n"]),
+    ("{a^n b^n | n >= 1}", []),
+    ("{a^n b^n | n > 0}", []),
+    ("{a^n b^m | n, m >= 0}", []),
+    ("{a^n b^m | n != m}", ["m", "n"]),
+    ("{a^n b^m | 1 <= n <= m}", []),
+    ("{a^n b^m | n >= m >= 2}", []),
+    ("{a^n b^m | n <= m; m >= 1}", ["n"]),
+    ("{a^i b^j | i = 0 or j = 1}", ["i", "j"]),
+    ("{a^i b^j | not i >= 1; j >= 1}", ["i"]),
+])
+def test_unstated_lower_bounds(pattern, unstated):
+    from cfl_system.lib.exponent_pattern import parse_exponent_pattern
+    assert ca._unstated_lower_bounds(parse_exponent_pattern(pattern)) == unstated
+
+
+def test_union_pattern_reads_each_branch_both_ways():
+    oracle, details = ca._pattern_oracle("{a^n | n >= 1} union {b^m}")
+    assert oracle("a") is True and oracle("bb") is True and oracle("ab") is False
+    assert oracle("") is None       # only b^0 puts ε in S
+    assert details["pattern_lower_bound"]["unstated_variables"] == ["m"]
+    assert details["pattern_lower_bound"]["examples"] == [""]
+
+
 def test_destructive_inverse_homomorphism_uses_the_source_alphabet():
     abc = _ir("{a^n b^n c^n | n >= 1}", ["a", "b", "c"])
     source = {"alphabet": ["x", "y", "z"], "pattern": "{x^n y^n z^n | n >= 1}", "grammar": None, "dpda": None}
