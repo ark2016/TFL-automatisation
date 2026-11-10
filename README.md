@@ -688,6 +688,12 @@ The first `--live` run (24 trap tasks, Haiku, 2026-09-27; its write-up is kept l
 19/19 solved tasks correct and 0 false-confident-wrong, and its diagnoses fed the DCFL certificate, R4′ and the
 structured-output fixes below. A full-74-task run and a re-run after those fixes are still open.
 
+`python -m tfl_eval.false_proofs [--pipeline P] [--json]` replays a corpus of 22 deliberately false agent proofs
+(`tfl_eval/false_proofs/corpus.py`, each with a concrete counterexample) through the pipelines' own verifiers and
+verdict gates, mock only. It reports per pipeline how many false proofs reach trust above `well_formed` and how many end
+in a confident wrong verdict; `tfl_eval/tests/test_false_proofs.py` pins those numbers. What a symbolic checker would
+change is in [`docs/SEMANTIC_CHECK.md`](docs/SEMANTIC_CHECK.md).
+
 ---
 
 ## External dependencies
