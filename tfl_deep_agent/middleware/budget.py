@@ -1144,16 +1144,21 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
         """The budget stop."""
         if self.request_budget_extension is None or not self._is_main_call(node):
             return
-        with node.ledger.lock:
-            low = self._budget_low_locked(est, node)
-        if low is None:
-            return
-        answer = self.request_budget_extension(low)  # may raise GraphInterrupt: nothing is reserved yet
-        if answer is None:
-            return
-        # (kind, new absolute limit); a bare number is the limit of what was short (low.binds)
-        kind, new_limit = answer if isinstance(answer, tuple) else (low.binds or "task", answer)
-        (node.ledger.raise_day_limit if kind == "day" else node.ledger.raise_limit)(new_limit)
+        answered: set[str] = set()  # kinds an answer was applied for in this execution of the node
+        for _ in range(2):  # at most one question per kind: the task's limit and the day's
+            with node.ledger.lock:
+                low = self._budget_low_locked(est, node)
+            if low is None or (low.binds or "task") in answered:
+                return
+            answer = self.request_budget_extension(low)  # may raise GraphInterrupt: nothing is reserved yet
+            if answer is None:
+                return
+            # (kind, new absolute limit); a bare number is the limit of what was short (low.binds).
+            # The kind is the answer's own: a re-run node gets the EARLIER answer back from the
+            # first interrupt() and only the next one is a fresh question.
+            kind, new_limit = answer if isinstance(answer, tuple) else (low.binds or "task", answer)
+            (node.ledger.raise_day_limit if kind == "day" else node.ledger.raise_limit)(new_limit)
+            answered.add(kind)
 
     def _before(self, request: Any) -> tuple[Any, CallEstimate, Admission | None]:
         """What the hook goes on with; the admission is ``None`` when the call is skipped."""

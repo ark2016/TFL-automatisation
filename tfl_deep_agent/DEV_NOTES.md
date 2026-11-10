@@ -3383,8 +3383,12 @@ Final fix round (user's decision; everything else from the reviews goes to the b
   Round 2: `request_budget_extension` returns `(kind, limit)` read from the decision's own key (a re-run node gets the earlier question's
   stored answer back from `interrupt`, so indexing by `low.binds` raised KeyError); the middleware applies the kind it gets. A day raise holds
   only on the day given (`budget_day_limit_day`, `day_limit_raise`). Day card title/button: «Дневной лимит заканчивается» / «Оставить отчёт как есть».
-  OPEN (user): `followup.day_refusal` still refuses a live follow-up outright when the day's remainder is exactly used up (<= 1e-9), before any
-  question; routing that to the `binds: day` stop is a behaviour change left for the user's decision.
+  Round 3 (user decision 2026-11-10, no wrap-up for the day): `BudgetMiddleware._ask_for_budget` asks up to twice in one node, once per kind
+  (tracked by the kind of the applied answer, so a re-run node whose first `interrupt()` returns the earlier answer asks the other kind next);
+  `followup.day_refusal` is skipped for a run with status `submitted` and the budget stop on (TFL Lab 409 path too), so the day question asks
+  instead of a refusal; a declined day card carries `binds: day` and `progress.hitl_decision`/`fold_events` pass `binds`, `new_day_limit_usd`
+  (deep.js prints «дневной лимит $X» / «оставить отчёт как есть»). Tests: `test_both_limits_short_*`, `test_a_declined_day_card_*`,
+  `test_a_spent_day_asks_*`.
 - API-021: `_hitl_view` and `pending_card` apply today's remainder, and the card's summary line is rebuilt from it. API-022: the
   tooltip and the docs say «Без проверок». API-023 / OO-022: a record the lab is not waiting for gives the `--abandon` command,
   whatever the agent's status. CA-018: `_proved_in` reads `gate_entry()`.

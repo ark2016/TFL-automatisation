@@ -257,7 +257,9 @@ cap by the remainder), `approve` keeps the accepted report. With `--auto-approve
 skipped, never wrapped up into a truncated report; with the stop on and nobody at the terminal the run waits (exit 3),
 as at the task stop. The day raise holds only on the day it was given (`budget_day_limit_day` in `run.json`). If one
 message meets both questions (the day, then the task, or the other way round), each answer is applied as the kind it
-carries, and the next question is asked again.
+carries; the other limit is then asked in the same node (a second `interrupt()`, at most one question per kind), and
+the same message gets its answer once both are raised. A live follow-up of an accepted report is not refused up front
+when the day's remainder is used up: the day question comes first (a run with no stop is still refused).
 
 `auto_approve` means review mode `auto` plus no budget stop, so only a run started with `--auto-approve` goes straight
 to the report. Review mode `auto` on its own, and `--approve-rest`, concern reviews and still stop for money.

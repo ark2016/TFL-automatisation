@@ -1220,6 +1220,9 @@ def test_a_spent_day_refuses_a_live_follow_up_before_anything_changes(tmp_path):
     out = hitl.resume_run(out.run_dir, APPROVE, model_factory=live(), live=True)
     out = hitl.resume_run(out.run_dir, APPROVE, model_factory=live(), live=True)
     d = out.run_dir
+    run = hitl.load_run(d)
+    run["budget_stop"] = False  # nobody to ask: the refusal stands (with a stop the day question comes first)
+    hitl.save_run(d, run)
     assert followup.day_refusal(hitl.load_run(d)) is None
     log = B.DailySpendLog()
     log.append({"day": log.today(), "task": "other", "usd": 1000.0})
@@ -1231,6 +1234,18 @@ def test_a_spent_day_refuses_a_live_follow_up_before_anything_changes(tmp_path):
     after = hitl.load_run(d)
     assert after["status"] == before["status"] and "followup_in_progress" not in after
     assert not (d / run_store.REPORT_HISTORY_DIR).exists()
+
+
+def test_a_spent_day_asks_instead_of_refusing_after_an_accepted_report(tmp_path):
+    d, live, per_day = day_short_followup(tmp_path)
+    log = B.DailySpendLog()
+    log.append({"day": log.today(), "task_id": "more", "usd": 10.0})  # the day is used up
+    run = hitl.load_run(d)
+    assert run["status"] == "submitted" and followup.day_refusal(run) is None
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.awaiting and out.pending.request["action_requests"][0]["args"]["binds"] == "day"
+    done = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert done.reply == ANSWER
 
 
 def test_the_day_says_nothing_about_a_mock_run(tmp_path):
@@ -2219,3 +2234,42 @@ def test_the_middleware_applies_the_kind_of_the_answer_not_of_the_question():
     mw.request_budget_extension = lambda low: ("day", 7.0)
     mw._ask_for_budget(est, led.root)
     assert led.per_day_usd == 7.0
+
+
+def test_a_declined_day_card_is_recorded_as_a_day_card_and_reaches_progress(tmp_path):
+    from tfl_deep_agent.progress import ProgressEmitter
+
+    low = B.BudgetLow(spent_usd=1.0, limit_usd=2.0, available_usd=0.001, reserve_usd=0.0, day_left_usd=0.0005,
+                      binds="day", per_day_usd=2.0)
+    action = BS.budget_request(low)["action_requests"][0]
+    _, review = BS.budget_decision_response(action, hitl.Decision("approve"))
+    assert review["decision"] == BS.DECLINED and review["binds"] == "day"
+    pe = ProgressEmitter(tmp_path)
+    pe.hitl_decision({**review, "new_day_limit_usd": 9.0})
+    event = json.loads((tmp_path / "progress.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert event["binds"] == "day" and event["new_day_limit_usd"] == 9.0
+    task = B.BudgetLow(spent_usd=1.0, limit_usd=2.0, available_usd=0.001, reserve_usd=0.0, day_left_usd=5.0)
+    _, review = BS.budget_decision_response(BS.budget_request(task)["action_requests"][0], hitl.Decision("approve"))
+    assert "binds" not in review
+
+
+def test_both_limits_short_the_money_of_two_answers_lets_the_same_message_run(tmp_path):
+    """The task limit and the day's remainder are both short: one question per kind, and
+    the SAME message gets its answer once both are raised."""
+    d, live, per_day = day_short_followup(tmp_path)
+    run = hitl.load_run(d)
+    run["settings"]["budget"].update({"per_task_usd": spent(d) + REFUSED, "reserve_for_report_usd": REFUSED * 0.99})
+    hitl.save_run(d, run)
+    calls = live_calls(tmp_path)
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.awaiting and out.pending.point == hitl.BUDGET
+    first = out.pending.request["action_requests"][0]["args"].get("binds")
+    out = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert out.awaiting and out.pending.point == hitl.BUDGET, "the other kind is asked next"
+    assert out.pending.request["action_requests"][0]["args"].get("binds") != first
+    assert live_calls(tmp_path) == calls
+    out = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert not out.awaiting and out.reply == ANSWER
+    assert live_calls(tmp_path) == calls + 1
+    run = hitl.load_run(d)
+    assert {e.get("binds", "task") for e in run["budget_extensions"][-2:]} == {"day", "task"}

@@ -442,6 +442,12 @@ function deepIsAutoSource(source) {
 function deepDecisionText(x) {
   if (x.point === 'budget') {
     const who = deepIsAutoSource(x.source) ? 'автоматически' : 'вы';
+    if (x.decision === 'extended' && x.binds === 'day') {
+      return {text: `✓ бюджет: +${deepUsdShort(x.add_usd)}, дневной лимит ${deepUsdShort(x.new_day_limit_usd)} · ${who}`, kind: 'edited'};
+    }
+    if (x.decision === 'declined' && x.binds === 'day') {
+      return {text: `✓ бюджет: оставить отчёт как есть · ${who}`, kind: 'approved'};
+    }
     if (x.decision === 'extended') {
       return {text: `✓ бюджет: +${deepUsdShort(x.add_usd)}, лимит ${deepUsdShort(x.new_limit_usd)} · ${who}`, kind: 'edited'};
     }

@@ -162,7 +162,8 @@ def budget_decision_response(action: Any, decision: Any) -> tuple[dict[str, Any]
         raise DecisionError("'reject' is not allowed at the budget stop: add money (edit with add_usd) "
                             "or finish with what is left (approve)")
     if decision.type == "approve":
-        return {"decisions": [{"type": "approve"}]}, {**review, "decision": DECLINED, "add_usd": 0.0,
+        binds = {"binds": DAY} if args.get("binds") == DAY else {}  # the card that was declined
+        return {"decisions": [{"type": "approve"}]}, {**review, **binds, "decision": DECLINED, "add_usd": 0.0,
                                                       "new_limit_usd": limit}
     add = parse_add_usd(decision.args)
     if args.get("binds") == DAY:  # the day limit is what is raised: the remainder is no cap
