@@ -32,13 +32,13 @@ from dcfl_system.lib.word_sampler import (
     build_membership_oracle_from_ir,
     instantiate_exponent_pattern,
 )
-from dcfl_system.lib.dpda import (
-    DPDAFormatError,
-    check_determinism,
-    dpda_run,
-    normalize_epsilon_accept_sinks,
-    to_cfl_pda,
+from dcfl_system.lib.closure_artifact import (
+    ArtifactError,
+    ArtifactMissing,
+    build_equation,
+    normalize_operation,
 )
+from dcfl_system.lib.dpda import dpda_run, prepare_dpda
 
 
 # ---------------------------------------------------------------------------
@@ -344,104 +344,109 @@ def _verify_stack_strategy_dpda(
         deterministic, just not checked against the language).
     """
     check_name = "dpda_determinism_and_simulation"
-    if not isinstance(dpda, dict):
-        return "refuted", check_name, "dpda must be an object", None
-
-    dpda, normalization_notes = normalize_epsilon_accept_sinks(dpda)
-    base_details: dict[str, Any] = {}
-    if normalization_notes:
-        base_details["normalization"] = normalization_notes
-    if dpda.get("accept_configs"):
-        base_details["accept_configs"] = dpda["accept_configs"]
-
-    conflicts = check_determinism(dpda)
-    if conflicts:
-        return "refuted", check_name, (
-            "dpda is not deterministic: " + "; ".join(conflicts)
-        ), {**base_details, "determinism": "violated", "conflicts": conflicts}
-
-    # to_cfl_pda is used here ONLY as a compatibility structural-validity
-    # check (unknown states/symbols, missing required fields) -- it does not
-    # understand accept_configs, so it must never be used to simulate; (b)
-    # below uses dpda_run instead.
-    try:
-        to_cfl_pda(dpda)
-    except DPDAFormatError as exc:
-        return "refuted", check_name, f"dpda is structurally invalid: {exc}", {
-            **base_details, "determinism": "verified", "structure": "invalid",
-        }
+    dpda, base_details, problem = prepare_dpda(dpda)
+    if dpda is None:
+        return "refuted", check_name, problem, base_details or None
 
     oracle = build_membership_oracle_from_ir(task_ir)
     if oracle is None:
-        return "well_formed", check_name, "", {**base_details, "determinism": "verified"}
+        return "well_formed", check_name, "", base_details
 
     try:
-        samples = sample_words(task_ir, count=60, max_len=_DPDA_MAX_WORD_LEN)
+        candidates = _simulation_words(task_ir, task_ir.get("alphabet"), with_samples=True)
     except Exception as exc:
         return "well_formed", check_name, (
             f"could not sample words for simulation: {exc}"
-        ), {**base_details, "determinism": "verified"}
+        ), base_details
 
-    candidate_set = {
-        s["word"] for s in samples
-        if isinstance(s.get("word"), str) and len(s["word"]) <= _DPDA_MAX_WORD_LEN
-    }
-    # Backlog review (major): always add a full enumeration of the task
-    # alphabet (not just the sampler's heuristic picks) so a short but
-    # decisive counterexample the sampler never happens to generate -- e.g.
-    # a bare "b" with no preceding "a" -- is still caught by simulation.
-    alphabet = task_ir.get("alphabet")
-    if isinstance(alphabet, list) and alphabet:
-        max_len = _full_enumeration_max_len(len(alphabet))
-        candidate_set.update(_enumerate_words_up_to_length(
-            alphabet, max_len=max_len, limit=_DPDA_FULL_ENUM_WORD_BUDGET,
-        ))
-    candidates = sorted(candidate_set)
-
-    checked = 0
-    mismatches: list[str] = []
-    for word in candidates:
+    def decide(word: str) -> tuple[bool, bool] | None:
         expected = oracle(word)
         if expected is None:
-            continue
+            return None
+        # None = step budget exceeded (pathological epsilon cycle):
+        # inconclusive for this word, skipped like an undecided oracle answer.
         actual = dpda_run(dpda, word)
-        if actual is None:
-            # Step budget exceeded (pathological epsilon cycle) -- inconclusive
-            # for this word, not a definite rejection; skip it like a TimeoutError.
-            continue
-        checked += 1
-        if actual != expected:
-            mismatches.append(
-                f"word={word!r}: oracle says in_L={expected}, dpda says accepted={actual}"
-            )
-        if len(mismatches) >= 5:
-            break
+        return None if actual is None else (expected, actual)
+
+    checked, mismatches = _compare_on_words(
+        candidates, decide, "oracle says in_L={0}, dpda says accepted={1}",
+    )
 
     if mismatches:
         return "refuted", check_name, (
             "dpda simulation disagrees with the task's language oracle: "
             + "; ".join(mismatches)
-        ), {
-            **base_details, "determinism": "verified",
-            "counterexamples": mismatches, "words_checked": checked,
-        }
+        ), {**base_details, "counterexamples": mismatches, "words_checked": checked}
 
     if checked < _DPDA_MIN_WORDS:
         return "well_formed", check_name, (
             f"only {checked} words could be decisively checked (< {_DPDA_MIN_WORDS}) "
             "-- coverage incomplete, trust stays well_formed"
-        ), {**base_details, "determinism": "verified", "words_checked": checked}
+        ), {**base_details, "words_checked": checked}
 
-    return "bounded_pass", check_name, "", {
-        **base_details, "determinism": "verified", "words_checked": checked,
-    }
+    return "bounded_pass", check_name, "", {**base_details, "words_checked": checked}
+
+
+def _simulation_words(
+    task_ir: dict, alphabet: Any, *, with_samples: bool,
+) -> list[str]:
+    """The words an executable artifact is simulated on (docs/VERDICT_POLICY.md
+    R2′/R2″): with ``with_samples``, the task's own ``word_sampler`` picks
+    (positive and negative, length <= ``_DPDA_MAX_WORD_LEN``; may raise), plus,
+    always, every word over ``alphabet`` up to the length
+    ``_full_enumeration_max_len`` allows within ``_DPDA_FULL_ENUM_WORD_BUDGET``.
+
+    Backlog review (major): the full enumeration is added to (never replaces)
+    the sampler's candidates so a short but decisive counterexample the sampler
+    never happens to generate -- e.g. a bare "b" with no preceding "a" -- is
+    still caught by simulation. Shortest first (then lexicographic), so the
+    reported counterexamples are the shortest ones and the run is reproducible.
+    """
+    words: set[str] = set()
+    if with_samples:
+        samples = sample_words(task_ir, count=60, max_len=_DPDA_MAX_WORD_LEN)
+        words.update(
+            s["word"] for s in samples
+            if isinstance(s.get("word"), str) and len(s["word"]) <= _DPDA_MAX_WORD_LEN
+        )
+    if isinstance(alphabet, list) and alphabet:
+        max_len = _full_enumeration_max_len(len(alphabet))
+        words.update(_enumerate_words_up_to_length(
+            alphabet, max_len=max_len, limit=_DPDA_FULL_ENUM_WORD_BUDGET,
+        ))
+    return sorted(words, key=lambda w: (len(w), w))
+
+
+def _compare_on_words(
+    words: list[str],
+    decide: Callable[[str], tuple[bool, bool] | None],
+    mismatch_format: str,
+    max_mismatches: int = 5,
+) -> tuple[int, list[str]]:
+    """Run ``decide`` (word -> ``(expected, actual)``, or ``None`` when either
+    side is undecided for that word) over ``words``; return the number of
+    decisively compared words and up to ``max_mismatches`` disagreements, each
+    rendered as ``word=...: `` + ``mismatch_format.format(expected, actual)``."""
+    checked = 0
+    mismatches: list[str] = []
+    for word in words:
+        pair = decide(word)
+        if pair is None:
+            continue
+        checked += 1
+        expected, actual = pair
+        if expected != actual:
+            mismatches.append(f"word={word!r}: " + mismatch_format.format(expected, actual))
+            if len(mismatches) >= max_mismatches:
+                break
+    return checked, mismatches
 
 
 # ---------------------------------------------------------------------------
 # 2. closure_reduction  (§6.1.2)
 # ---------------------------------------------------------------------------
 
-def _verify_closure_reduction(proof_sketch: dict, _task_ir: dict) -> dict[str, Any]:
+def _verify_closure_reduction(proof_sketch: dict, task_ir: dict) -> dict[str, Any]:
     checks_run: list[str] = []
     passed: list[bool] = []
     issues: list[str] = []
@@ -499,10 +504,168 @@ def _verify_closure_reduction(proof_sketch: dict, _task_ir: dict) -> dict[str, A
 
     n_passed = sum(1 for p in passed if p)
     if not checks_run:
-        return _make_result("not_verified", checks_run, 0,
-                            ["no verifiable fields found in proof_sketch"])
-    status = "well_formed" if n_passed == len(checks_run) else "not_verified"
-    return _make_result(status, checks_run, n_passed, issues if issues else None)
+        status = "not_verified"
+        issues.append("no verifiable fields found in proof_sketch")
+    else:
+        status = "well_formed" if n_passed == len(checks_run) else "not_verified"
+    # Only an artifact check of its own may raise the status, and only when no
+    # structural check failed (an empty structural list fails none).
+    structural_ok = n_passed == len(checks_run)
+
+    canonical_op = normalize_operation(operation)
+    if canonical_op is None or (not checks_run and proof_sketch.get("artifact") is None):
+        # An operation outside the three closed ones the contract names (no
+        # artifact check applies, and no closure argument follows from it),
+        # or nothing at all to check.
+        return _make_result(status, checks_run, n_passed, issues if issues else None)
+
+    # R2″ (user decision 2026-11-10): the reduction's executable artifact,
+    # simulated against the task's oracle like stack_strategy's dpda (R2′).
+    art_status, art_check, art_issue, art_details = _verify_closure_reduction_artifact(
+        proof_sketch, task_ir, canonical_op,
+    )
+    if art_check:
+        checks_run.append(art_check)
+    if art_issue:
+        issues.append(art_issue)
+    if art_status == "refuted":
+        result = _make_result("refuted", checks_run, n_passed, issues)
+    else:
+        if art_status in ("bounded_pass", "passed"):
+            n_passed += 1
+            if structural_ok:
+                # "passed": the equality held, but nothing machine-checks the
+                # class of S, so the artifact vouches for no more than the
+                # structure does (well_formed).
+                status = art_status if art_status == "bounded_pass" else "well_formed"
+        result = _make_result(status, checks_run, n_passed, issues if issues else None)
+    result["details"] = art_details
+    return result
+
+
+def _verify_closure_reduction_artifact(
+    proof_sketch: dict, task_ir: dict, operation: str,
+) -> tuple[str | None, str, str, dict[str, Any]]:
+    """R2″ (user decision 2026-11-10): check a closure_reduction proof's
+    executable ``artifact`` (``dcfl_system.lib.closure_artifact``) the way
+    ``_verify_stack_strategy_dpda`` checks a dpda.
+
+    The artifact turns the claimed equality (``L = S ∩ R``, ``L = h⁻¹(S)``,
+    ``L = Σ*∖S``, or for a destructive proof ``L ∩ R = S``, ``h⁻¹(L) = S``,
+    ``Σ*∖L = S``) into two membership predicates: the side with L uses the
+    task's OWN oracle (``build_membership_oracle_from_ir``), the other side
+    simulates the artifact (DFA / regex for R, the homomorphism h, the source
+    language S given as an exponent pattern, a grammar or a DPDA). Both are
+    compared on the task sampler's words and on every word over the domain
+    alphabet up to the length ``_full_enumeration_max_len`` allows (the same
+    word set and the same ``_DPDA_MIN_WORDS`` threshold as for a dpda).
+
+    Returns ``(status, check_name, issue, details)``:
+
+    - ``refuted`` -- the artifact is malformed (``ArtifactError``: not a DFA,
+      h undefined on a letter, a nondeterministic source dpda, ...) or the
+      two sides disagree on a word (the counterexamples are in ``details``);
+    - ``bounded_pass`` -- constructive proof whose S is ``source.dpda``
+      (deterministic, checked as in R2′, so S is a DCFL by construction),
+      and the sides agree on at least ``_DPDA_MIN_WORDS`` decided words
+      (confidence cap 0.85);
+    - ``passed`` -- the same agreement, but the class of S is not
+      machine-checked: a constructive proof whose S is a ``pattern`` or a
+      ``grammar`` (nothing shows that S is a DCFL -- with S = L and
+      R = Σ*, or h the identity, the equality holds for any L, even a
+      non-CFL one), or a destructive / undirected proof (nothing shows that
+      S is not a DCFL). Trust stays where the structural checks put it
+      (at most ``well_formed``);
+    - ``None`` -- nothing checked: artifact missing (as a missing dpda: at
+      most ``well_formed``), no task oracle, a source the oracle layer
+      cannot parse, or too few decided words.
+    """
+    check_name = "closure_artifact_simulation"
+    direction = proof_sketch.get("direction")
+    artifact = proof_sketch.get("artifact")
+    if artifact is None:
+        return None, "", (
+            "no executable artifact (proof_sketch.artifact) -- trust stays at most "
+            "well_formed; a constructive closure_reduction needs it for bounded_pass"
+        ), {"artifact": "missing"}
+
+    oracle = build_membership_oracle_from_ir(task_ir)
+    alphabet = task_ir.get("alphabet")
+    if not isinstance(alphabet, list):
+        alphabet = []
+
+    # The artifact's own structure is judged first, with or without a task
+    # oracle -- as a dpda's determinism is.
+    try:
+        equation = build_equation(
+            artifact, operation, direction or "",
+            oracle if oracle is not None else (lambda _w: None), alphabet,
+        )
+    except ArtifactMissing as exc:
+        return None, "", f"{exc} -- trust stays at most well_formed", {"artifact": "missing"}
+    except ArtifactError as exc:
+        return "refuted", check_name, f"closure_reduction artifact is invalid: {exc}", {
+            "artifact": "invalid",
+        }
+
+    details: dict[str, Any] = {"equation": equation.text, **equation.details}
+    if oracle is None or not alphabet:
+        return None, "", (
+            "no membership oracle for the task language -- the artifact cannot be checked"
+        ), {**details, "artifact": "unchecked"}
+    if not equation.checkable:
+        return None, "", (
+            f"artifact.source ({equation.details.get('source_kind')}) does not parse into a "
+            "membership oracle -- the equality cannot be checked, trust stays at most well_formed"
+        ), {**details, "artifact": "unchecked"}
+
+    try:
+        words = _simulation_words(task_ir, equation.domain, with_samples=equation.with_samples)
+    except Exception as exc:
+        # The full enumeration alone still checks the equality; only the
+        # sampler's longer words are lost.
+        details["sampler_error"] = str(exc)
+        words = _simulation_words(task_ir, equation.domain, with_samples=False)
+
+    def decide(word: str) -> tuple[bool, bool] | None:
+        left = equation.left(word)
+        if left is None:
+            return None
+        right = equation.right(word)
+        return None if right is None else (left, right)
+
+    checked, mismatches = _compare_on_words(
+        words, decide,
+        f"{equation.left_name}={{0}}, {equation.right_name}={{1}}",
+    )
+    details["words_checked"] = checked
+
+    if mismatches:
+        return "refuted", check_name, (
+            f"closure_reduction artifact: the claimed equality {equation.text} fails: "
+            + "; ".join(mismatches)
+        ), {**details, "artifact": "refuted", "counterexamples": mismatches}
+
+    if checked < _DPDA_MIN_WORDS:
+        return None, "", (
+            f"only {checked} words could be decisively checked (< {_DPDA_MIN_WORDS}) "
+            "-- coverage incomplete, trust stays at most well_formed"
+        ), {**details, "artifact": "unchecked"}
+
+    details["artifact"] = "bounded_pass"   # the equality held on every checked word
+    if direction != "constructive":
+        return "passed", check_name, "", details
+    if equation.details.get("source_kind") != "dpda":
+        # The equality alone does not show that S is a DCFL (S = L itself
+        # passes it), so only a deterministic automaton for S, checked as in
+        # R2′, lets a constructive reduction reach bounded_pass.
+        return "passed", check_name, (
+            f"artifact.source is a {equation.details.get('source_kind')}: the equality "
+            f"{equation.text} holds on all {checked} checked words, but nothing checks that "
+            "S is a DCFL -- give S as artifact.source.dpda for bounded_pass; trust stays at "
+            "most well_formed"
+        ), {**details, "source_certificate": "missing"}
+    return "bounded_pass", check_name, "", {**details, "source_certificate": "dpda"}
 
 
 # ---------------------------------------------------------------------------

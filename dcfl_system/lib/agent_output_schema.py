@@ -61,6 +61,25 @@ _NO_FIXED_CONTRACT = frozenset({"input_parser"})
 
 _STATUS = schema_string(enum=["success", "fail", "not_applicable", "uncertain"])
 
+# The `dpda` contract (prompts/stack_strategy.md, docs/VERDICT_POLICY.md
+# R2'): stack_strategy's certificate, and closure_reduction's
+# `artifact.source.dpda` (a known DCFL given by its automaton).
+_DPDA = schema_object({
+    "states": schema_string_array(),
+    "start": schema_string(),
+    "accept_states": schema_string_array(),
+    "accept_mode": schema_string(enum=["final_state", "empty_stack"]),
+    "stack_alphabet": schema_string_array(),
+    "initial_stack": schema_string_array(),
+    "transitions": schema_array(schema_object({
+        "from": schema_string(),
+        "read": nullable(schema_string()),
+        "top": schema_string(),
+        "to": schema_string(),
+        "push": schema_string_array(),
+    })),
+})
+
 # Each specialist's own "## proof_sketch format (...Proof)" block --
 # every field is a string/array/enum, none keyed by anything the agent
 # picks at generation time.
@@ -89,21 +108,7 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
         # oracle_verifier's contract to enforce, not output_config.format's
         # (a status == "failure"/"inconclusive" response has nothing to
         # put here).
-        "dpda": nullable(schema_object({
-            "states": schema_string_array(),
-            "start": schema_string(),
-            "accept_states": schema_string_array(),
-            "accept_mode": schema_string(enum=["final_state", "empty_stack"]),
-            "stack_alphabet": schema_string_array(),
-            "initial_stack": schema_string_array(),
-            "transitions": schema_array(schema_object({
-                "from": schema_string(),
-                "read": nullable(schema_string()),
-                "top": schema_string(),
-                "to": schema_string(),
-                "push": schema_string_array(),
-            })),
-        })),
+        "dpda": nullable(_DPDA),
     }),
     "closure_reduction": schema_object({
         "kind": schema_string(enum=["closure_reduction"]),
@@ -112,6 +117,49 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
         "source_language": schema_string(),
         "transformation": schema_string(),
         "result_argument": schema_string(),
+        # REQUIRED whenever status == "success" for a constructive proof
+        # (R2″ policy, user decision 2026-11-10): the executable artifact
+        # oracle_verifier simulates to check the claimed equality against
+        # the task's oracle on all short words (dcfl_system/lib/
+        # closure_artifact.py). Nullable for the same reason as `dpda`.
+        # `source`: the known language S -- exactly one of pattern /
+        # grammar / dpda is non-null; only a `dpda` source lets a
+        # constructive reduction reach bounded_pass. `regular`: R for reg_intersection
+        # (exactly one of dfa / regex). `homomorphism`: h for
+        # inv_homomorphism, one {letter, image} per letter. Arrays, not
+        # maps keyed by state or letter, so the schema stays closed.
+        "artifact": nullable(schema_object({
+            "source": schema_object({
+                "alphabet": schema_string_array(),
+                "pattern": nullable(schema_string()),
+                "grammar": nullable(schema_object({
+                    "start": schema_string(),
+                    "rules": schema_array(schema_object({
+                        "lhs": schema_string(),
+                        "rhs": schema_string_array(),
+                    })),
+                })),
+                "dpda": nullable(_DPDA),
+            }),
+            "regular": nullable(schema_object({
+                "dfa": nullable(schema_object({
+                    "states": schema_string_array(),
+                    "alphabet": schema_string_array(),
+                    "start": schema_string(),
+                    "accept": schema_string_array(),
+                    "transitions": schema_array(schema_object({
+                        "from": schema_string(),
+                        "read": schema_string(),
+                        "to": schema_string(),
+                    })),
+                })),
+                "regex": nullable(schema_string()),
+            })),
+            "homomorphism": nullable(schema_array(schema_object({
+                "letter": schema_string(),
+                "image": schema_string(),
+            }))),
+        })),
     }),
     "dcfl_pumping": schema_object({
         "kind": schema_string(enum=["dcfl_pumping"]),

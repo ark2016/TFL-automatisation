@@ -271,7 +271,10 @@ here. They build on `base.py` and on the inventory.
 
   Optional: `stratification`, `dcfl_claim_check`, `ll_claim_check`.
 - **The R2' DPDA procedure is private.** It lives only in `dcfl_system.lib.oracle_verifier._verify_stack_strategy_dpda`.
-  The public route is `verify_agent_results({"stack_strategy": ...}, ir)`.
+  The public route is `verify_agent_results({"stack_strategy": ...}, ir)`. (Since 2026-11-10 its first three steps,
+  normalization → determinism → structure, are the public `dcfl_system.lib.dpda.prepare_dpda`, which the
+  pipeline's closure_reduction artifact check also uses for a DPDA source; this package's `_prepare_dpda` in
+  `tools/dcfl.py` still does the same steps itself, because it reports every conflict and structure error.)
 - **No lib backing.** `describe_ir_schema` has no schema constants for CFL / DCFL / LL (only REG has `IR_SCHEMA`),
   and the kind sets are private. `ir_to_text`, `list_theorems` and `get_theorem` have no lib function at all.
   They are written in the package.
