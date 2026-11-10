@@ -299,7 +299,12 @@ def safe_text(text: Any, *, max_chars: int | None = None) -> str:
     return "\n".join(_BLOCK_START_RE.sub(r"\1\\\2", line) for line in s.split("\n"))
 
 
-_MATH_SPAN_RE = re.compile(r"\$\$.+?\$\$|\$[^$\n]{1,200}\$", re.S)
+_MATH_SPAN_RE = re.compile(
+    r"\$\$.+?\$\$|\$[^$\n]{1,200}\$"      # $$...$$ / $...$
+    r"|\\\(.+?\\\)|\\\[.+?\\\]"           # \(...\) / \[...\]
+    r"|``.+?``|`[^`\n]+`",                # code spans
+    re.S,
+)
 _STAR_RE = re.compile(r"(?<!\\)\*")
 
 

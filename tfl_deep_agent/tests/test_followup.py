@@ -2084,6 +2084,8 @@ def test_the_task_keeps_its_stars_outside_math_and_katex_is_untouched():
     assert esc("(ab)* и {a,b}*") == "(ab)\\* и {a,b}\\*"
     assert esc("$a^*$ и $$b^*$$") == "$a^*$ и $$b^*$$"
     assert esc("(ab)* где $L=\\{a^n\\}^*$ и c*") == "(ab)\\* где $L=\\{a^n\\}^*$ и c\\*"
+    assert esc("`(ab)*` и c*") == "`(ab)*` и c\\*"
+    assert esc("``a*`` и \\(a^*\\) и \\[b^*\\] и c*") == "``a*`` и \\(a^*\\) и \\[b^*\\] и c\\*"
     html = render.render_report({"task": "Язык (ab)* ... {a,b}* и $x^*$", "status": "incomplete"}).html
     main = html.split("<main>")[1].split("</main>")[0]
     assert "(ab)&#42; ... {a,b}&#42;" in main and "<em>" not in main and "$x^*$" in main

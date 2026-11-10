@@ -378,9 +378,8 @@ flowchart LR
   disagreement → `refuted` (counterexamples go to the retry hint); no table, or a claimed grammar that is LL(k)
   but not strong LL(k) (no global table from its rules parses exactly its language; the table is not run) →
   at most `well_formed`, even when the grammar passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
-  (Format 3, and the Format 2 grammar) stays `verified` and needs no table. The matching rule for dcfl
-  `closure_reduction` (a DFA for R in L ∩ R, or a transducer / homomorphism, simulated on short words) is in
-  the policy but not implemented yet.
+  (Format 3, and the Format 2 grammar) stays `verified` and needs no table. dcfl `closure_reduction` has its own
+  executable-artifact check (R2″, see the DCFL section above and `docs/VERDICT_POLICY.md` R3′ (2)).
 
 ---
 
