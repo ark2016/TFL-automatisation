@@ -2089,3 +2089,85 @@ def test_the_task_keeps_its_stars_outside_math_and_katex_is_untouched():
     html = render.render_report({"task": "Язык (ab)* ... {a,b}* и $x^*$", "status": "incomplete"}).html
     main = html.split("<main>")[1].split("</main>")[0]
     assert "(ab)&#42; ... {a,b}&#42;" in main and "<em>" not in main and "$x^*$" in main
+
+
+# ---------------------------------------------------------------------------
+# CA-015, the day case: the day's remainder is what is short in a follow-up
+# ---------------------------------------------------------------------------
+
+def day_short_followup(tmp_path, **start_kw):
+    """A finished live run (scripted model) whose day has almost nothing left."""
+    script = H.base_script()
+    script["models"]["main"].append({"content": ANSWER})
+
+    def live():
+        return live_factory(script, tmp_path)
+
+    out = hitl.start_run(tmp_path / "lv", TASK, settings=H.example_settings(), model_factory=live(), **start_kw)
+    while out.awaiting:
+        out = hitl.resume_run(out.run_dir, APPROVE, model_factory=live(), live=True)
+    assert out.status == "submitted", out.result
+    d = out.run_dir
+    run = hitl.load_run(d)
+    log = B.DailySpendLog()
+    log.append({"day": log.today(), "task_id": "other", "usd": 1.5})  # the validator wants per_task <= per_day
+    per_day = log.day_total() + 0.0005
+    run["settings"]["budget"].update({"per_day_usd": per_day, "per_task_usd": 1.0, "reserve_for_report_usd": 0.0001})
+    hitl.save_run(d, run)
+    return d, live, per_day
+
+
+def live_calls(tmp_path):
+    return json.loads((tmp_path / "cursors.json").read_text())["cursors"]["main"]
+
+
+def test_a_short_day_asks_to_raise_the_day_limit_and_declining_keeps_the_report(tmp_path):
+    d, live, per_day = day_short_followup(tmp_path)
+    before, calls = rating(d), live_calls(tmp_path)
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.awaiting and out.pending.point == hitl.BUDGET
+    args = out.pending.request["action_requests"][0]["args"]
+    assert args["binds"] == "day" and args["per_day_usd"] == pytest.approx(per_day, abs=1e-5)
+    assert "Дневной лимит" in out.pending.request["action_requests"][0]["description"]
+    card = hitl.load_run(d)["pending"]["card"]
+    assert card["summary"][0].startswith("Сегодня потрачено")
+    done = hitl.resume_run(d, APPROVE, model_factory=live(), live=True)
+    assert done.status == "submitted" and done.followup_note == UNANSWERED_NOTE and done.reply is None
+    assert live_calls(tmp_path) == calls, "no model call"
+    assert rating(d) == before
+    assert hitl.load_run(d)["budget_declined"] is True
+
+
+def test_raising_the_day_limit_lets_the_follow_up_run(tmp_path):
+    d, live, per_day = day_short_followup(tmp_path)
+    assert hitl.send_followup(d, QUESTION, model_factory=live(), live=True).pending.point == hitl.BUDGET
+    # the remainder is no cap on a day raise
+    done = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert done.reply == ANSWER
+    run = hitl.load_run(d)
+    assert run["budget_day_limit_usd"] == pytest.approx(per_day + 50)
+    assert run["settings"]["budget"]["per_day_usd"] == per_day  # the settings snapshot does not change
+    assert BS.per_day_usd(run) == pytest.approx(per_day + 50)
+    ext = run["budget_extensions"][-1]
+    assert ext["binds"] == "day" and ext["add_usd"] == 50
+
+
+def test_a_short_day_with_nobody_to_ask_skips_the_call_instead_of_wrapping_up(tmp_path):
+    d, live, _ = day_short_followup(tmp_path, auto_approve=True)
+    assert hitl.load_run(d)["budget_stop"] is False
+    before, calls = rating(d), live_calls(tmp_path)
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.status == "submitted" and out.followup_note == UNANSWERED_NOTE
+    assert live_calls(tmp_path) == calls and rating(d) == before
+
+
+def test_the_day_case_is_asked_only_in_a_follow_up_of_an_accepted_report():
+    est = B.CallEstimate("claude-opus-5-5", 1000, 1000, 0.03)
+    log = B.DailySpendLog()
+    led = B.BudgetLedger(5.0, reserve_for_report_usd=0.5, spend_log=log, per_day_usd=0.002, task_id="t")
+    mw = B.BudgetMiddleware(led.root, fit_max_tokens=False)
+    assert mw._budget_low_locked(est, led.root) is None
+    mw.skip_call_when_low = True
+    low = mw._budget_low_locked(est, led.root)
+    assert low.binds == "day" and low.per_day_usd == 0.002
+    assert led.raise_day_limit(7.0) == 7.0 and led.raise_day_limit(1.0) == 7.0

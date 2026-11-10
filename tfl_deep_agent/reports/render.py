@@ -1515,8 +1515,10 @@ def _evidence_block(ctx: _Ctx, claims_out: Sequence[Mapping[str, Any]],
     extensions = (b or {}).get("extensions") or []
     if extensions:
         out += ["", "**Бюджет добавлен:** " + "; ".join(
-            f"+{_money(e.get('add_usd') or 0.0)}, лимит {_money(e.get('new_limit_usd') or 0.0)} "
-            f"({e.get('reviewer') or 'человек'}, {e.get('at') or '?'})" for e in extensions) + "."]
+            f"+{_money(e.get('add_usd') or 0.0)}, "
+            + (f"дневной лимит {_money(e.get('new_day_limit_usd') or 0.0)} " if e.get("binds") == "day"
+               else f"лимит {_money(e.get('new_limit_usd') or 0.0)} ")
+            + f"({e.get('reviewer') or 'человек'}, {e.get('at') or '?'})" for e in extensions) + "."]
 
     out += ["", "<details><summary>Журнал вызовов, модели и расходы</summary>", ""]
     if ctx.evidence:

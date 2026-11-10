@@ -1740,14 +1740,15 @@ function deepBudgetCard(pv, run) {
     if (res.error) { setMsg(res.error, 'err'); return; }
     await deepSubmitDecision(card, res.body, setMsg);
   };
+  const dayCap = args.binds === 'day' ? null : args.day_left_usd;  // a day extension raises the day limit: no cap
   const addMoney = (value) => {
-    const a = deepParseBudgetAdd(value, args.day_left_usd);
+    const a = deepParseBudgetAdd(value, dayCap);
     if (a.error) setMsg(a.error, 'err'); else send('edit', {add_usd: a.add});
   };
   const actions = el('div', 'dk-card-actions');
   [1, 5].forEach(x => {
     const b = deepBtn('+$' + x, 'primary', () => addMoney(x));
-    if (deepParseBudgetAdd(x, args.day_left_usd).error) b.disabled = true;
+    if (deepParseBudgetAdd(x, dayCap).error) b.disabled = true;
     actions.appendChild(b);
   });
   const own = el('label', 'dk-money');

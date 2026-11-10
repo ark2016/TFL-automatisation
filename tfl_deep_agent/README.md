@@ -238,7 +238,8 @@ When the main agent's next call would enter wrap-up or be refused, the run stops
 ending. `--decision edit --payload '{"add_usd": 5}'` raises this run's limit (stored in `run.json`, the settings do not
 change; live, it must fit in the day's remainder) and is recorded as `extended`. `--decision approve` finishes with what
 is left, as wrap-up always did, and is recorded as `declined`. The report's run section lists the extensions. If the
-day's remainder is what binds, there is no stop, because more task budget would buy nothing. A subagent or a
+day's remainder is what binds in a run's own call, there is no stop (more task budget would buy nothing) and wrap-up
+applies; in a follow-up of an accepted report the stop is asked about the day limit instead (below). A subagent or a
 summarization never stops the run. The stop does not depend on `settings.hitl`: with both review points off it still
 asks; only `auto_approve` or `budget_stop=False` turns it off.
 
@@ -248,6 +249,12 @@ for the call: nothing is charged, the report, status and revision stay, and the 
 follow-up with no accepted report keeps wrap-up, which is how it gets its first report. A run with no budget stop
 (`--auto-approve`) is protected the same way (user, 2026-11-10): a follow-up of an accepted report with too little money
 makes no model call, so the accepted report and its label are never replaced by a truncated, auto-accepted one.
+
+When the DAY's remainder is what is short in such a follow-up (user, 2026-11-10, CA-015), the stop asks to raise the day
+limit (`per_day_usd`) instead of wrapping up: the card names the day (`binds: day`), `--decision edit --payload
+'{"add_usd": 5}'` raises this run's day limit (`budget_day_limit_usd` in `run.json`; the settings file does not change; no
+cap by the remainder), `approve` keeps the accepted report. With nobody to ask (`--auto-approve`, no dialog) the call is
+skipped, never wrapped up into a truncated report.
 
 `auto_approve` means review mode `auto` plus no budget stop, so only a run started with `--auto-approve` goes straight
 to the report. Review mode `auto` on its own, and `--approve-rest`, concern reviews and still stop for money.

@@ -1571,6 +1571,7 @@ def _budget_ledger(run: Mapping[str, Any], settings_obj: Any, factory: Any = Non
     # money the human added at the budget stop: not in settings, whose validator keeps
     # per_task_usd <= per_day_usd (the day's cap still binds through the ledger)
     led.raise_limit(float(run.get("budget_limit_usd") or 0.0))
+    led.raise_day_limit(float(run.get("budget_day_limit_usd") or 0.0))  # a day extension (CA-015)
     fields = {f.name for f in dataclasses.fields(budget_mod.CallRecord)}
     led.records.extend(budget_mod.CallRecord(**{k: v for k, v in r.items() if k in fields})
                        for r in prev.get("records") or [])
@@ -2161,10 +2162,19 @@ class TTYDialog:
             text = Path(text[1:]).read_text(encoding="utf-8")
         return json.loads(text)
 
+    @staticmethod
+    def _binds_day(info: PendingInfo) -> bool:
+        acts = _get(info.request, "action_requests") or []
+        return bool(acts) and (_get(acts[0], "args") or {}).get("binds") == budget_stop_mod.DAY
+
     def _budget(self, info: PendingInfo) -> Decision | None:
         self.print(info.card)
         while True:
-            choice = self.input("[a]dd money / [f]inish with what is left / [l]ater: ").strip().lower()[:1]
+            day = self._binds_day(info)
+            choice = self.input("[a]dd money to the day limit / [k]eep the report / [l]ater: " if day
+                                else "[a]dd money / [f]inish with what is left / [l]ater: ").strip().lower()[:1]
+            if day and choice == "k":
+                choice = "f"
             if choice == "f":
                 return Decision("approve", source="dialog", reviewer=self.reviewer)
             if choice in ("l", "q"):

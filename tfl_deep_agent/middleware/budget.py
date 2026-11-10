@@ -624,6 +624,19 @@ class BudgetLedger:
             self._emit({"event": "limit_raised", "node": self.root.path, "previous_usd": before, "limit_usd": limit})
         return limit
 
+    def raise_day_limit(self, new_limit: float) -> float | None:
+        """Raise the day's limit (``per_day_usd``) of this ledger to ``new_limit``; like
+        :meth:`raise_limit` it only grows. ``None`` and no change for a ledger with no day
+        limit. The settings' ``per_day_usd`` is not touched."""
+        with self.lock:
+            before = self.per_day_usd
+            if before is None:
+                return None
+            limit = self.per_day_usd = max(before, float(new_limit))
+        if limit > before:
+            self._emit({"event": "day_limit_raised", "previous_usd": before, "limit_usd": limit})
+        return limit
+
     def _emit(self, event: dict[str, Any]) -> None:
         for fn in self.listeners:
             try:
@@ -905,6 +918,10 @@ class BudgetLow:
     available_usd: float
     reserve_usd: float
     day_left_usd: float | None  # None: a run with no day log (mock)
+    #: what is short: ``"task"`` (the task's limit) or ``"day"`` (the day's remainder; only asked
+    #: for a follow-up of an accepted report, ``skip_call_when_low``, where wrap-up must never run)
+    binds: str = "task"
+    per_day_usd: float | None = None  # the day limit; set when ``binds == "day"``
 
 
 class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
@@ -1092,9 +1109,11 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
 
     def _budget_low_locked(self, est: CallEstimate, node: BudgetNode) -> BudgetLow | None:
         """The numbers of ``node`` when a call with ``est`` would enter wrap-up or be
-        refused (ledger lock held, nothing reserved), else ``None``. Also ``None`` when
-        the day's remainder is what binds: raising the task's limit cannot buy anything
-        then, so the old wrap-up behaviour applies."""
+        refused (ledger lock held, nothing reserved), else ``None``. When the day's
+        remainder is what binds, raising the task's limit buys nothing: the numbers then
+        ask for the day limit (``binds == "day"``) in a follow-up of an accepted report
+        (``skip_call_when_low``: user decision 2026-11-10, CA-015), else ``None`` and the
+        old wrap-up behaviour applies."""
         if node.closed:
             return None
         probe, enter = self.derive(est, node) if self.fit_max_tokens else (est, False)
@@ -1102,7 +1121,11 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
             return None
         day = node.ledger._day_remaining()
         if day is not None and day <= node._own() + EPS:
-            return None
+            if not self.skip_call_when_low:
+                return None
+            return BudgetLow(spent_usd=node.spent, limit_usd=node.limit, available_usd=max(node._available(), 0.0),
+                             reserve_usd=node.reserve, day_left_usd=max(day, 0.0), binds="day",
+                             per_day_usd=node.ledger.per_day_usd)
         return BudgetLow(spent_usd=node.spent, limit_usd=node.limit, available_usd=max(node._available(), 0.0),
                          reserve_usd=node.reserve, day_left_usd=None if day is None else max(day, 0.0))
 
@@ -1126,8 +1149,8 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
         if low is None:
             return
         new_limit = self.request_budget_extension(low)  # may raise GraphInterrupt: nothing is reserved yet
-        if new_limit is not None:
-            node.ledger.raise_limit(new_limit)
+        if new_limit is not None:  # the new absolute limit of what was short
+            (node.ledger.raise_day_limit if low.binds == "day" else node.ledger.raise_limit)(new_limit)
 
     def _before(self, request: Any) -> tuple[Any, CallEstimate, Admission | None]:
         """What the hook goes on with; the admission is ``None`` when the call is skipped."""
