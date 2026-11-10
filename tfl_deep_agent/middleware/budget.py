@@ -945,7 +945,7 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
     by default): called with a :class:`BudgetLow` before a call of the root scope
     would enter wrap-up or be refused, with nothing reserved yet. It may raise
     LangGraph's ``GraphInterrupt`` (``budget_stop.request_budget_extension``); what
-    it returns is the task's new absolute limit, or ``None`` to finish with what is
+    it returns is ``(kind, new absolute limit)`` (``kind`` ``"task"`` or ``"day"``), or ``None`` to finish with what is
     left (:meth:`BudgetLedger.raise_limit`).
 
     ``skip_call_when_low`` (a follow-up on a run with an accepted report, off by default;
@@ -1120,7 +1120,9 @@ class BudgetMiddleware(_AgentMiddleware):  # type: ignore[misc,valid-type]
         if not node.would_enter_wrap_up_locked(probe.worst_case_usd, enter_wrap_up=enter):
             return None
         day = node.ledger._day_remaining()
-        if day is not None and day <= node._own() + EPS:
+        day_short = day is not None and (day <= node._own() + EPS or (
+            self.skip_call_when_low and probe.worst_case_usd > day - node.reserve + EPS))
+        if day_short:
             if not self.skip_call_when_low:
                 return None
             return BudgetLow(spent_usd=node.spent, limit_usd=node.limit, available_usd=max(node._available(), 0.0),

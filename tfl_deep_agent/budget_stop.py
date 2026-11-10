@@ -84,14 +84,15 @@ def request_budget_extension(low: BudgetLow) -> tuple[str, float] | None:
     The kind is the one the decision carries, not ``low.binds``: when a node asks twice
     (one answer for the day, then a question about the task, or the other way round) the
     re-run node gets the stored answer of the EARLIER question back from ``interrupt``.
-    Applying that raise again is harmless (limits only grow); the call is then admitted
-    or skipped and the next message asks again.
+    Applying that raise again is harmless (limits only grow). At most one question per kind
+    is asked in one node execution.
 
     A resumed node runs again from its start. The resume has raised the limit in
     ``run.json`` by then, so the condition is false and this is not reached; the
     same process's dialog applies it to the ledger just the same. If the new limit is
-    still too low, ``interrupt`` returns this same answer and the call goes on to
-    wrap-up: no second question in one node execution."""
+    still too low, ``interrupt`` returns this same answer; the call then goes on to wrap-up,
+    or, in a follow-up of an accepted report (``skip_call_when_low``), is skipped with
+    ``UNANSWERED_REPLY``."""
     from langgraph.types import interrupt
 
     decision = first_decision(interrupt(budget_request(low)))

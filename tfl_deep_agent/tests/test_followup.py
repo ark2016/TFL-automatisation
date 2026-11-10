@@ -2273,3 +2273,22 @@ def test_both_limits_short_the_money_of_two_answers_lets_the_same_message_run(tm
     assert live_calls(tmp_path) == calls + 1
     run = hitl.load_run(d)
     assert {e.get("binds", "task") for e in run["budget_extensions"][-2:]} == {"day", "task"}
+
+
+def test_both_limits_short_with_the_task_remainder_smaller_still_asks_the_day_first(tmp_path):
+    """own (task) < day remainder, both short for the call: the day is asked first, so the
+    task card that follows is capped by the raised day and the SAME message gets its answer."""
+    d, live, per_day = day_short_followup(tmp_path)
+    run = hitl.load_run(d)
+    run["settings"]["budget"].update({
+        "per_day_usd": per_day + 0.0015, "per_task_usd": spent(d) + REFUSED, "reserve_for_report_usd": REFUSED * 0.99})
+    hitl.save_run(d, run)
+    calls = live_calls(tmp_path)
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.awaiting and out.pending.point == hitl.BUDGET
+    assert out.pending.request["action_requests"][0]["args"].get("binds") == "day"
+    out = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert out.awaiting and out.pending.request["action_requests"][0]["args"].get("binds") in (None, "task")
+    out = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert not out.awaiting and out.reply == ANSWER
+    assert live_calls(tmp_path) == calls + 1
