@@ -1,0 +1,11 @@
+{
+  "agent_name": "stack_strategy",
+  "status": "not_applicable",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "В этом примере конструктивный сертификат даёт closure_reduction (сведение L = {aⁿbⁿ | n >= 1} ∩ (aa)*(bb)* с исполняемым ДКА для R); прямой ДМПА здесь не строился"
+  ],
+  "confidence": 0.0,
+  "errors": []
+}

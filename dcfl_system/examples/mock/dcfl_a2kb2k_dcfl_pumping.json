@@ -1,0 +1,14 @@
+{
+  "agent_name": "dcfl_pumping",
+  "status": "fail",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "Пару слов xy, xz с общим префиксом |x| > p, нарушающую условие (1) или (2) леммы Ю, найти не удалось",
+    "L = {a²ᵏb²ᵏ | k >= 1} — DCFL (сведение closure_reduction: L = {aⁿbⁿ | n >= 1} ∩ (aa)*(bb)*), поэтому лемма о накачке для DCFL контрпримера не даёт"
+  ],
+  "confidence": 0.1,
+  "errors": [
+    "Не удалось построить деструктивное доказательство: язык является DCFL"
+  ]
+}

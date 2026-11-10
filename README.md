@@ -144,7 +144,7 @@ and closure verification follows oracle construction.
 - **Error tracking.** `proof_verified` comes from the verdict gate's `verified` trust basis, which can include deterministic verification such as a checked Lean proof; an LLM proof-checker self-assessment alone cannot set it. Agent errors, API failures, and JSON-parse problems are tracked in `state["errors"]` and surfaced in the final result.
 - **Known limitations.** Claim verifiers that used to mark an agent claim `verified` for being merely well-formed now
   return `well_formed` (see trust taxonomy below); semantic (word-level) verification of the claim's content is only
-  partial so far — implemented where an oracle already exists (CFL pumping/ogden/closure_reduction, DCFL pumping/Shallit,
+  partial so far — implemented where an oracle already exists (CFL pumping/ogden/closure_reduction, DCFL pumping/Shallit/closure_reduction,
   LL constructive/substitution/prefix_classes, REG pumping/Nerode), not yet for set_builder languages without a
   word-oracle. Treat a verdict's confidence per its `trust` level, not as a proof; see
   [`docs/VERDICT_POLICY.md`](docs/VERDICT_POLICY.md) §4.
@@ -313,6 +313,19 @@ verdict requires more than prose: `stack_strategy`'s `proof_sketch` must include
 (at most one transition per `(state, top, letter)`, no ε/letter coexistence on the same `(state, top)`). No
 `dpda` field ⇒ `status: "uncertain"`/`"not_applicable"`, never a bare prose "strategy" standing in for a
 verdict.
+
+**Executable closure reduction (R3′, user decision 2026-11-10).** A constructive `closure_reduction` (L = S ∩ R,
+L = h⁻¹(S), L = Σ* ∖ S, with S a known DCFL) carries `proof_sketch.artifact`: the source language S (an
+exponent pattern, a grammar or a DPDA), a DFA or regex for R, the homomorphism h as `{letter, image}` pairs.
+`dcfl_system/lib/closure_artifact.py` turns the claimed equality into two membership predicates: the side with L
+uses the task's own oracle, the other side simulates the artifact (`agent_system.lib.dfa_runner` for R, the DPDA
+check of R2′ for a DPDA source). The oracle verifier compares them on the sampler's words and on every word over
+the alphabet up to the R2′ length bound. Agreement on ≥ 30 decided words ⇒ `bounded_pass` (cap 0.85); a
+disagreeing word or a malformed artifact ⇒ `refuted`, retried with the counterexample; no artifact ⇒ at most
+`well_formed`, which cannot carry `dcfl`. A destructive reduction may carry the same artifact: a wrong equality
+is refuted, but agreement does not raise its trust above `well_formed`. Mock set: `dcfl_a2kb2k`
+(`task_a2kb2k.json`, L = {a²ᵏb²ᵏ | k ≥ 1} = {aⁿbⁿ | n ≥ 1} ∩ (aa)*(bb)*), and `dcfl_a2kb2k_wrong_dfa_closure_reduction.json` with a
+wrong DFA that the check refutes on `ab`.
 - **Inherent ambiguity.** Every DCFL has an unambiguous grammar, so an *inherently* ambiguous language (every CFG for it is ambiguous) is not DCFL. One ambiguous grammar proves nothing.
 - **Closure under complement (DCFL-specific).** DCFLs are closed under complement but CFLs are not — useful discriminator.
 

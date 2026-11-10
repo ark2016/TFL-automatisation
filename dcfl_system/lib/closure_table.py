@@ -14,6 +14,9 @@ from typing import Any
 # Table 1 — DCFL closure properties
 # ---------------------------------------------------------------------------
 
+# `artifact`: the parts of closure_reduction's executable `proof_sketch.artifact`
+# a reduction by this operation must fill (R3' policy, 2026-11-10;
+# dcfl_system/lib/closure_artifact.py simulates them).
 CLOSURE_TABLE: list[dict[str, Any]] = [
     {
         "operation": "complement",
@@ -21,6 +24,7 @@ CLOSURE_TABLE: list[dict[str, Any]] = [
         "closed": True,
         "implication_if_closed": "complement(L) is DCFL ⟺ L is DCFL",
         "proof_direction": "both",
+        "artifact": ("source",),
     },
     {
         "operation": "inverse_homomorphism",
@@ -28,6 +32,7 @@ CLOSURE_TABLE: list[dict[str, Any]] = [
         "closed": True,
         "implication_if_closed": "if L' is DCFL and L = h⁻¹(L'), then L is DCFL",
         "proof_direction": "both",
+        "artifact": ("source", "homomorphism"),
     },
     {
         "operation": "reg_intersection",
@@ -37,6 +42,7 @@ CLOSURE_TABLE: list[dict[str, Any]] = [
         "proof_direction": "both",
         "note": "Not from Table 1 (where ∩ means DCFL ∩ DCFL, which is NOT closed). "
                 "Follows from DPDA × DFA product construction preserving determinism.",
+        "artifact": ("source", "regular"),
     },
     {
         "operation": "union",
@@ -107,6 +113,14 @@ def get_implication(operation: str) -> str | None:
     if entry is None:
         return None
     return entry["implication_if_closed"]
+
+
+def get_required_artifact(operation: str) -> tuple[str, ...]:
+    """The ``proof_sketch.artifact`` parts a closure_reduction by *operation*
+    must fill (``()`` for an operation DCFL is not closed under, or one not
+    in the table). Accepts the agent contract's spelling ``inv_homomorphism``."""
+    entry = _BY_OP.get("inverse_homomorphism" if operation == "inv_homomorphism" else operation)
+    return tuple(entry.get("artifact", ())) if entry else ()
 
 
 def get_proof_direction(operation: str) -> str | None:

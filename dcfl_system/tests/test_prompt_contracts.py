@@ -108,11 +108,9 @@ def _json_blocks(path: Path) -> list[dict]:
 # 1. Worked-example AgentOutput blocks carry the required contract keys
 # ---------------------------------------------------------------------------
 
-# closure_reduction.md currently has schema sketches only (pseudo-JSON with
-# `"a" | "b"` unions), no fully-concrete worked example — unlike the other
-# 4 specialists. Adding one is prompt content, not the cosmetic-only cleanup
-# in scope here (root TODO.md §6); tracked separately, not required below.
-_HAS_WORKED_EXAMPLE = tuple(n for n in DCFL_SPECIALIST_NAMES if n != "closure_reduction")
+# Every specialist prompt has a fully concrete worked example (closure_reduction
+# got one with its executable artifact, R3' policy 2026-11-10).
+_HAS_WORKED_EXAMPLE = DCFL_SPECIALIST_NAMES
 
 
 @pytest.mark.parametrize("agent_name", _HAS_WORKED_EXAMPLE)

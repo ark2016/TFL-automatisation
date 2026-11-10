@@ -1,0 +1,12 @@
+{
+  "action": "done",
+  "verdict": "dcfl",
+  "confidence": 0.9,
+  "primary_evidence": "closure_reduction",
+  "summary": "L = {a²ᵏb²ᵏ | k >= 1} является DCFL. Агент closure_reduction свёл L к известному DCFL: L = S ∩ R, где S = {aⁿbⁿ | n >= 1}, R = (aa)*(bb)*; aⁿbⁿ ∈ R ⇔ n чётно. DCFL замкнут относительно пересечения с регулярным языком. Сведение снабжено исполняемым артефактом (ДКА для R и описание S), который верификатор моделирует против оракула языка задачи на всех коротких словах. dcfl_pumping/shallit/inh_ambiguity — fail/not_applicable, что ожидаемо для DCFL (R1: провал деструктивных агентов не является свидетельством против).",
+  "retry_plan": null,
+  "hints_for_human": [
+    "closure_reduction предоставил исполняемый артефакт сведения (ДКА для R) — конструктивный сертификат, проверенный на коротких словах (bounded_pass, потолок 0.85)"
+  ],
+  "errors": []
+}

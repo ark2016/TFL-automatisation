@@ -1,0 +1,46 @@
+{
+  "agent_name": "closure_reduction",
+  "status": "success",
+  "verdict": "dcfl",
+  "proof_sketch": {
+    "kind": "closure_reduction",
+    "operation": "reg_intersection",
+    "direction": "constructive",
+    "source_language": "S = {aⁿbⁿ | n >= 1} — известный DCFL (ДМПА: push на каждую a, pop на каждую b, принятие на дне стека после хотя бы одной b)",
+    "transformation": "R = (aa)*(bb)* — регулярный язык (слова вида a^i b^j с чётными i и j); L = S ∩ R",
+    "result_argument": "aⁿbⁿ ∈ R ⇔ n чётно, поэтому S ∩ R = {aⁿbⁿ | n >= 1, n чётно} = {a²ᵏb²ᵏ | k >= 1} = L. DCFL замкнут относительно пересечения с регулярным языком (произведение ДМПА × ДКА детерминировано), значит L — DCFL.",
+    "artifact": {
+      "source": {
+        "alphabet": ["a", "b"],
+        "pattern": "{a^n b^n | n >= 1}",
+        "grammar": null,
+        "dpda": null
+      },
+      "regular": {
+        "dfa": {
+          "states": ["a_even", "a_odd", "b_odd", "b_even"],
+          "alphabet": ["a", "b"],
+          "start": "a_even",
+          "accept": ["a_even", "b_even"],
+          "transitions": [
+            {"from": "a_even", "read": "a", "to": "a_odd"},
+            {"from": "a_odd", "read": "a", "to": "a_even"},
+            {"from": "a_even", "read": "b", "to": "b_odd"},
+            {"from": "b_odd", "read": "b", "to": "b_even"},
+            {"from": "b_even", "read": "b", "to": "b_odd"}
+          ]
+        },
+        "regex": null
+      },
+      "homomorphism": null
+    }
+  },
+  "evidence": [
+    "Известный DCFL: S = {aⁿbⁿ | n >= 1}",
+    "Регулярный фильтр: R = (aa)*(bb)*, ДКА из четырёх состояний (чётность числа a, затем чётность числа b; отсутствующий переход — отвержение)",
+    "aⁿbⁿ ∈ R тогда и только тогда, когда n чётно, поэтому S ∩ R = {a²ᵏb²ᵏ | k >= 1} = L",
+    "DCFL замкнут относительно ∩ REG (произведение ДМПА × ДКА детерминировано) ⇒ L — DCFL"
+  ],
+  "confidence": 0.9,
+  "errors": []
+}
