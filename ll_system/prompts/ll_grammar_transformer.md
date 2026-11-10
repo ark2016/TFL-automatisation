@@ -97,10 +97,13 @@ length and compares each answer with the task's membership oracle: agreement on 
 `trust: "bounded_pass"` (confidence ≤ 0.85); a cell with two different right-hand sides, a
 right-hand side that is not a rule of `transformed_grammar`, or one wrongly accepted or rejected
 word makes the claim `refuted`; with no table the claim stays at most `well_formed`
-(confidence ≤ 0.55). List every cell the parser needs: a missing cell means "error". The table is
-one global (nonterminal, lookahead) → rule map, a strong LL(k) table, so `transformed_grammar` must
-be strong LL(k) for this k (every LL(k) language has one, docs/THEORY.md §3.1); for a grammar that
-is LL(k) but not strong LL(k) the table is not run and the claim stays at most `well_formed`.
+(confidence ≤ 0.55). The table must be exactly the strong LL(k) director table of
+`transformed_grammar`: rule A → α in cell (A, x) for **every** x ∈ FIRST_k(α) ⊕_k FOLLOW_k(A) and in
+no other cell. A cell outside its rule's director set makes the claim `refuted`; a missing director
+cell keeps it at most `well_formed`. The table is one global (nonterminal, lookahead) → rule map, a
+strong LL(k) table, so `transformed_grammar` must be strong LL(k) for this k (every LL(k) language
+has one, docs/THEORY.md §3.1); for a grammar that is not strong LL(k) the table is not run and the
+claim stays at most `well_formed`.
 
 ---
 

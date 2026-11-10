@@ -372,12 +372,18 @@ flowchart LR
   marker's structured-output schema uses). `ll_system/lib/parse_table_check.py` runs it with
   `LLParser.from_table` on every word over the task alphabet up to the DPDA full-enumeration length
   (Σ_{i≤k}|Σ|ⁱ ≤ 3000, k ≤ 10; `agent_system/lib/word_enumeration.py`) and compares it with the task oracle:
-  agreement on ≥ 30 decided words → `bounded_pass` (cap 0.85); a conflict cell, a table inconsistent with the
-  claimed grammar (a row, start or rule not in it), a word on which the parser never halts (`LLParser.parse`
-  detects the left-recursion loop exactly: a nonterminal back on top before its own expansion finished), or a
-  disagreement → `refuted` (counterexamples go to the retry hint); no table, or a claimed grammar that is LL(k)
-  but not strong LL(k) (no global table from its rules parses exactly its language; the table is not run) →
-  at most `well_formed`, even when the grammar passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
+  the table must be the complete strong LL(k) director table of its grammar (the claimed grammar, or, for a
+  marker claim without one, the grammar of the table's own productions; compared after removing useless
+  symbols), since an incomplete table encodes a priority choice and can accept a non-LL language
+  (S: a → aSB, b/$ → ε; B: b → b, $ → ε accepts {aⁱbʲ | i ≥ j}). Agreement on every word the oracle decides,
+  at least 30 of them, with such a table → `bounded_pass` (cap 0.85); a conflict cell, a table inconsistent with
+  the claimed grammar (a row, start or rule not in it), a cell outside its rule's director set, a table for a
+  larger k than claimed, a word on which the parser never halts (`LLParser.parse` detects the left-recursion
+  loop exactly: a nonterminal back on top before its own expansion finished), or a disagreement → `refuted`
+  (counterexamples go to the retry hint); a table missing a director cell, a table whose own productions are not
+  strong LL(k), no table, or a claimed grammar that is not strong LL(k) (if it is LL(k), any conflict-free table
+  from its rules rejects some word of its language, possibly beyond the bound; the table is not run) → at most `well_formed`, even when the grammar
+  passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
   (Format 3, and the Format 2 grammar) stays `verified` and needs no table. dcfl `closure_reduction` has its own
   executable-artifact check (R2″, see the DCFL section above and `docs/VERDICT_POLICY.md` R3′ (2)).
 

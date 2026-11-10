@@ -40,6 +40,34 @@ def _is_strong_ll_k(grammar: dict, k: int) -> bool:
 # Core table builder
 # ---------------------------------------------------------------------------
 
+def director_cells(
+    grammar: dict,
+    k: int,
+    nullable: set[str],
+    first_k: dict[str, set[str]],
+    follow_k: dict[str, set[str]],
+) -> dict[str, dict[str, list[list[str]]]]:
+    """The strong LL(k) director table with every alternative kept.
+
+    Maps ``{nonterminal: {lookahead: [rhs, ...]}}``: rule A -> α is listed in
+    cell (A, x) for every x in director(A -> α) = FIRST_k(α) ⊕_k FOLLOW_k(A),
+    in rule order, each distinct right-hand side once (ε as ``[]``). A cell
+    with two or more right-hand sides is a strong-LL(k) conflict; the grammar
+    is strong LL(k) iff no cell has one. A rule with an empty director set
+    (unreachable left side, or a right side that derives no terminal string)
+    occupies no cell.
+    """
+    cells: dict[str, dict[str, list[list[str]]]] = {nt: {} for nt in grammar["nonterminals"]}
+    for rule in grammar["rules"]:
+        lhs: str = rule["lhs"]
+        rhs: list[str] = [] if _is_epsilon_rhs(rule["rhs"]) else rule["rhs"]
+        for lookahead in director_set(grammar, lhs, rhs, k, first_k, follow_k, nullable):
+            slot = cells[lhs].setdefault(lookahead, [])
+            if rhs not in slot:
+                slot.append(rhs)
+    return cells
+
+
 def build_parse_table(
     grammar: dict,
     k: int,
@@ -50,43 +78,29 @@ def build_parse_table(
     """Build the LL(k) parse table.
 
     Returns ``(table, conflicts)`` where:
-    - *table* maps ``{nonterminal: {lookahead: rhs}}``
+    - *table* maps ``{nonterminal: {lookahead: rhs}}`` (the first rule, in
+      rule order, of each ``director_cells`` cell)
     - *conflicts* is a (possibly empty) list of conflict dicts
 
     A conflict occurs when two rules for the same nonterminal share a lookahead
     string in their director sets.
     """
-    nonterminals: set[str] = set(grammar["nonterminals"])
-    table: dict[str, dict[str, list[str]]] = {nt: {} for nt in nonterminals}
-    conflicts: list[dict] = []
-
-    for rule in grammar["rules"]:
-        lhs: str = rule["lhs"]
-        rhs: list[str] = [] if _is_epsilon_rhs(rule["rhs"]) else rule["rhs"]
-
-        ds = director_set(grammar, lhs, rhs, k, first_k, follow_k, nullable)
-
-        for lookahead in ds:
-            if lookahead in table[lhs]:
-                existing_rhs = table[lhs][lookahead]
-                # Only record a conflict when the two rules are genuinely different.
-                if existing_rhs != rhs:
-                    # Determine conflict type
-                    # first/first if neither is triggered solely by follow
-                    conflict_type = _classify_conflict(
-                        grammar, lhs, existing_rhs, rhs, k, first_k, follow_k, nullable
-                    )
-                    conflicts.append(
-                        {
-                            "nonterminal": lhs,
-                            "lookahead": lookahead,
-                            "competing_rules": [existing_rhs, rhs],
-                            "type": conflict_type,
-                        }
-                    )
-            else:
-                table[lhs][lookahead] = rhs
-
+    cells = director_cells(grammar, k, nullable, first_k, follow_k)
+    table: dict[str, dict[str, list[str]]] = {
+        nt: {la: alts[0] for la, alts in row.items()} for nt, row in cells.items()
+    }
+    conflicts: list[dict] = [
+        {
+            "nonterminal": lhs,
+            "lookahead": lookahead,
+            "competing_rules": [alts[0], rhs],
+            # first/first if neither is triggered solely by follow
+            "type": _classify_conflict(grammar, lhs, alts[0], rhs, k, first_k, follow_k, nullable),
+        }
+        for lhs, row in cells.items()
+        for lookahead, alts in row.items()
+        for rhs in alts[1:]
+    ]
     return table, conflicts
 
 

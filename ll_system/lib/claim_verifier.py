@@ -338,7 +338,6 @@ def _parse_table_artifact(proof_sketch: dict) -> Any:
 
 def _apply_constructive_checks(
     grammar: dict | None, k: Any, proof_sketch: dict, ir: dict,
-    ll_k_result: dict | None = None,
 ) -> tuple[str, list[str], dict]:
     """Step 2 (docs/VERDICT_POLICY.md §4) on the claimed grammar, then the
     R3′ (1) parse-table check, combined into one trust level.
@@ -346,21 +345,28 @@ def _apply_constructive_checks(
     - either check refutes                  -> ``refuted``;
     - no parse table                        -> at most ``well_formed`` (R3′:
       a missing executable artifact caps trust, like a missing DPDA);
-    - the grammar is LL(k) but not strong LL(k) (``ll_k_result`` from
-      ``check_ll_k``)                       -> at most ``well_formed``, the
-      table is not run: no global table built from such a grammar's own
-      rules parses exactly L(G), so the artifact can neither certify nor
-      refute the claim (docs/THEORY.md §3.1);
-    - otherwise the parse-table run decides (``bounded_pass`` when it agreed
-      with the task oracle on every word up to the full-enumeration length,
-      else ``well_formed``): it is the full enumeration, step 2 is a sample.
+    - the grammar is not strong LL(k) for the table's k (``check_parse_table``
+      status ``not_strong``, trust ``not_applicable``; a grammar that is not
+      LL(k) at all was already refuted by ``check_ll_k`` when the claim names
+      k)                                    -> at most ``well_formed``, the
+      table is not run: if the grammar is LL(k), a conflict-free table built
+      from its rules rejects at least one word of L(G), possibly longer than
+      the enumeration bound, so the artifact can neither certify nor refute
+      the claim (docs/THEORY.md §3.1);
+    - otherwise the parse-table run decides (``bounded_pass`` when the table
+      is the strong director table of its grammar and agreed with the task
+      oracle on every decided word up to the full-enumeration length, at
+      least 30 of them, else ``well_formed``): it is the full enumeration,
+      step 2 is a sample.
 
-    ``grammar`` is None for a marker claim without a grammar: the table is
-    then checked on its own (its productions are not run through
-    ``check_ll_k`` -- a table may omit cells the grammar's FIRST/FOLLOW sets
-    would fill, so a conflict in the full table of that grammar would not
-    contradict the parser the claim actually exhibits). A left-recursive
-    table is still refuted: the parser run detects the loop.
+    ``grammar`` is None for a marker claim without a grammar: the table's own
+    productions are then its grammar G_T, and ``check_parse_table`` requires
+    G_T to be strong LL(k) and the table to be its director table. An
+    incomplete table can encode a priority choice and certify a language
+    that is not LL (S: a -> aSB, b, $ -> ε; B: b -> b, $ -> ε accepts
+    {a^i b^j | i >= j}, docs/THEORY.md §3.4), so it stays at ``well_formed``;
+    a cell contradicting the director table or a left-recursive table (the
+    parser run detects the loop) is refuted.
     """
     issues: list[str] = []
     details: dict = {}
@@ -372,17 +378,6 @@ def _apply_constructive_checks(
             return "refuted", issues, details
 
     claimed_k = k if isinstance(k, int) and not isinstance(k, bool) and k >= 1 else None
-    if (
-        grammar is not None and claimed_k is not None and isinstance(ll_k_result, dict)
-        and ll_k_result.get("is_ll_k") is True and ll_k_result.get("is_strong_ll_k") is False
-    ):
-        issues.append(
-            f"grammar is LL({claimed_k}) but not strong LL({claimed_k}): no global parse table from its "
-            "rules is conflict-free and correct, so the parse_table artifact is not run; trust capped at "
-            "well_formed (docs/VERDICT_POLICY.md R3′ (1))"
-        )
-        details["parse_table_check"] = {"trust": "not_applicable", "status": "not_strong", "k": claimed_k}
-        return "well_formed", issues, details
     table = check_parse_table(
         _parse_table_artifact(proof_sketch), k=claimed_k, grammar=grammar,
         terminals=_task_alphabet_list(ir), oracle_factory=lambda: _try_word_oracle(ir),
@@ -391,7 +386,7 @@ def _apply_constructive_checks(
     details["parse_table_check"] = {"trust": table["trust"], **table["details"]}
     if table["trust"] == "refuted":
         return "refuted", issues, details
-    if table["trust"] == "missing":
+    if table["trust"] in ("missing", "not_applicable"):
         return "well_formed", issues, details
     return table["trust"], issues, details
 
@@ -405,8 +400,10 @@ def _finish_constructive_claim(
     must at least satisfy its own claim; not LL(k) -> ``refuted``), then step 2
     and the R3′ parse-table check (``_apply_constructive_checks``).
 
-    ``grammar`` None (a marker claim without a grammar) skips ``check_ll_k``.
-    ``grammar_label`` starts the "... is NOT LL(k)" issue.
+    ``grammar`` None (a marker claim without a grammar) skips ``check_ll_k``
+    here; the parse-table check then applies the strong LL(k) test to the
+    table's own productions G_T. ``grammar_label`` starts the "... is NOT
+    LL(k)" issue.
     """
     ll_k_result = None
     if grammar is not None and _HAS_TABLE_BUILDER and isinstance(k, int) and k >= 1:
@@ -430,9 +427,7 @@ def _finish_constructive_claim(
                     checks_total=checks_total, issues=issues, details=details,
                 )
 
-    trust, extra_issues, extra_details = _apply_constructive_checks(
-        grammar, k, proof_sketch, ir, ll_k_result=ll_k_result,
-    )
+    trust, extra_issues, extra_details = _apply_constructive_checks(grammar, k, proof_sketch, ir)
     issues.extend(extra_issues)
     details.update(extra_details)
     checks_total += 1
@@ -1279,8 +1274,10 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
         checks_passed += 1
 
     # Check 4 (check_ll_k on the grammar), step 2 and R3′. No grammar: the
-    # parse table is the only executable artifact; without it the claim
-    # stays a structural pass (well_formed).
+    # parse table is the only executable artifact, and it must be the strong
+    # LL(k) director table of its own productions (an incomplete table is a
+    # priority parser, not an LL(k) certificate); without it the claim stays
+    # a structural pass (well_formed).
     return _finish_constructive_claim(
         agent, grammar, k, proof_sketch, ir, grammar_label="Grammar with marker",
         checks_passed=checks_passed, checks_total=checks_total, issues=issues, details=details,

@@ -80,10 +80,15 @@ class LLParser:
         from [A] to [..., A] without reading input or touching what lies
         below, so the same steps repeat forever (left recursion, possibly
         through nullable symbols, e.g. a cell A -> A x). Conversely, a run
-        that never halts reads finitely many symbols and then expands forever;
-        the lowest stack height it keeps returning to is never left below,
-        so the expansions opened there stay open and, nonterminals being
-        finitely many, one of them comes back on top. Every loop is caught.
+        that never halts reads finitely many symbols and from some point on
+        only expands nonterminals. Let m be the liminf of its stack heights:
+        from some point on the height never drops below m, and it equals m
+        infinitely often. Each time it equals m after that point, the
+        nonterminal on top is expanded at height m, and that expansion stays
+        open from then on. Nonterminals being finitely many, by pigeonhole
+        some A is expanded at height m twice after that point, and the second
+        time A comes back on top while its first expansion is open. Every
+        loop is caught.
         """
         k = self._k
         start = self._grammar["start"]
