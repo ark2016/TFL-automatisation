@@ -386,6 +386,24 @@ def _apply_constructive_checks(
     details["parse_table_check"] = {"trust": table["trust"], **table["details"]}
     if table["trust"] == "refuted":
         return "refuted", issues, details
+    if table["trust"] == "not_applicable" and claimed_k is None and grammar is not None and _HAS_TABLE_BUILDER:
+        # The claim names no k (k only from the table): check_ll_k has not run
+        # yet, so run it with the table's k; a grammar that is not LL(k) is refuted.
+        table_k = table["details"].get("k")
+        if isinstance(table_k, int) and table_k >= 1:
+            try:
+                ll_k_result = check_ll_k(grammar, table_k)
+            except Exception as exc:
+                issues.append(f"check_ll_k raised an error: {exc}")
+            else:
+                details["check_ll_k_result"] = ll_k_result
+                if ll_k_result.get("is_ll_k") is False:
+                    issues.append(
+                        f"the claimed grammar is NOT LL({table_k}) (k taken from the parse table): "
+                        f"{len(ll_k_result.get('conflicts', []))} conflict(s)"
+                    )
+                    details["conflicts"] = ll_k_result.get("conflicts", [])
+                    return "refuted", issues, details
     if table["trust"] in ("missing", "not_applicable"):
         return "well_formed", issues, details
     return table["trust"], issues, details

@@ -503,9 +503,9 @@ def test_marker_claim_with_a_priority_table_stays_well_formed():
     assert res["details"]["parse_table_check"]["status"] == "not_director_table"
 
 
-def test_marker_claim_with_grammar_but_no_k_applies_the_strong_test_itself():
-    """Without a claimed k, check_ll_k is skipped; the table names k = 1. The
-    parse-table check must still see that the grammar is not strong LL(1)."""
+def test_marker_claim_with_grammar_but_no_k_runs_check_ll_k_with_the_table_k():
+    """Without a claimed k, the table names k = 1: check_ll_k runs with it and
+    refutes a grammar that is not LL(1) (R3′ (1), docs/VERDICT_POLICY.md)."""
     agent = {
         "agent_name": "marker_analyzer", "verdict": "ll",
         "proof_sketch": {
@@ -516,8 +516,8 @@ def test_marker_claim_with_grammar_but_no_k_applies_the_strong_test_itself():
         "artifacts": {},
     }
     res = verify_ll_claim(agent, AIBJ_IR)
-    assert "check_ll_k_result" not in res["details"]
-    assert res["trust"] == "well_formed", res
+    assert res["details"]["check_ll_k_result"]["is_ll_k"] is False
+    assert res["trust"] == "refuted", res
     assert res["details"]["parse_table_check"] == {"trust": "not_applicable", "status": "not_strong", "k": 1}
 
 
@@ -630,3 +630,35 @@ def test_mock_pipeline_with_a_wrong_table_refutes_the_claim():
     assert cv["details"]["parse_table_check"]["status"] == "mismatch"
     assert result["verdict"] == "uncertain"
     assert result["confidence"] <= 0.40
+
+
+# ---------------------------------------------------------------- k only from the table
+
+NOT_LL_GRAMMAR = {
+    "nonterminals": ["S", "B"], "terminals": ["a", "b"], "start": "S",
+    "rules": [
+        {"lhs": "S", "rhs": ["a", "S", "B"]}, {"lhs": "S", "rhs": []},
+        {"lhs": "B", "rhs": ["b"]}, {"lhs": "B", "rhs": []},
+    ],
+}
+NOT_LL_TABLE = {
+    "k": 1, "start": "S",
+    "table": {"S": {"a": ["a", "S", "B"], "b": [], "$": []}, "B": {"b": ["b"], "$": []}},
+}
+
+
+def test_grammar_not_ll_for_the_table_k_is_refuted_when_claim_names_no_k():
+    from ll_system.lib.claim_verifier import _apply_constructive_checks
+    trust, issues, details = _apply_constructive_checks(
+        NOT_LL_GRAMMAR, None, {"parse_table": NOT_LL_TABLE},
+        {"task_type": "ll_check_grammar_lang", "language_spec": {"kind": "grammar", **NOT_LL_GRAMMAR}, "question": "is_ll_language"},
+    )
+    assert trust == "refuted"
+    assert any("NOT LL(1)" in i for i in issues)
+    assert details["check_ll_k_result"]["is_ll_k"] is False
+
+
+def test_grammar_ll_without_named_k_is_not_refuted():
+    from ll_system.lib.claim_verifier import _apply_constructive_checks
+    trust, _, _ = _apply_constructive_checks(GRAMMAR, None, {"parse_table": TABLE}, _ir())
+    assert trust != "refuted"
