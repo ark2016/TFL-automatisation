@@ -1245,6 +1245,10 @@ def _agent_retry_hint(claim_verification: dict, agent_name: str) -> dict:
                 counterexamples.append(entry["word_1"])
             if entry.get("word_2_in_l") is False and isinstance(entry.get("word_2"), str):
                 counterexamples.append(entry["word_2"])
+    # R3′: words on which the claim's own parse table disagrees with the oracle.
+    ptc = details.get("parse_table_check")
+    if isinstance(ptc, dict):
+        counterexamples.extend(w for w in (ptc.get("counterexamples") or []) if isinstance(w, str))
     if counterexamples:
         seen: set[str] = set()
         uniq: list[str] = []

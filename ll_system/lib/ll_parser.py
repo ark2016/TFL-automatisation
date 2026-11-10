@@ -52,10 +52,14 @@ class LLParser:
     # Parsing
     # ------------------------------------------------------------------
 
-    def parse(self, word: str) -> dict:
+    def parse(
+        self, word: str, *, record_steps: bool = True, max_steps: int = _MAX_STEPS,
+    ) -> dict:
         """Parse *word* using the LL(k) algorithm.
 
         *word* is treated as a sequence of single-character terminals.
+        ``record_steps=False`` leaves ``"steps"`` empty (bulk checks run the
+        parser on thousands of words); ``max_steps`` bounds the run.
 
         Returns a dict with:
         - ``"accepted"`` (bool)
@@ -79,7 +83,7 @@ class LLParser:
             padded = remaining + "$" * k
             return padded[:k]
 
-        for step_no in range(_MAX_STEPS):
+        for step_no in range(max_steps):
             if not stack:
                 # Empty stack — should not happen (we always have eos on bottom)
                 return {
@@ -92,14 +96,15 @@ class LLParser:
             top = stack[-1]
             la = _lookahead()
 
-            steps.append(
-                {
-                    "step": step_no,
-                    "stack_top": top,
-                    "lookahead": la,
-                    "pos": pos,
-                }
-            )
+            if record_steps:
+                steps.append(
+                    {
+                        "step": step_no,
+                        "stack_top": top,
+                        "lookahead": la,
+                        "pos": pos,
+                    }
+                )
 
             # ---- End sentinel on top of stack ----------------------------
             if top == "$" or (k > 1 and top == eos):
@@ -164,11 +169,15 @@ class LLParser:
                 "error": f"Unknown stack symbol '{top}'",
             }
 
+        # Not a rejection: a table whose cells keep expanding without
+        # consuming input (e.g. a left-recursive cell) never halts. Callers
+        # comparing the parser with an oracle treat this word as undecided.
         return {
             "accepted": False,
             "word": word,
             "steps": steps,
-            "error": f"Step limit ({_MAX_STEPS}) exceeded",
+            "error": f"Step limit ({max_steps}) exceeded",
+            "step_limit_exceeded": True,
         }
 
 

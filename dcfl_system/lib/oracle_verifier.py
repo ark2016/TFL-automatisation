@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from agent_system.lib.word_enumeration import full_enumeration_max_len
 from dcfl_system.lib.word_sampler import (
     check_constraints,
     sample_words,
@@ -90,22 +91,11 @@ def _full_enumeration_max_len(
     alphabet_size: int, budget: int = _DPDA_FULL_ENUM_WORD_BUDGET,
     max_len_cap: int = _DPDA_MAX_WORD_LEN,
 ) -> int:
-    """Largest word length k (capped at ``max_len_cap``, matching the
-    simulation's own ``_DPDA_MAX_WORD_LEN``) such that enumerating every word
-    over an alphabet of this size up to length k stays within ``budget``
-    total words -- for |Sigma| = 3 this gives k = 6 (3**1 + ... + 3**6 =
-    1092 <= 3000 < 1092 + 3**7), the exact bound the review asked for."""
-    if alphabet_size <= 1:
-        return max_len_cap
-    k = 0
-    total = 1  # the empty word (length 0)
-    while k < max_len_cap:
-        nxt = alphabet_size ** (k + 1)
-        if total + nxt > budget:
-            break
-        total += nxt
-        k += 1
-    return max(k, 1)
+    """Largest full-enumeration word length for the DPDA simulation
+    (``agent_system.lib.word_enumeration.full_enumeration_max_len``, shared
+    with ll_system's parse-table check, docs/VERDICT_POLICY.md R3'):
+    |Sigma| = 3 gives k = 6."""
+    return full_enumeration_max_len(alphabet_size, budget, max_len_cap)
 
 
 def trust_rank(trust: str | None) -> int:

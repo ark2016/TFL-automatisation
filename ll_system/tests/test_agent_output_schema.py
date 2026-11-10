@@ -90,3 +90,39 @@ def test_schema_for_builds_a_closed_top_level_schema():
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(REQUIRED_KEYS["classifier"])
     assert set(schema["properties"]) == set(REQUIRED_KEYS["classifier"])
+
+
+def test_marker_analyzer_schema_carries_the_r3_parse_table_entry_list():
+    """docs/VERDICT_POLICY.md R3′ (1): marker_analyzer's closed schema must let
+    the model emit the LL(k) parse table (entry-list form: a dict keyed by
+    grammar symbols cannot be closed) or null, and the prompt's own worked
+    "ll" examples must be accepted by the parse-table check."""
+    import json
+    import re
+    from pathlib import Path
+
+    from ll_system.lib.parse_table_check import normalize_parse_table
+
+    proof = schema_for("marker_analyzer")["properties"]["proof_sketch"]
+    assert "parse_table" in proof["required"]
+    variants = proof["properties"]["parse_table"]["anyOf"]
+    assert {"type": "null"} in variants
+    obj = next(v for v in variants if v.get("type") == "object")
+    assert set(obj["required"]) == {"k", "start", "entries"}
+    entry = obj["properties"]["entries"]["items"]
+    assert set(entry["required"]) == {"nonterminal", "lookahead", "rhs"}
+    assert entry["additionalProperties"] is False
+
+    prompt = (
+        Path(__file__).resolve().parent.parent / "prompts" / "ll_marker_analyzer.md"
+    ).read_text(encoding="utf-8")
+    examples = [
+        json.loads(b) for b in re.findall(r"```json\s*\n(.*?)\n```", prompt, re.S)
+        if '"verdict": "ll"' in b
+    ]
+    assert examples
+    for ex in examples:
+        table = normalize_parse_table(
+            ex["proof_sketch"]["parse_table"], k=1, grammar=None, terminals=["a", "b", "c"],
+        )
+        assert not table.conflicts()

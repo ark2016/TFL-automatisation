@@ -8,15 +8,104 @@
     "k": 1,
     "explanation": "Символ c является уникальным разделителем: слева от c находится w b (один литерный символ b, а не неограниченный повтор b*), справа — w^R. LL-парсер при чтении c однозначно определяет конец входной части и начало зеркальной. Предложенная грамматика использует c как терминальный маркер перехода.",
     "grammar": {
-      "nonterminals": ["S", "T"],
-      "terminals": ["a", "b", "c"],
+      "nonterminals": [
+        "S",
+        "T"
+      ],
+      "terminals": [
+        "a",
+        "b",
+        "c"
+      ],
       "start": "S",
       "rules": [
-        {"lhs": "S", "rhs": ["a", "S", "a"]},
-        {"lhs": "S", "rhs": ["b", "T"]},
-        {"lhs": "T", "rhs": ["c"]},
-        {"lhs": "T", "rhs": ["a", "S", "a", "b"]},
-        {"lhs": "T", "rhs": ["b", "T", "b"]}
+        {
+          "lhs": "S",
+          "rhs": [
+            "a",
+            "S",
+            "a"
+          ]
+        },
+        {
+          "lhs": "S",
+          "rhs": [
+            "b",
+            "T"
+          ]
+        },
+        {
+          "lhs": "T",
+          "rhs": [
+            "c"
+          ]
+        },
+        {
+          "lhs": "T",
+          "rhs": [
+            "a",
+            "S",
+            "a",
+            "b"
+          ]
+        },
+        {
+          "lhs": "T",
+          "rhs": [
+            "b",
+            "T",
+            "b"
+          ]
+        }
+      ]
+    },
+    "parse_table": {
+      "k": 1,
+      "start": "S",
+      "entries": [
+        {
+          "nonterminal": "S",
+          "lookahead": "a",
+          "rhs": [
+            "a",
+            "S",
+            "a"
+          ]
+        },
+        {
+          "nonterminal": "S",
+          "lookahead": "b",
+          "rhs": [
+            "b",
+            "T"
+          ]
+        },
+        {
+          "nonterminal": "T",
+          "lookahead": "c",
+          "rhs": [
+            "c"
+          ]
+        },
+        {
+          "nonterminal": "T",
+          "lookahead": "a",
+          "rhs": [
+            "a",
+            "S",
+            "a",
+            "b"
+          ]
+        },
+        {
+          "nonterminal": "T",
+          "lookahead": "b",
+          "rhs": [
+            "b",
+            "T",
+            "b"
+          ]
+        }
       ]
     }
   },

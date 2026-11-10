@@ -21,6 +21,9 @@ import re
 import time
 from typing import Any
 
+from agent_system.lib.word_enumeration import words_up_to
+from ll_system.lib.parse_table_check import check_parse_table
+
 # Defensive import — may not be available in test environment
 try:
     from ll_system.lib.ll_table_builder import check_ll_k
@@ -324,6 +327,57 @@ def _apply_constructive_step2(grammar: dict, ir: dict) -> tuple[str, list[str], 
     return "well_formed", issues, details
 
 
+def _parse_table_artifact(proof_sketch: dict) -> Any:
+    """The claim's LL(k) parse table: ``proof_sketch.parse_table``, else
+    ``artifacts.parse_table`` (injected by `verify_ll_claim`)."""
+    table = proof_sketch.get("parse_table")
+    if table is None:
+        table = proof_sketch.get("_artifacts_parse_table")
+    return table
+
+
+def _apply_constructive_checks(
+    grammar: dict | None, k: Any, proof_sketch: dict, ir: dict,
+) -> tuple[str, list[str], dict]:
+    """Step 2 (docs/VERDICT_POLICY.md §4) on the claimed grammar, then the
+    R3′ (1) parse-table check, combined into one trust level.
+
+    - either check refutes                  -> ``refuted``;
+    - no parse table                        -> at most ``well_formed`` (R3′:
+      a missing executable artifact caps trust, like a missing DPDA);
+    - otherwise the parse-table run decides (``bounded_pass`` when it agreed
+      with the task oracle on every word up to the full-enumeration length,
+      else ``well_formed``): it is the full enumeration, step 2 is a sample.
+
+    ``grammar`` is None for a marker claim without a grammar: the table is
+    then checked on its own (its productions are not run through
+    ``check_ll_k`` -- a table may omit cells the grammar's FIRST/FOLLOW sets
+    would fill, so a conflict in the full table of that grammar would not
+    contradict the parser the claim actually exhibits).
+    """
+    issues: list[str] = []
+    details: dict = {}
+    if grammar is not None:
+        step2_trust, step2_issues, step2_details = _apply_constructive_step2(grammar, ir)
+        issues.extend(step2_issues)
+        details.update(step2_details)
+        if step2_trust == "refuted":
+            return "refuted", issues, details
+
+    claimed_k = k if isinstance(k, int) and not isinstance(k, bool) and k >= 1 else None
+    table = check_parse_table(
+        _parse_table_artifact(proof_sketch), k=claimed_k, grammar=grammar,
+        terminals=_task_alphabet_list(ir), oracle_factory=lambda: _try_word_oracle(ir),
+    )
+    issues.extend(table["issues"])
+    details["parse_table_check"] = {"trust": table["trust"], **table["details"]}
+    if table["trust"] == "refuted":
+        return "refuted", issues, details
+    if table["trust"] == "missing":
+        return "well_formed", issues, details
+    return table["trust"], issues, details
+
+
 # ---------------------------------------------------------------------------
 # Step 2 for the substitution method (docs/VERDICT_POLICY.md §4 "ll / substitution"):
 # instantiate branch_words at n = k + 2 for k in {1, 2}, check both concrete
@@ -597,15 +651,11 @@ def _continuable_ll(
         return None
 
 
-def _all_words_ll(alphabet: list[str], max_len: int) -> list[str]:
-    """All words over `alphabet` of length 0..max_len, shortest first --
-    NOT filtered through the task's own oracle (unlike `generate_words`,
-    which only returns words already IN L, and would therefore make every
-    dead-class check trivially pass via the empty extension)."""
-    words = [""]
-    for length in range(1, max_len + 1):
-        words.extend("".join(t) for t in itertools.product(alphabet, repeat=length))
-    return words
+# All words over the alphabet of length 0..max_len, shortest first -- NOT
+# filtered through the task's own oracle (unlike `generate_words`, which only
+# returns words already IN L and would make every dead-class check trivially
+# pass via the empty extension). Shared with the R3' parse-table check.
+_all_words_ll = words_up_to
 
 
 def _check_dead_class_finite_ll(
@@ -844,10 +894,13 @@ def verify_ll_grammar_claim(proof_sketch: dict, ir: dict) -> dict:
         except Exception as exc:
             issues.append(f"check_ll_k raised an error: {exc}")
 
-    # Step 2 (docs/VERDICT_POLICY.md §4): task-alphabet + language-equivalence
-    trust, step2_issues, step2_details = _apply_constructive_step2(grammar, ir)
-    issues.extend(step2_issues)
-    details.update(step2_details)
+    # Step 2 (docs/VERDICT_POLICY.md §4) + R3′ parse-table check
+    trust, extra_issues, extra_details = _apply_constructive_checks(grammar, k, proof_sketch, ir)
+    issues.extend(extra_issues)
+    details.update(extra_details)
+    checks_total += 1
+    if trust != "refuted" and details["parse_table_check"]["trust"] != "missing":
+        checks_passed += 1
 
     return _make_result(
         agent=agent, trust=trust, checks_passed=checks_passed,
@@ -1129,10 +1182,15 @@ def verify_grammar_transformation_claim(proof_sketch: dict, ir: dict) -> dict:
         except Exception as exc:
             issues.append(f"check_ll_k raised an error: {exc}")
 
-    # Step 2 (docs/VERDICT_POLICY.md §4): task-alphabet + language-equivalence
-    trust, step2_issues, step2_details = _apply_constructive_step2(transformed_grammar, ir)
-    issues.extend(step2_issues)
-    details.update(step2_details)
+    # Step 2 (docs/VERDICT_POLICY.md §4) + R3′ parse-table check
+    trust, extra_issues, extra_details = _apply_constructive_checks(
+        transformed_grammar, k, proof_sketch, ir,
+    )
+    issues.extend(extra_issues)
+    details.update(extra_details)
+    checks_total += 1
+    if trust != "refuted" and details["parse_table_check"]["trust"] != "missing":
+        checks_passed += 1
 
     return _make_result(
         agent=agent,
@@ -1205,10 +1263,19 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
         or proof_sketch.get("ll_grammar")
         or proof_sketch.get("_artifacts_ll_grammar")  # injected by verify_ll_claim
     )
+    # Prompt uses "suggested_k"; accept both names.
+    k = proof_sketch.get("k") or proof_sketch.get("suggested_k")
     if grammar is None:
-        # No artifact to check semantically — structural pass only.
+        # No grammar: the parse table (R3′) is the only executable artifact;
+        # without it the claim stays a structural pass (well_formed).
+        trust, extra_issues, extra_details = _apply_constructive_checks(None, k, proof_sketch, ir)
+        issues.extend(extra_issues)
+        details.update(extra_details)
+        checks_total += 1
+        if trust != "refuted" and details["parse_table_check"]["trust"] != "missing":
+            checks_passed += 1
         return _make_result(
-            agent=agent, trust="well_formed", checks_passed=checks_passed,
+            agent=agent, trust=trust, checks_passed=checks_passed,
             checks_total=checks_total, issues=issues, details=details,
         )
 
@@ -1224,8 +1291,6 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
 
     # Check 4: run check_ll_k if available — the grammar must at least
     # satisfy its own claim before anything else is checked.
-    # Prompt uses "suggested_k"; accept both names.
-    k = proof_sketch.get("k") or proof_sketch.get("suggested_k")
     if _HAS_TABLE_BUILDER and isinstance(k, int) and k >= 1:
         checks_total += 1
         try:
@@ -1245,10 +1310,13 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
         except Exception as exc:
             issues.append(f"check_ll_k raised an error: {exc}")
 
-    # Step 2 (docs/VERDICT_POLICY.md §4): task-alphabet + language-equivalence
-    trust, step2_issues, step2_details = _apply_constructive_step2(grammar, ir)
-    issues.extend(step2_issues)
-    details.update(step2_details)
+    # Step 2 (docs/VERDICT_POLICY.md §4) + R3′ parse-table check
+    trust, extra_issues, extra_details = _apply_constructive_checks(grammar, k, proof_sketch, ir)
+    issues.extend(extra_issues)
+    details.update(extra_details)
+    checks_total += 1
+    if trust != "refuted" and details["parse_table_check"]["trust"] != "missing":
+        checks_passed += 1
 
     return _make_result(
         agent=agent,
@@ -1537,11 +1605,16 @@ def verify_ll_claim(agent_result: dict, ir: dict) -> dict:
     # For marker_detection: prompt puts grammar in artifacts.ll_grammar.
     # Inject it into proof_sketch so verify_marker_claim can find it.
     method = proof_sketch.get("method", "")
+    artifacts = agent_result.get("artifacts") or {}
+    if not isinstance(artifacts, dict):
+        artifacts = {}
     if method == "marker_detection":
-        artifacts = agent_result.get("artifacts") or {}
         art_grammar = artifacts.get("ll_grammar")
         if art_grammar and not proof_sketch.get("grammar") and not proof_sketch.get("ll_grammar"):
             proof_sketch = {**proof_sketch, "_artifacts_ll_grammar": art_grammar}
+    # R3′: the LL(k) parse table may sit in proof_sketch or in artifacts.
+    if proof_sketch.get("parse_table") is None and artifacts.get("parse_table") is not None:
+        proof_sketch = {**proof_sketch, "_artifacts_parse_table": artifacts["parse_table"]}
     dispatch = {
         "ll_grammar_construction": verify_ll_grammar_claim,
         "substitution": verify_substitution_claim,

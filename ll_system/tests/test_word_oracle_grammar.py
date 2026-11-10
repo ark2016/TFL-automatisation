@@ -129,10 +129,11 @@ class TestGrammarOracle:
 # constructive step 2
 # ---------------------------------------------------------------------------
 
-def _constructive(candidate: dict, ir: dict, k: int = 1) -> dict:
-    return verify_ll_grammar_claim(
-        {"method": "ll_grammar_construction", "k": k, "grammar": candidate}, ir,
-    )
+def _constructive(candidate: dict, ir: dict, k: int = 1, parse_table: dict | None = None) -> dict:
+    claim = {"method": "ll_grammar_construction", "k": k, "grammar": candidate}
+    if parse_table is not None:
+        claim["parse_table"] = parse_table
+    return verify_ll_grammar_claim(claim, ir)
 
 
 LL1_ANBN = {
@@ -170,15 +171,27 @@ SUPERSET = {
 }
 
 
+# LL(1) parse table of LL1_ANBN (docs/VERDICT_POLICY.md R3').
+LL1_ANBN_TABLE = {"S": {"a": ["a", "S", "b"], "b": [], "$": []}}
+
+
 class TestConstructiveStep2OnGrammarTasks:
     def test_equivalent_grammar_is_bounded_pass_never_verified_format2(self):
-        result = _constructive(LL1_ANBN, _format2(ANBN))
+        result = _constructive(LL1_ANBN, _format2(ANBN), parse_table=LL1_ANBN_TABLE)
         assert result["trust"] == "bounded_pass"
 
     def test_equivalent_grammar_is_bounded_pass_format3(self):
-        result = _constructive(LL1_ANBN, _format3(ANBN))
+        result = _constructive(LL1_ANBN, _format3(ANBN), parse_table=LL1_ANBN_TABLE)
         assert result["trust"] == "bounded_pass"
         assert result["details"]["language_equivalence"]["method"] == "grammar_equivalent_sample"
+        assert result["details"]["parse_table_check"]["trust"] == "bounded_pass"
+
+    def test_equivalent_grammar_without_parse_table_is_capped_at_well_formed(self):
+        for ir in (_format2(ANBN), _format3(ANBN)):
+            result = _constructive(LL1_ANBN, ir)
+            assert result["trust"] == "well_formed"
+            assert result["details"]["language_equivalence"]["method"] == "grammar_equivalent_sample"
+            assert result["details"]["parse_table_check"]["trust"] == "missing"
 
     def test_subset_refuted_both_formats(self):
         for ir in (_format2(ANBN), _format3(ANBN)):

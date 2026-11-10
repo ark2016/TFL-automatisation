@@ -11,19 +11,12 @@ from __future__ import annotations
 from itertools import product as cart_product
 from typing import Callable
 
+from .word_enumeration import words_up_to as _words_up_to
+
 
 # ---------------------------------------------------------------------------
 # Helper: word generation
 # ---------------------------------------------------------------------------
-
-def _words_up_to(alphabet: list[str], max_len: int) -> list[str]:
-    """Generate all words over *alphabet* with length 0..max_len."""
-    words: list[str] = [""]
-    for length in range(1, max_len + 1):
-        for combo in cart_product(alphabet, repeat=length):
-            words.append("".join(combo))
-    return words
-
 
 def _words_of_length(alphabet: list[str], length: int) -> list[str]:
     """Generate all words over *alphabet* of exactly *length*."""

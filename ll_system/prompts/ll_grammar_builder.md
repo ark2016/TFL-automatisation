@@ -147,6 +147,27 @@ Return **only** valid JSON. No markdown fences, no extra text.
 - `"uncertain"`: could not build a grammar, but cannot rule out LL either.
 - `"not_ll"`: do NOT use this verdict — this agent is CONSTRUCTIVE. If you cannot build a grammar, use `"uncertain"`, not `"not_ll"`.
 
+### `proof_sketch.parse_table` is required with `"ll"` (docs/VERDICT_POLICY.md R3′)
+
+An `"ll"` claim must carry the LL(k) parse table of `proof_sketch.ll_grammar`. The pipeline runs
+this table as a table-driven predictive parser on **every** word over the task alphabet up to a
+bounded length and compares each answer with the task's membership oracle:
+
+- a table that agrees with the oracle on all those words gives `trust: "bounded_pass"` (confidence ≤ 0.85);
+- a cell with two different right-hand sides (a conflict), a right-hand side that is not a rule of
+  `ll_grammar`, or a single word the parser accepts or rejects wrongly makes the claim `refuted`;
+- with no `parse_table` the claim can never rise above `well_formed` (confidence ≤ 0.55).
+
+Format: `{nonterminal: {lookahead: rhs}}`, one cell per (nonterminal, lookahead).
+- `rhs` is the list of symbols of the chosen rule; `[]` or `["ε"]` is the ε-rule.
+- A lookahead is a string of at most k terminals. `"$"` marks the end of input and can only pad the
+  end, so for k = 2 `"a$"` means "the input is just `a`", and `"$$"` (or `"$"`, or `""`) means "the
+  input has ended". A lookahead shorter than k means the input ends after it.
+- List every cell the parser needs. A missing cell means "error": the parser rejects the word.
+- The table is one global (nonterminal, lookahead) → rule map, i.e. a strong LL(k) table
+  (`ll_grammar` must be strong LL(k) for this k; every LL(k) language has a strong LL(k) grammar,
+  docs/THEORY.md §3.1).
+
 ---
 
 ## Solved Examples

@@ -93,6 +93,20 @@ _ARTIFACTS_NO_GRAMMAR = schema_object({
     "ll_grammar": schema_null(),
 })
 
+# docs/VERDICT_POLICY.md R3′ (1): the LL(k) parse table an "is LL(k)" claim
+# carries, in the entry-list form (a dict keyed by the grammar's own
+# nonterminals cannot be a closed schema). Read by
+# ll_system/lib/parse_table_check.py.
+_PARSE_TABLE_SCHEMA = schema_object({
+    "k": schema_number(),
+    "start": schema_string(),
+    "entries": schema_array(schema_object({
+        "nonterminal": schema_string(),
+        "lookahead": schema_string(),
+        "rhs": schema_string_array(),
+    })),
+})
+
 _PROOF_SKETCH_BY_SPECIALIST: dict[str, dict] = {
     "ambiguity_detector": schema_object({
         "method": schema_string(enum=["essential_ambiguity"]),
@@ -116,6 +130,7 @@ _PROOF_SKETCH_BY_SPECIALIST: dict[str, dict] = {
         "marker_description": schema_string(),
         "ll_usage": nullable(schema_string()),
         "suggested_k": nullable(schema_number()),
+        "parse_table": nullable(_PARSE_TABLE_SCHEMA),
     }),
     "prefix_classes_agent": schema_object({
         "method": schema_string(enum=["prefix_classes"]),
