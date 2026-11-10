@@ -35,6 +35,7 @@ FINAL_STATUSES = ("submitted", "incomplete", "budget_exhausted", "error")
 #: exit codes of a run (the CLI's): 0 report accepted, 1 ended without a report or a
 #: follow-up failed (the previous report stays), 2 usage or setup error, 3 waiting for a human
 EXIT_SUBMITTED, EXIT_NO_REPORT, EXIT_USAGE, EXIT_AWAITING = 0, 1, 2, 3
+EXIT_FOLLOWUP_FAILED = EXIT_NO_REPORT  # alias, same number: a follow-up failed, the previous report stays
 
 #: the longest follow-up message; its progress event keeps the same amount
 MAX_MESSAGE_CHARS = 20_000
@@ -138,7 +139,7 @@ def read_result(run_dir: str | Path) -> dict[str, Any] | None:
 
 
 __all__ = [
-    "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_NO_REPORT", "EXIT_SUBMITTED", "EXIT_USAGE", "FINAL_STATUSES",
+    "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_FOLLOWUP_FAILED", "EXIT_NO_REPORT", "EXIT_SUBMITTED", "EXIT_USAGE", "FINAL_STATUSES",
     "MAX_MESSAGE_CHARS", "REPORT_HISTORY_DIR", "RESULT_FILES", "REVIEW_ALL", "REVIEW_AUTO", "REVIEW_FORMALIZATION",
     "REVIEW_MODES", "RUN_FILE", "STATUS_AWAITING", "UNANSWERED_REPLY", "DecisionError", "RunError", "first_decision", "get_field",
     "load_run", "message_text", "now", "read_result", "retry_on_sharing_violation", "save_run",

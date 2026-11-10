@@ -1885,6 +1885,12 @@ function deepEditor(pv, onSave, onCancel, setMsg) {
   if (pv.point === 'formalization') {
     const tr = ta(a.transcription || a.task_text || '', 3);
     if (allow('transcription')) { box.appendChild(field('Транскрипция', tr)); inputs.push(['transcription', tr]); }
+    if (a.followup_text) {  // the follow-up chat message that led to this review; the task above stays the original
+      const note = document.createElement('div');
+      note.className = 'muted';
+      note.textContent = 'Уточнение (сообщение чата): ' + a.followup_text;
+      box.appendChild(note);
+    }
     const cls = sel(DEEP_CLASSES, a.class || '');
     const ir = ta(a.ir ? JSON.stringify(a.ir, null, 2) : '', 10, true);
     if (allow('class')) { box.appendChild(field('Класс', cls, a.valid === false ? 'validate_ir: IR некорректен' : '')); inputs.push(['class', cls]); }

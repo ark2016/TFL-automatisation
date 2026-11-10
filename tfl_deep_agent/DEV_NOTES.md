@@ -3365,8 +3365,12 @@ Final fix round (user's decision; everything else from the reviews goes to the b
   question, a main call that still would enter wrap-up or be refused gets a text reply marked `run_store.UNANSWERED_REPLY` with no
   reservation and no charge. `followup.last_reply` skips that message, `followup_unanswered` carries the chat's note, the CLI prints it
   on stderr (`RunOutcome.followup_note`). The text stays in the conversation, so a later turn reads that the message had no answer.
-  `prompts/main.md` stays: no sentence in it became false. Left as they were, as decided: no accepted report, no budget stop. Also
+  `prompts/main.md` stays: no sentence in it became false. Left as they were, as decided: no accepted report. Also
   left: the day's remainder is what binds (no stop, the call goes to wrap-up), and a scope already in wrap-up.
+  CHANGED by the user on 2026-11-10: the earlier "leave it" for a run with no budget stop (`--auto-approve`) is withdrawn.
+  `declining_skips_the_call` no longer asks for `budget_stop_on`: any follow-up of a run with an accepted report skips
+  the call when the money does not cover it, so a truncated, auto-accepted report never replaces the accepted one
+  (`test_an_auto_approved_run_keeps_its_accepted_report_when_the_follow_up_has_no_money`).
 - API-021: `_hitl_view` and `pending_card` apply today's remainder, and the card's summary line is rebuilt from it. API-022: the
   tooltip and the docs say «Без проверок». API-023 / OO-022: a record the lab is not waiting for gives the `--abandon` command,
   whatever the agent's status. CA-018: `_proved_in` reads `gate_entry()`.
@@ -3449,3 +3453,19 @@ Follow-up: the compact exam_04 DPDA (356 transitions) fits the 2000-transition `
   be substrings of their example files, and the "not in the image" list must stay. `lean_statement` still refuses `ll`.
 - Skills: `cfl` step 8 no longer says the only compiled sample is {aⁿbⁿcⁿ} and that closure is not ported; the references to
   a `lean` skill (there is none) now name the `lean-formalizer` subagent.
+
+
+## deep-decisions (user decisions of 2026-11-10)
+
+- `EXIT_FOLLOWUP_FAILED = 1` (alias of `EXIT_NO_REPORT`, `run_store.py`, used by `cli._report` and `hitl._finish_segment` for a failed
+  follow-up); numeric codes and TFL Lab's rc handling unchanged.
+- Budget stop in review mode `auto`: exit 3, no terminal dialog in the starting process; a later `--resume` on a terminal asks.
+  Docs only (README, `docs/kb/budget.md`).
+- API-025: `review_summary` ignores a `rejected` HITL 2 review of the same digest when an approving review of that digest exists.
+- CA-015: see the entry above (`declining_skips_the_call` no longer needs `budget_stop_on`).
+- The report's task is the original task; a follow-up message that led to a HITL 1 review is stored as `review["followup_text"]`
+  (card arg `followup_text`) and rendered as «Уточнение» (`result["clarifications"]`, `clarification_section`). Runs written before this
+  key keep the old behaviour for their own reviews (`review["task_text"]` that differs from the first message still wins).
+- `render.safe_task_text` escapes `*` outside `$...$` / `$$...$$` in the task.
+- Agent identity keys (REG `module`, CFL `agent`, DCFL/LL `agent_name`) are kept; the row is in `docs/pipeline_capabilities.json`
+  and the generated README table.

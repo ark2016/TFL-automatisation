@@ -51,6 +51,7 @@ def differences_table(pipes: list[dict]) -> str:
     row("Retry", [p["retry"] for p in pipes])
     row("Hypothesis inversion", [yn(p["hypothesis_inversion"]) for p in pipes])
     row("Proof output / formalization", [p["proof_output"] for p in pipes])
+    row("Agent identity key in the structured-output schema", [p["agent_key"] for p in pipes])
     return "\n".join(lines)
 
 

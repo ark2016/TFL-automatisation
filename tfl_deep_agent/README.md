@@ -114,8 +114,8 @@ tfl-deep --resume RUN_DIR --decision approve|edit|reject
 | `--abandon` | with `--resume`: drop a follow-up, whether its process was killed or it waits at a stop (a draft waiting for a decision is thrown away); the previous report, status and reviews come back. It is refused while the pid recorded in `followup_in_progress` is alive (a resume after a stop records its own pid); `--force` skips that check, for a pid reused by an unrelated process after a hard kill. It takes no other flag. |
 
 Exit codes: `0` the report was accepted, `1` the run ended without a report (a partial result is written: `incomplete`,
-`error` or `budget_exhausted`) or a follow-up failed (the previous report stays),
-`2` usage or setup error, `3` waiting for a human decision.
+`error` or `budget_exhausted`) or a follow-up failed (the previous report stays; the alias `EXIT_FOLLOWUP_FAILED = 1` in
+`cli.py` / `run_store.py`, same number as `EXIT_NO_REPORT`), `2` usage or setup error, `3` waiting for a human decision.
 
 **Live runs.** By the repository rules (root `CLAUDE.md`), a live run happens only on the user's explicit request,
 with a budget agreed beforehand. Use Haiku only (`TFL_MODEL_OVERRIDE=claude-haiku-5-5 ... --live`), state the estimated
@@ -206,7 +206,9 @@ How the decision is given:
   process. The budget, the call counters, the evidence ledger and the mock cursors are restored from the run
   directory.
 - `--review-mode auto` (or `--auto-approve`) answers every review with approve, see below. In review mode `auto` a budget stop on a terminal still exits with
-  code 3 and waits for `--resume`, because money is never auto-approved.
+  code 3 and waits for `--resume`, because money is never auto-approved. This is decided (user, 2026-11-10): in the
+  process that started the run in review mode `auto` there is no terminal dialog for money, only exit code 3; a later
+  `--resume` on a terminal does ask.
 
 ### Review modes
 
@@ -243,8 +245,9 @@ asks; only `auto_approve` or `budget_stop=False` turns it off.
 Inside a follow-up on a run with an accepted report, declining makes no model call, and neither does a top-up too small
 for the call: nothing is charged, the report, status and revision stay, and the chat gets a note (`followup_unanswered`:
 "сообщение без ответа: бюджет не продлён, отчёт прежний"). Evidence already paid for stays in `evidence.jsonl`. A
-follow-up with no accepted report keeps wrap-up, which is how it gets its first report; so does a run with no budget
-stop.
+follow-up with no accepted report keeps wrap-up, which is how it gets its first report. A run with no budget stop
+(`--auto-approve`) is protected the same way (user, 2026-11-10): a follow-up of an accepted report with too little money
+makes no model call, so the accepted report and its label are never replaced by a truncated, auto-accepted one.
 
 `auto_approve` means review mode `auto` plus no budget stop, so only a run started with `--auto-approve` goes straight
 to the report. Review mode `auto` on its own, and `--approve-rest`, concern reviews and still stop for money.
@@ -273,8 +276,15 @@ the run itself). A restore that fails keeps the record: TFL Lab closes the compo
 
 A HITL 2 review record stores `report_digest`, the digest of the report it decided (for an edit, of the edited report).
 `human_review` in the result comes from the last review whose digest matches the current report, so a rejected draft
-followed by a text reply leaves "approved by a human" on the report that was approved. Older runs, with no digest, read
+followed by a text reply leaves "approved by a human" on the report that was approved. A rejection of a byte-identical
+report (same digest) is ignored while an approving review of that digest exists. Older runs, with no digest, read
 the last review.
+
+The report's «Условие» is always the original task (the text, or the intake transcription of a file, or the text the human
+corrected at HITL 1). A follow-up chat message that leads to a new IR review is not the task: it is stored in that
+review as `followup_text`, shown on the HITL 1 card (`followup_text`, «Clarification») and printed as «Уточнение»
+under «Условие» in `result.md` / `result.html` (`result["clarifications"]`, all of them in order). Stars of the task
+that stand outside `$...$` / `$$...$$` are escaped in the report, so `(ab)*` keeps them; math is left to KaTeX.
 
 An accepted report is rated by what existed when it was accepted. A new IR reviewed in a follow-up, or a tool run after
 the report, moves neither its trust, cap and verdict token nor its task. A report submitted after them binds to them as

@@ -12,15 +12,16 @@ from tfl_deep_agent import hitl  # noqa: E402
 from tfl_deep_agent.hitl import FORMALIZATION  # noqa: E402
 
 
-def test_card_task_is_the_task_stated_before_the_reviewed_call():
+def test_card_task_is_the_original_task_and_the_follow_up_message_is_kept_apart():
     a = HumanMessage(content="Task A")
     note = HumanMessage(content="HITL 1 ...", additional_kwargs={"tfl_hitl": FORMALIZATION})
     b = HumanMessage(content="Task B")
     target = AIMessage(content="ir B")
     msgs = [a, AIMessage(content="ir A"), note, b, target]
-    assert hitl._first_human_text(msgs, 4) == "Task B"
-    assert hitl._first_human_text(msgs, 1) == "Task A"
-    assert hitl._first_human_text(msgs[:3]) == "Task A"  # harness notes are not tasks
+    assert hitl._first_human_text(msgs) == "Task A"
+    assert hitl._followup_text(msgs, 4) == "Task B"
+    assert hitl._followup_text(msgs, 1) is None  # the run's own first message is not a follow-up
+    assert hitl._followup_text(msgs[:3], 3) is None  # harness notes are not tasks
 
 
 def test_report_names_the_task_of_the_latest_reviewed_ir():

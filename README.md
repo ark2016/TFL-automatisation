@@ -179,9 +179,14 @@ and closure verification follows oracle construction.
 | Retry | LLM planner | LLM planner | rule-based | reasoning-driven |
 | Hypothesis inversion | ✓ | ✓ | — | — |
 | Proof output / formalization | Lean proof body from IR-fixed statement (opt-in) | Structured `proof_document`; optional Lean step | Optional Lean step only | Structured/plain-language proof; no Lean |
+| Agent identity key in the structured-output schema | `module` | `agent` | `agent_name` | `agent_name` |
 <!-- END capabilities-differences -->
 
 (Generated from `docs/pipeline_capabilities.json`; see above.)
+
+The identity key differs on purpose: each pipeline's structured-output schema (`agent_output_schema.py`) pins its own
+key for the agent's name (REG `module`, CFL `agent`, DCFL / LL `agent_name`), and the prompts and parsers of that
+pipeline use it. Do not rename one without changing its schema, prompts, parsers and tests together.
 
 ### Live-runner reliability layer
 

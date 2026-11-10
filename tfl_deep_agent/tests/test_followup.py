@@ -974,11 +974,11 @@ def test_review_summary_of_runs_with_and_without_digests():
     # reviews of other reports only: this one was not reviewed
     other = [{"point": "report", "decision": "approved", "report_digest": "another"}]
     assert hitl.review_summary({**on, "reviews": other}, report) == ("not reviewed", {"decision": "not_reviewed"})
-    # the same content decided twice: the last decision on it
+    # the same content approved, then rejected (API-025): the approval stays
     digest = followup.report_digest(report)
     twice = [{"point": "report", "decision": "approved", "report_digest": digest},
              {"point": "report", "decision": "rejected", "report_digest": digest}]
-    assert "rejected" in hitl.review_summary({**on, "reviews": twice}, report)[0]
+    assert hitl.review_summary({**on, "reviews": twice}, report)[0] == "approved by a human at HITL 2"
 
 
 # ---------------------------------------------------------------------------
@@ -1844,6 +1844,26 @@ def test_a_top_up_too_small_for_the_call_ends_the_same_way(tmp_path, left):
     assert run["budget_extensions"][-1]["add_usd"] == 0.0001
 
 
+@LOW
+def test_an_auto_approved_run_keeps_its_accepted_report_when_the_follow_up_has_no_money(tmp_path, left):
+    """CA-015, decided 2026-11-10: no budget stop (--auto-approve) does not mean the report may be
+    replaced by a truncated one; the call is skipped and the accepted report and label stay."""
+    script = H.base_script()
+    script["models"]["main"] += [{"content": ANSWER}]
+    out = start(tmp_path, script, auto_approve=True)
+    assert out.status == "submitted", out.result
+    d = out.run_dir
+    assert hitl.load_run(d)["budget_stop"] is False
+    run = hitl.load_run(d)
+    run["settings"]["budget"].update({"per_task_usd": spent(d) + left, "reserve_for_report_usd": left * 0.99})
+    hitl.save_run(d, run)
+    before, money, calls = rating(d), spent(d), main_calls(d)
+    report, label = result_json(d)["report"], result_json(d)["human_review"]
+    out = hitl.send_followup(d, QUESTION)
+    assert_unanswered(d, out, before, calls=calls, money=money)
+    assert result_json(d)["report"] == report and result_json(d)["human_review"] == label
+
+
 def test_the_next_message_after_an_unanswered_one_asks_for_money_again(tmp_path):
     d = finished(tmp_path, {"content": ANSWER})
     run = hitl.load_run(d)
@@ -1880,8 +1900,10 @@ def test_a_message_with_no_accepted_report_keeps_the_old_wrap_up():
     assert not BS.declining_skips_the_call({"budget_stop": True,
                                             "followup_in_progress": {"previous_status": "budget_exhausted"}})
     assert not BS.declining_skips_the_call({"budget_stop": True})  # the run itself: wrap-up writes its report
-    assert not BS.declining_skips_the_call({"budget_stop": False,  # no stop, nobody declined
-                                            "followup_in_progress": {"previous_status": "submitted"}})
+    # user decision 2026-11-10: a run with no budget stop (--auto-approve) is protected too
+    assert BS.declining_skips_the_call({"budget_stop": False,
+                                        "followup_in_progress": {"previous_status": "submitted"}})
+    assert not BS.declining_skips_the_call({"budget_stop": False})
 
 
 def test_a_resumed_followup_records_its_own_pid(tmp_path, monkeypatch):
@@ -1962,3 +1984,106 @@ def test_cli_resume_rejects_force_without_abandon(tmp_path, capsys, extra):
     with pytest.raises(SystemExit) as stop:
         cli.main(["--resume", str(tmp_path), "--force", *extra])
     assert stop.value.code == run_store.EXIT_USAGE and "--force" in capsys.readouterr().err
+
+
+def test_rejecting_a_byte_identical_report_keeps_the_accepted_label(tmp_path):
+    """API-025: the digest filter ignores a rejection of the same bytes when an approval holds that digest."""
+    d = finished(tmp_path, H.report_call(H.base_script(), call_id="call-same"), {"content": "Оставляю прежний отчёт."})
+    approved = result_json(d)
+    assert hitl.send_followup(d, "Повтори отчёт").pending.point == hitl.REPORT
+    out = hitl.resume_run(d, REJECT)
+    assert out.status == "submitted"
+    result = result_json(d)
+    assert result["report"] == approved["report"]
+    assert result["human_review"] == "approved by a human at HITL 2"
+    reviews = report_reviews(hitl.load_run(d))
+    assert [r["decision"] for r in reviews] == ["approved", "rejected"]
+    assert reviews[0]["report_digest"] == reviews[1]["report_digest"]
+
+
+def test_review_summary_ignores_a_rejection_of_the_same_digest_only_when_an_approval_holds_it():
+    report = {"verdict": "regular", "summary": "s"}
+    digest = followup.report_digest(report)
+    on = {"hitl": {"report": True}}
+    rows = [{"point": "report", "decision": "approved", "report_digest": digest},
+            {"point": "report", "decision": "rejected", "report_digest": digest}]
+    assert hitl.review_summary({**on, "reviews": rows}, report)[0] == "approved by a human at HITL 2"
+    assert "rejected" in hitl.review_summary({**on, "reviews": rows[1:]}, report)[0]
+    assert hitl.review_summary({**on, "reviews": rows[::-1]}, report)[0] == "approved by a human at HITL 2"
+
+
+# ---------------------------------------------------------------------------
+# A follow-up message that leads to a new IR review: «Условие» stays, «Уточнение» is added
+# ---------------------------------------------------------------------------
+
+def _clarified_run(tmp_path, *, script=None, task=TASK):
+    """A finished LL run; its follow-up NEW_TASK reviews IR B, then a new report is submitted and accepted."""
+    script = add_ir_b(script or H.base_script(), LL_IR_B, "ll", draft_reply("Отчёт после уточнения.", "call-draft-b"))
+    out = hitl.start_run(tmp_path / "cl", task, settings=H.example_settings(), mock_script=script)
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    assert out.status == "submitted", out.result
+    d = out.run_dir
+    to_ir_b_review(d)
+    out = hitl.resume_run(d, APPROVE)
+    assert out.awaiting and out.pending.point == hitl.REPORT, out.result
+    out = hitl.resume_run(d, APPROVE)
+    assert out.status == "submitted" and result_json(d)["report"]["summary"] == "Отчёт после уточнения."
+    return d
+
+
+def test_a_correction_follow_up_keeps_the_original_task_and_shows_the_clarification(tmp_path):
+    d = _clarified_run(tmp_path)
+    result = result_json(d)
+    assert result["task"] == TASK
+    assert result["clarifications"] == [NEW_TASK]
+    md = (d / "result.md").read_text(encoding="utf-8")
+    assert md.index("## Условие") < md.index(TASK[:20]) < md.index("## Уточнение") < md.index(NEW_TASK)
+    html = (d / "result.html").read_text(encoding="utf-8")
+    assert "Уточнение" in html and NEW_TASK in html
+    review = [r for r in hitl.load_run(d)["reviews"] if r["point"] == hitl.FORMALIZATION][-1]
+    assert review["followup_text"] == NEW_TASK and review["task_text"] == TASK
+
+
+def test_the_hitl1_card_of_a_follow_up_review_shows_the_clarification(tmp_path):
+    script = add_ir_b(H.base_script(), LL_IR_B, "ll")
+    out = hitl.start_run(tmp_path / "card", TASK, settings=H.example_settings(), mock_script=script)
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    out = hitl.send_followup(out.run_dir, NEW_TASK)
+    args = out.pending.request["action_requests"][0]["args"]
+    assert args["task_text"] == TASK and args["followup_text"] == NEW_TASK
+    card = (out.run_dir / hitl.CARD_FILE).read_text(encoding="utf-8")
+    assert "Clarification" in card and "другая задача" in card
+
+
+def test_a_file_task_keeps_its_transcription_and_gets_the_clarification(tmp_path):
+    from tfl_deep_agent.intake import files as intake_files
+
+    pdf = tmp_path / "task.pdf"
+    pdf.write_bytes(H.make_pdf())
+    d = _clarified_run(tmp_path, script=H.pdf_script(), task=intake_files.from_path(pdf))
+    result = result_json(d)
+    assert result["task"] == H.INTAKE_TRANSCRIPTION
+    assert result["clarifications"] == [NEW_TASK]
+
+
+def test_several_clarifications_are_listed_in_order():
+    from tfl_deep_agent.reports import render
+
+    md = render.render_report({"task": "TASKTEXT", "clarifications": ["первое", "второе"],
+                               "status": "incomplete"}).markdown
+    assert md.index("TASKTEXT") < md.index("## Уточнение") < md.index("**1.** первое") < md.index("**2.** второе")
+    assert "Уточнение" not in render.render_report({"task": "T", "status": "incomplete"}).markdown
+
+
+def test_the_task_keeps_its_stars_outside_math_and_katex_is_untouched():
+    from tfl_deep_agent.reports import render
+
+    esc = render.escape_stars_outside_math
+    assert esc("(ab)* и {a,b}*") == "(ab)\\* и {a,b}\\*"
+    assert esc("$a^*$ и $$b^*$$") == "$a^*$ и $$b^*$$"
+    assert esc("(ab)* где $L=\\{a^n\\}^*$ и c*") == "(ab)\\* где $L=\\{a^n\\}^*$ и c\\*"
+    html = render.render_report({"task": "Язык (ab)* ... {a,b}* и $x^*$", "status": "incomplete"}).html
+    main = html.split("<main>")[1].split("</main>")[0]
+    assert "(ab)&#42; ... {a,b}&#42;" in main and "<em>" not in main and "$x^*$" in main

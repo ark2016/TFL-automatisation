@@ -52,8 +52,8 @@ The run directory (``--save``, default ``<runs dir>/<run id>``) holds
 ``result.{json,md,html}`` (a draft while HITL 2 waits).
 
 Exit codes: 0 report accepted, 1 the run ended without a report (partial
-result written) or a follow-up failed (the previous report stays), 2 usage /
-setup error, 3 waiting for a human decision.
+result written; ``EXIT_NO_REPORT``) or a follow-up failed (the previous report stays;
+the alias ``EXIT_FOLLOWUP_FAILED`` = 1), 2 usage / setup error, 3 waiting for a human decision.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .run_store import EXIT_USAGE, REVIEW_MODES
+from .run_store import EXIT_FOLLOWUP_FAILED, EXIT_USAGE, REVIEW_MODES
 
 TEMPLATES = ["full_proof", "exam_solution", "short_verdict", "lean_appendix"]
 TEXT_SUFFIXES = {".txt", ".md"}
@@ -196,7 +196,7 @@ def _report(outcome: Any) -> int:
     if outcome.followup_error:
         print(f"tfl-deep: the follow-up failed, the previous report ({outcome.status}) stays: "
               f"{outcome.followup_error}", file=sys.stderr)
-        return outcome.exit_code
+        return EXIT_FOLLOWUP_FAILED
     result = outcome.result or {}
     if outcome.paths:
         print("tfl-deep: wrote " + ", ".join(str(p) for p in outcome.paths.values()), file=sys.stderr)
