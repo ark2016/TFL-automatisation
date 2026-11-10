@@ -710,7 +710,9 @@ Notes:
   uses it: elan (installer pinned to the same commit and SHA-256 as `Dockerfile.lean4`, checked before it runs)
   with the toolchain from `lean-toolchain`, cached `.lake`, `lake exe cache get`,
   `lake build`, then the Lean pytest files (`test_lean_ir`, `test_phase3` templates, the Examples tests,
-  `test_lean_llk_doc`) with a step that fails if any of them was skipped for lack of Lean.
+  `test_lean_llk_doc`, `test_constraint_semantics`, the cfl/dcfl `test_lean_formalize` and
+  `test_type_check_security`, whose `docker`-marked cases go through `check_lean_file` and so run under the local
+  runner too) with a step that fails if any of them was skipped for lack of Lean.
 - Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
   leading UTF-8 BOM. PowerShell's `Set-Content -Encoding utf8` adds one; use `-Encoding utf8NoBOM` (or write with a
   tool that doesn't add a BOM) instead.

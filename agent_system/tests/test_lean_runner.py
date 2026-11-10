@@ -195,7 +195,9 @@ def test_lean_workflow_uses_the_local_runner_and_does_not_skip():
     text = (root / ".github/workflows/lean.yml").read_text(encoding="utf-8")
     assert "TFL_LEAN_RUNNER: local" in text and "workflow_dispatch" in text and "schedule" in text
     assert "lake exe cache get" in text and "lake build" in text and "actions/cache" in text
-    for f in ("test_phase3.py", "test_lean_examples.py", "test_lean_llk_doc.py", "test_lean_ir.py"):
+    for f in ("test_phase3.py", "test_lean_examples.py", "test_lean_llk_doc.py", "test_lean_ir.py",
+              "cfl_system/tests/test_lean_formalize.py", "dcfl_system/tests/test_lean_formalize.py",
+              "agent_system/tests/test_type_check_security.py"):
         assert f in text, f
     assert "docker/build-push-action" not in text
     assert "is_docker_available()" in text and "skipped" in text

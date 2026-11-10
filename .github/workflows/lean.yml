@@ -107,7 +107,10 @@ jobs:
             cfl_system/tests/test_lean_examples_cfl.py \
             dcfl_system/tests/test_lean_examples_dcfl.py \
             agent_system/tests/test_lean_llk_doc.py \
-            dcfl_system/tests/test_constraint_semantics.py
+            dcfl_system/tests/test_constraint_semantics.py \
+            cfl_system/tests/test_lean_formalize.py \
+            dcfl_system/tests/test_lean_formalize.py \
+            agent_system/tests/test_type_check_security.py
 
       # No Lean test may skip because Lean looked unavailable.
       - name: Fail on silently skipped Lean tests
