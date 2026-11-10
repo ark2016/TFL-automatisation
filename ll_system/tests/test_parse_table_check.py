@@ -522,19 +522,104 @@ def test_marker_claim_with_grammar_but_no_k_runs_check_ll_k_with_the_table_k():
 
 
 def test_cell_contradicting_the_director_table_is_refuted():
-    # (S, c) -> aSa: c is not in director(S -> aSa) = {a}. The cell is dead
-    # (the parser then fails on the terminal a), but the table is not the
-    # director table of its productions.
+    # (T, a) -> bTb and (T, b) -> aSab swap two rules: each director cell is
+    # non-empty and the table holds another right-hand side there. Both rules
+    # are productions of the table, so G_T is the claimed grammar.
+    swapped = deepcopy(TABLE)
+    swapped["T"]["a"], swapped["T"]["b"] = ["b", "T", "b"], ["a", "S", "a", "b"]
+    for grammar in (None, GRAMMAR):
+        res = _check({"k": 1, "start": "S", "table": swapped}, grammar=grammar)
+        assert res["trust"] == "refuted", res
+        assert res["details"]["status"] == "director_contradiction"
+        assert res["details"]["contradictions"] == [
+            {"nonterminal": "T", "lookahead": "a", "rhs": ["b", "T", "b"], "director": [["a", "S", "a", "b"]]},
+            {"nonterminal": "T", "lookahead": "b", "rhs": ["a", "S", "a", "b"], "director": [["b", "T", "b"]]},
+        ]
+
+
+def test_cell_the_director_table_leaves_empty_is_ignored():
+    # (S, c) -> aSa: c is not in director(S -> aSa) = {a}, and the director
+    # cell (S, c) is empty. The parser expands S -> aSa on a word starting
+    # with c and then fails on the terminal a, so it still recognizes L(G):
+    # the extra cell is recorded, not refuted (R3′ (1)).
     extra = deepcopy(ENTRIES)
     extra["entries"].append({"nonterminal": "S", "lookahead": "c", "rhs": ["a", "S", "a"]})
-    res = _check(extra, grammar=None)
+    for grammar in (None, GRAMMAR):
+        res = _check(extra, grammar=grammar)
+        assert res["trust"] == "bounded_pass", res
+        assert res["details"]["director_table"]["ignored_extra_cells"] == [
+            {"nonterminal": "S", "lookahead": "c", "alternatives": [["a", "S", "a"]]}
+        ]
+
+
+# G = S -> aA, A -> ε | c, U -> Ab: U is unreachable, G is strong LL(1),
+# L = {a, ac}. A textbook FOLLOW over all rules puts b into FOLLOW(A), hence
+# (A, b) -> ε, a cell the director table of the reduced grammar leaves empty.
+UNREACHABLE_GRAMMAR = {
+    "nonterminals": ["S", "A", "U"], "terminals": ["a", "b", "c"], "start": "S",
+    "rules": [{"lhs": "S", "rhs": ["a", "A"]}, {"lhs": "A", "rhs": []}, {"lhs": "A", "rhs": ["c"]},
+              {"lhs": "U", "rhs": ["A", "b"]}],
+}
+UNREACHABLE_TABLE = {
+    "S": {"a": ["a", "A"]},
+    "A": {"c": ["c"], "b": [], "$": []},
+    "U": {"b": ["A", "b"], "c": ["A", "b"]},
+}
+# S -> aAb, A -> c | ε, L = {ab, acb}, with ε as the default of A:
+# (A, a) and (A, $) -> ε besides the director cell (A, b) -> ε.
+DEFAULT_EPS_GRAMMAR = {
+    "nonterminals": ["S", "A"], "terminals": ["a", "b", "c"], "start": "S",
+    "rules": [{"lhs": "S", "rhs": ["a", "A", "b"]}, {"lhs": "A", "rhs": ["c"]}, {"lhs": "A", "rhs": []}],
+}
+DEFAULT_EPS_TABLE = {
+    "S": {"a": ["a", "A", "b"]},
+    "A": {"c": ["c"], "b": [], "a": [], "$": []},
+}
+
+
+def test_follow_over_unreachable_rules_is_not_refuted():
+    res = _check(UNREACHABLE_TABLE, grammar=UNREACHABLE_GRAMMAR, oracle=lambda w: w in ("a", "ac"))
+    assert res["trust"] == "bounded_pass", res
+    director = res["details"]["director_table"]
+    assert director["ignored_rows"] == ["U"]
+    assert director["ignored_extra_cells"] == [{"nonterminal": "A", "lookahead": "b", "alternatives": [[]]}]
+
+
+def test_epsilon_production_as_default_is_not_refuted():
+    for grammar in (DEFAULT_EPS_GRAMMAR, None):
+        res = _check({"k": 1, "start": "S", "table": DEFAULT_EPS_TABLE}, grammar=grammar,
+                     oracle=lambda w: w in ("ab", "acb"))
+        assert res["trust"] == "bounded_pass", res
+        assert res["details"]["director_table"]["ignored_extra_cells"] == [
+            {"nonterminal": "A", "lookahead": "$", "alternatives": [[]]},
+            {"nonterminal": "A", "lookahead": "a", "alternatives": [[]]},
+        ]
+
+
+def test_non_empty_director_cell_with_a_wrong_rhs_is_still_refuted():
+    wrong = deepcopy(DEFAULT_EPS_TABLE)
+    wrong["A"]["c"] = []          # director cell (A, c) holds A -> c
+    res = _check(wrong, grammar=DEFAULT_EPS_GRAMMAR, oracle=lambda w: w in ("ab", "acb"))
     assert res["trust"] == "refuted", res
     assert res["details"]["status"] == "director_contradiction"
     assert res["details"]["contradictions"] == [
-        {"nonterminal": "S", "lookahead": "c", "rhs": ["a", "S", "a"], "director": []}
+        {"nonterminal": "A", "lookahead": "c", "rhs": [], "director": [["c"]]}
     ]
-    # the same with the claimed grammar
-    assert _check(extra)["details"]["status"] == "director_contradiction"
+
+
+def test_priority_table_with_an_extra_cell_is_still_not_an_ll_certificate():
+    """B1 with one more cell outside the director table: (B, a) -> ε joins
+    G_T (it is already there), G_T stays not strong LL(1), and the table
+    still does not reach bounded_pass."""
+    extra = deepcopy(PRIORITY_TABLE)
+    extra["entries"].append({"nonterminal": "B", "lookahead": "a", "rhs": []})
+    res = check_parse_table(extra, k=1, grammar=None, terminals=["a", "b"], oracle_factory=lambda: _aibj)
+    assert res["trust"] == "well_formed", res
+    assert res["details"]["status"] == "not_director_table"
+    assert res["details"]["director_table"]["strong"] is False
+    assert res["details"]["director_table"]["ignored_extra_cells"] == [
+        {"nonterminal": "B", "lookahead": "a", "alternatives": [[]]}
+    ]
 
 
 def test_rows_of_useless_nonterminals_are_ignored():

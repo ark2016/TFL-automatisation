@@ -18,9 +18,16 @@ and accepts exactly {a^i b^j | i >= j}, a DCFL that is not LL
 the director cell (B, b) holds both B -> b and B -> ε, and the table keeps
 only the first. The comparison is made on the reduced grammar
 (``remove_useless_symbols``): rows of the nonterminals it removes are
-ignored; every other cell of the table must be a director-table cell with
-the same right-hand side, and every director-table cell must be in the
-table.
+ignored; every non-empty director-table cell must be in the table with the
+same right-hand side. A table cell that the director table leaves empty is
+ignored (listed in ``details.director_table.ignored_extra_cells``): every
+expansion is a rule of G, so the parser accepts only words of L(G); on a
+word of L(G) the unique leftmost derivation (G is strong LL(k), hence
+unambiguous) uses at each step a rule whose director set holds the current
+lookahead, a non-empty cell that the table matches; so the parser
+recognizes exactly L(G) whatever the extra cells hold (the usual
+"ε-production as default" table, or a FOLLOW set computed over rules of
+unreachable nonterminals).
 
 - no table (absent, or with no cells)                  -> ``missing``
   (the caller caps the claim at ``well_formed``, like a missing DPDA);
@@ -37,8 +44,9 @@ table.
   that is not one of its rules), a symbol used both as terminal and
   nonterminal (or "$" used as a symbol), a conflict cell (two different
   right-hand sides in one (nonterminal, lookahead) cell), a table for a
-  larger k than claimed, a cell that contradicts the director table (its
-  right-hand side is not the director-table entry of that cell), a word on
+  larger k than claimed, a cell that contradicts the director table (the
+  director cell is non-empty and the table holds another right-hand side
+  there), a word on
   which the table-driven parser never halts (``LLParser.parse`` detects the
   loop exactly; a correct LL(k) parser halts on every input), or a word on
   which parser and oracle disagree                     -> ``refuted``;
@@ -313,21 +321,29 @@ def _director_comparison(table: NormalizedTable, grammar: dict) -> dict:
 
     Returns ``strong`` (the reduced grammar is strong LL(k): no director cell
     holds two rules), ``director_conflicts`` (those cells), ``contradictions``
-    (table cells whose right-hand side is not in the director cell, including
-    cells the director table leaves empty), ``missing`` (director cells the
-    table omits) and ``ignored_rows``.
+    (table cells where the director cell is non-empty and the table holds a
+    right-hand side that is not in it), ``missing`` (director cells the table
+    omits), ``ignored_extra_cells`` (table cells the director table leaves
+    empty: never used on a word of L(G), see the module docstring) and
+    ``ignored_rows``.
     """
     reduced = remove_useless_symbols(grammar)
     nullable, first_k, follow_k = compute_all(reduced, table.k)
     director = director_cells(reduced, table.k, nullable, first_k, follow_k)
     useful = {rule["lhs"] for rule in reduced["rules"]}
-    contradictions = [
-        {"nonterminal": nt, "lookahead": la, "rhs": alts[0],
-         "director": director[nt].get(la, [])}
-        for nt in sorted(table.cells) if nt in useful
-        for la, alts in sorted(table.cells[nt].items())
-        if alts[0] not in director[nt].get(la, [])
-    ]
+    contradictions: list[dict] = []
+    ignored_extra: list[dict] = []
+    for nt in sorted(table.cells):
+        if nt not in useful:
+            continue
+        for la, alts in sorted(table.cells[nt].items()):
+            expected = director[nt].get(la, [])
+            if not expected:
+                ignored_extra.append({"nonterminal": nt, "lookahead": la, "alternatives": alts})
+            else:
+                wrong = [rhs for rhs in alts if rhs not in expected]
+                if wrong:
+                    contradictions.append({"nonterminal": nt, "lookahead": la, "rhs": wrong[0], "director": expected})
     missing = [
         {"nonterminal": nt, "lookahead": la, "alternatives": alts}
         for nt in sorted(useful)
@@ -345,6 +361,7 @@ def _director_comparison(table: NormalizedTable, grammar: dict) -> dict:
         "director_conflicts": conflicts,
         "contradictions": contradictions,
         "missing": missing,
+        "ignored_extra_cells": ignored_extra,
         "ignored_rows": sorted(nt for nt in table.cells if nt not in useful),
     }
 
@@ -471,6 +488,7 @@ def check_parse_table(
         "strong": director["strong"],
         "missing": director["missing"][:_MAX_REPORTED],
         "director_conflicts": director["director_conflicts"][:_MAX_REPORTED],
+        "ignored_extra_cells": director["ignored_extra_cells"][:_MAX_REPORTED],
         "ignored_rows": director["ignored_rows"],
     }
 

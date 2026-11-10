@@ -379,16 +379,21 @@ flowchart LR
   (Σ_{i≤k}|Σ|ⁱ ≤ 3000, k ≤ 10; `agent_system/lib/word_enumeration.py`) and compares it with the task oracle:
   the table must be the complete strong LL(k) director table of its grammar (the claimed grammar, or, for a
   marker claim without one, the grammar of the table's own productions; compared after removing useless
-  symbols), since an incomplete table encodes a priority choice and can accept a non-LL language
+  symbols) on every non-empty director cell, since an incomplete table encodes a priority choice and can accept a non-LL language
   (S: a → aSB, b/$ → ε; B: b → b, $ → ε accepts {aⁱbʲ | i ≥ j}). Agreement on every word the oracle decides,
   at least 30 of them, with such a table → `bounded_pass` (cap 0.85); a conflict cell, a table inconsistent with
-  the claimed grammar (a row, start or rule not in it), a cell outside its rule's director set (unreachable in
-  accepting runs: refuted as a malformed certificate, not as a counterexample to the language claim), a table for a
+  the claimed grammar (a row, start or rule not in it), a non-empty director cell where the table holds a different
+  or extra right-hand side, a table for a
   larger k than claimed, a word on which the parser never halts (`LLParser.parse` detects the left-recursion
   loop exactly: a nonterminal back on top before its own expansion finished), or a disagreement → `refuted`
-  (counterexamples go to the retry hint); a table missing a director cell, a table whose own productions are not
+  (counterexamples go to the retry hint); a table cell the director table leaves empty is ignored and recorded in
+  `director_table.ignored_extra_cells` (the parser still recognizes exactly L(G): every expansion is a rule of G, and
+  on a word of L(G) the unique leftmost derivation only uses non-empty director cells, so an "ε as default" table or
+  a FOLLOW computed over unreachable rules passes; without a grammar its rule joins G_T, whose strong-LL(k) check
+  still runs); a table missing a director cell, a table whose own productions are not
   strong LL(k), no table, or a claimed grammar that is not strong LL(k) (checked before the conflict, foreign-rule and director-contradiction
-  refutations, which apply only when the grammar is strong or absent; format errors are always refuted; a claim
+  refutations, which apply only when the grammar is strong or absent; when the table is read (task alphabet known,
+  k known), format errors are always refuted; a claim
   without k is refuted when `check_ll_k` with the table's k says the grammar is not LL(k); if it is LL(k), any conflict-free table
   from its rules rejects some word of its language, possibly beyond the bound; the table is not run) → at most `well_formed`, even when the grammar
   passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
