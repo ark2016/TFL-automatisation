@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import unittest
+
+import pytest
 from pathlib import Path
 
 from agent_system.lib.lean_ir import LeanStatement
@@ -108,6 +110,9 @@ class TestIdempotent(unittest.TestCase):
         first = render_statement(ir, "non_cfl").render("sorry")
         again = render_statement(ir, "non_cfl").render("sorry")
         self.assertEqual(first, again)
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
@@ -526,6 +531,9 @@ def _filter_oracle(ir: dict):
     return lambda w: bool(_eval_filter_predicate(spec["filter"], w))
 
 
+@pytest.mark.docker
+
+
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
 class TestNewKindsCompile(unittest.TestCase):
 
@@ -573,6 +581,9 @@ class TestNewKindsCompile(unittest.TestCase):
         g = _load("task_grammar_filter_49.json")["language_spec"]["grammar"]
         ir = {"alphabet": ["a", "b"], "language_spec": {"kind": "intersection", "branches": [g, _WWVVR]}}
         self._assert_valid_with_sorry(ir, "non_cfl")
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")

@@ -169,6 +169,9 @@ def test_input_parser_complete_examples_validate():
     assert len(complete) >= 2
 
 
+@pytest.mark.docker
+
+
 @pytest.mark.skipif(not is_docker_available(), reason="Docker with tfl-lean4 image not available")
 @pytest.mark.parametrize("compare_variables", [False, True])
 def test_lean_evaluation_and_oracle_agree_on_integer_comparisons(compare_variables):

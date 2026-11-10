@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import unittest
+
+import pytest
 from pathlib import Path
 
 from agent_system.lib.lean_ir import LeanStatement
@@ -118,6 +120,9 @@ class TestIdempotent(unittest.TestCase):
         first = render_statement(ir, "dcfl").render("sorry")
         again = render_statement(ir, "dcfl").render("sorry")
         self.assertEqual(first, again)
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
@@ -352,6 +357,9 @@ class TestNestedExponentWordPattern(unittest.TestCase):
         self.assertIn("List.replicate (2 ^ n) Letter.b", stmt.language_decl)
 
 
+@pytest.mark.docker
+
+
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
 class TestNewKindsCompile(unittest.TestCase):
 
@@ -380,6 +388,9 @@ class TestNewKindsCompile(unittest.TestCase):
             },
         }
         self._assert_valid_with_sorry(ir, "non_dcfl")
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")

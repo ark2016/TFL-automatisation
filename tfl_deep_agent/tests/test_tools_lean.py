@@ -492,6 +492,7 @@ def _docker_or_skip() -> None:
         pytest.skip(f"Docker or the {type_check.DOCKER_IMAGE} image is not available")
 
 
+@pytest.mark.docker
 def test_golden_reg_proof_verifies_through_the_tools():
     _docker_or_skip()
     _text, _head, body = golden_split()

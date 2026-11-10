@@ -71,7 +71,7 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 # Tests: pyproject.toml testpaths includes tfl_eval/tests and excludes the legacy
 # pumping_lemma/tests that call the real Anthropic API. The root conftest also
 # strips ANTHROPIC_API_KEY and stubs anthropic.Anthropic.
-.venv/Scripts/python -m pytest -q
+.venv/Scripts/python -m pytest -q   # Lean/Docker tests are skipped; they need TFL_LEAN_TESTS=1
 
 # Any pipeline, shared CLI contract (writes <stem>_result.{json,md,html})
 .venv/Scripts/python -m cfl_system.orchestrator <ir.json> --save DIR [--live] [--verbose]

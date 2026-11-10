@@ -198,7 +198,7 @@ def build(script: dict[str, Any], **kw: Any):
 _STATUS = D.sandbox_status()
 
 
-@pytest.fixture(params=["fake", "docker"])
+@pytest.fixture(params=["fake", pytest.param("docker", marks=pytest.mark.docker)])
 def sandbox_case(request, tmp_path):
     if request.param == "fake":
         sb = FakeSandbox(tmp_path / "sbx")

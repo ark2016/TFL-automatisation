@@ -6,15 +6,13 @@ name: lean-compile
 # cache from `lake exe cache get`, and TFL_LEAN_RUNNER=local (type_check.py runs
 # `lake env lean --json` in the Lean project instead of `docker run`).
 #
-# Manual or weekly, never on push/PR (it is not a required PR check), but a
+# On demand only (workflow_dispatch; no schedule, user decision 2026-11-10), never on push/PR (it is not a required PR check), but a
 # failing step fails the run (no continue-on-error). The fast part run on every
 # push/PR -- statement generation without compiling -- is the `lean-ir-units`
 # job in tests.yml.
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 3 * * 1'  # Mondays 03:17 UTC
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -24,6 +22,8 @@ permissions:
   contents: read
 
 env:
+  # Lean / Docker tests are off by default (root conftest.py); this workflow turns them on.
+  TFL_LEAN_TESTS: '1'
   TFL_LEAN_RUNNER: local
   TFL_LEAN_PROJECT_DIR: ${{ github.workspace }}/agent_system/docker/tfl_lean
 

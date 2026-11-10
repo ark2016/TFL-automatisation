@@ -554,10 +554,10 @@ Pure-function modules have pytest coverage; LLM-driven layers are covered by moc
 ```
 
 The counts change with every commit, so none are recorded here; run the command for the current ones. `-n 4` runs it in
-parallel. Tests that need Docker, Graphviz `dot` or node skip with a reason when they are missing.
+parallel. Tests that need Graphviz `dot` or node skip with a reason when they are missing. Tests that start a Docker container (Lean type-checking, the deep-agent sandbox) carry the `docker` marker and are skipped unless `TFL_LEAN_TESTS=1` (also `true`/`yes`/`on`; root `conftest.py`); their pure-Python siblings run by default.
 
 The configured `testpaths` include `tfl_eval/tests` and exclude the legacy `pumping_lemma/tests`, which call the
-real Anthropic API. Tests that type-check Lean 4 templates need Docker with the `tfl-lean4` image and skip without it.
+real Anthropic API. Tests that type-check Lean 4 templates need `TFL_LEAN_TESTS=1` and Docker with the `tfl-lean4` image; they skip without either.
 
 The root `conftest.py` also strips `ANTHROPIC_API_KEY` and blocks live Anthropic client calls during test runs.
 
@@ -701,7 +701,7 @@ Notes:
 - **Local runner (CI without the image).** `TFL_LEAN_RUNNER=local` (default `docker`) makes the checks run
   `lake env lean --json <file>` in the Lean project `TFL_LEAN_PROJECT_DIR` (default `agent_system/docker/tfl_lean`)
   with the same timeout and parsing; `is_docker_available()` then means "`lake` on PATH and the project's `.lake`
-  built", so the Lean tests' skip gates keep working. `.github/workflows/lean.yml` (manual + weekly)
+  built", so the Lean tests' skip gates keep working. `.github/workflows/lean.yml` (on demand only, `workflow_dispatch`; sets `TFL_LEAN_TESTS=1`)
   uses it: elan (installer pinned to the same commit and SHA-256 as `Dockerfile.lean4`, checked before it runs)
   with the toolchain from `lean-toolchain`, cached `.lake`, `lake exe cache get`,
   `lake build`, then the Lean pytest files (`test_lean_ir`, `test_phase3` templates, the Examples tests,

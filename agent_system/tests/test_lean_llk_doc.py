@@ -42,6 +42,9 @@ def test_doc_block_has_no_escape_hatches():
         assert bad not in block, bad
 
 
+@pytest.mark.docker
+
+
 @pytest.mark.skipif(not is_docker_available(), reason="Docker with the tfl-lean4 image not available")
 def test_doc_block_compiles_to_proved():
     result = check_lean_file(_lean_blocks()[0], timeout=600)

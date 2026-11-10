@@ -546,9 +546,12 @@ def test_grammar_assb_module_has_no_escape_hatches():
 # Docker: the examples actually compile to `proved`
 # ---------------------------------------------------------------------------
 
-docker = pytest.mark.skipif(
-    not is_docker_available(), reason="Docker with the tfl-lean4 image not available"
-)
+def docker(fn):
+    """Docker-backed case: the shared ``docker`` marker (needs TFL_LEAN_TESTS=1, see
+    the root conftest.py) plus the is-Docker-available guard."""
+    return pytest.mark.docker(pytest.mark.skipif(
+        not is_docker_available(), reason="Docker with the tfl-lean4 image not available"
+    )(fn))
 
 
 def _assert_proved(result: dict, what: str) -> None:

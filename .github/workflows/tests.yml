@@ -60,7 +60,7 @@ jobs:
 
   # IR -> Lean statement generation (no compilation): deterministic string
   # output, fast, blocking. Compile-checking against the tfl-lean4 image is
-  # the separate manual/weekly workflow lean.yml; without the image the
+  # the separate on-demand workflow lean.yml; without the image the
   # Docker-gated tests in these files skip.
   lean-ir-units:
     name: lean_ir statement generation (blocking)
@@ -128,7 +128,7 @@ jobs:
   # importorskip, so the `pytest` job above never runs them. Their own job, so
   # the extra's heavier install stays out of the main job. Scripted / fake chat
   # models only (tfl_deep_agent/tests/guard.py); the real-Docker sandbox and
-  # Lean tests skip when the tfl-sandbox / tfl-lean4 images are absent.
+  # Lean tests are skipped (TFL_LEAN_TESTS is not set).
   pytest-deep:
     name: pytest (tfl_deep_agent, [deep] extra)
     runs-on: ubuntu-latest

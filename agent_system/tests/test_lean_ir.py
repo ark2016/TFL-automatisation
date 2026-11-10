@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import unittest
+
+import pytest
 from pathlib import Path
 
 from agent_system.lib.lean_ir import (
@@ -267,6 +269,8 @@ class TestAlphabetDecl(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Docker-conditional: the golden strings above actually compile.
 # ---------------------------------------------------------------------------
+
+@pytest.mark.docker
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
 class TestGoldenStringsCompile(unittest.TestCase):
@@ -722,6 +726,9 @@ def _is_wwR(w: str) -> bool:
     return n % 2 == 0 and w[: n // 2] == w[n // 2:][::-1]
 
 
+@pytest.mark.docker
+
+
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
 class TestDecidableMatchesOracle(unittest.TestCase):
 
@@ -779,6 +786,9 @@ class TestDecidableMatchesOracle(unittest.TestCase):
         o2 = oracle_from_ir({"language_spec": {**r2, "alphabet": ["a", "b"]}})
         ir = {"alphabet": ["a", "b"], "language_spec": {"kind": "union", "branches": [r1, r2]}}
         self._check(ir, "regular", lambda w: o1(w) or o2(w))
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")

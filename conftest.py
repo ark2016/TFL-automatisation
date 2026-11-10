@@ -67,6 +67,21 @@ class _StubAnthropicClient:
         return _StubAnthropicClient()
 
 
+_LEAN_TESTS_ON = ("1", "true", "yes", "on")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Tests marked ``docker`` start a container; they run only with ``TFL_LEAN_TESTS=1``
+    (also true/yes/on). Lean / Docker tests are off by default (user decision 2026-11-10);
+    the on-demand ``lean-compile`` workflow sets the variable."""
+    if os.environ.get("TFL_LEAN_TESTS", "").strip().lower() in _LEAN_TESTS_ON:
+        return
+    skip = pytest.mark.skip(reason="Lean/Docker test: set TFL_LEAN_TESTS=1 to run (docker marker, see conftest.py)")
+    for item in items:
+        if "docker" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _block_live_anthropic_calls():
     if os.environ.get("TFL_ALLOW_LIVE") == "1":

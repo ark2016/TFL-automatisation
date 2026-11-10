@@ -734,9 +734,12 @@ def test_mock_lean_formalizer_output_matches_the_contract():
 # Docker: the real compiler
 # ---------------------------------------------------------------------------
 
-docker = pytest.mark.skipif(
-    not is_docker_available(), reason="Docker with the tfl-lean4 image not available",
-)
+def docker(fn):
+    """Docker-backed case: the shared ``docker`` marker (needs TFL_LEAN_TESTS=1, see
+    the root conftest.py) plus the is-Docker-available guard."""
+    return pytest.mark.docker(pytest.mark.skipif(
+        not is_docker_available(), reason="Docker with the tfl-lean4 image not available",
+    )(fn))
 
 
 @docker
