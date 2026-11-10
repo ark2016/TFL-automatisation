@@ -92,3 +92,5 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 - Run python, pytest, pip install in the project venv; docker for Lean 4 verification
 - Do NOT modify `pumping_lemma/` or `reverse_morfism/`
 - Do NOT run commands that affect system-level configs
+- Parallel agents that modify files work in separate git worktrees on their own branches; only one agent merges, in
+  the main working tree, and agents running tests in the main tree pause while a merge is in progress
