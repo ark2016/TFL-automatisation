@@ -26,6 +26,8 @@
                                                  at the budget stop: edit {"add_usd": X} adds money
                                                  (recorded as extended), approve finishes with what
                                                  is left (recorded as declined)
+    POST /api/deep/runs/<id>/abandon          -> drops a follow-up recorded as in progress with no process alive
+                                                  (the CLI's --abandon); 409 otherwise
     POST /api/deep/runs/<id>/message          -> {text | preset: "lean", confirm_spend? (live runs)}:
                                                  a follow-up to a finished run, in the same conversation
     POST /api/deep/runs/<id>/cancel           -> {"run_id", "status"}
@@ -96,7 +98,8 @@ continued.
 ``result`` during a follow-up: the view of the newest ``report_history/<n>/`` (immutable,
 so reading it never gets in the way of the agent's writes), or of the draft while HITL 2
 waits. ``result.report_revision`` tracks the report object, not the files: a text reply
-re-renders ``result.*`` and keeps it. From revision 2 on the URLs carry ``?v=<n>``.
+re-renders ``result.*`` and keeps it (a follow-up bumps it only when status, verdict, trust, confidence cap
+or ``report_digest`` changes). From revision 2 on the URLs carry ``?v=<n>``.
 
 Run directory: ``<DEEP_RUNS_DIR>/<12 hex>/`` (``.tfl_lab_runs/deep``; the
 pipeline registry in ``server.py`` only lists 12-hex directories directly under
@@ -488,11 +491,16 @@ def _followup_back_locked(run: dict[str, Any], note: str | None = None) -> None:
     run["result_status"] = prev.get("result_status")
     run["error"] = prev.get("error")
     run["followup_error"] = note
+    _mark_process_gone(run)
+    run["cancel_requested"] = False
+
+
+def _mark_process_gone(run: dict[str, Any]) -> None:
+    """The run's process is over: stamp ``finished`` and forget pid, identity and orphan mark."""
     run["finished"] = _now()
     run["pid"] = None
     run["pid_identity"] = None
     run["orphan"] = False
-    run["cancel_requested"] = False
 
 
 def _settle_cancelled_locked(run: dict[str, Any], error: str, *, note: str | None = None) -> None:
@@ -504,10 +512,7 @@ def _settle_cancelled_locked(run: dict[str, Any], error: str, *, note: str | Non
     else:
         run["status"] = "cancelled"
         run["error"] = error
-        run["finished"] = _now()
-        run["pid"] = None
-        run["pid_identity"] = None
-        run["orphan"] = False
+        _mark_process_gone(run)
 
 
 def _settle_cancelled(run: dict[str, Any], error: str, *, rc: int | None = None) -> None:
@@ -522,6 +527,18 @@ def _settle_cancelled(run: dict[str, Any], error: str, *, rc: int | None = None)
         _persist_locked(run)
 
 
+def _fresh_agent_error(run: dict[str, Any], agent: dict[str, Any]) -> bool:
+    """The agent's ``followup_error`` belongs to this follow-up: it is new since the message
+    was sent, or the agent started a segment for it. ``run.json`` keeps the error of an earlier
+    follow-up until ``begin_followup`` clears it, which a CLI that refused the message never reaches."""
+    error = agent.get("followup_error")
+    if not error:
+        return False
+    before = run.get("followup_from") or {}
+    return (error != before.get("agent_error")
+            or len(agent.get("segments") or []) > int(before.get("agent_segments") or 0))
+
+
 def _settle_followup_locked(run: dict[str, Any], agent: dict[str, Any], *, rc: int | None, tail: str,
                             dead_note: str | None) -> bool:
     """Handle a follow-up before the run's own statuses. Returns whether it settled the
@@ -533,14 +550,24 @@ def _settle_followup_locked(run: dict[str, Any], agent: dict[str, Any], *, rc: i
         _followup_back_locked(run, dead_note)
     elif agent.get("status") == WAITING_STATUS and agent.get("pending"):
         return False
+    elif _fresh_agent_error(run, agent):  # the agent failed and has restored the report itself; its reason beats rc
+        _followup_back_locked(run, str(agent["followup_error"]))
     elif rc not in (None, EXIT_SUBMITTED, EXIT_NO_REPORT):  # the CLI refused it: nothing has changed
         _followup_back_locked(run, f"the follow-up did not run (exit code {rc}); the previous report stays"
                               + (f"\n{tail}" if tail else ""))
-    elif agent.get("followup_error"):  # the agent failed and has restored the report itself
-        _followup_back_locked(run, str(agent["followup_error"]))
     else:
         return False
     return True
+
+
+def _sync_review_mode_locked(run: dict[str, Any], agent: dict[str, Any]) -> None:
+    """The agent's ``run.json`` is the authority on the review mode: a continuation that
+    failed before it applied ``approve_rest`` would leave the lab's copy at ``auto``.
+    Caller holds ``_lock``."""
+    mode = agent.get("review_mode")
+    if mode in REVIEW_MODES:
+        run["review_mode"] = mode
+        run["auto_approve"] = mode == "auto"
 
 
 def _settle_from_disk_locked(run: dict[str, Any], *, rc: int | None = None, tail: str = "",
@@ -549,10 +576,8 @@ def _settle_from_disk_locked(run: dict[str, Any], *, rc: int | None = None, tail
     the agent's ``run.json``: awaiting_human / completed (+ result_status) /
     error / interrupted. A follow-up is handled first (:func:`_settle_followup_locked`)."""
     agent = _agent_run(Path(run["run_dir"])) or {}
-    run["finished"] = _now()
-    run["pid"] = None
-    run["pid_identity"] = None
-    run["orphan"] = False
+    _sync_review_mode_locked(run, agent)
+    _mark_process_gone(run)
     if not _settle_followup_locked(run, agent, rc=rc, tail=tail, dead_note=dead_followup_note):
         _settle_status_locked(run, agent, rc=rc, tail=tail, reason=reason)
     if run.get("followup_from") and run["status"] != WAITING_STATUS:  # the follow-up ran to its end
@@ -742,7 +767,12 @@ def _spawn_and_wait(run_id: str, cmd: list[str], env: dict[str, str]) -> tuple[i
 def _followup_finished_as_cancel_landed(run: dict[str, Any], rc: int | None) -> bool:
     """A cancel reached a follow-up that had already finished: the process ran and left
     no record in ``run.json``, so there is nothing to abandon."""
-    return (rc is not None and bool(run.get("followup_from"))
+    return rc is not None and _followup_record_gone(run)
+
+
+def _followup_record_gone(run: dict[str, Any]) -> bool:
+    """The run is in a follow-up whose process left no record in ``run.json``."""
+    return (bool(run.get("followup_from"))
             and not (_agent_run(Path(run["run_dir"])) or {}).get("followup_in_progress"))
 
 
@@ -783,6 +813,7 @@ def _worker(run_id: str, cmd: list[str], live: bool, action: str) -> None:
         elif rc is None:
             with _lock:
                 agent = _agent_run(Path(run["run_dir"])) or {}
+                _sync_review_mode_locked(run, agent)
                 waiting = agent.get("status") == WAITING_STATUS and bool(agent.get("pending"))
                 if run.get("followup_from") and not waiting:
                     _followup_back_locked(run, outcome)  # the follow-up never started
@@ -1197,6 +1228,8 @@ def api_message(run_id: str, payload: Any) -> dict[str, Any]:
         if not conflict:
             current["followup_from"] = {"status": current["status"], "result_status": current.get("result_status"),
                                         "error": current.get("error"), "report_revision": agent.get("report_revision"),
+                                        "agent_error": agent.get("followup_error"),
+                                        "agent_segments": len(agent.get("segments") or []),
                                         "snapshots_before": snapshots_before}
             current["followup_error"] = None
             current["status"] = "queued"
@@ -1212,6 +1245,39 @@ def api_message(run_id: str, payload: Any) -> dict[str, Any]:
         raise Conflict(f"the run is {status_now!r} now: send the message when it finishes")
     _start_worker(run_id, cmd, live, "follow-up: Lean" if payload.get("preset") == "lean" else "follow-up message")
     return {"run_id": run_id, "status": "queued"}
+
+
+def api_abandon(run_id: str) -> dict[str, Any]:
+    """``POST runs/<id>/abandon``: drop a follow-up that is recorded as in progress while
+    no process of the run is alive (the CLI's ``--abandon``): the previous report comes
+    back and the run can take a message again. 409 while a process is alive or when
+    there is nothing to abandon."""
+    with _lock:
+        run = _get_run(run_id)
+        if run["status"] in ACTIVE_STATUSES or run["status"] == WAITING_STATUS:
+            raise Conflict(f"the run is {run['status']!r}: a follow-up can be abandoned only when nothing is running")
+        proc, pid, ident = run.get("proc"), run.get("pid"), run.get("pid_identity")
+    if proc is not None and proc.poll() is None:
+        raise Conflict("a process of the run is still alive")
+    if pid and _lab()._pid_matches(pid, ident):
+        raise Conflict("a process of the run is still alive")
+    if not (_agent_run(Path(run["run_dir"])) or {}).get("followup_in_progress"):
+        raise Conflict("this run has no follow-up in progress")
+    try:
+        followup.abandon_followup(run["run_dir"], check_alive=True)
+    except RunError as exc:
+        raise Conflict(str(exc)) from exc
+    except Exception:  # noqa: BLE001
+        logger.exception("could not restore the report of the follow-up of %s", run.get("run_id"))
+        raise Conflict(_not_restored_note(run))
+    with _lock:
+        run["followup_from"] = None
+        run["followup_error"] = None
+        run["pid"] = None
+        run["pid_identity"] = None
+        run["orphan"] = False
+        _persist_locked(run)
+    return {"run_id": run_id, "status": run["status"]}
 
 
 def api_cancel(run_id: str) -> dict[str, Any]:
@@ -1330,7 +1396,8 @@ def fold_events(events: list[dict[str, Any]]) -> dict[str, Any]:
             awaiting = {k: ev.get(k) for k in ("point", "interrupt_id", "ts", "draft", "segment")}
         elif kind == "hitl_decision":
             decisions.append({k: ev.get(k) for k in ("point", "decision", "source", "comment", "edited_fields",
-                                                     "interrupt_id", "ts", "segment", "add_usd", "new_limit_usd")})
+                                                     "interrupt_id", "ts", "segment", "add_usd", "new_limit_usd",
+                                                     "new_day_limit_usd", "binds")})
         elif kind == "done":
             done = {k: ev.get(k) for k in ("status", "verdict", "language_class", "trust", "confidence_cap",
                                            "error", "ts")}
@@ -1475,22 +1542,24 @@ def _hitl_view(run: dict[str, Any], agent: dict[str, Any] | None) -> dict[str, A
     return out
 
 
+def _lean_off(reason: str) -> dict[str, Any]:
+    """The Lean button's view when it is not offered."""
+    return {"available": False, "reason": reason, "model": None, "subagent_limit_usd": None}
+
+
 def _lean_view(agent: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     """Whether the button «Формально верифицировать (Lean)» applies
     (``followup.lean_refusal``), and what it would run."""
-    def off(reason: str) -> dict[str, Any]:
-        return {"available": False, "reason": reason, "model": None, "subagent_limit_usd": None}
-
     refusal = followup.lean_refusal(agent, run_dir)
     if refusal:
-        return off(refusal)
+        return _lean_off(refusal)
     settings = agent.get("settings") if isinstance(agent.get("settings"), dict) else {}
     try:
         from tfl_deep_agent.agent import resolve_role_model
 
         model = resolve_role_model(settings, "lean")
     except Exception as exc:  # noqa: BLE001 - not offered when the model cannot be resolved
-        return off(f"the lean role has no usable model: {exc}")
+        return _lean_off(f"the lean role has no usable model: {exc}")
     limit = (settings.get("budget") or {}).get("per_subagent_max_usd")
     return {"available": True, "reason": None, "model": model, "subagent_limit_usd": limit}
 
@@ -1504,7 +1573,7 @@ def _followup_view(run: dict[str, Any], agent: dict[str, Any] | None) -> dict[st
 
     def closed(reason: str) -> dict[str, Any]:
         return {"can_message": False, "reason": reason, "in_progress": in_progress, "error": error,
-                "lean": {"available": False, "reason": reason, "model": None, "subagent_limit_usd": None}}
+                "lean": _lean_off(reason)}
 
     status = run.get("status")
     if status in ACTIVE_STATUSES:
@@ -1514,7 +1583,9 @@ def _followup_view(run: dict[str, Any], agent: dict[str, Any] | None) -> dict[st
     agent = agent or {}
     run_dir = Path(run["run_dir"])
     if agent.get("followup_in_progress"):  # the lab is not waiting for it: nothing here will finish it
-        return closed(f"{followup.STUCK_REFUSAL}: {followup.abandon_command(run_dir)}")
+        out = closed(f"{followup.STUCK_REFUSAL}: {followup.abandon_command(run_dir)}")
+        out["can_abandon"] = True  # POST runs/<id>/abandon does the same
+        return out
     if status in ("cancelled", "interrupted"):
         return closed(f"this run was {status}: start a new task")
     refusal = followup.followup_refusal(agent, run_dir)
@@ -1652,6 +1723,11 @@ def _summary_locked(run: dict[str, Any], agent: dict[str, Any] | None = None,
     budget = agent.get("budget") or {}
     result = agent.get("result") if isinstance(agent.get("result"), dict) else {}
     started = run.get("started") or run.get("created")
+    segments = run.get("segments") or []
+    if run["status"] in ACTIVE_STATUSES and segments:
+        # a continuation: the clock of "the agent is working" counts from its own start
+        # (none while it is still queued)
+        started = (segments[-1] or {}).get("started") if run["status"] == "running" else None
     end = run.get("finished") if run.get("finished") else (_now() if run["status"] in ACTIVE_STATUSES else None)
     return {
         "run_id": run["run_id"], "status": run["status"], "live": bool(run.get("live")),
@@ -1880,7 +1956,13 @@ def _watch_orphan(run_id: str) -> None:
             run = _runs.get(run_id)
             if run is None or run["status"] not in ACTIVE_STATUSES:
                 return
-            if cancel:
+            if cancel and _followup_record_gone(run):
+                # as in _worker: the cancel reached a follow-up that had already finished;
+                # what the process wrote is the truth (its exit code is unknown here)
+                with _lock:
+                    run["cancel_requested"] = False
+                _settle_process_end(run, reason="process ended while the server was restarted")
+            elif cancel:
                 _settle_cancelled(run, "cancelled by user")
             else:
                 _settle_process_end(run, reason="process ended while the server was restarted")
@@ -1914,6 +1996,8 @@ def _route(method: str, path: str, query: dict[str, list[str]], payload: Any) ->
             return api_resume(run_id, payload)
         if len(parts) == 3 and parts[2] == "message" and method == "POST":
             return api_message(run_id, payload)
+        if len(parts) == 3 and parts[2] == "abandon" and method == "POST":
+            return api_abandon(run_id)
         if len(parts) == 3 and parts[2] == "cancel" and method == "POST":
             return api_cancel(run_id)
         if len(parts) == 3 and parts[2] == "render" and method == "POST":
@@ -1949,7 +2033,7 @@ def dispatch(method: str, path: str, query: str = "", payload: Any = None) -> tu
         return 500, {"error": f"internal: {exc}"}
 
 
-__all__ = ["DEEP_RUNS_DIR", "FileResponse", "PREFIX", "api_cancel", "api_create", "api_detail", "api_estimate",
+__all__ = ["DEEP_RUNS_DIR", "FileResponse", "PREFIX", "api_abandon", "api_cancel", "api_create", "api_detail", "api_estimate",
            "api_get_settings", "api_message", "api_put_settings", "api_render", "api_resume",
            "build_followup_command", "build_resume_command", "build_start_command",
            "dispatch", "fold_events", "handles", "max_body_bytes", "restore_runs"]

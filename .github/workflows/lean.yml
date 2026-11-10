@@ -1,0 +1,131 @@
+name: lean-compile
+
+# Full Lean compilation of the generated theorem statements and the Lean
+# templates/examples, WITHOUT the 16 GB tfl-lean4 Docker image: elan + the
+# toolchain pinned in agent_system/docker/tfl_lean/lean-toolchain, the Mathlib
+# cache from `lake exe cache get`, and TFL_LEAN_RUNNER=local (type_check.py runs
+# `lake env lean --json` in the Lean project instead of `docker run`).
+#
+# On demand only (workflow_dispatch; no schedule, user decision 2026-11-10), never on push/PR (it is not a required PR check), but a
+# failing step fails the run (no continue-on-error). The fast part run on every
+# push/PR -- statement generation without compiling -- is the `lean-ir-units`
+# job in tests.yml.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Lean / Docker tests are off by default (root conftest.py); this workflow turns them on.
+  TFL_LEAN_TESTS: '1'
+  TFL_LEAN_RUNNER: local
+  TFL_LEAN_PROJECT_DIR: ${{ github.workspace }}/agent_system/docker/tfl_lean
+
+jobs:
+  lean-compile:
+    name: compile Lean (local toolchain)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install project + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      # elan-init.sh is pinned to the same commit and checksum as in
+      # agent_system/docker/Dockerfile.lean4 (elan v4.2.4) and checked before it
+      # runs; bump both places together.
+      - name: Install elan and the pinned Lean toolchain
+        run: |
+          toolchain="$(tr -d '[:space:]' < "$TFL_LEAN_PROJECT_DIR/lean-toolchain")"
+          echo "toolchain: $toolchain"
+          curl -fsSL -o elan-init.sh \
+            https://raw.githubusercontent.com/leanprover/elan/227caca133724d5516bee25c2aeb3e609478f2d8/elan-init.sh
+          echo "a620ff1641616222c8d37c54845492004bb84d6877cdbc944dd65c1aa685bf53  elan-init.sh" | sha256sum -c -
+          sh elan-init.sh -y --default-toolchain "$toolchain"
+          rm elan-init.sh
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      # `.lake` holds the Mathlib/langlib checkouts and the built .olean files.
+      - name: Cache .lake
+        uses: actions/cache@v4
+        with:
+          path: agent_system/docker/tfl_lean/.lake
+          key: lake-${{ runner.os }}-${{ hashFiles('agent_system/docker/tfl_lean/lean-toolchain', 'agent_system/docker/tfl_lean/lake-manifest.json', 'agent_system/docker/tfl_lean/lakefile.toml', 'agent_system/docker/tfl_lean/TflLean/**') }}
+          restore-keys: |
+            lake-${{ runner.os }}-
+
+      - name: Fetch dependencies and the Mathlib cache
+        working-directory: agent_system/docker/tfl_lean
+        run: |
+          if grep -q '"name": "mathlib"' lake-manifest.json; then
+            lake exe cache get
+          fi
+
+      - name: Build the TflLean library
+        working-directory: agent_system/docker/tfl_lean
+        run: lake build
+
+      # The Lean tests gate on type_check.is_docker_available(), which under
+      # the local runner means "lake on PATH and a built project". If that is
+      # False every Lean test would skip and the job would be green for nothing.
+      - name: Fail if the Lean tests would skip
+        run: |
+          python - <<'PY'
+          from agent_system.lib import type_check as tc
+          assert tc.lean_runner() == "local", tc.lean_runner()
+          assert tc.is_docker_available(), (
+              "local Lean runner not available: lake missing or "
+              f"{tc.local_project_dir()}/.lake not built -- the Lean tests would all skip")
+          print("local Lean runner ok:", tc.local_project_dir())
+          PY
+
+      - name: Compile generated statements, templates and examples
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-placeholder-not-used
+        run: |
+          python -m pytest -q --color=yes -rs --junitxml=lean-junit.xml \
+            agent_system/tests/test_lean_ir.py \
+            cfl_system/tests/test_lean_ir.py \
+            dcfl_system/tests/test_lean_ir.py \
+            agent_system/tests/test_phase3.py \
+            agent_system/tests/test_lean_examples.py \
+            cfl_system/tests/test_lean_examples_cfl.py \
+            dcfl_system/tests/test_lean_examples_dcfl.py \
+            agent_system/tests/test_lean_llk_doc.py \
+            dcfl_system/tests/test_constraint_semantics.py \
+            cfl_system/tests/test_lean_formalize.py \
+            dcfl_system/tests/test_lean_formalize.py \
+            agent_system/tests/test_type_check_security.py
+
+      # No Lean test may skip because Lean looked unavailable.
+      - name: Fail on silently skipped Lean tests
+        if: always()
+        run: |
+          python - <<'PY'
+          import re, sys
+          import xml.etree.ElementTree as ET
+          bad = []
+          for case in ET.parse("lean-junit.xml").getroot().iter("testcase"):
+              sk = case.find("skipped")
+              if sk is not None and re.search(r"docker|tfl-lean4|lean", sk.get("message", ""), re.I):
+                  bad.append(f"{case.get('classname')}::{case.get('name')}: {sk.get('message')}")
+          if bad:
+              print("Lean tests skipped for lack of Lean:\n  " + "\n  ".join(bad))
+              sys.exit(1)
+          print("no Lean test was skipped for lack of Lean")
+          PY

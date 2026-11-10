@@ -1,0 +1,11 @@
+{
+  "verdict": "ll",
+  "k": 1,
+  "confidence": 0.9,
+  "summary": "Язык $L = \\{w b c w^R \\mid w \\in \\{a,b\\}^*\\}$ является LL(1)-языком (по таблице разбора ll_grammar_builder).",
+  "justification": "Агент ll_grammar_builder предложил грамматику $S \\to aSa \\mid bT$, $T \\to c \\mid aSab \\mid bTb$ с таблицей разбора LL(1) без конфликтов. Деструктивные агенты не нашли доказательств не-LL.",
+  "primary_method": "ll_grammar_construction",
+  "primary_agent": "ll_grammar_builder",
+  "action": "done",
+  "retry_plan": null
+}

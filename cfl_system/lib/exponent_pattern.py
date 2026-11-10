@@ -45,12 +45,20 @@ requiring a fully trusted oracle for a semantic-check upgrade skip it.
 
 from __future__ import annotations
 
+import contextvars
 import re
 import string
 from dataclasses import dataclass, field
 from typing import Any
 
 __all__ = ["ExponentPattern", "parse_exponent_pattern"]
+
+# ``^`` inside an exponent / condition (``a^(2^n)``). Off by default: the
+# membership oracle (``_solve_affine`` & co.) only handles +,-,* arithmetic, so
+# the oracle callers keep getting ``None`` for such text exactly as before.
+# ``parse_exponent_pattern(text, allow_pow=True)`` (the Lean statement
+# translators) turns it on for the duration of one parse.
+_ALLOW_POW: contextvars.ContextVar[bool] = contextvars.ContextVar("exponent_allow_pow", default=False)
 
 _MAX_WORD_LEN = 40
 _STEP_BUDGET = 200_000
@@ -82,6 +90,7 @@ _TOKEN_SPEC: list[tuple[str, str]] = [
     ("PLUS", r"\+"),
     ("MINUS", r"-"),
     ("STAR", r"\*"),
+    ("POW", r"\^"),
     ("NUM", r"\d+"),
     ("ID", r"[A-Za-zЀ-ӿ_][A-Za-zЀ-ӿ0-9_]*"),
     ("WS", r"\s+"),
@@ -122,6 +131,8 @@ def _tokenize(s: str) -> list[tuple[str, str]] | None:
         pos = m.end()
         if kind == "WS":
             continue
+        if kind == "POW" and not _ALLOW_POW.get():
+            return None
         if kind == "ID":
             low = val.lower()
             if low in _KEYWORDS:
@@ -188,7 +199,17 @@ def _parse_unary(p: _TokenStream) -> tuple:
     if tok is not None and tok[0] == "MINUS":
         p.next()
         return ("neg", _parse_unary(p))
-    return _parse_atom(p)
+    return _parse_pow(p)
+
+
+def _parse_pow(p: _TokenStream) -> tuple:
+    """``atom ['^' unary]`` -- right-associative, binds tighter than ``*``."""
+    base = _parse_atom(p)
+    tok = p.peek()
+    if tok is not None and tok[0] == "POW":
+        p.next()
+        return ("bin", "^", base, _parse_unary(p))
+    return base
 
 
 def _parse_atom(p: _TokenStream) -> tuple:
@@ -246,6 +267,11 @@ def _eval_arith(expr: tuple, env: dict[str, int]) -> int | None:
             return lv - rv
         if op == "*":
             return lv * rv
+        if op == "^":
+            # Bounded: never materialise a huge power (None = unknown).
+            if rv < 0 or rv > 64 or abs(lv) > 2**32:
+                return None
+            return lv ** rv
     return None
 
 
@@ -280,11 +306,30 @@ def _solve_affine(expr: tuple, var: str, target: int, env: dict[str, int]) -> in
         return None
     slope = f1 - f0
     if slope == 0:
-        return 0 if f0 == target else None
+        return 0 if f0 == target else _solve_by_search(expr, var, target, env)
     diff = target - f0
     if diff % slope != 0:
-        return None
-    return diff // slope
+        return _solve_by_search(expr, var, target, env)
+    val = diff // slope
+    # Guard against non-affine expressions (e.g. ``2 ^ n``): the linear
+    # inversion is only valid if the candidate really satisfies the equation.
+    env_v = dict(env)
+    env_v[var] = val
+    if _eval_arith(expr, env_v) != target:
+        return _solve_by_search(expr, var, target, env)
+    return val
+
+
+def _solve_by_search(expr: tuple, var: str, target: int, env: dict[str, int]) -> int | None:
+    """Non-affine fallback (``n*n``, ``2 ^ n``): smallest ``val >= 0`` with
+    ``expr(val) == target`` found by direct evaluation, so a returned value is
+    always verified. Searches a bounded window; ``None`` if nothing fits."""
+    env_v = dict(env)
+    for val in range(0, max(target, 0) + 65):
+        env_v[var] = val
+        if _eval_arith(expr, env_v) == target:
+            return val
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -790,7 +835,7 @@ def _parse_single_pattern(s: str) -> ExponentPattern | None:
     return ExponentPattern(segments=segments, condition=condition_ast)
 
 
-def parse_exponent_pattern(text: Any) -> ExponentPattern | _UnionPattern | None:
+def parse_exponent_pattern(text: Any, *, allow_pow: bool = False) -> ExponentPattern | _UnionPattern | None:
     """Parse an exponent-notation language description into a callable
     ``word -> bool`` oracle, or ``None`` if *text* isn't (purely) that
     notation. Never raises.
@@ -798,7 +843,20 @@ def parse_exponent_pattern(text: Any) -> ExponentPattern | _UnionPattern | None:
     Supports a top-level ``A union B`` (or ``A ∪ B``) of two or more
     such groups (e.g. ``"{a^n b^n | n>=0} union {a^n b^(2n) | n>=0}"``),
     combining them via logical OR -- ``None`` unless EVERY branch parses.
+
+    ``allow_pow=True`` additionally accepts ``^`` in exponents/conditions
+    (``a^(2^n)``, right-associative, tighter than ``*``) as ``("bin", "^", l, r)``.
+    Only the Lean statement translators pass it: the resulting pattern is a
+    syntax tree for them, not something the bounded membership oracle solves.
     """
+    token = _ALLOW_POW.set(bool(allow_pow))
+    try:
+        return _parse_exponent_pattern(text)
+    finally:
+        _ALLOW_POW.reset(token)
+
+
+def _parse_exponent_pattern(text: Any) -> ExponentPattern | _UnionPattern | None:
     try:
         if not isinstance(text, str):
             return None

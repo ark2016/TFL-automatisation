@@ -4,6 +4,8 @@
 
 $task
 
+$clarification_section
+
 ## Ответ
 
 $verdict_block

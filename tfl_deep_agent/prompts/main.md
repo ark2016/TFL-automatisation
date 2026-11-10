@@ -123,7 +123,7 @@ they made are in the evidence ledger, and the tool result lists their ids for yo
 ## Skills and theory
 
 Methodology per class lives in skills under `/skills/` (read-only): `reg`, `cfl`, `dcfl`, `ll`,
-`lean`, `report-templates`. Read the `SKILL.md` of the class before you choose a method.
+`report-templates` (there is no Lean skill file). Read the `SKILL.md` of the class before you choose a method.
 
 Theory statements come from `docs/THEORY.md` through `list_theorems` and `get_theorem`. A
 statement THEORY.md has no section for (for example the general REG pumping lemma and

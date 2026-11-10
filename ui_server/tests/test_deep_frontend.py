@@ -716,6 +716,17 @@ def test_budget_decision_lines():
 
 
 @needs_node
+def test_day_budget_decision_lines():
+    r = _js([
+        ["deepDecisionText", {"point": "budget", "decision": "extended", "binds": "day", "add_usd": 5,
+                              "new_day_limit_usd": 25, "source": "resume"}],
+        ["deepDecisionText", {"point": "budget", "decision": "declined", "binds": "day", "source": "resume"}],
+    ])
+    assert "дневной лимит $25" in r[0]["text"] and "+$5" in r[0]["text"]
+    assert "оставить отчёт как есть" in r[1]["text"] and "завершить" not in r[1]["text"]
+
+
+@needs_node
 def test_followup_chat_items():
     items = _one("deepChatItems", [
         {"event": "done", "status": "submitted"},

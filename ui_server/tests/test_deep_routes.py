@@ -659,6 +659,15 @@ def test_fold_events_builds_the_tree_budget_and_todos():
     assert v["orchestration"][0]["workflow"] == "w" and v["hitl_decisions"][0]["decision"] == "approved"
 
 
+def test_fold_events_keeps_the_day_raise_of_a_decision():
+    evs = [{"event": "hitl_decision", "point": "budget", "decision": "extended", "binds": "day", "add_usd": 5,
+            "new_day_limit_usd": 25.0},
+           {"event": "hitl_decision", "point": "budget", "decision": "declined", "binds": "day"}]
+    got = dr.fold_events(evs)["hitl_decisions"]
+    assert got[0]["binds"] == "day" and got[0]["new_day_limit_usd"] == 25.0
+    assert got[1]["binds"] == "day" and got[1]["decision"] == "declined"
+
+
 def test_settings_get_put(tmp_path):
     got = dr.api_get_settings()
     assert got["settings"]["budget"]["per_task_usd"] == 10.0 and got["error"] is None
@@ -1004,8 +1013,9 @@ def test_live_message_needs_confirm_spend_and_money_left_today(fake_agent):
     from tfl_deep_agent.middleware import budget as budget_mod
 
     agent_file = dr.DEEP_RUNS_DIR / run_id / "run.json"
-    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "mode": "live"}),
-                          encoding="utf-8")  # what a live agent records; the fake does not
+    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "mode": "live",
+                                                    "budget_stop": False}),
+                          encoding="utf-8")  # what a live agent records; the fake does not; nobody to ask
     log = budget_mod.DailySpendLog(dr.spend_dir() / budget_mod.SPEND_LOG_NAME)
     log.append({"task": "other", "usd": 1000.0})
     status, body = _post_message(run_id, {"text": "вопрос", "confirm_spend": True})
@@ -1013,6 +1023,12 @@ def test_live_message_needs_confirm_spend_and_money_left_today(fake_agent):
     # one wording with the CLI, which refuses through followup.day_refusal too
     assert body["error"] == followup_mod.day_refusal(json.loads(agent_file.read_text(encoding="utf-8")), log)
     assert not fake_agent["followup_argv"]
+    # with the budget stop on, an accepted report's follow-up is not refused: the day question asks
+    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "budget_stop": True,
+                                      "status": "submitted"}), encoding="utf-8")
+    assert followup_mod.day_refusal(json.loads(agent_file.read_text(encoding="utf-8")), log) is None
+    agent_file.write_text(json.dumps({**json.loads(agent_file.read_text(encoding="utf-8")), "budget_stop": False}),
+                          encoding="utf-8")
     log.path.unlink()
     assert dr.api_message(run_id, {"text": "вопрос", "confirm_spend": True})["status"] == "queued"
     wait_status(run_id, {"completed"})
@@ -1446,3 +1462,95 @@ def test_the_detail_says_whether_the_budget_stop_is_on(fake_agent):
     assert dr.api_detail(run_id)["hitl"]["budget_stop"] is True
     agent_file.write_text(json.dumps({**agent, "budget_stop": False}), encoding="utf-8")
     assert dr.api_detail(run_id)["hitl"]["budget_stop"] is False
+
+
+def test_a_stuck_follow_up_can_be_abandoned_from_the_lab(fake_agent, monkeypatch):
+    run_id, _ = _finished_fake(fake_agent)
+    before = _read_report(run_id)
+    fake_agent["followup"] = "followup_sleep"
+    dr.api_message(run_id, {"text": "q"})
+    _wait_for_snapshot(run_id)
+
+    def fails(*_a, **_k):
+        raise OSError("the file is locked")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(dr.followup, "abandon_followup", fails)
+        dr.api_cancel(run_id)
+        data = wait_status(run_id, {"completed", "error"})
+    assert data["followup"]["can_abandon"] is True and data["followup"]["can_message"] is False
+    out = dr.api_abandon(run_id)
+    assert out["status"] == "completed"
+    data = dr.api_detail(run_id)
+    assert data["followup"]["can_message"] is True and not data["followup"].get("can_abandon")
+    assert _read_report(run_id) == before
+    with pytest.raises(dr.Conflict):  # nothing left to abandon
+        dr.api_abandon(run_id)
+
+
+def test_abandon_refuses_a_run_that_is_working(fake_agent):
+    run_id, _ = _finished_fake(fake_agent)
+    fake_agent["followup"] = "followup_sleep"
+    dr.api_message(run_id, {"text": "q"})
+    with pytest.raises(dr.Conflict):
+        dr.api_abandon(run_id)
+    dr.api_cancel(run_id)
+    wait_status(run_id, {"completed", "error"})
+
+
+def test_elapsed_of_a_continuation_counts_from_its_own_segment():
+    now = time.time()
+    run = {"run_id": "x" * 12, "run_dir": "nowhere", "status": "running", "started": now - 5000, "created": now - 5000,
+           "finished": None, "segments": [{"started": now - 5000, "finished": now - 4990}, {"started": now - 5}]}
+    out = dr._summary_locked(run, agent={})
+    assert out["elapsed"] is not None and out["elapsed"] < 1000
+    run["status"] = "queued"
+    assert dr._summary_locked(run, agent={})["elapsed"] is None
+
+
+def test_a_failed_approve_rest_does_not_keep_the_lab_copy_at_auto():
+    run = {"review_mode": "auto", "auto_approve": True}
+    with dr._lock:
+        dr._sync_review_mode_locked(run, {"review_mode": "all"})
+    assert run["review_mode"] == "all" and run["auto_approve"] is False
+    with dr._lock:
+        dr._sync_review_mode_locked(run, {})  # no record: nothing to take
+    assert run["review_mode"] == "all"
+
+
+def test_a_cancel_landing_as_an_adopted_follow_up_finishes_settles_from_disk(tmp_path, monkeypatch):
+    monkeypatch.setattr(dr, "_persist_locked", lambda _run: None)
+    d = tmp_path / "orphan2"
+    d.mkdir()
+    (d / "run.json").write_text(json.dumps({"run_id": "orphan2", "status": "submitted"}), encoding="utf-8")
+    run = {"run_id": "orphan2", "run_dir": str(d), "status": "running", "segments": [], "error": None,
+           "orphan": True, "pid": 1, "pid_identity": None, "cancel_requested": True,
+           "followup_from": {"status": "completed", "result_status": "submitted", "error": None}}
+    monkeypatch.setitem(dr._runs, "orphan2", run)
+    lab = dr._lab()
+    monkeypatch.setattr(lab, "_pid_matches", lambda *_a: False)
+    dr._watch_orphan("orphan2")
+    assert run["status"] == "completed" and run["cancel_requested"] is False
+
+
+@pytest.mark.parametrize("agent_error, before, segments_before, segments_now, shown", [
+    ("boom", None, 0, 1, "boom"),                                   # a new error with rc=2 wins
+    ("boom", "boom", 1, 2, "boom"),                                 # same text, but a segment ran for this message
+    ("boom", "boom", 1, 1, "the follow-up did not run (exit code 2)"),  # stale error, the CLI refused the message
+])
+def test_followup_error_beats_the_exit_code_only_when_fresh(tmp_path, monkeypatch, agent_error, before,
+                                                           segments_before, segments_now, shown):
+    monkeypatch.setattr(dr, "_persist_locked", lambda _run: None)
+    d = tmp_path / "r"
+    d.mkdir()
+    (d / "run.json").write_text(json.dumps({
+        "run_id": "r", "status": "submitted", "followup_error": agent_error,
+        "segments": [{}] * segments_now}), encoding="utf-8")
+    run = {"run_id": "r", "run_dir": str(d), "status": "running", "segments": [], "error": None,
+           "followup_from": {"status": "completed", "result_status": "submitted", "error": None,
+                             "agent_error": before, "agent_segments": segments_before}}
+    dr._settle_process_end(run, rc=2, tail="stderr tail")
+    assert run["status"] == "completed" and not run.get("followup_from")
+    assert shown in run["followup_error"]
+    if shown != agent_error:
+        assert "stderr tail" in run["followup_error"] and "boom" not in run["followup_error"]

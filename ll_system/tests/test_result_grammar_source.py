@@ -28,6 +28,11 @@ REJECTED_GRAMMAR = {
 }
 
 
+# docs/VERDICT_POLICY.md R3': the LL(1) parse table of LL_GRAMMAR; without
+# it a constructive claim stays at well_formed.
+LL_TABLE = {"S": {"a": ["a", "S", "b"], "b": [], "$": []}}
+
+
 class _Runner:
     def __init__(self, outputs: dict):
         self.outputs = outputs
@@ -88,7 +93,7 @@ def test_pipeline_reports_later_candidate_selected_by_oracle(source):
                 "method": "marker_detection", "k": 1,
                 "marker": "b", "explanation": "b closes each nested pair",
             },
-            "artifacts": {"ll_grammar": LL_GRAMMAR},
+            "artifacts": {"ll_grammar": LL_GRAMMAR, "parse_table": LL_TABLE},
             "grammar": REJECTED_GRAMMAR,
         }
     else:
@@ -100,6 +105,7 @@ def test_pipeline_reports_later_candidate_selected_by_oracle(source):
                 "transformed_grammar": LL_GRAMMAR,
                 "transformation_steps": ["Remove the redundant S -> S rule"],
                 "conflicts_remaining": [],
+                "parse_table": LL_TABLE,
             },
         }
     result = run_pipeline(

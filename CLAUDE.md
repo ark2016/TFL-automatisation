@@ -71,7 +71,7 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 # Tests: pyproject.toml testpaths includes tfl_eval/tests and excludes the legacy
 # pumping_lemma/tests that call the real Anthropic API. The root conftest also
 # strips ANTHROPIC_API_KEY and stubs anthropic.Anthropic.
-.venv/Scripts/python -m pytest -q
+.venv/Scripts/python -m pytest -q   # Lean/Docker tests are skipped; they need TFL_LEAN_TESTS=1
 
 # Any pipeline, shared CLI contract (writes <stem>_result.{json,md,html})
 .venv/Scripts/python -m cfl_system.orchestrator <ir.json> --save DIR [--live] [--verbose]
@@ -92,3 +92,5 @@ Their tests are not part of the suite: `pumping_lemma/tests` calls the real Anth
 - Run python, pytest, pip install in the project venv; docker for Lean 4 verification
 - Do NOT modify `pumping_lemma/` or `reverse_morfism/`
 - Do NOT run commands that affect system-level configs
+- Parallel agents that modify files work in separate git worktrees on their own branches; only one agent merges, in
+  the main working tree, and agents running tests in the main tree pause while a merge is in progress

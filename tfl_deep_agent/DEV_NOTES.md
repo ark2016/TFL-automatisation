@@ -271,7 +271,10 @@ here. They build on `base.py` and on the inventory.
 
   Optional: `stratification`, `dcfl_claim_check`, `ll_claim_check`.
 - **The R2' DPDA procedure is private.** It lives only in `dcfl_system.lib.oracle_verifier._verify_stack_strategy_dpda`.
-  The public route is `verify_agent_results({"stack_strategy": ...}, ir)`.
+  The public route is `verify_agent_results({"stack_strategy": ...}, ir)`. (Since 2026-11-10 its first three steps,
+  normalization → determinism → structure, are the public `dcfl_system.lib.dpda.prepare_dpda`, which the
+  pipeline's closure_reduction artifact check also uses for a DPDA source; this package's `_prepare_dpda` in
+  `tools/dcfl.py` still does the same steps itself, because it reports every conflict and structure error.)
 - **No lib backing.** `describe_ir_schema` has no schema constants for CFL / DCFL / LL (only REG has `IR_SCHEMA`),
   and the kind sets are private. `ir_to_text`, `list_theorems` and `get_theorem` have no lib function at all.
   They are written in the package.
@@ -3262,7 +3265,7 @@ Decisions and deviations:
   remove a later one.
 - "Finish with what is left" sets `budget_declined`, so a new process does not ask again; a new message clears it.
 - An extension too small for the next call goes on to wrap-up, with no second question in that step.
-- No stop when the day's remainder is what binds: more task budget buys nothing. Live extensions are checked against the
+- No stop when the day's remainder is what binds in a run's own call: more task budget buys nothing (a follow-up of an accepted report is the exception, CA-015 day case below). Live extensions are checked against the
   remainder at decision time (`with_todays_day_left`), not the one on the card.
 - Each message forks from `stable_checkpoint_id`, so a failed or cancelled follow-up leaves no half-finished branch (a tool
   call without a result would break the next model call). Errors restore `report_history/<n>/` and set `followup_error`.
@@ -3365,8 +3368,27 @@ Final fix round (user's decision; everything else from the reviews goes to the b
   question, a main call that still would enter wrap-up or be refused gets a text reply marked `run_store.UNANSWERED_REPLY` with no
   reservation and no charge. `followup.last_reply` skips that message, `followup_unanswered` carries the chat's note, the CLI prints it
   on stderr (`RunOutcome.followup_note`). The text stays in the conversation, so a later turn reads that the message had no answer.
-  `prompts/main.md` stays: no sentence in it became false. Left as they were, as decided: no accepted report, no budget stop. Also
-  left: the day's remainder is what binds (no stop, the call goes to wrap-up), and a scope already in wrap-up.
+  `prompts/main.md` stays: no sentence in it became false. Left as they were, as decided: no accepted report. Also
+  left: a scope already in wrap-up. The day case was left too, until the user decided on 2026-11-10 (see "CA-015 day case").
+  CHANGED by the user on 2026-11-10: the earlier "leave it" for a run with no budget stop (`--auto-approve`) is withdrawn.
+  `declining_skips_the_call` no longer asks for `budget_stop_on`: any follow-up of a run with an accepted report skips
+  the call when the money does not cover it, so a truncated, auto-accepted report never replaces the accepted one
+  (`test_an_auto_approved_run_keeps_its_accepted_report_when_the_follow_up_has_no_money`).
+- CA-015 day case (user, 2026-11-10). In a follow-up of an accepted report (`skip_call_when_low`) a main call short because of the
+  DAY's remainder no longer goes to wrap-up: `_budget_low_locked` returns `BudgetLow(binds="day", per_day_usd=...)` and the budget stop asks
+  about the day limit. `edit` `add_usd` raises `per_day_usd` of the run: `run.json` `budget_day_limit_usd` (`budget_stop.per_day_usd` and
+  `_budget_ledger` read it, `BudgetLedger.raise_day_limit` only grows), no cap by the remainder, the settings snapshot stays;
+  `budget_extensions` gets `{binds: day, new_day_limit_usd}` (report: "дневной лимит"). `approve`/auto: the call is skipped, accepted report
+  kept. Tests: `test_followup.py` `test_a_short_day_*`, `test_raising_the_day_limit_*`, `test_the_day_case_*`. deep.js: no day cap on the +$ buttons for `binds: day`.
+  Round 2: `request_budget_extension` returns `(kind, limit)` read from the decision's own key (a re-run node gets the earlier question's
+  stored answer back from `interrupt`, so indexing by `low.binds` raised KeyError); the middleware applies the kind it gets. A day raise holds
+  only on the day given (`budget_day_limit_day`, `day_limit_raise`). Day card title/button: «Дневной лимит заканчивается» / «Оставить отчёт как есть».
+  Round 3 (user decision 2026-11-10, no wrap-up for the day): `BudgetMiddleware._ask_for_budget` asks up to twice in one node, once per kind
+  (tracked by the kind of the applied answer, so a re-run node whose first `interrupt()` returns the earlier answer asks the other kind next);
+  `followup.day_refusal` is skipped for a run with status `submitted` and the budget stop on (TFL Lab 409 path too), so the day question asks
+  instead of a refusal; a declined day card carries `binds: day` and `progress.hitl_decision`/`fold_events` pass `binds`, `new_day_limit_usd`
+  (deep.js prints «дневной лимит $X» / «оставить отчёт как есть»). Tests: `test_both_limits_short_*`, `test_a_declined_day_card_*`,
+  `test_a_spent_day_asks_*`.
 - API-021: `_hitl_view` and `pending_card` apply today's remainder, and the card's summary line is rebuilt from it. API-022: the
   tooltip and the docs say «Без проверок». API-023 / OO-022: a record the lab is not waiting for gives the `--abandon` command,
   whatever the agent's status. CA-018: `_proved_in` reads `gate_entry()`.
@@ -3404,3 +3426,64 @@ Two gaps in that baseline (`accepted_report`), both reproduced first (R1 went fr
   report and rating unchanged (Haiku wrote `exact?` three times, `lean_check` ran in Docker); the budget card at the start of a run
   with a $0.01 limit, top-up to $0.04 and the run continuing; declining inside a follow-up makes no model call, shows the chat note
   and keeps the report. R-IR itself is covered by mock tests only. A proof that passes `lean_check` was not seen live: that needs Opus.
+
+## Core backlog round (bk/deep-core)
+
+- Lean prompt no longer points at a missing /skills/lean/SKILL.md. Follow-up replies are kept whole (no truncated flag; progress.assistant_message no longer cuts). HITL 1 feedback messages carry additional_kwargs tfl_hitl; the card's task_text is the task stated before the reviewed call and the review stores task_text, so a new report names the new task. _as_accepted cuts at the next task message, not at a HITL note. A non-HITL-2 stop drops a stale rejected draft from result.*. Verdict-gate predicates moved to evidence/rules.py (ledger re-exports them). CA-015 for runs with no budget stop left as decided earlier (needs the user).
+- OPEN, needs the user: `_task_text` names the report task after the newest HITL 1 review `task_text`, i.e. the last plain human message before the reviewed call. In a follow-up that is the chat message, so a correction such as "typo: a^n b^2n" becomes the report task instead of the original. Options: (1) keep (right when the follow-up states a whole new task); (2) store the follow-up text in `review['followup_text']` and keep the original as the task; (3) record both in the report. Not changed.
+
+## 2026-11-09: backlog round (ultracode)
+
+Mock-mode work on branch `feat/backlog-ultracode`; no live calls.
+
+- TFL Lab: the continuation timer counts from the latest segment's start; `POST /api/deep/runs/<id>/abandon` and the
+  «Отменить продолжение» button (`followup.can_abandon`, 409 while a process is alive); the lab's `review_mode` copy is
+  re-read from the agent's `run.json` when a continuation settles; `_watch_orphan` handles a cancel that lands as an adopted
+  follow-up finishes; only a button click asks for confirmation (`deepSend*` take `viaButton`); `followup_error` beats the
+  exit code only when it is fresh (`agent_error` / `agent_segments` stored at send time).
+- CLI: `--abandon` refuses while the pid in `followup_in_progress` is alive (a resumed segment records its own pid);
+  `--abandon --force` skips the check; `--force` without `--abandon` is a parser error. `--resume` that cannot start (`OSError`,
+  `ImportError`) exits 2 with the reason on stderr. `_check_live_flag` became `_check_live_key`; the mode/`--live` mismatch is
+  refused by `hitl.check_run_mode`.
+- HITL cards: user text is markdown-escaped (`hitl.md_escape`) so `*` survives; the HITL 2 card and `hitl.md` show the draft
+  `summary`. The final report's task statement is not escaped (see decisions).
+- Core: no truncation of chat replies (`progress.assistant_message`); `/lean/SKILL.md` no longer referenced; `_task_text` uses
+  a review's `task_text` only when it differs from the run's first task message; gate predicates in `evidence/rules.py`.
+- Refactors: `budget_add` -> `parse_add_usd`, `budget_resume` -> `budget_decision_response`, `usd` -> `format_usd`;
+  `hitl._record_review`, `deep_routes._mark_process_gone`, `_lean_off`, `deepLogNote`, `deepIsAutoSource`.
+- Docs: README, `tfl_deep_agent/README.md` and `docs/kb` (`run-lifecycle.md`, `tfl-lab.md`) describe `--force`, the abandon route
+  and `report_revision` as implemented.
+
+Open decisions (options and recommendations in TODO.md): exit code for a failed follow-up (keep 1, add alias); TTY dialog at a
+budget stop in auto mode (keep exit 3); byte-identical rejected report vs `review_summary` (skip rejected when filtering by
+digest); accepted report replaced by a truncated one without a budget stop (drop the `budget_stop_on` condition); escaping `*`
+in the rendered report task (only outside `$...$`); follow-up chat message becoming the report task (see the OPEN item above).
+Deferred: end-to-end mock test for a rejected draft followed by a new IR; `_is_task_message` for checkpoints without `tfl_hitl`.
+Follow-up: the compact exam_04 DPDA (356 transitions) fits the 2000-transition `dpda_vs_ir` limit, unlike the old 5835-transition one.
+
+## 2026-11-10: lean-formalizer prompt knows the lean-theory lemmas (bk2/deep-lean-prompt)
+
+- `prompts/lean.md` lists the Transfer, Closure, RegularFilters and TransferAnBn lemmas of `TflLean/Lemmas.lean`
+  (signatures copied from the file), Ogden's lemma (langlib, in the image via `TflLean.Langlib`), a route per direction,
+  what is not in the image (LL(k), Parikh, Yu, Shallit 4.7.4, inherent ambiguity, DCFL pumping, DCFL inverse homomorphism,
+  grammar to DPDA) and the compiled examples, with four proof bodies quoted verbatim.
+- `tests/test_tools_lean.py`: every `TflLean.*` name in `lean.md` must be declared in `Lemmas.lean`, the quoted bodies must
+  be substrings of their example files, and the "not in the image" list must stay. `lean_statement` still refuses `ll`.
+- Skills: `cfl` step 8 no longer says the only compiled sample is {aⁿbⁿcⁿ} and that closure is not ported; the references to
+  a `lean` skill (there is none) now name the `lean-formalizer` subagent.
+
+
+## deep-decisions (user decisions of 2026-11-10)
+
+- `EXIT_FOLLOWUP_FAILED = 1` (alias of `EXIT_NO_REPORT`, `run_store.py`, used by `cli._report` and `hitl._finish_segment` for a failed
+  follow-up); numeric codes and TFL Lab's rc handling unchanged.
+- Budget stop in review mode `auto`: exit 3, no terminal dialog in the starting process; a later `--resume` on a terminal asks.
+  Docs only (README, `docs/kb/budget.md`).
+- API-025: `review_summary` ignores a `rejected` HITL 2 review of the same digest when an approving review of that digest exists.
+- CA-015: see the entry above (`declining_skips_the_call` no longer needs `budget_stop_on`).
+- The report's task is the original task; a follow-up message that led to a HITL 1 review is stored as `review["followup_text"]`
+  (card arg `followup_text`) and rendered as «Уточнение» (`result["clarifications"]`, `clarification_section`). Runs written before this
+  key keep the old behaviour for their own reviews (`review["task_text"]` that differs from the first message still wins).
+- `render.safe_task_text` escapes `*` outside `$...$` / `$$...$$` in the task.
+- Agent identity keys (REG `module`, CFL `agent`, DCFL/LL `agent_name`) are kept; the row is in `docs/pipeline_capabilities.json`
+  and the generated README table.

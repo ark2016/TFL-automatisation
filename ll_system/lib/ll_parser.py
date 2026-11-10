@@ -52,16 +52,43 @@ class LLParser:
     # Parsing
     # ------------------------------------------------------------------
 
-    def parse(self, word: str) -> dict:
+    def parse(
+        self, word: str, *, record_steps: bool = True, max_steps: int = _MAX_STEPS,
+    ) -> dict:
         """Parse *word* using the LL(k) algorithm.
 
         *word* is treated as a sequence of single-character terminals.
+        ``record_steps=False`` leaves ``"steps"`` empty (bulk checks run the
+        parser on thousands of words); ``max_steps`` bounds the run.
 
         Returns a dict with:
         - ``"accepted"`` (bool)
         - ``"word"`` (str)
         - ``"steps"`` (list[dict]) — parse steps for debugging
         - ``"error"`` (str | None)
+        - ``"non_halting"`` (True, only when the run provably never halts:
+          a nonterminal came back on top, with the same lookahead, before its
+          own expansion finished; ``"loop"`` names it)
+        - ``"step_limit_exceeded"`` (True, only when ``max_steps`` ran out
+          without such a repetition)
+
+        Non-halting detection is exact. Between two consumed input symbols
+        the lookahead is fixed, so the run depends on the stack alone. An
+        expansion of A at stack height h is *open* while the stack has not
+        dropped below h (A's subtree is unfinished). If A comes back on top
+        while its expansion is open, the stack above height h - 1 has gone
+        from [A] to [..., A] without reading input or touching what lies
+        below, so the same steps repeat forever (left recursion, possibly
+        through nullable symbols, e.g. a cell A -> A x). Conversely, a run
+        that never halts reads finitely many symbols and from some point on
+        only expands nonterminals. Let m be the liminf of its stack heights:
+        from some point on the height never drops below m, and it equals m
+        infinitely often. Each time it equals m after that point, the
+        nonterminal on top is expanded at height m, and that expansion stays
+        open from then on. Nonterminals being finitely many, by pigeonhole
+        some A is expanded at height m twice after that point, and the second
+        time A comes back on top while its first expansion is open. Every
+        loop is caught.
         """
         k = self._k
         start = self._grammar["start"]
@@ -72,6 +99,9 @@ class LLParser:
         stack: list[str] = [eos, start]
         pos: int = 0       # position in *word*
         steps: list[dict] = []
+        # nonterminal -> stack height of its open expansion, since the last
+        # consumed input symbol (see the docstring).
+        open_expansions: dict[str, int] = {}
 
         def _lookahead() -> str:
             """Return the next k characters from the remaining input, padded with $."""
@@ -79,7 +109,7 @@ class LLParser:
             padded = remaining + "$" * k
             return padded[:k]
 
-        for step_no in range(_MAX_STEPS):
+        for step_no in range(max_steps):
             if not stack:
                 # Empty stack — should not happen (we always have eos on bottom)
                 return {
@@ -92,14 +122,15 @@ class LLParser:
             top = stack[-1]
             la = _lookahead()
 
-            steps.append(
-                {
-                    "step": step_no,
-                    "stack_top": top,
-                    "lookahead": la,
-                    "pos": pos,
-                }
-            )
+            if record_steps:
+                steps.append(
+                    {
+                        "step": step_no,
+                        "stack_top": top,
+                        "lookahead": la,
+                        "pos": pos,
+                    }
+                )
 
             # ---- End sentinel on top of stack ----------------------------
             if top == "$" or (k > 1 and top == eos):
@@ -125,6 +156,7 @@ class LLParser:
                 if pos < len(word) and word[pos] == top:
                     stack.pop()
                     pos += 1
+                    open_expansions.clear()
                     continue
                 return {
                     "accepted": False,
@@ -149,6 +181,25 @@ class LLParser:
                             f"at position {pos}"
                         ),
                     }
+                height = len(stack)
+                if open_expansions:
+                    open_expansions = {
+                        nt: h for nt, h in open_expansions.items() if h <= height
+                    }
+                if top in open_expansions:
+                    return {
+                        "accepted": False,
+                        "word": word,
+                        "steps": steps,
+                        "error": (
+                            f"Parser never halts: {top!r} comes back on top with "
+                            f"lookahead {la!r} at position {pos} before its own "
+                            "expansion finished (left recursion)"
+                        ),
+                        "non_halting": True,
+                        "loop": {"nonterminal": top, "lookahead": la, "pos": pos},
+                    }
+                open_expansions[top] = height
                 stack.pop()
                 # Push rhs right-to-left so the leftmost symbol ends up on top.
                 for sym in reversed(rule_rhs):
@@ -164,11 +215,14 @@ class LLParser:
                 "error": f"Unknown stack symbol '{top}'",
             }
 
+        # Neither a rejection nor a proven loop (loops return above): the run
+        # was still making progress when the step budget ran out.
         return {
             "accepted": False,
             "word": word,
             "steps": steps,
-            "error": f"Step limit ({_MAX_STEPS}) exceeded",
+            "error": f"Step limit ({max_steps}) exceeded",
+            "step_limit_exceeded": True,
         }
 
 

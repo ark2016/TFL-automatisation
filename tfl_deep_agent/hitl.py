@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import shutil
 import uuid
@@ -101,6 +102,7 @@ from .run_store import (
     CHECKPOINT_FILE,
     DECISIONS,
     EXIT_AWAITING,
+    EXIT_FOLLOWUP_FAILED,
     EXIT_NO_REPORT,
     EXIT_SUBMITTED,
     FINAL_STATUSES,
@@ -277,13 +279,30 @@ def _trailing_tool_messages(messages: Sequence[Any]) -> list[Any]:
     return list(reversed(out))
 
 
-def _first_human_text(messages: Sequence[Any]) -> str:
+def _is_task_message(msg: Any) -> bool:
+    """A human message that states a task: not a note the harness added (HITL 1 feedback,
+    budget / call-limit wrap-up; they carry a ``tfl_*`` key in ``additional_kwargs``)."""
     from langchain_core.messages import HumanMessage
 
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            return _text_of(msg)
-    return ""
+    return isinstance(msg, HumanMessage) and not any(
+        str(k).startswith("tfl_") for k in (getattr(msg, "additional_kwargs", None) or {}))
+
+
+def _first_human_text(messages: Sequence[Any]) -> str:
+    """The task as the run started with it: the first human message that states a task. A
+    follow-up chat message never replaces it (:func:`_followup_text` keeps it apart)."""
+    return next((_text_of(m) for m in messages if _is_task_message(m)), "")
+
+
+def _followup_text(messages: Sequence[Any], before: int | None = None) -> str | None:
+    """The follow-up chat message that led to the review of the message at index ``before``:
+    the last task message before it, unless that is the run's first one. ``None`` otherwise."""
+    msgs = list(messages)
+    tasks = [m for m in (msgs if before is None else msgs[:before]) if _is_task_message(m)]
+    first = next((m for m in msgs if _is_task_message(m)), None)
+    if not tasks or tasks[-1] is first:
+        return None
+    return _text_of(tasks[-1])[:20000] or None
 
 
 def _subagent_answers(messages: Sequence[Any], calls: Mapping[str, Mapping[str, Any]],
@@ -451,8 +470,10 @@ def formalization_request(state: Mapping[str, Any], target: Any, *, evidence: An
         found = find_ir(answer, task_args=calls.get(target.tool_call_id), evidence=evidence,
                         call_id=target.tool_call_id)
     checks = ir_checks(found["class"], found["ir"])
+    at = next((i for i, m in enumerate(messages) if m is target), None)
     args = {
         "task_text": _first_human_text(messages)[:20000],
+        "followup_text": _followup_text(messages, at),
         "source": dict(source) if source else {"kind": "text"},
         "transcription": _text_of(intake[-1])[:20000] if intake else None,
         "trigger": trigger,
@@ -477,8 +498,17 @@ def formalization_request(state: Mapping[str, Any], target: Any, *, evidence: An
     }
 
 
+_MD_SPECIALS = re.compile(r"([\\`*_<>\[\]~])")
+
+
+def md_escape(text: Any) -> str:
+    """User text for a Markdown card as literal characters: ``(ab)*`` and ``{a,b}*`` must not turn
+    the text between two stars into italics."""
+    return _MD_SPECIALS.sub(r"\\\1", str(text))
+
+
 def _words(ws: Sequence[str] | None) -> str:
-    return ", ".join(w if w else "ε" for w in ws or []) or "—"
+    return ", ".join(md_escape(w) if w else "ε" for w in ws or []) or "—"
 
 
 def formalization_card(args: Mapping[str, Any]) -> str:
@@ -490,9 +520,11 @@ def formalization_card(args: Mapping[str, Any]) -> str:
         where = src.get("stored_as") or src.get("input_path")
         lines += [f"Source: {src.get('kind')} «{src.get('name')}»{extra} ({where}).", ""]
     if args.get("transcription"):
-        lines += ["### Transcription (intake)", "", str(args["transcription"]), ""]
+        lines += ["### Transcription (intake)", "", md_escape(args["transcription"]), ""]
     else:
-        lines += ["### Task text", "", str(args.get("task_text") or "—"), ""]
+        lines += ["### Task text", "", md_escape(args.get("task_text") or "—"), ""]
+    if args.get("followup_text"):
+        lines += ["### Clarification (follow-up message)", "", md_escape(args["followup_text"]), ""]
     head = f"### IR (class {args.get('class') or '?'}"
     head += f", {args['ir_fingerprint']}" if args.get("ir_fingerprint") else ""
     head += ", valid)" if args.get("valid") else ", NOT valid)"
@@ -507,7 +539,7 @@ def formalization_card(args: Mapping[str, Any]) -> str:
     if args.get("warnings"):
         lines += ["Warnings: " + "; ".join(str(w) for w in args["warnings"]), ""]
     if args.get("restatement"):
-        lines += ["### Restatement of the IR (ir_to_text, code)", "", str(args["restatement"]), ""]
+        lines += ["### Restatement of the IR (ir_to_text, code)", "", md_escape(args["restatement"]), ""]
     ex = args.get("examples") or {}
     if ex:
         lines += [f"### Words (labels: {ex.get('labels_from')}, length ≤ {ex.get('max_len')})", "",
@@ -590,7 +622,8 @@ class FormalizationReviewMiddleware(_AgentMiddleware):  # type: ignore[misc,vali
         message, rec = self._apply(decision, args, target.tool_call_id)
         from langchain_core.messages import HumanMessage
 
-        return {"messages": [HumanMessage(content=message)], STATE_KEY: [*superseded, rec]}
+        return {"messages": [HumanMessage(content=message, additional_kwargs={"tfl_hitl": FORMALIZATION})],
+                STATE_KEY: [*superseded, rec]}
 
     async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         return self.before_model(state, runtime)
@@ -752,6 +785,19 @@ def formalization_note(binding: Mapping[str, Any] | None, report: Mapping[str, A
     return line
 
 
+DRAFT_SUMMARY_CHARS = 600
+
+
+def _draft_summary_quote(summary: Any) -> list[str]:
+    """The draft's ``summary`` as a short Markdown quote (clipped), or ``[]``."""
+    text = str(summary or "").strip()
+    if not text:
+        return []
+    if len(text) > DRAFT_SUMMARY_CHARS:
+        text = text[:DRAFT_SUMMARY_CHARS - 1].rstrip() + "…"
+    return ["> " + md_escape(line) if line.strip() else ">" for line in text.splitlines()]
+
+
 def report_review_text(report: Mapping[str, Any], evidence: Any = None,
                        state: Mapping[str, Any] | None = None, *, formalization_on: bool = False) -> str:
     """The HITL 2 description: the verdict and the trust labels computed by
@@ -766,6 +812,9 @@ def report_review_text(report: Mapping[str, Any], evidence: Any = None,
              f"Verdict: «{report.get('verdict')}» (class {report.get('language_class')}"
              + (f", answer {report.get('answer')}" if report.get("answer") else "") + f"). "
              f"Method: {report.get('method')}.", ""]
+    draft_summary = _draft_summary_quote(report.get("summary"))
+    if draft_summary:
+        lines += ["Draft summary (the model's text):", "", *draft_summary, ""]
     try:
         ev = evaluate_report(report, records, formalization=binding)
     except Exception as exc:  # noqa: BLE001 - the review must still be shown
@@ -995,7 +1044,7 @@ def resume_value(request: Mapping[str, Any], decision: Decision, *,
     configs = {_get(c, "action_name"): c for c in _get(request, "review_configs") or []}
     point = request_point(request)
     if point == BUDGET:
-        return budget_stop_mod.budget_resume(actions[0], decision)
+        return budget_stop_mod.budget_decision_response(actions[0], decision)
     if decision.type == "edit" and len(actions) != 1:
         raise DecisionError(f"edit needs exactly one pending action, there are {len(actions)}")
     decisions: list[dict[str, Any]] = []
@@ -1037,6 +1086,10 @@ def resume_value(request: Mapping[str, Any], decision: Decision, *,
         edited_args = (decisions[0].get("edited_action") or {}).get("args") or {}
         if edited_args.get("transcription"):
             review["transcription"] = edited_args["transcription"]
+        elif args0.get("task_text"):
+            review["task_text"] = args0["task_text"]  # the original task this IR was built for
+        if args0.get("followup_text"):
+            review["followup_text"] = args0["followup_text"]  # the follow-up message that led to this review
         if edited_args.get("ir") is not None:
             from .tools.ir import ir_fingerprint
 
@@ -1202,6 +1255,8 @@ def _report_summary(args: Mapping[str, Any], draft: Mapping[str, Any] | None) ->
     out.append(f"Шагов: {len(args.get('steps') or [])} · утверждений: {len(args.get('claims') or [])}")
     if draft.get("unknown_ids"):
         out.append(_short(f"Ссылки без записи в журнале: {len(draft['unknown_ids'])}"))
+    elif str(args.get("summary") or "").strip():
+        out.append(_short(f"Черновик: {args['summary']}", 88))  # the full text is in the folded details
     return out[:4]
 
 
@@ -1239,6 +1294,8 @@ def pending_card(request: Mapping[str, Any], *, draft: Mapping[str, Any] | None 
         summary = [_short(f"Команда: {cmd}")] if cmd else [_short(f"Вызов: {_get(a, 'name')}") for a in acts][:4]
     editable = facts.editable(first) if len(acts) == 1 and "edit" in allowed_decisions(request) else []
     title = facts.title or _short(f"Остановка: {', '.join(str(_get(a, 'name')) for a in acts)}")
+    if point == BUDGET and first.get("binds") == budget_stop_mod.DAY:
+        title = "Дневной лимит заканчивается"
     return {"point": point, "title": title, "summary": [s for s in summary if s][:4],
             "details_md": card_details(request, point), "editable": editable}
 
@@ -1388,8 +1445,6 @@ def resume_run(
     request = budget_stop_mod.with_todays_day_left(run, pending["request"]) if at_budget else pending["request"]
     value, review = resume_value(request, decision, evidence=_run_evidence(d))
     review["interrupt_id"] = pending["interrupt_id"]
-    if at_budget:
-        budget_stop_mod.apply_budget_review(run, review)
     if approve_rest or auto_approve_later:
         run.setdefault("initial_review_mode", review_mode_of(run))
         run["review_mode"] = REVIEW_AUTO
@@ -1399,10 +1454,7 @@ def resume_run(
         run["approve_rest"] = {"at": review["at"], "point": review["point"],
                                "interrupt_id": pending["interrupt_id"], "source": decision.source,
                                "reviewer": decision.reviewer}
-    run["reviews"].append(review)
-    run["pending"] = None
-    run["status"] = "running"
-    save_run(d, run)
+    _record_review(d, run, review, at_budget=at_budget)
     return guarded_segment(d, run, Command(resume={pending["interrupt_id"]: value}), model_factory=model_factory,
                            dialog=dialog, resumed_with=review)
 
@@ -1441,6 +1493,19 @@ def send_followup(
     save_run(d, run)
     return guarded_segment(d, run, {"messages": [HumanMessage(content=text)]}, model_factory=model_factory,
                            dialog=dialog, resumed_with=None, message=text)
+
+
+def _record_review(d: Path, run: dict[str, Any], review: dict[str, Any], *, at_budget: bool,
+                   budget: Any = None) -> None:
+    """A decision is taken: apply a budget stop's decision (``budget``: the running
+    segment's ledger, none on a resume), add the review, clear ``pending``, mark the run
+    running and save ``run.json``."""
+    if at_budget:
+        budget_stop_mod.apply_budget_review(run, review, budget)
+    run["reviews"].append(review)
+    run["pending"] = None
+    run["status"] = "running"
+    save_run(d, run)
 
 
 def check_run_mode(d: Path, run: Mapping[str, Any], model_factory: Any, live: bool, doing: str) -> None:
@@ -1508,6 +1573,7 @@ def _budget_ledger(run: Mapping[str, Any], settings_obj: Any, factory: Any = Non
     # money the human added at the budget stop: not in settings, whose validator keeps
     # per_task_usd <= per_day_usd (the day's cap still binds through the ledger)
     led.raise_limit(float(run.get("budget_limit_usd") or 0.0))
+    led.raise_day_limit(budget_stop_mod.day_limit_raise(run))  # a day extension (CA-015)
     fields = {f.name for f in dataclasses.fields(budget_mod.CallRecord)}
     led.records.extend(budget_mod.CallRecord(**{k: v for k, v in r.items() if k in fields})
                        for r in prev.get("records") or [])
@@ -1595,6 +1661,9 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
     settings_obj = settings_mod.validate_settings(json.loads(json.dumps(cfg)))
     segment = {"started_at": _now(), "resumed_with": dict(resumed_with) if resumed_with else None}
     run["segments"].append(segment)
+    if run.get("followup_in_progress"):  # this process now owns the follow-up (a resume after a stop)
+        run["followup_in_progress"]["pid"] = os.getpid()
+        save_run(d, run)
     factory = _factory(d, run, model_factory)
     try:
         budget = _budget_ledger(run, settings_obj, factory)
@@ -1656,12 +1725,7 @@ def _segment(d: Path, run: dict[str, Any], value: Any, *, model_factory: Any, di
                     break
             resume, review = resume_value(request, decision, evidence=evidence)
             review["interrupt_id"] = intr.id
-            if info.point == BUDGET:
-                budget_stop_mod.apply_budget_review(run, review, budget)
-            run["reviews"].append(review)
-            run["pending"] = None
-            run["status"] = "running"
-            save_run(d, run)
+            _record_review(d, run, review, at_budget=info.point == BUDGET, budget=budget)
             progress.hitl_decision(review)
             value = Command(resume={intr.id: resume})
     except Exception as exc:  # noqa: BLE001 - a build / checkpoint failure ends the segment as an error
@@ -1716,7 +1780,7 @@ def _finish_segment(d: Path, run: dict[str, Any], segment: dict[str, Any], *, st
         segment["status"] = "error"
         save_run(d, run)
         followup_mod.emit_abandoned(progress, str(run["status"]), error)
-        return RunOutcome(d, run["run_id"], str(run["status"]), EXIT_NO_REPORT, read_result(d),
+        return RunOutcome(d, run["run_id"], str(run["status"]), EXIT_FOLLOWUP_FAILED, read_result(d),
                           paths={"run": d / RUN_FILE}, followup_error=error)
     result = final_result(d, run, state, budget, evidence, error=error)
     _note_accepted_report(run, state, evidence)
@@ -1779,17 +1843,23 @@ def _ask(dialog: Dialog | None, info: PendingInfo, *, evidence: Any = None) -> D
         return decision
 
 
+_ACCEPTING = ("approved", "edited", "auto_approved")
+
+
 def review_summary(run: Mapping[str, Any], report: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
     """``(human_review label, review mapping for the renderer)`` from the run's HITL 2
     history. ``report``: the accepted report; the last review holding its digest speaks for
-    it, so a draft rejected later does not. Reviews with no digest (a run written before
+    it, so a draft rejected later does not; a rejection of a byte-identical report is ignored
+    when an approving review of the same digest exists. Reviews with no digest (a run written before
     the key) count when no review holds it; reviews of other reports only: it was not
     reviewed. With no accepted report, the last review says what became of the last draft."""
     reports = [r for r in run.get("reviews") or [] if r.get("point") == REPORT]
     digest = followup_mod.report_digest(report)
     if digest and reports:
-        reports = ([r for r in reports if r.get("report_digest") == digest]
-                   or [r for r in reports if not r.get("report_digest")])
+        same = [r for r in reports if r.get("report_digest") == digest]
+        if any(r.get("decision") in _ACCEPTING for r in same):  # API-025: a later rejection of a byte-identical
+            same = [r for r in same if r.get("decision") != "rejected"]  # draft does not unlabel the report
+        reports = same or [r for r in reports if not r.get("report_digest")]
         if not reports:
             return "not reviewed", {"decision": "not_reviewed"}
     if not reports:
@@ -1856,10 +1926,17 @@ def _task_text(run: Mapping[str, Any], state: Mapping[str, Any], later_calls: Co
     """The task as the report states it: the text as the human corrected it at
     HITL 1, else the given text, else (a file) the intake transcription.
     ``later_calls``: tool calls whose reviews came after the report (:func:`_as_accepted`)."""
+    msgs0 = list(state.get("messages") or [])
+    # The run's own first message (for a file: the harness instruction). A review's task_text equal
+    # to it is not a new task: the transcription / intake answer below stays the source.
+    first = next((_text_of(m) for m in msgs0 if _is_task_message(m)), None)
     for r in reversed(run.get("reviews") or []):
         if (r.get("point") == FORMALIZATION and r.get("transcription")
                 and r.get("reviewed_call_id") not in later_calls):
             return str(r["transcription"])
+        if (r.get("point") == FORMALIZATION and r.get("task_text") and str(r["task_text"]) != first
+                and r.get("reviewed_call_id") not in later_calls):
+            return str(r["task_text"])
     if run.get("task_text"):
         return str(run["task_text"])
     messages = list(state.get("messages") or [])
@@ -1870,12 +1947,27 @@ def _task_text(run: Mapping[str, Any], state: Mapping[str, Any], later_calls: Co
     return f"(file {src.get('name')}: {src.get('kind')}; no transcription)"
 
 
+def _clarifications(run: Mapping[str, Any], later_calls: Collection[str] = ()) -> list[str]:
+    """The follow-up messages that led to a HITL 1 review of this report, in order, each once."""
+    out: list[str] = []
+    for r in run.get("reviews") or []:
+        text = r.get("followup_text")
+        if (r.get("point") == FORMALIZATION and text and r.get("reviewed_call_id") not in later_calls
+                and text not in out):
+            out.append(str(text))
+    return out
+
+
 def _result_common(d: Path, run: Mapping[str, Any], result: dict[str, Any], budget: Any,
-                   state: Mapping[str, Any], *, task: str | None = None) -> dict[str, Any]:
+                   state: Mapping[str, Any], *, task: str | None = None,
+                   later_calls: Collection[str] = ()) -> dict[str, Any]:
     result["run_id"] = run["run_id"]
     result["mode"] = "mock" if run.get("mode") == "mock" else run.get("mode")
     result["template"] = run.get("template")
     result["task"] = _task_text(run, state) if task is None else task
+    clarifications = _clarifications(run, later_calls)
+    if clarifications:
+        result["clarifications"] = clarifications
     if run.get("input"):
         result["input"] = run["input"]
     result["budget_refusal"] = result.pop("budget", None)
@@ -1898,14 +1990,15 @@ def _accepted_report_at(messages: Sequence[Any]) -> int | None:
 
 def _as_accepted(state: Mapping[str, Any]) -> tuple[Mapping[str, Any], frozenset[str]]:
     """``(state, later tool calls)``: the state as its accepted report had it. A report
-    ends its segment, so what came later starts with the human's next message. A run with
+    ends its segment, so what came later starts with the human's next message (a task message:
+    the notes HITL 1 adds in the same segment, e.g. a ``validate_ir`` in the report's own turn, are not a cut). A run with
     no accepted report, or no message after it, comes back as it is."""
-    from langchain_core.messages import HumanMessage, ToolMessage
+    from langchain_core.messages import ToolMessage
 
     messages = list(state.get("messages") or [])
     at = _accepted_report_at(messages)
     cut = None if at is None else next(
-        (i for i in range(at + 1, len(messages)) if isinstance(messages[i], HumanMessage)), None)
+        (i for i in range(at + 1, len(messages)) if _is_task_message(messages[i])), None)
     if cut is None:
         return state, frozenset()
     later = frozenset(m.tool_call_id for m in messages[cut:] if isinstance(m, ToolMessage))
@@ -1958,7 +2051,8 @@ def final_result(d: Path, run: Mapping[str, Any], state: Mapping[str, Any], budg
                                       formalization=run_binding(reviewed_then, accepted),
                                       rating_evidence=_rating_evidence(run, state, evidence))
     result["human_review"], _ = review_summary(run, result.get("report"))
-    result = _result_common(d, run, result, budget, state, task=_task_text(run, accepted, later))
+    result = _result_common(d, run, result, budget, state, task=_task_text(run, accepted, later),
+                           later_calls=later)
     if error:
         result["status"] = "error"
         result["reason"] = error
@@ -1980,6 +2074,20 @@ def _write_result(d: Path, run: Mapping[str, Any], result: Mapping[str, Any], bu
     _, review = review_summary(run, result.get("report"))
     return write_report(d, result, evidence=evidence, budget=_budget_view(budget, run), task_text=result.get("task"),
                         human_review=review)
+
+
+def _drop_stale_draft(d: Path, run: dict[str, Any], graph: Any, config: Mapping[str, Any],
+                      budget: Any, evidence: Any) -> None:
+    """A stop that is not HITL 2 while ``result.*`` still shows a draft the human has
+    decided (rejected) earlier in this continuation: write the result of the thread as it
+    stands (the accepted report, or none), so the page does not show that draft as pending."""
+    run.pop("draft", None)
+    try:
+        state = dict(graph.get_state(config).values)
+        result = final_result(d, run, state, budget, evidence)
+        _write_result(d, run, result, budget, evidence)
+    except Exception:  # noqa: BLE001 - the stop itself must still be recorded
+        pass
 
 
 def _write_awaiting(d: Path, run: dict[str, Any], info: PendingInfo, graph: Any, config: Mapping[str, Any],
@@ -2009,6 +2117,8 @@ def _write_awaiting(d: Path, run: dict[str, Any], info: PendingInfo, graph: Any,
                      human_review={"decision": "awaiting"}, status=STATUS_AWAITING)
         run["draft"] = {"verdict": (draft.get("report") or {}).get("verdict"), "trust": draft.get("trust"),
                         "confidence_cap": draft.get("confidence_cap"), "unknown_ids": draft.get("unknown_ids")}
+    elif run.get("draft"):
+        _drop_stale_draft(d, run, graph, config, budget, evidence)
     try:
         run["pending"]["card"] = pending_card(info.request, draft=run.get("draft") if info.point == REPORT else None,
                                               point=info.point)
@@ -2054,10 +2164,19 @@ class TTYDialog:
             text = Path(text[1:]).read_text(encoding="utf-8")
         return json.loads(text)
 
+    @staticmethod
+    def _binds_day(info: PendingInfo) -> bool:
+        acts = _get(info.request, "action_requests") or []
+        return bool(acts) and (_get(acts[0], "args") or {}).get("binds") == budget_stop_mod.DAY
+
     def _budget(self, info: PendingInfo) -> Decision | None:
         self.print(info.card)
         while True:
-            choice = self.input("[a]dd money / [f]inish with what is left / [l]ater: ").strip().lower()[:1]
+            day = self._binds_day(info)
+            choice = self.input("[a]dd money to the day limit / [k]eep the report / [l]ater: " if day
+                                else "[a]dd money / [f]inish with what is left / [l]ater: ").strip().lower()[:1]
+            if day and choice == "k":
+                choice = "f"
             if choice == "f":
                 return Decision("approve", source="dialog", reviewer=self.reviewer)
             if choice in ("l", "q"):
@@ -2065,7 +2184,7 @@ class TTYDialog:
             if choice == "a":
                 amount = self.input("How many dollars to add: ").strip()
                 try:
-                    return Decision("edit", args={"add_usd": budget_stop_mod.budget_add({"add_usd": amount})},
+                    return Decision("edit", args={"add_usd": budget_stop_mod.parse_add_usd({"add_usd": amount})},
                                     source="dialog", reviewer=self.reviewer)
                 except DecisionError as exc:
                     self.print(str(exc))
@@ -2117,7 +2236,7 @@ def copy_input(path: str | Path, run_dir: str | Path) -> Path:  # pragma: no cov
 
 
 __all__ = [
-    "AUTO_APPROVED_LABEL", "BUDGET", "CARD_FILE", "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_NO_REPORT",
+    "AUTO_APPROVED_LABEL", "BUDGET", "CARD_FILE", "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_FOLLOWUP_FAILED", "EXIT_NO_REPORT",
     "EXIT_SUBMITTED", "FINAL_STATUSES", "FORMALIZATION", "POINTS", "REPORT", "REPORT_HISTORY_DIR",
     "REVIEW_ALL", "REVIEW_AUTO", "REVIEW_FORMALIZATION",
     "REVIEW_MODES", "RUN_FILE", "STATUS_AWAITING", "allowed_decisions", "auto_approves",

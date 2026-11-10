@@ -20,6 +20,8 @@ Docker-conditional, same guard as the rest of the Lean test suite.
 from __future__ import annotations
 
 import unittest
+
+import pytest
 from unittest.mock import patch
 
 from agent_system.lib.type_check import (
@@ -311,6 +313,9 @@ class TestCheckLeanFileReplayGating(unittest.TestCase):
 
         result = check_lean_file(text)
         self.assertEqual(result["status"], "proved", result)
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(

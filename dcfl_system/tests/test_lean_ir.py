@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import unittest
+
+import pytest
 from pathlib import Path
 
 from agent_system.lib.lean_ir import LeanStatement
@@ -118,6 +120,9 @@ class TestIdempotent(unittest.TestCase):
         first = render_statement(ir, "dcfl").render("sorry")
         again = render_statement(ir, "dcfl").render("sorry")
         self.assertEqual(first, again)
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
@@ -334,6 +339,27 @@ def _need(oracle):
     return call
 
 
+class TestNestedExponentWordPattern(unittest.TestCase):
+    """A word_pattern carrying ``a^(2^n)`` notation goes through the full
+    exponent parser with the deterministic ``2 ^ n`` translation."""
+
+    @staticmethod
+    def _ir(word_pattern):
+        return {
+            "alphabet": ["a", "b"],
+            "language_spec": {"kind": "set_builder", "word_pattern": word_pattern,
+                              "variables": [], "constraints": []},
+        }
+
+    def test_pow_word_pattern_is_rendered(self):
+        stmt, reason = render_statement_verbose(self._ir("{a^n b^(2^n) | n >= 0}"), "non_dcfl")
+        self.assertIsNotNone(stmt, reason)
+        self.assertIn("List.replicate (2 ^ n) Letter.b", stmt.language_decl)
+
+
+@pytest.mark.docker
+
+
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")
 class TestNewKindsCompile(unittest.TestCase):
 
@@ -362,6 +388,9 @@ class TestNewKindsCompile(unittest.TestCase):
             },
         }
         self._assert_valid_with_sorry(ir, "non_dcfl")
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(is_docker_available(), "Docker with tfl-lean4 image not available")

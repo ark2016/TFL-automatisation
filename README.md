@@ -16,12 +16,16 @@ See the [theorem and source registry](docs/THEORY_REFERENCE.md) for exact hypoth
 
 ## At a glance
 
+<!-- BEGIN capabilities-glance -->
 | Pipeline | Language class | Agents | Flagship theorems |
 |---|---|---|---|
 | **REG** — `agent_system/` | Regular | 12 | Myhill–Nerode, pumping lemma (reg), closure under ⋃ ⋂ ¬ · * |
 | **CFL** — `cfl_system/` | Context-free | 15 | Bar-Hillel pumping, Ogden's lemma, Parikh's theorem, interchange lemma, CFL ∩ REG |
 | **DCFL** — `dcfl_system/` | Deterministic CFL | 8 | DCFL pumping, Shallit's lemma, inherent ambiguity |
 | **LL** — `ll_system/` | LL(k) grammars | 10 | FIRST / FOLLOW, LL(k) conflict detection, left-recursion and factoring transforms |
+<!-- END capabilities-glance -->
+
+(The two capability tables in this README are generated: edit `docs/pipeline_capabilities.json`, then run `python scripts/gen_capability_table.py --write`.)
 
 Each pipeline runs its specialist agents **in parallel**, checks their artifacts against deterministic oracles, and fuses the evidence through a reasoning agent into a verdict and a structured report. REG and CFL also run an independent LLM proof-checker; its self-assessment alone does not establish `proof_verified`. See [Architecture](#architecture) below.
 
@@ -140,7 +144,7 @@ and closure verification follows oracle construction.
 - **Error tracking.** `proof_verified` comes from the verdict gate's `verified` trust basis, which can include deterministic verification such as a checked Lean proof; an LLM proof-checker self-assessment alone cannot set it. Agent errors, API failures, and JSON-parse problems are tracked in `state["errors"]` and surfaced in the final result.
 - **Known limitations.** Claim verifiers that used to mark an agent claim `verified` for being merely well-formed now
   return `well_formed` (see trust taxonomy below); semantic (word-level) verification of the claim's content is only
-  partial so far — implemented where an oracle already exists (CFL pumping/ogden/closure_reduction, DCFL pumping/Shallit,
+  partial so far — implemented where an oracle already exists (CFL pumping/ogden/closure_reduction, DCFL pumping/Shallit/closure_reduction,
   LL constructive/substitution/prefix_classes, REG pumping/Nerode), not yet for set_builder languages without a
   word-oracle. Treat a verdict's confidence per its `trust` level, not as a proof; see
   [`docs/VERDICT_POLICY.md`](docs/VERDICT_POLICY.md) §4.
@@ -151,7 +155,7 @@ and closure verification follows oracle construction.
   | trust | meaning | confidence cap |
   |---|---|---|
   | `verified` | deterministic, complete check (LL(k) table, Lean proof w/o `sorry`, regex/DFA regularity) | 0.98 |
-  | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, sampled grammar equivalence) | 0.85 |
+  | `bounded_pass` | deterministic but bounded check (oracle membership up to length L, sampled grammar equivalence, an executable artifact — DPDA, LL(k) parse table — run against the oracle on all short words) | 0.85 |
   | `well_formed` | structure only — fields present, JSON/words parsed | 0.55 |
   | `not_verified` | check impossible or fields missing (verdict must be `inconclusive`/`uncertain`) | 0.40 |
   | unresolved `contradiction` (constructive vs. destructive evidence) | — | 0.50 |
@@ -165,6 +169,7 @@ and closure verification follows oracle construction.
 
 ### Pipeline differences
 
+<!-- BEGIN capabilities-differences -->
 | Stage | REG | CFL | DCFL | LL |
 |---|:-:|:-:|:-:|:-:|
 | Classifier (advisory) | ✓ | ✓ | ✓ | ✓ |
@@ -174,6 +179,14 @@ and closure verification follows oracle construction.
 | Retry | LLM planner | LLM planner | rule-based | reasoning-driven |
 | Hypothesis inversion | ✓ | ✓ | — | — |
 | Proof output / formalization | Lean proof body from IR-fixed statement (opt-in) | Structured `proof_document`; optional Lean step | Optional Lean step only | Structured/plain-language proof; no Lean |
+| Agent identity key in the structured-output schema | `module` | `agent` | `agent_name` | `agent_name` |
+<!-- END capabilities-differences -->
+
+(Generated from `docs/pipeline_capabilities.json`; see above.)
+
+The identity key differs on purpose: each pipeline's structured-output schema (`agent_output_schema.py`) pins its own
+key for the agent's name (REG `module`, CFL `agent`, DCFL / LL `agent_name`), and the prompts and parsers of that
+pipeline use it. Do not rename one without changing its schema, prompts, parsers and tests together.
 
 ### Live-runner reliability layer
 
@@ -305,6 +318,27 @@ verdict requires more than prose: `stack_strategy`'s `proof_sketch` must include
 (at most one transition per `(state, top, letter)`, no ε/letter coexistence on the same `(state, top)`). No
 `dpda` field ⇒ `status: "uncertain"`/`"not_applicable"`, never a bare prose "strategy" standing in for a
 verdict.
+
+**Executable closure reduction (R2″, user decision 2026-11-10).** A constructive `closure_reduction` (L = S ∩ R,
+L = h⁻¹(S), L = Σ* ∖ S, with S a known DCFL) carries `proof_sketch.artifact`: the source language S (an
+exponent pattern, a grammar or a DPDA), a DFA or regex for R, the homomorphism h as `{letter, image}` pairs.
+`dcfl_system/lib/closure_artifact.py` turns the claimed equality into two membership predicates: the side with L
+uses the task's own oracle, the other side simulates the artifact (`agent_system.lib.dfa_runner` for R, the DPDA
+check of R2′ for a DPDA source). The oracle verifier compares them on the sampler's words and on every word over
+Σ (Δ for a destructive h⁻¹) up to the R2′ length bound computed for that alphabet; letters the artifact adds (an
+intersection's domain is Σ ∪ Δ ∪ alphabet(R)) bring extra words on top and never shorten the check over Σ*. A word
+is decided when both sides answer it; only decided words over Σ count toward the minimum of 30. An exponent pattern
+for S that states no lower bound for a variable is read both as n ≥ 0 and as n ≥ 1, and a word whose membership
+depends on that choice is not compared (listed in `details.pattern_lower_bound`). Agreement on ≥ 30 decided words
+with S given as a DPDA (its determinism
+checked as in R2′, so S is a DCFL by construction) ⇒ `bounded_pass` (cap 0.85). With S as a pattern or a grammar,
+agreement leaves trust at most `well_formed`: the equality alone does not show that S is a DCFL (S = L with
+R = Σ*, or h the identity, passes it for any L, even a non-CFL one). A disagreeing word or a malformed artifact ⇒
+`refuted`, retried with the counterexample; no artifact ⇒ at most `well_formed`, which cannot carry `dcfl`. A
+destructive reduction may carry the same artifact: a wrong equality is refuted (as is a DPDA source, which would
+make S a DCFL), but agreement does not raise its trust above `well_formed`. Mock set: `dcfl_a2kb2k`
+(`task_a2kb2k.json`, L = {a²ᵏb²ᵏ | k ≥ 1} = {aⁿbⁿ | n ≥ 1} ∩ (aa)*(bb)*, S given by a three-state DPDA), and
+`dcfl_a2kb2k_wrong_dfa_closure_reduction.json` with a wrong DFA that the check refutes on `ab`.
 - **Inherent ambiguity.** Every DCFL has an unambiguous grammar, so an *inherently* ambiguous language (every CFG for it is ambiguous) is not DCFL. One ambiguous grammar proves nothing.
 - **Closure under complement (DCFL-specific).** DCFLs are closed under complement but CFLs are not — useful discriminator.
 
@@ -337,6 +371,34 @@ flowchart LR
   membership oracle built from the given grammar, constructive sample-equivalence and `prefix_classes` checks. `None` means
   unknown (no oracle, budget exhausted, or an inconclusive answer), never a definite verdict, and trust reaches at most
   `bounded_pass`.
+- **LL(k) parse table as an executable artifact (`docs/VERDICT_POLICY.md` R3′ (1)).** An "is LL(k)" claim of
+  `ll_grammar_builder` / `grammar_transformer` / `marker_analyzer` carries its strong LL(k) parse table
+  (`proof_sketch.parse_table`: `{A: {lookahead: rhs}}`, or the `{k, start, entries: [...]}` list that the
+  marker's structured-output schema uses). `ll_system/lib/parse_table_check.py` runs it with
+  `LLParser.from_table` on every word over the task alphabet up to the DPDA full-enumeration length
+  (Σ_{i≤k}|Σ|ⁱ ≤ 3000, k ≤ 10; `agent_system/lib/word_enumeration.py`) and compares it with the task oracle:
+  the table must be the complete strong LL(k) director table of its grammar (the claimed grammar, or, for a
+  marker claim without one, the grammar of the table's own productions; compared after removing useless
+  symbols) on every non-empty director cell, since an incomplete table encodes a priority choice and can accept a non-LL language
+  (S: a → aSB, b/$ → ε; B: b → b, $ → ε accepts {aⁱbʲ | i ≥ j}). Agreement on every word the oracle decides,
+  at least 30 of them, with such a table → `bounded_pass` (cap 0.85); a conflict cell, a table inconsistent with
+  the claimed grammar (a row, start or rule not in it), a non-empty director cell where the table holds a different
+  or extra right-hand side, a table for a
+  larger k than claimed, a word on which the parser never halts (`LLParser.parse` detects the left-recursion
+  loop exactly: a nonterminal back on top before its own expansion finished), or a disagreement → `refuted`
+  (counterexamples go to the retry hint); a table cell the director table leaves empty is ignored and recorded in
+  `director_table.ignored_extra_cells` (the parser still recognizes exactly L(G): every expansion is a rule of G, and
+  on a word of L(G) the unique leftmost derivation only uses non-empty director cells, so an "ε as default" table or
+  a FOLLOW computed over unreachable rules passes; without a grammar its rule joins G_T, whose strong-LL(k) check
+  still runs); a table missing a director cell, a table whose own productions are not
+  strong LL(k), no table, or a claimed grammar that is not strong LL(k) (checked before the conflict, foreign-rule and director-contradiction
+  refutations, which apply only when the grammar is strong or absent; when the table is read (task alphabet known,
+  k known), format errors are always refuted; a claim
+  without k is refuted when `check_ll_k` with the table's k says the grammar is not LL(k); if it is LL(k), any conflict-free table
+  from its rules rejects some word of its language, possibly beyond the bound; the table is not run) → at most `well_formed`, even when the grammar
+  passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
+  (Format 3, and the Format 2 grammar) stays `verified` and needs no table. dcfl `closure_reduction` has its own
+  executable-artifact check (R2″, see the DCFL section above and `docs/VERDICT_POLICY.md` R3′ (2)).
 
 ---
 
@@ -497,10 +559,10 @@ Pure-function modules have pytest coverage; LLM-driven layers are covered by moc
 ```
 
 The counts change with every commit, so none are recorded here; run the command for the current ones. `-n 4` runs it in
-parallel. Tests that need Docker, Graphviz `dot` or node skip with a reason when they are missing.
+parallel. Tests that need Graphviz `dot` or node skip with a reason when they are missing. Tests that start a Docker container (Lean type-checking, the deep-agent sandbox) carry the `docker` marker and are skipped unless `TFL_LEAN_TESTS=1` (also `true`/`yes`/`on`; root `conftest.py`); their pure-Python siblings run by default.
 
 The configured `testpaths` include `tfl_eval/tests` and exclude the legacy `pumping_lemma/tests`, which call the
-real Anthropic API. Tests that type-check Lean 4 templates need Docker with the `tfl-lean4` image and skip without it.
+real Anthropic API. Tests that type-check Lean 4 templates need `TFL_LEAN_TESTS=1` and Docker with the `tfl-lean4` image; they skip without either.
 
 The root `conftest.py` also strips `ANTHROPIC_API_KEY` and blocks live Anthropic client calls during test runs.
 
@@ -556,20 +618,31 @@ use their `lean_formalizer` agents for this role. This exists because
   (`is_CF`/`is_DCF`, the pumping lemma, DCFL complement/intersection-with-REG closure, `DCFL ⊆ CFL`). The IR->Lean
   translator covers: exponent notation (with a decidable companion `Bool` def), reversals/palindromes, grammars
   (`g.language`, also `g.language ⊓ {w | filter}`), and predicate filters; a `natural_language_filter` or an
-  unsupported predicate gives `None` (`not_formalizable`, no evidence either way). **LL(k) is not formalized.**
-  Methods without Lean lemmas in the image (closure with a regular language, Parikh, substitution) are proved
-  directly or not at all.
+  unsupported predicate gives `None` (`not_formalizable`, no evidence either way). **LL(k) is not formalized**
+  in the pipelines; `docs/LEAN_LLK.md` designs the statement (`TflLL.IsLLk g k` over leftmost derivations,
+  compiled together with one `¬ IsLLk` example) and the plan. Closure is in `TflLean/Lemmas.lean`: CFL ∩ REG,
+  union, substitution, (inverse) homomorphism, letter maps, REG ⊆ DCFL/CFL, DCFL ∩ REG, the intersection method
+  for REG, regular filters (`|w| mod m`, `|w|_a mod m`, `a*b*`), and `{aⁿbⁿ}` (CF, DCF, not regular),
+  `{a^(2^k)}` (not CF) on any alphabet. Methods with no Lean formalization in Mathlib v4.33.0 or langlib @
+  c5fb834 (Parikh's theorem, Yu's DCFL pumping lemma, Shallit's Theorem 4.7.4) are proved directly or not at all.
 - **Reference proofs** (`agent_system/docker/tfl_lean/TflLean/Examples/`, each is exactly
   `compose_lean_file(render_statement(IR, direction), body)` and compiles to `proved`, replay OK; checked by
   `agent_system/tests/test_lean_examples.py`, `cfl_system/tests/test_lean_examples_cfl.py`,
   `dcfl_system/tests/test_lean_examples_dcfl.py`, Docker-conditional):
-  `EvenA_Regular`, `AnBnNotRegular` (REG); `AnBnCnNotCF`, `AnBnAnNotCF` (via the closure lemma
-  `TflLean.not_isContextFree_of_slice`), `EvenPalGrammar_CF` (CFL); `AnBnCm_DCF`, `AnBnCmPos_DCF`,
-  `AiBjCkNeq_NotDCF` (DCFL; the non-DCFL direction goes through `TflLean.not_isDCF_of_not_isContextFree`).
-  Shared lemmas: `TflLean/Lemmas.lean`.
-  Known gaps: no compiled worked example for the *positive* CFL direction beyond `EvenPalGrammar_CF`; the
-  exam_04 grammar case (DCFL by a grammar) has no grammar->DPDA bridge in the image, so the mock is an honest
-  refusal; nested exponents (`a^(2^n)`) are not translated.
+  `EvenA_Regular`, `AnBnNotRegular`, `AiBjNeq_NotRegular` (REG; the last by the intersection method,
+  `Lᶜ ∩ a*b* = {aⁿbⁿ}`); `AnBnCnNotCF`, `AnBnAnNotCF` (via the closure lemma
+  `TflLean.not_isContextFree_of_slice`), `EvenPalGrammar_CF`, `AnBnMod4Filter_CF` (grammar ∩ regular filter),
+  `AnBnUnionAnB2n_CF` (set-builder `{aⁿbⁿ} ∪ {aⁿb²ⁿ}` as a union of homomorphic images) (CFL); `AnBnCm_DCF`,
+  `AnBnCmPos_DCF`, `AnBn_DCF`, `AiBjCkNeq_NotDCF` (DCFL; the non-DCFL direction goes through
+  `TflLean.not_isDCF_of_not_isContextFree`), `GrammarASSb_DCF` (exam_04, `S → aSSb | ba | Ab`, `A → aAb | a` is
+  DCF: the DPDA of docs/THEORY.md §1.10 is built and proved correct in `TflLean/GrammarASSb.lean`,
+  `TflLean.ASSb.isDCF_LangS`; an image built before that module skips the example's compile test until it is
+  rebuilt). Shared lemmas: `TflLean/Lemmas.lean`.
+  Known gaps: a set-builder CFL that is not a closure image of a known language still needs a grammar with
+  `g.language = L` proved by hand (no compiled example); the image has no general grammar->DPDA bridge (only
+  REG ⊆ DCFL, `TflLean.isDCF_of_isRegular`; exam_04 is proved by its own module, see `GrammarASSb_DCF` above, and
+  the exam_04 mock formalizer reply is still a refusal); nested exponents (`a^(2^n)`) are translated into Lean
+  statements (`(2 ^ n)`), but the membership oracle still returns `None` for them.
 - **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0` (resolves to commit
   `db584cd6d46c92f209a44c0f1c829460d327499d`), langlib pinned at commit
   `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — verified against langlib's *own* `lake-manifest.json` at that
@@ -623,6 +696,23 @@ agent_system/docker/run_check.sh path/to/file.lean          # bash
 Notes:
 - `agent_system/lib/type_check.py`'s `check_lean()` runs `docker run ... -w /home/lean/tfl_lean tfl-lean4 lake env lean /home/lean/check.lean`
   and is a no-op (`status: "skipped"`) when Docker or the image isn't available — mock-mode tests stay green without it.
+- **Docker start failures.** `check_lean_file` / `check_lean` go through `type_check.run_lean_process`: a
+  `docker run` that exits 125/126/127 (or exits non-zero with no output and a daemon message such as `OCI runtime
+  create failed`) never ran Lean, so it is retried 3 times (`START_ATTEMPTS`). If it still fails, `check_lean_file`
+  returns the terminal status `unavailable` with Docker's stderr as the message (the formalizer is not called again
+  and a correct proof is not recorded as `error`); legacy `check_lean` returns `skipped`. `lean_eval.run_lean`
+  (Docker/Lean test helper) uses the same runner and raises `RuntimeError` instead. `tfl_deep_agent/tools/lean.py`
+  imports the daemon detector (`is_daemon_failure`, `DAEMON_ERROR_RE`) from `type_check.py`.
+- **Local runner (CI without the image).** `TFL_LEAN_RUNNER=local` (default `docker`) makes the checks run
+  `lake env lean --json <file>` in the Lean project `TFL_LEAN_PROJECT_DIR` (default `agent_system/docker/tfl_lean`)
+  with the same timeout and parsing; `is_docker_available()` then means "`lake` on PATH and the project's `.lake`
+  built", so the Lean tests' skip gates keep working. `.github/workflows/lean.yml` (on demand only, `workflow_dispatch`; sets `TFL_LEAN_TESTS=1`)
+  uses it: elan (installer pinned to the same commit and SHA-256 as `Dockerfile.lean4`, checked before it runs)
+  with the toolchain from `lean-toolchain`, cached `.lake`, `lake exe cache get`,
+  `lake build`, then the Lean pytest files (`test_lean_ir`, `test_phase3` templates, the Examples tests,
+  `test_lean_llk_doc`, `test_constraint_semantics`, the cfl/dcfl `test_lean_formalize` and
+  `test_type_check_security`, whose `docker`-marked cases go through `check_lean_file` and so run under the local
+  runner too) with a step that fails if any of them was skipped for lack of Lean.
 - Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
   leading UTF-8 BOM. PowerShell's `Set-Content -Encoding utf8` adds one; use `-Encoding utf8NoBOM` (or write with a
   tool that doesn't add a BOM) instead.
@@ -672,6 +762,14 @@ This is what lets a prompt or model change be measured rather than eyeballed.
 The first `--live` run (24 trap tasks, Haiku, 2026-09-27; its write-up is kept locally and not tracked) gave
 19/19 solved tasks correct and 0 false-confident-wrong, and its diagnoses fed the DCFL certificate, R4′ and the
 structured-output fixes below. A full-74-task run and a re-run after those fixes are still open.
+
+`python -m tfl_eval.false_proofs [--pipeline P] [--json]` replays a corpus of 22 deliberately false agent proofs
+(`tfl_eval/false_proofs/corpus.py`, each with a concrete counterexample) through the pipelines' own verifiers and
+verdict gates, mock only. It reports per pipeline how many false proofs reach trust above `well_formed` and how many end
+in a confident wrong verdict; `tfl_eval/tests/test_false_proofs.py` pins those numbers. Now (after R3′/R2″,
+2026-11-10): 9 of 22 above `well_formed`, 14 wrong verdicts, 8 confident wrong (before R3′: 10 / 15 / 9; the LL(k)
+claim without a parse table dropped to `well_formed`). What a symbolic checker would
+change is in [`docs/SEMANTIC_CHECK.md`](docs/SEMANTIC_CHECK.md).
 
 ---
 

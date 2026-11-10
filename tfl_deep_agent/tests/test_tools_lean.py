@@ -425,6 +425,64 @@ def test_lean_prompt_names_the_tools_and_the_rules():
     assert "arrive in phase P6" not in text and "stub" not in text.lower()
 
 
+TFL_LEAN = ROOT / "agent_system" / "docker" / "tfl_lean" / "TflLean"
+
+
+def _tfllean_declarations() -> set[str]:
+    import re
+
+    text = (TFL_LEAN / "Lemmas.lean").read_text(encoding="utf-8")
+    return set(re.findall(r"^(?:theorem|lemma|def|abbrev|structure)\s+([^\s({\[:]+)", text, re.M))
+
+
+def test_every_tfllean_name_in_the_lean_prompt_is_declared_in_lemmas_lean():
+    import re
+
+    declared = _tfllean_declarations()
+    names = {m.rstrip(".") for m in re.findall(r"TflLean\.([A-Za-z_][\w'.]*)", PROMPT.read_text(encoding="utf-8"))}
+    assert names, "the prompt names no TflLean lemma"
+    missing = sorted(n for n in names if n not in declared)
+    assert not missing, f"lean.md names TflLean lemmas that Lemmas.lean does not declare: {missing}"
+
+
+def test_lean_prompt_knows_the_closure_filter_and_anbn_lemmas():
+    text = PROMPT.read_text(encoding="utf-8")
+    for name in ("isContextFree_inf_isRegular", "not_isContextFree_of_inf_isRegular",
+                 "not_isRegular_of_inf_isRegular", "isDCF_inf_isRegular", "not_isDCF_of_inf_isRegular",
+                 "isDCF_of_isRegular", "isContextFree_of_isRegular", "isContextFree_add",
+                 "isContextFree_subst", "mem_homomorphicImage_iff", "isContextFree_homomorphicImage",
+                 "not_isContextFree_of_homomorphicImage", "isContextFree_map",
+                 "isContextFree_inverseHomomorphicImage", "isRegular_length_mod", "isRegular_count_mod",
+                 "isRegular_replicate_append_replicate", "isContextFree_anbn", "isContextFree_anbn_mul",
+                 "isDCF_anbn", "not_isRegular_anbn", "not_isContextFree_pow2", "isDCF_anbncm",
+                 "isDCF_anbncm_pos", "not_isContextFree_of_slice", "isContextFree_of_isDCF"):
+        assert f"`TflLean.{name} " in text or f"`TflLean.{name}`" in text, name
+
+
+def test_lean_prompt_reference_examples_exist_and_quoted_bodies_are_verbatim():
+    import re
+
+    text = PROMPT.read_text(encoding="utf-8").replace("\r\n", "\n")
+    for name in set(re.findall(r"`([A-Za-z0-9_]+\.lean)`", text)) - {"Lemmas.lean"}:
+        assert (TFL_LEAN / "Examples" / name).is_file(), name
+    for name in ("AnBnMod4Filter_CF", "AnBnUnionAnB2n_CF", "AnBn_DCF", "AiBjNeq_NotRegular"):
+        assert f"`{name}.lean`" in text, name
+    quoted = re.findall(r"Proof body of `([A-Za-z0-9_]+\.lean)`.*?```lean\n(.*?)```", text, re.S)
+    assert len(quoted) == 4
+    for name, body in quoted:
+        source = (TFL_LEAN / "Examples" / name).read_text(encoding="utf-8").replace("\r\n", "\n")
+        assert body in source, name
+
+
+def test_lean_prompt_does_not_claim_unformalized_theory():
+    text = PROMPT.read_text(encoding="utf-8")
+    section = text.split("### Not in the image", 1)[1].split("###", 1)[0]
+    for topic in ("LL(k)", "Parikh", "Yu's two-word lemma", "Shallit's theorem", "grammar to a DPDA",
+                  "`lean_statement` refuses `ll`"):
+        assert topic in section, topic
+    assert "LL(k) is not formalized" in text
+
+
 # ---------------------------------------------------------------------------
 # Acceptance: the golden REG proof through the real tool (Docker, tfl-lean4)
 # ---------------------------------------------------------------------------
@@ -434,6 +492,7 @@ def _docker_or_skip() -> None:
         pytest.skip(f"Docker or the {type_check.DOCKER_IMAGE} image is not available")
 
 
+@pytest.mark.docker
 def test_golden_reg_proof_verifies_through_the_tools():
     _docker_or_skip()
     _text, _head, body = golden_split()
@@ -446,3 +505,8 @@ def test_golden_reg_proof_verifies_through_the_tools():
     assert res.trust == "verified", res.trust_reason
     assert set(res.data["axioms"]) <= type_check.ALLOWED_AXIOMS
     assert res.data["direction"] == "non_regular"
+
+
+def test_deep_agent_uses_the_shared_daemon_detector():
+    assert lean._is_daemon_failure is type_check.is_daemon_failure
+    assert lean._DAEMON_ERROR_RE is type_check.DAEMON_ERROR_RE

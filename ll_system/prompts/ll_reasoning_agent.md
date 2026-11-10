@@ -26,9 +26,9 @@ agent output) tells you HOW an agent's claim was checked, not just whether it wa
 | `trust` | Meaning | Typical source here |
 |---|---|---|
 | `verified` | deterministic, **complete** proof | full LL(k)-table test of THIS EXACT grammar (Format 3, or a Format 1/2 candidate whose own equivalence to the task language is also `verified`) |
-| `bounded_pass` | deterministic but **bounded** check | `is_grammar_equivalent_sample` passed against the task language; substitution's `branch_words` instantiated at k∈{1,2} and oracle-confirmed |
-| `well_formed` | structure only | required fields present and internally consistent — the claim was never checked against the task's actual language |
-| `refuted` | deterministic **counterexample** found | grammar rejected by `check_ll_k`, terminals outside the task alphabet, instantiated `branch_words` word ∉ L |
+| `bounded_pass` | deterministic but **bounded** check | constructive `"ll"`: the claim's own `parse_table`, the complete strong LL(k) director table of its grammar (the claimed one, or the table's own productions), run as a predictive parser agreed with the task's membership oracle on every word up to the full-enumeration length that the oracle decides, at least 30 of them (`details.parse_table_check`, R3′); substitution's `branch_words` instantiated at k∈{1,2} and oracle-confirmed |
+| `well_formed` | structure only | required fields present and internally consistent — the claim was never checked against the task's actual language; a constructive `"ll"` claim **without** a `parse_table` stays here even when its grammar passed `check_ll_k` and sample equivalence (R3′); so does a table that omits a director cell or whose grammar is not strong LL(k) (`parse_table_check.status` `not_director_table` / `not_strong`) |
+| `refuted` | deterministic **counterexample** found | grammar rejected by `check_ll_k`, terminals outside the task alphabet, a `parse_table` with a conflict cell / a rule not in the grammar / a cell outside its rule's director set / a word on which it never halts (left recursion) or disagrees with the oracle (`details.parse_table_check.counterexamples`), instantiated `branch_words` word ∉ L |
 | `not_verified` | could not be checked at all | missing/unparsable `proof_sketch`, agent returned `uncertain` |
 
 **This matters for your own output**: the orchestrator's deterministic gate (`verdict_gate`,
@@ -338,7 +338,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
 - ambiguity_detector: uncertain
 - prefix_classes_agent: uncertain (finite prefix classes)
 - first_follow_result: is_ll_k=true, k=1, no conflicts (confirms the CANDIDATE grammar is LL(1) — this is Format 1, so this alone is not equivalence to the task language)
-- claim_verification: ll_grammar_builder: `trust: "bounded_pass"` (`is_grammar_equivalent_sample` confirmed G generates exactly {aⁿbⁿ})
+- claim_verification: ll_grammar_builder: `trust: "bounded_pass"` (its `parse_table`, run as a predictive parser, agreed with the task oracle on every word over {a,b} of length ≤ 10, `details.parse_table_check`; sample equivalence of G with the task language also passed)
 
 **Output:**
 ```json
@@ -346,7 +346,7 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "verdict": "ll",
   "k": 1,
   "confidence": 0.85,
-  "summary": "Язык L = {aⁿbⁿ | n ≥ 0} является LL(1). Построена LL(1)-грамматика G = (S → aSb | ε). Oracle подтвердил отсутствие конфликтов в таблице разбора: FIRST(aSb) = {a} и FOLLOW(S) ∩ FIRST(ε-rule) = {b, $} — множества не пересекаются. Таблица разбора однозначна для k=1. Эквивалентность G и языка задачи проверена выборочно (bounded_pass, до длины 8) — это Format 1, поэтому confidence ограничен 0.85, а не 0.98 (последнее — только для Format 3, где грамматика и есть задача).",
+  "summary": "Язык L = {aⁿbⁿ | n ≥ 0} является LL(1). Построена LL(1)-грамматика G = (S → aSb | ε). Oracle подтвердил отсутствие конфликтов в таблице разбора: FIRST(aSb) = {a} и FOLLOW(S) ∩ FIRST(ε-rule) = {b, $} — множества не пересекаются. Таблица разбора однозначна для k=1. Таблица разбора агента прогнана как предиктивный парсер и совпала с оракулом языка на всех словах над {a,b} длины ≤ 10 (bounded_pass) — это ограниченная проверка, Format 1, поэтому confidence ограничен 0.85, а не 0.98 (последнее — только для Format 3, где грамматика и есть задача).",
   "justification": "Теорема: L = {aⁿbⁿ | n ≥ 0} является LL(1)-языком.\n\nДоказательство. Рассмотрим грамматику G: S → aSb | ε.\n\nВычислим FIRST и FOLLOW:\n  FIRST(aSb) = {a}\n  FIRST(ε) = {ε}, управляется FOLLOW(S) = {b, $}\n\nТаблица разбора:\n  S при вводе 'a': применяем S → aSb\n  S при вводе 'b' или $: применяем S → ε\n\nВсе записи таблицы единственны — грамматика LL(1). Поскольку L(G) = {aⁿbⁿ | n ≥ 0}, язык является LL(1). ∎",
   "primary_method": "ll_grammar_construction",
   "primary_agent": "ll_grammar_builder",
@@ -412,14 +412,14 @@ never raise it (docs/VERDICT_POLICY.md §2):
 | Basis | Ceiling |
 |---|---|
 | `verified` (Format 3 ONLY: full LL(k)-table test of the exact grammar in question) | 0.98 |
-| `bounded_pass` (Format 1/2 constructive: `is_grammar_equivalent_sample` passed; destructive: oracle-checked instantiation) | 0.85 |
-| `well_formed` (structure only — no equivalence to the task language was ever checked) | 0.60 |
+| `bounded_pass` (Format 1/2 constructive: the claim's `parse_table` agreed with the oracle on all short words; destructive: oracle-checked instantiation) | 0.85 |
+| `well_formed` (structure only, or a constructive claim with no `parse_table`) | 0.55 |
 | self-assessment only / `not_verified` | 0.40, and the verdict may only be `"uncertain"` |
 
 - Oracle verified LL(k), Format 3 (`is_ll_k == true`, full table test of THIS grammar): confidence = 0.98 (never 1.0 — the cap itself is never absolute certainty).
-- Constructive agent LL + oracle pass, Formats 1/2: the oracle only confirms the CANDIDATE grammar's own LL(k)-ness, not its equivalence to the task's language — confidence is capped by that grammar's own `trust` (`bounded_pass` → up to 0.85, `well_formed` → up to 0.60), not automatically 0.90.
+- Constructive agent LL + oracle pass, Formats 1/2: the oracle only confirms the CANDIDATE grammar's own LL(k)-ness, not its equivalence to the task's language — confidence is capped by that grammar's own `trust` (`bounded_pass` → up to 0.85, `well_formed` → up to 0.55), not automatically 0.90. Without a `parse_table` the claim cannot reach `bounded_pass` (R3′).
 - Destructive agent + claim verified (`bounded_pass`): confidence = max(agent_conf, 0.85), capped at 0.85.
-- Destructive agent, structural only (`well_formed`): capped at 0.60.
+- Destructive agent, structural only (`well_formed`): capped at 0.55.
 - Multiple concordant destructive proofs: confidence = min(cap, max_conf + 0.05 * count).
 - Unverified proof (`not_verified`): confidence = agent_conf * 0.7, capped at 0.40, verdict `"uncertain"`.
 - Conflict: confidence = 0.0 until resolved (see R3 — contradiction caps at 0.50 even once "resolved" to the stronger side).

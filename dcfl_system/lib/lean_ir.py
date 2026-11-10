@@ -247,7 +247,7 @@ def _setbuilder_leaf(spec: dict, sym_map: dict[str, str], suffix: str) -> LangDe
     # Fallback: word_pattern carries exponent notation directly (a plain
     # "a^n b^n"-style string) rather than the variables+domains shape.
     word_pattern = spec.get("word_pattern")
-    pattern = parse_exponent_pattern(word_pattern) if isinstance(word_pattern, str) else None
+    pattern = parse_exponent_pattern(word_pattern, allow_pow=True) if isinstance(word_pattern, str) else None
     body = pattern_tree_body(pattern, sym_map) if pattern is not None else None
     if body is not None:
         return set_language(suffix, body, pattern_tree_body(pattern, sym_map, decidable=True))

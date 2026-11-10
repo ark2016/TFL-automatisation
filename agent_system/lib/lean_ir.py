@@ -592,7 +592,7 @@ def parse_regex(pattern: str, sym_map: dict[str, str]) -> str | None:
 #
 # ``segments``: list of ``{"literal": str}`` or ``{"unit": str, "expr": Expr}``.
 # ``condition``: ``None`` or a boolean-condition AST node.
-# ``Expr``    := ("num", int) | ("var", str) | ("bin", "+"|"*", Expr, Expr)
+# ``Expr``    := ("num", int) | ("var", str) | ("bin", "+"|"*"|"^", Expr, Expr)
 #                -- NOT "-"/"neg": unbounded truncating subtraction in ℕ
 #                would silently change the statement's meaning, so any
 #                expression using it is rejected (``None``).
@@ -641,13 +641,13 @@ def _expr_to_lean(expr: tuple, var_names: dict[str, str]) -> str | None:
         return var_names.get(expr[1])
     if kind == "bin":
         _, op, l, r = expr
-        if op not in ("+", "*"):
+        if op not in ("+", "*", "^"):
             return None
         ls = _expr_to_lean(l, var_names)
         rs = _expr_to_lean(r, var_names)
         if ls is None or rs is None:
             return None
-        return f"({ls} + {rs})" if op == "+" else f"({ls} * {rs})"
+        return f"({ls} {op} {rs})"
     return None
 
 
@@ -719,6 +719,10 @@ def _bounded_by_var(expr: tuple, v: str) -> bool:
         return expr[1] == v
     if kind == "bin":
         _, op, l, r = expr
+        if op == "^":
+            # b^e with a literal base b >= 2 satisfies b^e >= e + 1 > e, so it
+            # is bounded by whatever bounds the exponent e.
+            return l[0] == "num" and l[1] >= 2 and _bounded_by_var(r, v)
         if op == "+":
             return _bounded_by_var(l, v) or _bounded_by_var(r, v)
         if op == "*":

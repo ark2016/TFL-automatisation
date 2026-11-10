@@ -1,0 +1,3 @@
+# Skill files are read as raw bytes by tfl_deep_agent/tests (UTF-8, no BOM, LF);
+# keep LF in the working tree even with core.autocrlf=true on Windows.
+tfl_deep_agent/skills/** text eol=lf

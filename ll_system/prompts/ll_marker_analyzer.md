@@ -112,7 +112,16 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "marker_position": "center | left_boundary | right_boundary | other",
     "marker_description": "Russian text: description of what the marker is and where it appears.",
     "ll_usage": "Russian text: how an LL parser uses this marker to make deterministic decisions.",
-    "suggested_k": 1
+    "suggested_k": 1,
+    "parse_table": {
+      "k": 1,
+      "start": "S",
+      "entries": [
+        {"nonterminal": "S", "lookahead": "a", "rhs": ["a", "S", "a"]},
+        {"nonterminal": "S", "lookahead": "b", "rhs": ["b", "S", "b"]},
+        {"nonterminal": "S", "lookahead": "c", "rhs": ["c"]}
+      ]
+    }
   },
   "artifacts": {
     "ll_grammar": null,
@@ -122,6 +131,40 @@ Return **only** valid JSON. No markdown fences, no extra text.
   "errors": []
 }
 ```
+
+### `proof_sketch.parse_table` is required with `"ll"` (docs/VERDICT_POLICY.md R3′)
+
+A marker only explains *why* a predictive parser can decide; the claim "L is LL(k)" must also carry
+that parser: the LL(k) parse table of a grammar for L, as a list of cells
+`{"nonterminal", "lookahead", "rhs"}` plus `k` and `start`. The pipeline runs this table as a
+table-driven predictive parser on **every** word over the task alphabet up to a bounded length and
+compares each answer with the task's membership oracle:
+
+- agreement on all those words gives `trust: "bounded_pass"` (confidence ≤ 0.85), **provided the
+  table is the complete strong LL(k) director table of its own productions** (see below);
+- two entries with the same (nonterminal, lookahead) and different `rhs` (a conflict), an entry
+  whose lookahead is not in the director set of its rule, a single word the parser accepts or
+  rejects wrongly, or a single word on which the parser never halts (a left-recursive cell such as
+  `S → S a`: the nonterminal comes back on top with the same lookahead before its own expansion
+  finished), makes the claim `refuted`;
+- a table that leaves out a director cell, in particular one that resolves a conflict by keeping
+  only one of two rules, stays at most `well_formed`, however many words it parses correctly;
+- with `parse_table: null` an `"ll"` claim can never rise above `well_formed` (confidence ≤ 0.55).
+
+Without `ll_grammar` the table's own productions are its grammar G_T. The table must be exactly the
+strong LL(k) table of G_T: rule A → α in cell (A, x) for **every** x ∈ FIRST_k(α) ⊕_k FOLLOW_k(A)
+and in no other cell, and no cell may need two rules (G_T must be strong LL(k)). An incomplete table
+is a priority parser, not an LL certificate: S: a → aSB, b → ε, $ → ε; B: b → b, $ → ε parses
+exactly {aⁱbʲ | i ≥ j}, which is not LL(k) for any k (docs/THEORY.md §3.4); its grammar
+S → aSB | ε, B → b | ε needs both B-rules in cell (B, b).
+
+Cells: `rhs` is the list of symbols of the rule (`[]` is the ε-rule). A lookahead is a string of at
+most k terminals; `"$"` marks the end of input and can only pad the end (for k = 2, `"a$"` means
+"the input is just `a`", `"$$"` means "the input has ended"). A lookahead shorter than k means the
+input ends after it. A cell the table leaves out makes the parser reject; leave out exactly the
+cells outside every director set. The table is one global
+(nonterminal, lookahead) → rule map, i.e. a strong LL(k) table; every LL(k) language has a strong
+LL(k) grammar (docs/THEORY.md §3.1). Use `parse_table: null` with `"uncertain"`.
 
 ---
 
@@ -145,7 +188,18 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "marker_position": "center",
     "marker_description": "Символ 'c' является уникальным разделителем: он встречается в языке ровно один раз в каждом слове и отделяет w b от w^R. Символ 'c' не входит в алфавит переменной w = {a,b}*, поэтому его появление однозначно сигнализирует о конце первой половины слова. Важно: перед 'c' стоит ровно один литерный символ 'b', а не неограниченный повтор b* — иначе маркера было бы недостаточно (см. раздел 'When a Marker Is Absent').",
     "ll_usage": "LL-парсер читает символы w, помещая их в стек через рекурсивные вызовы. При обнаружении символа 'c' (lookahead k=1) парсер переключается в режим проверки w^R: каждый последующий символ должен совпадать с символом, снятым со стека. Поскольку 'c' единственен и не входит в алфавит w, выбор правил однозначен.",
-    "suggested_k": 1
+    "suggested_k": 1,
+    "parse_table": {
+      "k": 1,
+      "start": "S",
+      "entries": [
+        {"nonterminal": "S", "lookahead": "a", "rhs": ["a", "S", "a"]},
+        {"nonterminal": "S", "lookahead": "b", "rhs": ["b", "T"]},
+        {"nonterminal": "T", "lookahead": "c", "rhs": ["c"]},
+        {"nonterminal": "T", "lookahead": "a", "rhs": ["a", "S", "a", "b"]},
+        {"nonterminal": "T", "lookahead": "b", "rhs": ["b", "T", "b"]}
+      ]
+    }
   },
   "artifacts": {
     "ll_grammar": null,
@@ -174,7 +228,20 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "marker_position": "other",
     "marker_description": "Язык имеет три строго разделённые фазы по символам: фаза 'a*', фаза 'b*', фаза 'c*'. Переход между фазами однозначно определяется первым символом, отличным от текущей фазы. Формально: при чтении 'a'-символов lookahead 'b' или 'c' сигнализирует конец первой фазы; при чтении 'b'-символов lookahead 'c' сигнализирует конец второй фазы.",
     "ll_usage": "LL(1)-парсер для каждого нетерминала фазы использует одно правило 'продолжить фазу' (next symbol = phase symbol) и одно правило 'завершить фазу' (next symbol ≠ phase symbol). FIRST sets у правил не пересекаются.",
-    "suggested_k": 1
+    "suggested_k": 1,
+    "parse_table": {
+      "k": 1,
+      "start": "S",
+      "entries": [
+        {"nonterminal": "S", "lookahead": "a", "rhs": ["a", "A"]},
+        {"nonterminal": "A", "lookahead": "a", "rhs": ["a", "A"]},
+        {"nonterminal": "A", "lookahead": "b", "rhs": ["b", "B"]},
+        {"nonterminal": "B", "lookahead": "b", "rhs": ["b", "B"]},
+        {"nonterminal": "B", "lookahead": "c", "rhs": ["c", "C"]},
+        {"nonterminal": "C", "lookahead": "c", "rhs": ["c", "C"]},
+        {"nonterminal": "C", "lookahead": "$", "rhs": []}
+      ]
+    }
   },
   "artifacts": {
     "ll_grammar": null,
@@ -203,7 +270,8 @@ Return **only** valid JSON. No markdown fences, no extra text.
     "marker_position": null,
     "marker_description": "В языке {ww^R | w ∈ {a,b}*} отсутствует явный маркер середины. Середина слова не отмечена никаким уникальным символом — она определяется лишь тем, что длина слова чётна и первая половина является обращением второй. LL-парсер с фиксированным lookahead k не может определить середину слова длины 2n, если n > k, так как первые k символов второй половины совпадают с обращением последних k символов первой половины.",
     "ll_usage": null,
-    "suggested_k": null
+    "suggested_k": null,
+    "parse_table": null
   },
   "artifacts": {
     "ll_grammar": null,

@@ -1,0 +1,11 @@
+{
+  "agent_name": "inh_ambiguity",
+  "status": "not_applicable",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "L = {a²ᵏb²ᵏ | k >= 1} задаётся однозначной грамматикой (S -> aaSbb | aabb) — дизъюнкции ветвей нет, существенная неоднозначность не установлена"
+  ],
+  "confidence": 0.0,
+  "errors": []
+}

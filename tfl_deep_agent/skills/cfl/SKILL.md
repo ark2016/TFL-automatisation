@@ -36,7 +36,7 @@ formulation in order to correct it.
   subwords). Format 2: a CFG G and a filter F, and the question is about L(G) ∩ F (tz_cfl §1.1, §1.2).
 - The answer is `cfl`, `non_cfl`, or inconclusive (verdict `null`, VERDICT_POLICY R1).
 - Other skills: "DCFL / deterministic" → `dcfl`; "LL(k)" → `ll`; "regular" → `reg`; Lean
-  details → `lean`; the report format → `report-templates`.
+  details → the `lean-formalizer` subagent; the report format → `report-templates`.
 
 ## 2. Ground rules
 
@@ -261,14 +261,16 @@ becomes `cfl`.
 
 ### Step 8. Lean (optional, settings and budget permitting)
 
-When the lean tools are available (`lean_statement`, `lean_check`; see the `lean` skill), the
-statement is rendered from the IR by code (direction `cfl` or `non_cfl`). The model writes only the
-proof body. Only status `proved` gives `verified` (0.98) for the proved direction. Every other status
-is not evidence either way (VERDICT_POLICY R-Lean). tz_cfl §5.5 lists the limits: the only compiled
-sample is `non_cfl` for {aⁿbⁿcⁿ}; methods with no lemmas in the image (closure / intersection with a
-regular language, Parikh, substitution) are not ported to Lean, and the formalizer proves
-`¬ L.IsContextFree` by pumping or Ogden directly; an IR with no Lean statement is `not_formalizable`.
-Writing a proof body is a model call and spends budget.
+When the lean tools are available (`lean_statement`, `lean_check`; the `lean-formalizer` subagent
+uses them, there is no Lean skill file), the statement is rendered from the IR by code (direction
+`cfl` or `non_cfl`). The model writes only the proof body. Only status `proved` gives `verified`
+(0.98) for the proved direction. Every other status is not evidence either way (VERDICT_POLICY
+R-Lean). The `tfl-lean4` image has CF closure lemmas (intersection with a regular language, union,
+substitution, homomorphic images) and compiled examples for both directions: `non_cfl` for
+{aⁿbⁿcⁿ} and {aⁿbⁿaⁿ}, `cfl` for a grammar, a grammar cut by a regular filter and
+{aⁿbⁿ} ∪ {aⁿb²ⁿ}. The lean-formalizer prompt lists them. Parikh's theorem is not in the image: the
+formalizer proves such an `¬ L.IsContextFree` by pumping or Ogden directly. An IR with no Lean
+statement is `not_formalizable`. Writing a proof body is a model call and spends budget.
 
 ### Step 9. Report
 

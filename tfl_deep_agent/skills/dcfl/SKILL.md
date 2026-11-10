@@ -172,7 +172,8 @@ dispute.
 
 **Step 7 — Optional Lean.** If the `lean_statement` / `lean_check` tools are available and the IR has a
 Lean statement (`validate_ir(..., check_tools=true)` → `lean_statement`), a `proved` result is the only
-way to `verified` (0.98). See the `lean` skill and section 6.
+way to `verified` (0.98). The `lean-formalizer` subagent writes the proof (there is no Lean skill
+file); see section 6.
 
 ## 4. Proof methods (statements verbatim from docs/THEORY.md)
 

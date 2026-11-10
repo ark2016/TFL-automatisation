@@ -18,6 +18,17 @@
         {"lhs": "T", "rhs": ["a", "S", "a", "b"]},
         {"lhs": "T", "rhs": ["b", "T", "b"]}
       ]
+    },
+    "parse_table": {
+      "k": 1,
+      "start": "S",
+      "entries": [
+        {"nonterminal": "S", "lookahead": "a", "rhs": ["a", "S", "a"]},
+        {"nonterminal": "S", "lookahead": "b", "rhs": ["b", "T"]},
+        {"nonterminal": "T", "lookahead": "c", "rhs": ["c"]},
+        {"nonterminal": "T", "lookahead": "a", "rhs": ["a", "S", "a", "b"]},
+        {"nonterminal": "T", "lookahead": "b", "rhs": ["b", "T", "b"]}
+      ]
     }
   },
   "artifacts": {

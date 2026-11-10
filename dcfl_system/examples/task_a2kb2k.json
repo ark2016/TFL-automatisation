@@ -1,0 +1,13 @@
+{
+  "task_id": "dcfl_a2kb2k",
+  "source_text": "Является ли данный язык детерминированным? {a²ᵏb²ᵏ | k >= 1}",
+  "input_format": "set_builder",
+  "task_type": "classify_and_prove_dcfl",
+  "language_spec": {
+    "kind": "set_builder",
+    "word_pattern": "{a^(2k) b^(2k) | k >= 1}",
+    "variables": [],
+    "constraints": []
+  },
+  "alphabet": ["a", "b"]
+}

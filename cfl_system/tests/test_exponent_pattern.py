@@ -296,3 +296,50 @@ class TestBudgetExceededReturnsNone:
             segments=p.segments, condition=p.condition, step_budget=1,
         )
         assert tiny("aaa") is None
+
+
+class TestPowerInExponent:
+    """``^`` in an exponent is parsed only for the Lean translators
+    (``allow_pow=True``); the membership oracle keeps rejecting it."""
+
+    def test_default_parse_still_rejects_pow(self):
+        assert parse_exponent_pattern("{a^(2^n) | n >= 0}") is None
+
+    def test_allow_pow_parses_nested_exponent(self):
+        p = parse_exponent_pattern("{a^(2^n) | n >= 0}", allow_pow=True)
+        assert p is not None
+        assert p.segments == [{"unit": "a", "expr": ("bin", "^", ("num", 2), ("var", "n"))}]
+
+    def test_pow_is_right_associative_and_binds_tighter_than_mul(self):
+        p = parse_exponent_pattern("a^(2*3^n)", allow_pow=True)
+        assert p.segments[0]["expr"] == ("bin", "*", ("num", 2), ("bin", "^", ("num", 3), ("var", "n")))
+        q = parse_exponent_pattern("a^(2^n^2)", allow_pow=True)
+        assert q.segments[0]["expr"] == (
+            "bin", "^", ("num", 2), ("bin", "^", ("var", "n"), ("num", 2)))
+
+    def test_flag_does_not_leak_between_calls(self):
+        assert parse_exponent_pattern("a^(2^n)", allow_pow=True) is not None
+        assert parse_exponent_pattern("a^(2^n)") is None
+
+
+class TestPowOracleNotWrong:
+    def test_pow_pattern_never_accepts_wrong_word(self):
+        p = parse_exponent_pattern("{a^(2^n) | n >= 0}", allow_pow=True)
+        assert p is not None
+        # 2^2 == 4 != 3: the affine solver must not accept 'aaa'.
+        assert p("aaa") is not True
+
+    def test_pow_pattern_accepts_members(self):
+        p = parse_exponent_pattern("{a^(2^n) | n >= 0}", allow_pow=True)
+        assert p is not None
+        for k in (1, 2, 4, 8, 16):
+            assert p("a" * k) is not False
+        assert p("a" * 3) is not True
+
+    def test_square_pattern_accepts_members_only(self):
+        p = parse_exponent_pattern("{a^(n*n) | n>=0}")
+        if p is None:
+            return
+        for k in range(0, 40):
+            member = int(k ** 0.5) ** 2 == k
+            assert p("a" * k) is member, k

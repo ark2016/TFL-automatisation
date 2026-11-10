@@ -89,5 +89,6 @@ testpaths = [
     "tfl_deep_agent/tests",
 ]
 markers = [
+    "docker: starts a Docker container (Lean type-checking, the deep-agent sandbox); skipped unless TFL_LEAN_TESTS=1 (see conftest.py)",
     "slow: exhaustive/brute-force simulations kept for coverage but run in a separate CI job (see .github/workflows/tests.yml)",
 ]

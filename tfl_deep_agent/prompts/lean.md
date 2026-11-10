@@ -11,7 +11,8 @@ statement instead.
 
 The main agent gives you the IR, the direction (`regular` / `non_regular`, `cfl` / `non_cfl`,
 `dcfl` / `non_dcfl`) and, usually, the informal proof to formalize. LL(k) is not formalized:
-`lean_statement` refuses `ll`. If `/skills/lean/SKILL.md` exists, read it first.
+`lean_statement` refuses `ll`.
+There is no Lean skill file: the Lean API notes are in this prompt, so do not try to read any `SKILL.md` for Lean.
 
 ## Procedure
 
@@ -49,8 +50,10 @@ The main agent gives you the IR, the direction (`regular` / `non_regular`, `cfl`
 ## Lean API in the image
 
 Lean v4.33.0, Mathlib, langlib and `TflLean` (`import TflLean` is always in the statement). These
-lines are copied from `agent_system/prompts/formalizer.md`, which was checked against the image. Do
-not rely on other names from memory.
+lines are copied from `agent_system/prompts/formalizer.md`, `cfl_system/prompts/cfl_lean_formalizer.md`
+and `dcfl_system/prompts/dcfl_lean_formalizer.md`, which were checked against the image, and every
+`TflLean.` signature is copied from `agent_system/docker/tfl_lean/TflLean/Lemmas.lean`. Do not rely
+on other names from memory.
 
 - `Language.IsRegular L : Prop := ∃ σ : Type, ∃ _ : Fintype σ, ∃ M : DFA T σ, M.accepts = L`
   — take it apart with `rintro ⟨σ, _, M, hM⟩`, build it with
@@ -75,6 +78,9 @@ not rely on other names from memory.
   ∃ u v x y z : List T, w = u ++ v ++ x ++ y ++ z ∧ (v ++ y).length > 0 ∧
   (v ++ x ++ y).length ≤ p ∧ ∀ i : ℕ, u ++ v ^+^ i ++ x ++ y ^+^ i ++ z ∈ L`, where
   `v ^+^ i` is `nTimes v i := (List.replicate i v).flatten` (`simp only [nTimes] at h`).
+- `Language.IsContextFree.ogdens_lemma (hL : L.IsContextFree) : ∃ p, ∀ w ∈ L,
+  ∀ (P : ℕ → Prop) [DecidablePred P], p ≤ countMarkedIn P 0 w.length → ∃ u v x y z, ...`
+  (same conclusion, lengths counted in marked positions).
 - `TflLean.not_isRegular_of_distinguishable {L : Language α} (f : ℕ → List α)
   (h : ∀ i j, i ≠ j → ∃ z, f i ++ z ∈ L ∧ f j ++ z ∉ L) : ¬ L.IsRegular` — easy half of
   Myhill–Nerode.
@@ -91,7 +97,222 @@ For a grammar statement (`def g : ContextFreeGrammar Letter`, `def L := g.langua
 unfolds definitionally to `g.Derives [Symbol.nonterminal g.initial] (List.map Symbol.terminal w)`
 (a `have hd : g.Derives ... := h` accepts it). A non-regularity proof
 usually needs an invariant of sentential forms preserved by every rule (induction on
-`g.Derives`, `ContextFreeRule.rewrites_iff`) and derivations of a family of words in `L`.
+`g.Derives`, `ContextFreeRule.rewrites_iff`) and derivations of a family of words in `L`. For
+`theorem tfl_main : L.IsContextFree` with `def L : Language Letter := g.language` the proof is one
+line, `exact ⟨g, rfl⟩`.
+
+### More `TflLean` lemmas
+
+Signatures as declared in `TflLean/Lemmas.lean` (`variable {α : Type*}`, `{β : Type}` where the
+signature uses them). A lemma with `[Fintype T]`, `[Fintype α]` or `[Fintype β]` needs a `Fintype`
+instance on the alphabet: only a statement that declares `instance : Fintype Letter` has one (the
+DCFL statements do; REG and CFL statements usually do not). `Letter` derives `DecidableEq`, and the
+letters' `≠` arguments close by `(by decide)`.
+
+DCFL and the slice (Transfer section):
+
+- `TflLean.isContextFree_of_isDCF {T : Type} [Fintype T] {L : Language T} (h : is_DCF L) :
+  L.IsContextFree` (DCFL ⊆ CFL),
+  `TflLean.not_isDCF_of_not_isContextFree {T : Type} [Fintype T] {L : Language T}
+  (h : ¬ L.IsContextFree) : ¬ is_DCF L`.
+- `TflLean.not_isContextFree_of_slice {L : Language β} (x y z : β)
+  (h : ∀ n m k : ℕ, List.replicate (n + 1) x ++ List.replicate (m + 1) y ++
+  List.replicate (k + 1) z ∈ L ↔ n = m ∧ m = k) : ¬ L.IsContextFree` (`{xⁿyⁿzⁿ}` on the slice
+  `x⁺y⁺z⁺`; the letters need not be distinct: `x = z = a`, `y = b` covers `{aⁿbⁿaⁿ}`).
+- `TflLean.isDCF_anbncm [Fintype β] {a b c : β} (hab : a ≠ b) (hac : a ≠ c) (hbc : b ≠ c) :
+  is_DCF ({w | ∃ n m : ℕ, w = List.replicate n a ++ List.replicate n b ++
+  List.replicate m c} : Language β)`
+- `TflLean.isDCF_anbncm_pos [Fintype β] {a b c : β} (hab : a ≠ b) (hac : a ≠ c) (hbc : b ≠ c) :
+  is_DCF ({w | ∃ n m : ℕ, w = List.replicate (n + 1) a ++ List.replicate (n + 1) b ++
+  List.replicate (m + 1) c} : Language β)`
+- `TflLean.replicate_append_replicate_append_replicate_inj [DecidableEq β] {a b c : β}
+  (hab : a ≠ b) (hac : a ≠ c) (hbc : b ≠ c) {i j k i' j' k' : ℕ}
+  (h : List.replicate i a ++ List.replicate j b ++ List.replicate k c =
+  List.replicate i' a ++ List.replicate j' b ++ List.replicate k' c) : i = i' ∧ j = j' ∧ k = k'`.
+- langlib's `DCF_closedUnderComplement L h : is_DCF Lᶜ` (complement of a DCFL).
+
+Closure section (`L ⊓ R` is the intersection, `L₁ + L₂` the union):
+
+- `TflLean.isContextFree_inf_isRegular {T : Type} {L R : Language T}
+  (hL : L.IsContextFree) (hR : R.IsRegular) : (L ⊓ R).IsContextFree`
+- `TflLean.not_isContextFree_of_inf_isRegular {T : Type} {L R : Language T}
+  (hR : R.IsRegular) (h : ¬ (L ⊓ R).IsContextFree) : ¬ L.IsContextFree`
+- `TflLean.not_isRegular_of_inf_isRegular {L R : Language α}
+  (hR : R.IsRegular) (h : ¬ (L ⊓ R).IsRegular) : ¬ L.IsRegular`
+- `TflLean.isDCF_inf_isRegular {T : Type} [Fintype T] {L R : Language T}
+  (hL : is_DCF L) (hR : R.IsRegular) : is_DCF (L ⊓ R)`
+- `TflLean.not_isDCF_of_inf_isRegular {T : Type} [Fintype T] {L R : Language T}
+  (hR : R.IsRegular) (h : ¬ is_DCF (L ⊓ R)) : ¬ is_DCF L`
+- `TflLean.isDCF_of_isRegular {T : Type} [Fintype T] {L : Language T} (h : L.IsRegular) :
+  is_DCF L` (REG ⊆ DCFL)
+- `TflLean.isContextFree_of_isRegular {T : Type} [Fintype T] {L : Language T}
+  (h : L.IsRegular) : L.IsContextFree` (REG ⊆ CFL)
+- `TflLean.isContextFree_add {T : Type} {L₁ L₂ : Language T}
+  (h₁ : L₁.IsContextFree) (h₂ : L₂.IsContextFree) : (L₁ + L₂).IsContextFree`
+  (`Language.mem_add : w ∈ L₁ + L₂ ↔ w ∈ L₁ ∨ w ∈ L₂`; bind the parts with
+  `let A : Language Letter := {w | …}` so that `A + B` elaborates as a `Language`)
+- `TflLean.isContextFree_subst {α β : Type} {L : Language α} {f : α → Language β}
+  (hL : L.IsContextFree) (hf : ∀ a, (f a).IsContextFree) : (L.subst f).IsContextFree`
+- `TflLean.mem_homomorphicImage_iff {α β : Type} (L : Language α) (h : α → List β)
+  (u : List β) : u ∈ L.homomorphicImage h ↔ ∃ w ∈ L, w.flatMap h = u`
+- `TflLean.isContextFree_homomorphicImage {α β : Type} {L : Language α} (h : α → List β)
+  (hL : L.IsContextFree) : (L.homomorphicImage h).IsContextFree`
+- `TflLean.not_isContextFree_of_homomorphicImage {α β : Type} {L : Language α}
+  (h : α → List β) (hn : ¬ (L.homomorphicImage h).IsContextFree) : ¬ L.IsContextFree`
+- `TflLean.isContextFree_map {α β : Type} (f : α → β) {L : Language α}
+  (hL : L.IsContextFree) : (Language.map f L).IsContextFree`
+- `TflLean.isContextFree_inverseHomomorphicImage {α β : Type} [Fintype α] {L : Language β}
+  (h : α → List β) (hL : L.IsContextFree) : (L.inverseHomomorphicImage h).IsContextFree`
+- Mathlib's `h.compl`, `h.inf h'`, `h.add h'` close `IsRegular` under complement, `⊓`, `+`
+  (union).
+
+RegularFilters section (explicit DFAs, for the intersection method and for filters):
+
+- `TflLean.isRegular_length_mod (m r : ℕ) (hm : 0 < m) :
+  Language.IsRegular ({w | w.length % m = r} : Language α)`
+- `TflLean.isRegular_count_mod [DecidableEq α] (a : α) (m r : ℕ) (hm : 0 < m) :
+  Language.IsRegular ({w | w.count a % m = r} : Language α)`
+- `TflLean.isRegular_replicate_append_replicate [DecidableEq α] {a b : α} (hab : a ≠ b) :
+  Language.IsRegular ({w | ∃ i j : ℕ, w = List.replicate i a ++ List.replicate j b} :
+  Language α)` (`a*b*`)
+
+TransferAnBn section (langlib's `{aⁿbⁿ}` and `{a^(2^k)}` on any alphabet):
+
+- `TflLean.isContextFree_anbn (a b : β) : Language.IsContextFree
+  ({w | ∃ n : ℕ, w = List.replicate n a ++ List.replicate n b} : Language β)`
+- `TflLean.isContextFree_anbn_mul (a b : β) (j k : ℕ) : Language.IsContextFree
+  ({w | ∃ n : ℕ, w = List.replicate (j * n) a ++ List.replicate (k * n) b} : Language β)`
+- `TflLean.isDCF_anbn [Fintype β] {a b : β} (hab : a ≠ b) :
+  is_DCF ({w | ∃ n : ℕ, w = List.replicate n a ++ List.replicate n b} : Language β)`
+- `TflLean.not_isRegular_anbn {a b : β} (hab : a ≠ b) : ¬ Language.IsRegular
+  ({w | ∃ n : ℕ, w = List.replicate n a ++ List.replicate n b} : Language β)`
+- `TflLean.not_isContextFree_pow2 (a : β) :
+  ¬ Language.IsContextFree ({w | ∃ k : ℕ, w = List.replicate (2 ^ k) a} : Language β)`
+
+The `n ≥ 0` conjunct, a different variable order or a different bracketing makes the task's `L`
+differ syntactically from a lemma's set: rewrite first (`have e : L = {w | …} := by ext w;
+constructor; …`, then `rw [e]`, or `apply` the lemma to a goal you rewrote).
+
+### Which route to try
+
+- `regular`: an explicit DFA with `TflLean.isRegular_of_dfa`, or closure of regular parts
+  (`h.compl`, `h.inf h'`, `h.add h'`, the RegularFilters lemmas).
+- `non_regular`: `TflLean.not_isRegular_of_distinguishable` or `TflLean.IsRegular.pumping`; the
+  intersection method `TflLean.not_isRegular_of_inf_isRegular` with `TflLean.not_isRegular_anbn` as
+  the usual target and `TflLean.isRegular_replicate_append_replicate` as the filter.
+- `cfl`: a grammar statement is `exact ⟨g, rfl⟩`; a grammar language cut by a regular filter is
+  `TflLean.isContextFree_inf_isRegular ⟨g, rfl⟩ hR`; a set-builder `L` is first rewritten as a union
+  (`TflLean.isContextFree_add`), homomorphic image or intersection with a regular language of
+  languages the lemmas know (`TflLean.isContextFree_anbn`, `TflLean.isContextFree_anbn_mul`).
+  Otherwise exhibit a grammar `g` and prove `g.language = L` (both inclusions); no compiled example
+  does this for a set-builder `L`.
+- `non_cfl`: CF pumping (`TflLean.not_isContextFree_of_not_cfPumping`) or Ogden's lemma
+  (`Language.IsContextFree.ogdens_lemma`), the slice lemma, or a
+  reduction by `TflLean.not_isContextFree_of_inf_isRegular` /
+  `TflLean.not_isContextFree_of_homomorphicImage` to a language that is then refuted (slice
+  lemma, pumping, or `TflLean.not_isContextFree_pow2` for `{a^(2^k)}`).
+- `dcfl`: `{aⁿbⁿcᵐ}` (either range) or `{aⁿbⁿ}` up to renaming by `TflLean.isDCF_anbncm`,
+  `TflLean.isDCF_anbncm_pos` or `TflLean.isDCF_anbn`; a regular `L` by `TflLean.isDCF_of_isRegular`;
+  a DCFL cut by a regular filter by `TflLean.isDCF_inf_isRegular`; otherwise an explicit langlib
+  `DPDA`.
+- `non_dcfl`: complement (`DCF_closedUnderComplement`) and/or intersection with a regular language
+  (`TflLean.not_isDCF_of_inf_isRegular`), then `TflLean.isContextFree_of_isDCF` and a non-CF
+  refutation of the derived language.
+
+### Not in the image
+
+There is no Lean formalization of LL(k) (`lean_statement` refuses `ll`; `docs/LEAN_LLK.md` is a
+design, not a lemma), of Parikh's theorem, Yu's two-word lemma, Shallit's theorem
+4.7.4, inherent ambiguity, a DCFL pumping lemma, DCFL closure under inverse homomorphism, or a
+bridge from a grammar to a DPDA. A plan that rests on one of these needs another route (pumping, a
+closure reduction above, an explicit automaton or grammar). If none fits, say so; do not invent a
+lemma name.
+
+### Compiled reference examples
+
+Files in `agent_system/docker/tfl_lean/TflLean/Examples/`, each `statement + proof body` that
+compiles to `proved`:
+
+- `AnBnNotRegular.lean` (`{aⁿbⁿ}`, `¬ L.IsRegular`), `EvenA_Regular.lean` (`|w|_a` even,
+  `L.IsRegular`), `AiBjNeq_NotRegular.lean` (`{aⁱbʲ | i ≠ j}`, `¬ L.IsRegular`, intersection method).
+- `AnBnCnNotCF.lean` with `AnBnCnPumpingCore.lean` (`{aⁿbⁿcⁿ}`, CF pumping), `AnBnAnNotCF.lean`
+  (`{aⁿbⁿaⁿ}`, `¬ L.IsContextFree`), `EvenPalGrammar_CF.lean` (a grammar, `L.IsContextFree`),
+  `AnBnMod4Filter_CF.lean` (a grammar cut by `|w| % 4 = 0`), `AnBnUnionAnB2n_CF.lean`
+  (`{aⁿbⁿ} ∪ {aⁿb²ⁿ}`, union of homomorphic images).
+- `AnBnCm_DCF.lean`, `AnBnCmPos_DCF.lean` (`{aⁿbⁿcᵐ}`, `is_DCF L`), `AnBn_DCF.lean` (`{aⁿbⁿ}`,
+  `is_DCF L`), `AiBjCkNeq_NotDCF.lean` (`{aⁱbʲcᵏ | i ≠ j ∨ j ≠ k}`, `¬ is_DCF L`, complement and
+  the slice lemma).
+
+Proof body of `AnBnMod4Filter_CF.lean` (`def L : Language Letter := g.language ⊓ ({w : List Letter |
+(w.length) % 4 = 0} : Language Letter)`):
+
+```lean
+  exact TflLean.isContextFree_inf_isRegular ⟨g, rfl⟩ (TflLean.isRegular_length_mod 4 0 (by decide))
+```
+
+Proof body of `AiBjNeq_NotRegular.lean` (`def L : Language Letter := {w : List Letter | ∃ i j : ℕ,
+w = List.replicate i Letter.a ++ List.replicate j Letter.b ∧ i ≠ j}`):
+
+```lean
+  intro h
+  apply TflLean.not_isRegular_anbn (a := Letter.a) (b := Letter.b) (by decide)
+  have e : ({w | ∃ n : ℕ, w = List.replicate n Letter.a ++ List.replicate n Letter.b} :
+      Language Letter) = Lᶜ ⊓ {w | ∃ i j : ℕ, w = List.replicate i Letter.a ++
+      List.replicate j Letter.b} := by
+    ext w
+    constructor
+    · rintro ⟨n, rfl⟩
+      refine ⟨?_, n, n, rfl⟩
+      rintro ⟨i, j, he, hne⟩
+      obtain ⟨rfl, rfl⟩ := TflLean.replicate_append_replicate_inj (by decide) he
+      exact hne rfl
+    · rintro ⟨hc, i, j, rfl⟩
+      have hij : i = j := by
+        by_contra hne
+        exact hc ⟨i, j, rfl, hne⟩
+      exact ⟨i, by rw [hij]⟩
+  rw [e]
+  exact h.compl.inf (TflLean.isRegular_replicate_append_replicate (by decide))
+```
+
+Proof body of `AnBnUnionAnB2n_CF.lean` (`def L : Language Letter := {w : List Letter | (∃ n : ℕ,
+w = List.replicate n Letter.a ++ List.replicate n Letter.b ∧ n ≥ 0) ∨ (∃ n : ℕ,
+w = List.replicate n Letter.a ++ List.replicate (2 * n) Letter.b ∧ n ≥ 0)}`):
+
+```lean
+  let A : Language Letter :=
+    {w | ∃ n : ℕ, w = List.replicate (1 * n) Letter.a ++ List.replicate (1 * n) Letter.b}
+  let B : Language Letter :=
+    {w | ∃ n : ℕ, w = List.replicate (1 * n) Letter.a ++ List.replicate (2 * n) Letter.b}
+  have e : L = A + B := by
+    ext w
+    rw [Language.mem_add]
+    constructor
+    · rintro (⟨n, rfl, -⟩ | ⟨n, rfl, -⟩)
+      · exact Or.inl ⟨n, by simp⟩
+      · exact Or.inr ⟨n, by simp⟩
+    · rintro (⟨n, rfl⟩ | ⟨n, rfl⟩)
+      · exact Or.inl ⟨n, by simp, Nat.zero_le _⟩
+      · exact Or.inr ⟨n, by simp, Nat.zero_le _⟩
+  rw [e]
+  exact TflLean.isContextFree_add (TflLean.isContextFree_anbn_mul _ _ 1 1)
+    (TflLean.isContextFree_anbn_mul _ _ 1 2)
+```
+
+Proof body of `AnBn_DCF.lean` (`instance : Fintype Letter`, `def L : Language Letter :=
+{w : List Letter | ∃ n : ℕ, w = List.replicate n Letter.a ++ List.replicate n Letter.b ∧ n ≥ 0}`):
+
+```lean
+  have e : L = {w | ∃ n : ℕ, w = List.replicate n Letter.a ++ List.replicate n Letter.b} := by
+    ext w
+    constructor
+    · rintro ⟨n, rfl, -⟩
+      exact ⟨n, rfl⟩
+    · rintro ⟨n, rfl⟩
+      exact ⟨n, rfl, Nat.zero_le _⟩
+  rw [e]
+  exact TflLean.isDCF_anbn (by decide)
+```
 
 ## Answer
 

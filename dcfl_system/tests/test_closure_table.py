@@ -235,8 +235,10 @@ class TestClosureScanExamples:
         # dcfl_system/CLAUDE.md tracks the exam_01-04 examples (task_wvaavRwR,
         # task_u1au2_u3au4, task_anb_cnbn, task_grammar_aSSb) plus
         # task_anbncm (docs/VERDICT_POLICY.md R2' -- a real DPDA certificate
-        # for a genuine DCFL, dcfl_exam_anbncm mock set).
-        assert len(self._example_files) == 5, (
-            f"Expected 5 example JSON files, found {len(self._example_files)}: "
+        # for a genuine DCFL, dcfl_exam_anbncm mock set) and task_a2kb2k
+        # (R2″ -- a closure_reduction with an executable DFA artifact,
+        # dcfl_a2kb2k mock set).
+        assert len(self._example_files) == 6, (
+            f"Expected 6 example JSON files, found {len(self._example_files)}: "
             f"{[p.name for p in self._example_files]}"
         )

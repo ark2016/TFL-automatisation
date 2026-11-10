@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 
@@ -593,6 +594,28 @@ def test_cli_abandon_after_a_hard_kill(tmp_path):
     assert r.returncode == hitl.EXIT_SUBMITTED, r.stderr
 
 
+def test_abandon_refused_while_recording_process_alive(tmp_path):
+    d = tmp_path / "r"
+    d.mkdir()
+    (d / "result.json").write_text("{}", encoding="utf-8")
+    run = {"run_id": "x", "status": "running", "reviews": [],
+           "followup_in_progress": {"snapshot": followup.snapshot_report(d), "previous_status": "submitted",
+                                    "pid": os.getpid(), "n_reviews": 0, "review_switch": {}}}
+    run_store.save_run(d, run)
+    assert followup.pid_alive(os.getpid()) and not followup.pid_alive(None) and not followup.pid_alive(-1)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        run["followup_in_progress"]["pid"] = child.pid
+        run_store.save_run(d, run)
+        with pytest.raises(run_store.RunError, match="--force"):
+            followup.abandon_followup(d, check_alive=True)
+    finally:
+        child.kill()
+        child.wait()
+    assert not followup.pid_alive(child.pid)
+    assert followup.abandon_followup(d, check_alive=True) == "submitted"
+
+
 class _SilentProgress:
     def __getattr__(self, _name):
         return lambda *_a, **_k: None
@@ -736,13 +759,13 @@ def test_cli_auto_approve_does_not_go_with_a_message(tmp_path):
 # Small contract points
 # ---------------------------------------------------------------------------
 
-def test_a_long_reply_says_it_was_cut(tmp_path):
+def test_a_long_reply_is_kept_whole(tmp_path):
     emitter = ProgressEmitter(tmp_path, run_id="r")
     emitter.assistant_message("да")
     emitter.assistant_message("x" * (run_store.MAX_MESSAGE_CHARS + 1))
     short, long = [e for e in events(tmp_path) if e["event"] == "assistant_message"]
     assert "truncated" not in short
-    assert long["truncated"] is True and len(long["text"]) == run_store.MAX_MESSAGE_CHARS
+    assert "truncated" not in long and len(long["text"]) == run_store.MAX_MESSAGE_CHARS + 1
 
 
 def test_the_message_limit_holds_in_the_core(tmp_path):
@@ -951,11 +974,11 @@ def test_review_summary_of_runs_with_and_without_digests():
     # reviews of other reports only: this one was not reviewed
     other = [{"point": "report", "decision": "approved", "report_digest": "another"}]
     assert hitl.review_summary({**on, "reviews": other}, report) == ("not reviewed", {"decision": "not_reviewed"})
-    # the same content decided twice: the last decision on it
+    # the same content approved, then rejected (API-025): the approval stays
     digest = followup.report_digest(report)
     twice = [{"point": "report", "decision": "approved", "report_digest": digest},
              {"point": "report", "decision": "rejected", "report_digest": digest}]
-    assert "rejected" in hitl.review_summary({**on, "reviews": twice}, report)[0]
+    assert hitl.review_summary({**on, "reviews": twice}, report)[0] == "approved by a human at HITL 2"
 
 
 # ---------------------------------------------------------------------------
@@ -1197,6 +1220,9 @@ def test_a_spent_day_refuses_a_live_follow_up_before_anything_changes(tmp_path):
     out = hitl.resume_run(out.run_dir, APPROVE, model_factory=live(), live=True)
     out = hitl.resume_run(out.run_dir, APPROVE, model_factory=live(), live=True)
     d = out.run_dir
+    run = hitl.load_run(d)
+    run["budget_stop"] = False  # nobody to ask: the refusal stands (with a stop the day question comes first)
+    hitl.save_run(d, run)
     assert followup.day_refusal(hitl.load_run(d)) is None
     log = B.DailySpendLog()
     log.append({"day": log.today(), "task": "other", "usd": 1000.0})
@@ -1208,6 +1234,18 @@ def test_a_spent_day_refuses_a_live_follow_up_before_anything_changes(tmp_path):
     after = hitl.load_run(d)
     assert after["status"] == before["status"] and "followup_in_progress" not in after
     assert not (d / run_store.REPORT_HISTORY_DIR).exists()
+
+
+def test_a_spent_day_asks_instead_of_refusing_after_an_accepted_report(tmp_path):
+    d, live, per_day = day_short_followup(tmp_path)
+    log = B.DailySpendLog()
+    log.append({"day": log.today(), "task_id": "more", "usd": 10.0})  # the day is used up
+    run = hitl.load_run(d)
+    assert run["status"] == "submitted" and followup.day_refusal(run) is None
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.awaiting and out.pending.request["action_requests"][0]["args"]["binds"] == "day"
+    done = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert done.reply == ANSWER
 
 
 def test_the_day_says_nothing_about_a_mock_run(tmp_path):
@@ -1821,6 +1859,26 @@ def test_a_top_up_too_small_for_the_call_ends_the_same_way(tmp_path, left):
     assert run["budget_extensions"][-1]["add_usd"] == 0.0001
 
 
+@LOW
+def test_an_auto_approved_run_keeps_its_accepted_report_when_the_follow_up_has_no_money(tmp_path, left):
+    """CA-015, decided 2026-11-10: no budget stop (--auto-approve) does not mean the report may be
+    replaced by a truncated one; the call is skipped and the accepted report and label stay."""
+    script = H.base_script()
+    script["models"]["main"] += [{"content": ANSWER}]
+    out = start(tmp_path, script, auto_approve=True)
+    assert out.status == "submitted", out.result
+    d = out.run_dir
+    assert hitl.load_run(d)["budget_stop"] is False
+    run = hitl.load_run(d)
+    run["settings"]["budget"].update({"per_task_usd": spent(d) + left, "reserve_for_report_usd": left * 0.99})
+    hitl.save_run(d, run)
+    before, money, calls = rating(d), spent(d), main_calls(d)
+    report, label = result_json(d)["report"], result_json(d)["human_review"]
+    out = hitl.send_followup(d, QUESTION)
+    assert_unanswered(d, out, before, calls=calls, money=money)
+    assert result_json(d)["report"] == report and result_json(d)["human_review"] == label
+
+
 def test_the_next_message_after_an_unanswered_one_asks_for_money_again(tmp_path):
     d = finished(tmp_path, {"content": ANSWER})
     run = hitl.load_run(d)
@@ -1857,5 +1915,380 @@ def test_a_message_with_no_accepted_report_keeps_the_old_wrap_up():
     assert not BS.declining_skips_the_call({"budget_stop": True,
                                             "followup_in_progress": {"previous_status": "budget_exhausted"}})
     assert not BS.declining_skips_the_call({"budget_stop": True})  # the run itself: wrap-up writes its report
-    assert not BS.declining_skips_the_call({"budget_stop": False,  # no stop, nobody declined
-                                            "followup_in_progress": {"previous_status": "submitted"}})
+    # user decision 2026-11-10: a run with no budget stop (--auto-approve) is protected too
+    assert BS.declining_skips_the_call({"budget_stop": False,
+                                        "followup_in_progress": {"previous_status": "submitted"}})
+    assert not BS.declining_skips_the_call({"budget_stop": False})
+
+
+def test_a_resumed_followup_records_its_own_pid(tmp_path, monkeypatch):
+    new = H.report_call(H.base_script(), call_id="call-report-2", summary="Отчёт после вопроса в чате.")
+    d = finished(tmp_path, new)
+    hitl.send_followup(d, "Перепиши сводку")
+    run = hitl.load_run(d)
+    run["followup_in_progress"]["pid"] = 999999  # the first process is gone
+    run_store.save_run(d, run)
+    seen = []
+    real = hitl.save_run
+
+    def spy(path, data):
+        if data.get("followup_in_progress"):
+            seen.append(data["followup_in_progress"].get("pid"))
+        return real(path, data)
+
+    monkeypatch.setattr(hitl, "save_run", spy)
+    hitl.resume_run(d, APPROVE)
+    assert os.getpid() in seen and 999999 in seen[:1]  # an earlier save may still carry the old pid; the segment's own save does not
+    assert seen[-1] == os.getpid()
+
+
+def test_abandon_force_skips_the_pid_check(tmp_path, capsys):
+    from tfl_deep_agent import cli
+
+    d = tmp_path / "r"
+    d.mkdir()
+    (d / "result.json").write_text("{}", encoding="utf-8")
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        run_store.save_run(d, {"run_id": "x", "status": "running", "reviews": [], "followup_in_progress": {
+            "snapshot": followup.snapshot_report(d), "previous_status": "submitted", "pid": child.pid,
+            "n_reviews": 0, "review_switch": {}}})
+        assert cli.main(["--resume", str(d), "--abandon"]) == 2
+        assert "--force" in capsys.readouterr().err
+        assert cli.main(["--resume", str(d), "--abandon", "--force"]) == 0
+    finally:
+        child.kill()
+        child.wait()
+    assert "followup_in_progress" not in run_store.load_run(d)
+
+
+def test_resume_exits_2_when_the_follow_up_cannot_start(tmp_path, monkeypatch, capsys):
+    from tfl_deep_agent import cli
+
+    d = finished(tmp_path)
+
+    def boom(*_a, **_k):
+        raise ImportError("no module named deepagents")
+
+    monkeypatch.setattr(hitl, "send_followup", boom)
+    assert cli.main(["--resume", str(d), "--message", "hi"]) == 2
+    assert "no module named deepagents" in capsys.readouterr().err
+
+
+def test_budget_stop_helper_names():
+    assert BS.format_usd(2) == "$2.00" and BS.format_usd(0.0123) == "$0.0123"
+    assert BS.parse_add_usd({"add_usd": "1.5"}) == 1.5
+    with pytest.raises(BS.DecisionError):
+        BS.parse_add_usd({"add_usd": 0})
+    assert not hasattr(BS, "usd") and not hasattr(BS, "budget_add") and not hasattr(BS, "budget_resume")
+
+
+def test_snapshot_report_takes_a_run_dir_as_text(tmp_path):
+    from tfl_deep_agent import followup as F
+
+    (tmp_path / "result.json").write_text("{}", encoding="utf-8")
+    assert F.latest_snapshot(str(tmp_path)) == 0
+    assert F.snapshot_report(str(tmp_path)) == "report_history/1"
+    assert F.latest_snapshot(tmp_path) == 1
+
+
+@pytest.mark.parametrize("extra", [["--message", "x"], ["--decision", "approve"]])
+def test_cli_resume_rejects_force_without_abandon(tmp_path, capsys, extra):
+    from tfl_deep_agent import cli
+
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["--resume", str(tmp_path), "--force", *extra])
+    assert stop.value.code == run_store.EXIT_USAGE and "--force" in capsys.readouterr().err
+
+
+def test_rejecting_a_byte_identical_report_keeps_the_accepted_label(tmp_path):
+    """API-025: the digest filter ignores a rejection of the same bytes when an approval holds that digest."""
+    d = finished(tmp_path, H.report_call(H.base_script(), call_id="call-same"), {"content": "Оставляю прежний отчёт."})
+    approved = result_json(d)
+    assert hitl.send_followup(d, "Повтори отчёт").pending.point == hitl.REPORT
+    out = hitl.resume_run(d, REJECT)
+    assert out.status == "submitted"
+    result = result_json(d)
+    assert result["report"] == approved["report"]
+    assert result["human_review"] == "approved by a human at HITL 2"
+    reviews = report_reviews(hitl.load_run(d))
+    assert [r["decision"] for r in reviews] == ["approved", "rejected"]
+    assert reviews[0]["report_digest"] == reviews[1]["report_digest"]
+
+
+def test_review_summary_ignores_a_rejection_of_the_same_digest_only_when_an_approval_holds_it():
+    report = {"verdict": "regular", "summary": "s"}
+    digest = followup.report_digest(report)
+    on = {"hitl": {"report": True}}
+    rows = [{"point": "report", "decision": "approved", "report_digest": digest},
+            {"point": "report", "decision": "rejected", "report_digest": digest}]
+    assert hitl.review_summary({**on, "reviews": rows}, report)[0] == "approved by a human at HITL 2"
+    assert "rejected" in hitl.review_summary({**on, "reviews": rows[1:]}, report)[0]
+    assert hitl.review_summary({**on, "reviews": rows[::-1]}, report)[0] == "approved by a human at HITL 2"
+
+
+# ---------------------------------------------------------------------------
+# A follow-up message that leads to a new IR review: «Условие» stays, «Уточнение» is added
+# ---------------------------------------------------------------------------
+
+def _clarified_run(tmp_path, *, script=None, task=TASK):
+    """A finished LL run; its follow-up NEW_TASK reviews IR B, then a new report is submitted and accepted."""
+    script = add_ir_b(script or H.base_script(), LL_IR_B, "ll", draft_reply("Отчёт после уточнения.", "call-draft-b"))
+    out = hitl.start_run(tmp_path / "cl", task, settings=H.example_settings(), mock_script=script)
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    assert out.status == "submitted", out.result
+    d = out.run_dir
+    to_ir_b_review(d)
+    out = hitl.resume_run(d, APPROVE)
+    assert out.awaiting and out.pending.point == hitl.REPORT, out.result
+    out = hitl.resume_run(d, APPROVE)
+    assert out.status == "submitted" and result_json(d)["report"]["summary"] == "Отчёт после уточнения."
+    return d
+
+
+def test_a_correction_follow_up_keeps_the_original_task_and_shows_the_clarification(tmp_path):
+    d = _clarified_run(tmp_path)
+    result = result_json(d)
+    assert result["task"] == TASK
+    assert result["clarifications"] == [NEW_TASK]
+    md = (d / "result.md").read_text(encoding="utf-8")
+    assert md.index("## Условие") < md.index(TASK[:20]) < md.index("## Уточнение") < md.index(NEW_TASK)
+    html = (d / "result.html").read_text(encoding="utf-8")
+    assert "Уточнение" in html and NEW_TASK in html
+    review = [r for r in hitl.load_run(d)["reviews"] if r["point"] == hitl.FORMALIZATION][-1]
+    assert review["followup_text"] == NEW_TASK and review["task_text"] == TASK
+
+
+def test_the_hitl1_card_of_a_follow_up_review_shows_the_clarification(tmp_path):
+    script = add_ir_b(H.base_script(), LL_IR_B, "ll")
+    out = hitl.start_run(tmp_path / "card", TASK, settings=H.example_settings(), mock_script=script)
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    out = hitl.resume_run(out.run_dir, APPROVE)
+    out = hitl.send_followup(out.run_dir, NEW_TASK)
+    args = out.pending.request["action_requests"][0]["args"]
+    assert args["task_text"] == TASK and args["followup_text"] == NEW_TASK
+    card = (out.run_dir / hitl.CARD_FILE).read_text(encoding="utf-8")
+    assert "Clarification" in card and "другая задача" in card
+
+
+def test_a_file_task_keeps_its_transcription_and_gets_the_clarification(tmp_path):
+    from tfl_deep_agent.intake import files as intake_files
+
+    pdf = tmp_path / "task.pdf"
+    pdf.write_bytes(H.make_pdf())
+    d = _clarified_run(tmp_path, script=H.pdf_script(), task=intake_files.from_path(pdf))
+    result = result_json(d)
+    assert result["task"] == H.INTAKE_TRANSCRIPTION
+    assert result["clarifications"] == [NEW_TASK]
+
+
+def test_several_clarifications_are_listed_in_order():
+    from tfl_deep_agent.reports import render
+
+    md = render.render_report({"task": "TASKTEXT", "clarifications": ["первое", "второе"],
+                               "status": "incomplete"}).markdown
+    assert md.index("TASKTEXT") < md.index("## Уточнение") < md.index("**1.** первое") < md.index("**2.** второе")
+    assert "Уточнение" not in render.render_report({"task": "T", "status": "incomplete"}).markdown
+
+
+def test_the_task_keeps_its_stars_outside_math_and_katex_is_untouched():
+    from tfl_deep_agent.reports import render
+
+    esc = render.escape_stars_outside_math
+    assert esc("(ab)* и {a,b}*") == "(ab)\\* и {a,b}\\*"
+    assert esc("$a^*$ и $$b^*$$") == "$a^*$ и $$b^*$$"
+    assert esc("(ab)* где $L=\\{a^n\\}^*$ и c*") == "(ab)\\* где $L=\\{a^n\\}^*$ и c\\*"
+    assert esc("`(ab)*` и c*") == "`(ab)*` и c\\*"
+    assert esc("``a*`` и \\(a^*\\) и \\[b^*\\] и c*") == "``a*`` и \\(a^*\\) и \\[b^*\\] и c\\*"
+    html = render.render_report({"task": "Язык (ab)* ... {a,b}* и $x^*$", "status": "incomplete"}).html
+    main = html.split("<main>")[1].split("</main>")[0]
+    assert "(ab)&#42; ... {a,b}&#42;" in main and "<em>" not in main and "$x^*$" in main
+
+
+# ---------------------------------------------------------------------------
+# CA-015, the day case: the day's remainder is what is short in a follow-up
+# ---------------------------------------------------------------------------
+
+def day_short_followup(tmp_path, **start_kw):
+    """A finished live run (scripted model) whose day has almost nothing left."""
+    script = H.base_script()
+    script["models"]["main"].append({"content": ANSWER})
+
+    def live():
+        return live_factory(script, tmp_path)
+
+    out = hitl.start_run(tmp_path / "lv", TASK, settings=H.example_settings(), model_factory=live(), **start_kw)
+    while out.awaiting:
+        out = hitl.resume_run(out.run_dir, APPROVE, model_factory=live(), live=True)
+    assert out.status == "submitted", out.result
+    d = out.run_dir
+    run = hitl.load_run(d)
+    log = B.DailySpendLog()
+    log.append({"day": log.today(), "task_id": "other", "usd": 1.5})  # the validator wants per_task <= per_day
+    per_day = log.day_total() + 0.0005
+    run["settings"]["budget"].update({"per_day_usd": per_day, "per_task_usd": 1.0, "reserve_for_report_usd": 0.0001})
+    hitl.save_run(d, run)
+    return d, live, per_day
+
+
+def live_calls(tmp_path):
+    return json.loads((tmp_path / "cursors.json").read_text())["cursors"]["main"]
+
+
+def test_a_short_day_asks_to_raise_the_day_limit_and_declining_keeps_the_report(tmp_path):
+    d, live, per_day = day_short_followup(tmp_path)
+    before, calls = rating(d), live_calls(tmp_path)
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.awaiting and out.pending.point == hitl.BUDGET
+    args = out.pending.request["action_requests"][0]["args"]
+    assert args["binds"] == "day" and args["per_day_usd"] == pytest.approx(per_day, abs=1e-5)
+    assert "Дневной лимит" in out.pending.request["action_requests"][0]["description"]
+    card = hitl.load_run(d)["pending"]["card"]
+    assert card["summary"][0].startswith("Сегодня потрачено")
+    done = hitl.resume_run(d, APPROVE, model_factory=live(), live=True)
+    assert done.status == "submitted" and done.followup_note == UNANSWERED_NOTE and done.reply is None
+    assert live_calls(tmp_path) == calls, "no model call"
+    assert rating(d) == before
+    assert hitl.load_run(d)["budget_declined"] is True
+
+
+def test_raising_the_day_limit_lets_the_follow_up_run(tmp_path):
+    d, live, per_day = day_short_followup(tmp_path)
+    assert hitl.send_followup(d, QUESTION, model_factory=live(), live=True).pending.point == hitl.BUDGET
+    # the remainder is no cap on a day raise
+    done = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert done.reply == ANSWER
+    run = hitl.load_run(d)
+    assert run["budget_day_limit_usd"] == pytest.approx(per_day + 50)
+    assert run["settings"]["budget"]["per_day_usd"] == per_day  # the settings snapshot does not change
+    assert BS.per_day_usd(run) == pytest.approx(per_day + 50)
+    ext = run["budget_extensions"][-1]
+    assert ext["binds"] == "day" and ext["add_usd"] == 50
+
+
+def test_a_short_day_with_nobody_to_ask_skips_the_call_instead_of_wrapping_up(tmp_path):
+    d, live, _ = day_short_followup(tmp_path, auto_approve=True)
+    assert hitl.load_run(d)["budget_stop"] is False
+    before, calls = rating(d), live_calls(tmp_path)
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.status == "submitted" and out.followup_note == UNANSWERED_NOTE
+    assert live_calls(tmp_path) == calls and rating(d) == before
+
+
+def test_the_day_case_is_asked_only_in_a_follow_up_of_an_accepted_report():
+    est = B.CallEstimate("claude-opus-5-5", 1000, 1000, 0.03)
+    log = B.DailySpendLog()
+    led = B.BudgetLedger(5.0, reserve_for_report_usd=0.5, spend_log=log, per_day_usd=0.002, task_id="t")
+    mw = B.BudgetMiddleware(led.root, fit_max_tokens=False)
+    assert mw._budget_low_locked(est, led.root) is None
+    mw.skip_call_when_low = True
+    low = mw._budget_low_locked(est, led.root)
+    assert low.binds == "day" and low.per_day_usd == 0.002
+    assert led.raise_day_limit(7.0) == 7.0 and led.raise_day_limit(1.0) == 7.0
+
+
+def test_a_day_raise_holds_only_on_the_day_it_was_given():
+    run = {"settings": {"budget": {"per_day_usd": 2.0}}}
+    BS.apply_budget_review(run, {"decision": BS.EXTENDED, "binds": "day", "new_day_limit_usd": 9.0, "add_usd": 7.0})
+    today = run["budget_day_limit_day"]
+    assert BS.per_day_usd(run) == 9.0 and BS.day_limit_raise(run, today) == 9.0
+    assert BS.day_limit_raise(run, "1999-01-01") == 0.0
+    run["budget_day_limit_day"] = "1999-01-01"  # given on an earlier day
+    assert BS.per_day_usd(run) == 2.0
+
+
+def test_the_day_card_is_titled_for_the_day(tmp_path):
+    d, live, _ = day_short_followup(tmp_path)
+    assert hitl.send_followup(d, QUESTION, model_factory=live(), live=True).pending.point == hitl.BUDGET
+    assert hitl.load_run(d)["pending"]["card"]["title"] == "Дневной лимит заканчивается"
+
+
+def _stored_answer(monkeypatch, edited_args):
+    import langgraph.types
+
+    monkeypatch.setattr(langgraph.types, "interrupt", lambda value: {"decisions": [
+        {"type": "edit", "edited_action": {"name": "budget", "args": edited_args}}]})
+
+
+@pytest.mark.parametrize("asked, stored, expected", [
+    ("task", {"add_usd": 5, "new_day_limit_usd": 9.0}, ("day", 9.0)),  # day first, task after
+    ("day", {"add_usd": 5, "new_limit_usd": 6.0}, ("task", 6.0)),      # task first, day after
+])
+def test_a_resumed_answer_of_the_other_kind_is_applied_as_what_it_is(monkeypatch, asked, stored, expected):
+    """The re-run node's interrupt() returns the stored answer of the EARLIER question."""
+    _stored_answer(monkeypatch, stored)
+    low = B.BudgetLow(spent_usd=1.0, limit_usd=1.002, available_usd=0.001, reserve_usd=0.0001, day_left_usd=0.0005,
+                      binds=asked, per_day_usd=2.0 if asked == "day" else None)
+    assert BS.request_budget_extension(low) == expected
+
+
+def test_the_middleware_applies_the_kind_of_the_answer_not_of_the_question():
+    est = B.CallEstimate("claude-opus-5-5", 1000, 1000, 0.03)
+    led = B.BudgetLedger(0.05, reserve_for_report_usd=0.04, spend_log=B.DailySpendLog(), per_day_usd=0.002, task_id="t")
+    mw = B.BudgetMiddleware(led.root, fit_max_tokens=False)
+    mw.skip_call_when_low = True
+    mw.request_budget_extension = lambda low: ("task", 9.0)  # the question was about the day
+    mw._ask_for_budget(est, led.root)
+    assert led.root.limit == 9.0 and led.per_day_usd == 0.002
+    mw.request_budget_extension = lambda low: ("day", 7.0)
+    mw._ask_for_budget(est, led.root)
+    assert led.per_day_usd == 7.0
+
+
+def test_a_declined_day_card_is_recorded_as_a_day_card_and_reaches_progress(tmp_path):
+    from tfl_deep_agent.progress import ProgressEmitter
+
+    low = B.BudgetLow(spent_usd=1.0, limit_usd=2.0, available_usd=0.001, reserve_usd=0.0, day_left_usd=0.0005,
+                      binds="day", per_day_usd=2.0)
+    action = BS.budget_request(low)["action_requests"][0]
+    _, review = BS.budget_decision_response(action, hitl.Decision("approve"))
+    assert review["decision"] == BS.DECLINED and review["binds"] == "day"
+    pe = ProgressEmitter(tmp_path)
+    pe.hitl_decision({**review, "new_day_limit_usd": 9.0})
+    event = json.loads((tmp_path / "progress.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert event["binds"] == "day" and event["new_day_limit_usd"] == 9.0
+    task = B.BudgetLow(spent_usd=1.0, limit_usd=2.0, available_usd=0.001, reserve_usd=0.0, day_left_usd=5.0)
+    _, review = BS.budget_decision_response(BS.budget_request(task)["action_requests"][0], hitl.Decision("approve"))
+    assert "binds" not in review
+
+
+def test_both_limits_short_the_money_of_two_answers_lets_the_same_message_run(tmp_path):
+    """The task limit and the day's remainder are both short: one question per kind, and
+    the SAME message gets its answer once both are raised."""
+    d, live, per_day = day_short_followup(tmp_path)
+    run = hitl.load_run(d)
+    run["settings"]["budget"].update({"per_task_usd": spent(d) + REFUSED, "reserve_for_report_usd": REFUSED * 0.99})
+    hitl.save_run(d, run)
+    calls = live_calls(tmp_path)
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.awaiting and out.pending.point == hitl.BUDGET
+    first = out.pending.request["action_requests"][0]["args"].get("binds")
+    out = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert out.awaiting and out.pending.point == hitl.BUDGET, "the other kind is asked next"
+    assert out.pending.request["action_requests"][0]["args"].get("binds") != first
+    assert live_calls(tmp_path) == calls
+    out = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert not out.awaiting and out.reply == ANSWER
+    assert live_calls(tmp_path) == calls + 1
+    run = hitl.load_run(d)
+    assert {e.get("binds", "task") for e in run["budget_extensions"][-2:]} == {"day", "task"}
+
+
+def test_both_limits_short_with_the_task_remainder_smaller_still_asks_the_day_first(tmp_path):
+    """own (task) < day remainder, both short for the call: the day is asked first, so the
+    task card that follows is capped by the raised day and the SAME message gets its answer."""
+    d, live, per_day = day_short_followup(tmp_path)
+    run = hitl.load_run(d)
+    run["settings"]["budget"].update({
+        "per_day_usd": per_day + 0.0015, "per_task_usd": spent(d) + REFUSED, "reserve_for_report_usd": REFUSED * 0.99})
+    hitl.save_run(d, run)
+    calls = live_calls(tmp_path)
+    out = hitl.send_followup(d, QUESTION, model_factory=live(), live=True)
+    assert out.awaiting and out.pending.point == hitl.BUDGET
+    assert out.pending.request["action_requests"][0]["args"].get("binds") == "day"
+    out = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert out.awaiting and out.pending.request["action_requests"][0]["args"].get("binds") in (None, "task")
+    out = hitl.resume_run(d, hitl.parse_decision("edit", {"add_usd": 50}), model_factory=live(), live=True)
+    assert not out.awaiting and out.reply == ANSWER
+    assert live_calls(tmp_path) == calls + 1

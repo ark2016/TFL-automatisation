@@ -228,6 +228,15 @@ Proved generic helpers (any alphabet `α`), namespace `TflLean`, re-exported by
   `TflLean.not_isContextFree_of_not_cfPumping (h : ¬ TflLean.CFPumping L) : ¬ L.IsContextFree`;
   `TflLean.flatten_replicate_zero (v) : (List.replicate 0 v).flatten = []`,
   `TflLean.flatten_replicate_two (v) : (List.replicate 2 v).flatten = v ++ v`.
+- Intersection method: `TflLean.not_isRegular_of_inf_isRegular (hR : R.IsRegular)
+  (h : ¬ (L ⊓ R).IsRegular) : ¬ L.IsRegular`, with `TflLean.not_isRegular_anbn (hab : a ≠ b) :
+  ¬ Language.IsRegular {w | ∃ n : ℕ, w = List.replicate n a ++ List.replicate n b}` as the usual
+  target and regular filters `TflLean.isRegular_replicate_append_replicate (hab : a ≠ b)`
+  (`{w | ∃ i j : ℕ, w = List.replicate i a ++ List.replicate j b}`, i.e. `a*b*`),
+  `TflLean.isRegular_length_mod (m r) (hm : 0 < m)` (`{w | w.length % m = r}`),
+  `TflLean.isRegular_count_mod (a) (m r) (hm : 0 < m)` (`{w | w.count a % m = r}`). Mathlib's
+  `h.compl`, `h.inf h'`, `h.add h'` close `IsRegular` under complement, `⊓`, `+` (union).
+  Compiled reference: `Examples/AiBjNeq_NotRegular.lean` (`{aⁱbʲ | i ≠ j}`: `Lᶜ ⊓ a*b*` is `{aⁿbⁿ}`).
 
 ## Worked examples
 

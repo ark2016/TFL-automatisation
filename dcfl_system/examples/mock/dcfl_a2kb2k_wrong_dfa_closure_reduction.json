@@ -1,0 +1,43 @@
+{
+  "agent_name": "closure_reduction",
+  "status": "success",
+  "verdict": "dcfl",
+  "proof_sketch": {
+    "kind": "closure_reduction",
+    "operation": "reg_intersection",
+    "direction": "constructive",
+    "source_language": "S = {aⁿbⁿ | n >= 1} — известный DCFL",
+    "transformation": "R = a⁺b⁺; L = S ∩ R",
+    "result_argument": "Утверждается S ∩ R = L; DCFL замкнут относительно пересечения с регулярным языком, значит L — DCFL.",
+    "artifact": {
+      "source": {
+        "alphabet": ["a", "b"],
+        "pattern": "{a^n b^n | n >= 1}",
+        "grammar": null,
+        "dpda": null
+      },
+      "regular": {
+        "dfa": {
+          "states": ["start", "in_a", "in_b"],
+          "alphabet": ["a", "b"],
+          "start": "start",
+          "accept": ["in_b"],
+          "transitions": [
+            {"from": "start", "read": "a", "to": "in_a"},
+            {"from": "in_a", "read": "a", "to": "in_a"},
+            {"from": "in_a", "read": "b", "to": "in_b"},
+            {"from": "in_b", "read": "b", "to": "in_b"}
+          ]
+        },
+        "regex": null
+      },
+      "homomorphism": null
+    }
+  },
+  "evidence": [
+    "Пример ошибочного сведения для проверки артефакта: ДКА задаёт R = a⁺b⁺ без условия чётности",
+    "На самом деле S ∩ a⁺b⁺ = S ≠ L: слово ab ∈ S ∩ R, но ab ∉ L — верификатор должен опровергнуть артефакт симуляцией"
+  ],
+  "confidence": 0.9,
+  "errors": []
+}

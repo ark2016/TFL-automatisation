@@ -710,6 +710,13 @@ def test_hint_list_covers_the_new_transfer_lemmas():
         assert f"TflLean.{name}" in orch._LEAN_AVAILABLE_LEMMAS, name
 
 
+def test_hint_list_covers_the_closure_lemmas():
+    for name in ("isContextFree_inf_isRegular", "not_isContextFree_of_inf_isRegular",
+                 "isContextFree_add", "isContextFree_homomorphicImage", "isContextFree_anbn_mul",
+                 "not_isContextFree_pow2", "isRegular_length_mod"):
+        assert f"TflLean.{name}" in orch._LEAN_AVAILABLE_LEMMAS, name
+
+
 def test_hint_lemmas_appear_in_the_prompt():
     prompt = PROMPT.read_text(encoding="utf-8")
     for name in orch._LEAN_AVAILABLE_LEMMAS:
@@ -727,9 +734,12 @@ def test_mock_lean_formalizer_output_matches_the_contract():
 # Docker: the real compiler
 # ---------------------------------------------------------------------------
 
-docker = pytest.mark.skipif(
-    not is_docker_available(), reason="Docker with the tfl-lean4 image not available",
-)
+def docker(fn):
+    """Docker-backed case: the shared ``docker`` marker (needs TFL_LEAN_TESTS=1, see
+    the root conftest.py) plus the is-Docker-available guard."""
+    return pytest.mark.docker(pytest.mark.skipif(
+        not is_docker_available(), reason="Docker with the tfl-lean4 image not available",
+    )(fn))
 
 
 @docker

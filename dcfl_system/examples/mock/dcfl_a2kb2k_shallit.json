@@ -1,0 +1,12 @@
+{
+  "agent_name": "shallit",
+  "status": "not_applicable",
+  "verdict": null,
+  "proof_sketch": null,
+  "evidence": [
+    "Мёртвый класс D для L = {a²ᵏb²ᵏ | k >= 1} непуст (например, ba ∈ D) и, будучи замкнут относительно продолжения вправо, бесконечен — теорема 4.7.4 ничего не доказывает",
+    "L — DCFL (сведение closure_reduction к ∩ REG), техника prefix_continuation противоречия с замкнутостью DCFL тоже не даёт"
+  ],
+  "confidence": 0.0,
+  "errors": []
+}

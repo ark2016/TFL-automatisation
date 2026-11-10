@@ -111,11 +111,11 @@ tfl-deep --resume RUN_DIR --decision approve|edit|reject
 | `--comment C` | the comment for the agent; required with `reject` |
 | `--approve-rest` | only with `--decision approve`: approve this stop as your decision, then auto-approve every later review of the run (its review mode becomes `auto`, stored in `run.json`). The budget stop stays, and this flag is refused at it. |
 | `--message TEXT` | with `--resume` on a finished run: a follow-up in the same conversation, see [Follow-up messages](#follow-up-messages). `@FILE` reads the text from a file, `@@text` is the literal `@text`. Excludes `--decision`, `--payload`, `--comment`, `--approve-rest` and `--auto-approve`. |
-| `--abandon` | with `--resume`: drop a follow-up, whether its process was killed or it waits at a stop (a draft waiting for a decision is thrown away); the previous report, status and reviews come back. The process must be gone; this is not checked. It takes no other flag. |
+| `--abandon` | with `--resume`: drop a follow-up, whether its process was killed or it waits at a stop (a draft waiting for a decision is thrown away); the previous report, status and reviews come back. It is refused while the pid recorded in `followup_in_progress` is alive (a resume after a stop records its own pid); `--force` skips that check, for a pid reused by an unrelated process after a hard kill. It takes no other flag. |
 
 Exit codes: `0` the report was accepted, `1` the run ended without a report (a partial result is written: `incomplete`,
-`error` or `budget_exhausted`) or a follow-up failed (the previous report stays),
-`2` usage or setup error, `3` waiting for a human decision.
+`error` or `budget_exhausted`) or a follow-up failed (the previous report stays; the alias `EXIT_FOLLOWUP_FAILED = 1` in
+`cli.py` / `run_store.py`, same number as `EXIT_NO_REPORT`), `2` usage or setup error, `3` waiting for a human decision.
 
 **Live runs.** By the repository rules (root `CLAUDE.md`), a live run happens only on the user's explicit request,
 with a budget agreed beforehand. Use Haiku only (`TFL_MODEL_OVERRIDE=claude-haiku-5-5 ... --live`), state the estimated
@@ -206,7 +206,9 @@ How the decision is given:
   process. The budget, the call counters, the evidence ledger and the mock cursors are restored from the run
   directory.
 - `--review-mode auto` (or `--auto-approve`) answers every review with approve, see below. In review mode `auto` a budget stop on a terminal still exits with
-  code 3 and waits for `--resume`, because money is never auto-approved.
+  code 3 and waits for `--resume`, because money is never auto-approved. This is decided (user, 2026-11-10): in the
+  process that started the run in review mode `auto` there is no terminal dialog for money, only exit code 3; a later
+  `--resume` on a terminal does ask.
 
 ### Review modes
 
@@ -236,15 +238,28 @@ When the main agent's next call would enter wrap-up or be refused, the run stops
 ending. `--decision edit --payload '{"add_usd": 5}'` raises this run's limit (stored in `run.json`, the settings do not
 change; live, it must fit in the day's remainder) and is recorded as `extended`. `--decision approve` finishes with what
 is left, as wrap-up always did, and is recorded as `declined`. The report's run section lists the extensions. If the
-day's remainder is what binds, there is no stop, because more task budget would buy nothing. A subagent or a
+day's remainder is what binds in a run's own call, there is no stop (more task budget would buy nothing) and wrap-up
+applies; in a follow-up of an accepted report the stop is asked about the day limit instead (below). A subagent or a
 summarization never stops the run. The stop does not depend on `settings.hitl`: with both review points off it still
 asks; only `auto_approve` or `budget_stop=False` turns it off.
 
 Inside a follow-up on a run with an accepted report, declining makes no model call, and neither does a top-up too small
 for the call: nothing is charged, the report, status and revision stay, and the chat gets a note (`followup_unanswered`:
 "сообщение без ответа: бюджет не продлён, отчёт прежний"). Evidence already paid for stays in `evidence.jsonl`. A
-follow-up with no accepted report keeps wrap-up, which is how it gets its first report; so does a run with no budget
-stop.
+follow-up with no accepted report keeps wrap-up, which is how it gets its first report. A run with no budget stop
+(`--auto-approve`) is protected the same way (user, 2026-11-10): a follow-up of an accepted report with too little money
+makes no model call, so the accepted report and its label are never replaced by a truncated, auto-accepted one.
+
+When the DAY's remainder is what is short in such a follow-up (user, 2026-11-10, CA-015), the stop asks to raise the day
+limit (`per_day_usd`) instead of wrapping up: the card names the day (`binds: day`), `--decision edit --payload
+'{"add_usd": 5}'` raises this run's day limit (`budget_day_limit_usd` in `run.json`; the settings file does not change; no
+cap by the remainder), `approve` keeps the accepted report. With `--auto-approve` (no budget stop) the call is
+skipped, never wrapped up into a truncated report; with the stop on and nobody at the terminal the run waits (exit 3),
+as at the task stop. The day raise holds only on the day it was given (`budget_day_limit_day` in `run.json`). If one
+message meets both questions (the day, then the task, or the other way round), each answer is applied as the kind it
+carries; the other limit is then asked in the same node (a second `interrupt()`, at most one question per kind), and
+the same message gets its answer once both are raised. A live follow-up of an accepted report is not refused up front
+when the day's remainder is used up: the day question comes first (a run with no stop is still refused).
 
 `auto_approve` means review mode `auto` plus no budget stop, so only a run started with `--auto-approve` goes straight
 to the report. Review mode `auto` on its own, and `--approve-rest`, concern reviews and still stop for money.
@@ -269,20 +284,27 @@ what restores the run, including its review mode: `--approve-rest` given at a st
 follow-up fails or is cancelled, so the next one stops for a human. A budget extension stays, because it was granted. A record that outlives its process means that process did not finish: `--resume DIR --abandon`
 restores the run, and TFL Lab does it by itself and shows why in `followup.error` (`run.error` stays for failures of
 the run itself). A restore that fails keeps the record: TFL Lab closes the composer, and `followup.reason` gives the
-`--abandon` command.
+`--abandon` command, and the feed shows a button «Отменить продолжение» (`POST /api/deep/runs/<id>/abandon`, `followup.can_abandon`) that does the same while no process of the run is alive.
 
 A HITL 2 review record stores `report_digest`, the digest of the report it decided (for an edit, of the edited report).
 `human_review` in the result comes from the last review whose digest matches the current report, so a rejected draft
-followed by a text reply leaves "approved by a human" on the report that was approved. Older runs, with no digest, read
+followed by a text reply leaves "approved by a human" on the report that was approved. A rejection of a byte-identical
+report (same digest) is ignored while an approving review of that digest exists. Older runs, with no digest, read
 the last review.
+
+The report's «Условие» is always the original task (the text, or the intake transcription of a file, or the text the human
+corrected at HITL 1). A follow-up chat message that leads to a new IR review is not the task: it is stored in that
+review as `followup_text`, shown on the HITL 1 card (`followup_text`, «Clarification») and printed as «Уточнение»
+under «Условие» in `result.md` / `result.html` (`result["clarifications"]`, all of them in order). Stars of the task
+that stand outside `$...$` / `$$...$$` are escaped in the report, so `(ab)*` keeps them; math is left to KaTeX.
 
 An accepted report is rated by what existed when it was accepted. A new IR reviewed in a follow-up, or a tool run after
 the report, moves neither its trust, cap and verdict token nor its task. A report submitted after them binds to them as
 usual. The later results are still listed in the report's evidence appendix and in `evidence.jsonl`.
 
 `report_revision` in `run.json` tracks the report object, not the files: a text answer re-renders `result.*` with the
-run's money and keeps the revision. The chat events: `user_message`, `assistant_message` (`truncated: true` when the
-text was cut to the limit), `followup_abandoned` (`error` says why; `null`: it was cancelled). `segment_end` is the end
+run's money and keeps the revision. A follow-up bumps the revision only when the status, verdict, trust, confidence cap
+or `report_digest` changes; any other report-writing segment always bumps it. The chat events: `user_message`, `assistant_message`, `followup_abandoned` (`error` says why; `null`: it was cancelled). `segment_end` is the end
 signal of a segment; `done` is a final report state to display. A failed follow-up emits `followup_abandoned` with the
 restored status and the error, then `segment_end` with the restored status and no error, whichever way it failed.
 
@@ -497,7 +519,9 @@ the report on the right.
   button «Формально верифицировать (Lean)» under the last final card sends the preset `lean`; live, a second click
   confirms the spend.
 - **Budget card.** At the budget stop: spent / limit, +$1, +$5, an amount of your own, «Завершить с тем, что есть». A
-  live run's buttons block on today's remainder of the day log, and the click is the decision about money.
+  live run's buttons block on today's remainder of the day log (except when the card is about the day limit,
+  `binds: day`: there the +$ raises the limit and the remainder is no cap; its title is «Дневной лимит заканчивается»
+  and the last button «Оставить отчёт как есть»), and the click is the decision about money.
 - **Report.** The finished report (or the draft at the report stop) in a sandboxed iframe; another template can be
   viewed for an accepted report; closable, widenable; the raw log is behind "журнал".
 

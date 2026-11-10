@@ -11,29 +11,29 @@ statement would be ``verified``).
 
 Shared by ``agent_system``/``cfl_system``/``dcfl_system`` tests
 (``from agent_system.tests.lean_eval import ...``); needs the ``tfl-lean4``
-image, see ``agent_system.lib.type_check.is_docker_available``.
+image (or ``TFL_LEAN_RUNNER=local``), see ``agent_system.lib.type_check.is_docker_available``.
 """
 
 from __future__ import annotations
 
 import itertools
-import os
-import subprocess
 import tempfile
 from pathlib import Path
 
 from agent_system.lib.type_check import (
-    DOCKER_IMAGE,
-    LEAN_PROJECT_DIR,
+    START_ATTEMPTS,
     _parse_lean_json_messages,
-    _windows_docker_path,
+    run_lean_process,
 )
 
 
-def run_lean(text: str, timeout: int = 300) -> list[dict]:
-    """Run ``lake env lean --json`` on *text* in the image, return the parsed
-    messages (``severity`` / ``data`` / ``pos``). Raises on Docker failure to
-    start or timeout; Lean errors are ordinary ``severity == "error"``
+def run_lean(text: str, timeout: int = 300, attempts: int = START_ATTEMPTS) -> list[dict]:
+    """Run ``lake env lean --json`` on *text* through the shared runner
+    (``type_check.run_lean_process``: Docker image or ``TFL_LEAN_RUNNER=local``,
+    start failures retried) and return the parsed messages (``severity`` /
+    ``data`` / ``pos``). A container that never starts raises ``RuntimeError``
+    (``LeanStartError``) with Docker's stderr, so a Docker fault never reads as
+    "Lean printed nothing". Lean errors are ordinary ``severity == "error"``
     messages."""
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".lean", delete=False, encoding="utf-8", newline="\n"
@@ -41,22 +41,10 @@ def run_lean(text: str, timeout: int = 300) -> list[dict]:
         f.write(text)
         tmp = f.name
     try:
-        mount = _windows_docker_path(tmp) if os.name == "nt" else tmp
-        env = dict(os.environ)
-        env["MSYS_NO_PATHCONV"] = "1"
-        proc = subprocess.run(
-            [
-                "docker", "run", "--rm", "--memory=4g", "--cpus=2",
-                "-v", f"{mount}:/home/lean/check.lean:ro",
-                "-w", LEAN_PROJECT_DIR, DOCKER_IMAGE,
-                "timeout", str(timeout), "lake", "env", "lean", "--json",
-                "/home/lean/check.lean",
-            ],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout + 30, env=env,
-        )
-        return _parse_lean_json_messages(proc.stdout)
+        proc = run_lean_process(tmp, timeout, attempts=attempts)
     finally:
         Path(tmp).unlink(missing_ok=True)
+    return _parse_lean_json_messages(proc.stdout)
 
 
 def all_words(alphabet: list[str], max_len: int) -> list[str]:

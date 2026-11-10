@@ -1,6 +1,8 @@
 """Tests for Phase 3 (Lean 4 formalization)."""
 
 import unittest
+
+import pytest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,6 +55,8 @@ class TestTemplatesExist(unittest.TestCase):
 
 # ── templates compile (requires Docker) ─────────────────────────────────────
 
+@pytest.mark.docker
+
 @unittest.skipUnless(
     is_docker_available(),
     "Docker with tfl-lean4 image not available"
@@ -83,6 +87,8 @@ class TestTemplatesCompile(unittest.TestCase):
 # tfl-lean4 image) is available; when it is, this exercises the actual
 # `lake env lean` path used by check_lean() against a real Mathlib import,
 # not just the self-contained, Mathlib-free templates above.
+
+@pytest.mark.docker
 
 @unittest.skipUnless(
     is_docker_available(),
@@ -475,6 +481,8 @@ class TestComposeWithRealLeanIr(unittest.TestCase):
 # through the actual tfl-lean4 image -- skipped unless Docker + the image
 # are available, same guard as TestTemplatesCompile above.
 
+@pytest.mark.docker
+
 @unittest.skipUnless(
     is_docker_available(),
     "Docker with tfl-lean4 image not available"
@@ -496,6 +504,9 @@ class TestCheckLeanFileRealDockerHasSorry(unittest.TestCase):
         result = check_lean_file(text, timeout=120)
         self.assertEqual(result["status"], "has_sorry", f"result: {result}")
         self.assertEqual(result["errors"], [])
+
+
+@pytest.mark.docker
 
 
 @unittest.skipUnless(

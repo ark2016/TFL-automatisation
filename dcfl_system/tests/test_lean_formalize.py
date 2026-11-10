@@ -599,6 +599,8 @@ class TestConfigAndArtifacts:
 # Real Docker (skipped without Docker + the tfl-lean4 image)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.docker
+
 @pytest.mark.skipif(not is_docker_available(), reason="Docker with the tfl-lean4 image not available")
 class TestRealDocker:
     def test_anbncm_dcfl_statement_with_sorry_is_has_sorry(self):

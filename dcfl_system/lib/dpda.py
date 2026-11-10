@@ -620,3 +620,49 @@ def to_cfl_pda(dpda: dict) -> dict:
     if errors:
         raise DPDAFormatError("invalid PDA after conversion: " + "; ".join(errors))
     return pda
+
+
+# ---------------------------------------------------------------------------
+# (e) One preparation path for every caller that simulates a submitted dpda
+# ---------------------------------------------------------------------------
+
+def prepare_dpda(dpda: Any) -> tuple[dict | None, dict[str, Any], str]:
+    """Normalize, determinism-check and structurally validate a submitted
+    ``dpda`` the way docs/VERDICT_POLICY.md R2' prescribes, in that order:
+    ``normalize_epsilon_accept_sinks`` -> ``check_determinism`` ->
+    ``to_cfl_pda`` (structure only). Shared by stack_strategy's ``dpda``
+    check and closure_reduction's ``artifact.source.dpda``
+    (``oracle_verifier``), so both judge an automaton identically.
+
+    Returns ``(normalized, details, issue)``. ``normalized`` is the
+    automaton to simulate with ``dpda_run``, or ``None`` when the dpda is
+    rejected -- not an object, not deterministic, or structurally invalid;
+    each of those is a definite defect of the artifact (``refuted`` for the
+    caller), and ``issue`` names it. ``details`` records what the
+    normalization rewrote (``normalization``), the resulting
+    ``accept_configs``, and ``determinism`` (``"verified"`` / ``"violated"``,
+    with ``conflicts`` on a violation; ``structure: "invalid"`` when the
+    conversion fails).
+    """
+    if not isinstance(dpda, dict):
+        return None, {}, "dpda must be an object"
+
+    normalized, notes = normalize_epsilon_accept_sinks(dpda)
+    details: dict[str, Any] = {}
+    if notes:
+        details["normalization"] = notes
+    if normalized.get("accept_configs"):
+        details["accept_configs"] = normalized["accept_configs"]
+
+    conflicts = check_determinism(normalized)
+    if conflicts:
+        details.update({"determinism": "violated", "conflicts": conflicts})
+        return None, details, "dpda is not deterministic: " + "; ".join(conflicts)
+
+    details["determinism"] = "verified"
+    try:
+        to_cfl_pda(normalized)
+    except DPDAFormatError as exc:
+        details["structure"] = "invalid"
+        return None, details, f"dpda is structurally invalid: {exc}"
+    return normalized, details, ""

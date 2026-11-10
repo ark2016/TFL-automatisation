@@ -562,7 +562,13 @@ def test_build_scripts_send_the_dockerfile_without_context():
 # ---------------------------------------------------------------------------
 
 _STATUS = D.sandbox_status()
-needs_docker = pytest.mark.skipif(not _STATUS[0], reason=f"Docker sandbox unavailable: {_STATUS[1]}")
+_needs_docker_guard = pytest.mark.skipif(not _STATUS[0], reason=f"Docker sandbox unavailable: {_STATUS[1]}")
+
+
+def needs_docker(fn):
+    """Real-container case: the shared ``docker`` marker (needs TFL_LEAN_TESTS=1, see
+    the root conftest.py) plus the sandbox-available guard."""
+    return pytest.mark.docker(_needs_docker_guard(fn))
 
 
 def _start_or_skip(sb: DockerSandbox) -> DockerSandbox:

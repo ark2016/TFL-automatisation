@@ -15,6 +15,14 @@ not money, so they still ask, and neither of the two switches is taken at this s
 (:func:`review_switch_refusal`). A run with no human to ask (review mode ``auto`` on a
 terminal with no dialog) waits here too: the CLI exits 3.
 
+A follow-up on a run that holds an accepted report, when the DAY's remainder is what is
+short (user decision 2026-11-10, CA-015), asks the same question about the day limit
+(``binds`` ``day`` on the card): ``edit`` raises ``per_day_usd`` of this run by ``add_usd``
+(``budget_day_limit_usd`` in ``run.json``; the settings file is not touched), ``approve``
+leaves the report, and the raise holds only on the day it was given. With ``--auto-approve``
+(no budget stop) the call is skipped (below), never wrapped up; with the stop on and no
+dialog the run waits (exit 3) as at the task stop.
+
 A follow-up on a run that holds an accepted report does not spend money the human did
 not give: declining, or a top-up too small for the call, ends the message without a
 model call (:func:`declining_skips_the_call`). The report stays. A follow-up with no
@@ -40,38 +48,60 @@ if TYPE_CHECKING:
 BUDGET = "budget"
 #: what ``resume_value`` records for a decision at this stop
 EXTENDED, DECLINED = "extended", "declined"
+#: ``BudgetLow.binds`` / the card's ``binds`` when the day's limit is what is short
+DAY = "day"
 
 
-def usd(value: Any) -> str:
+def format_usd(value: Any) -> str:
     x = float(value or 0.0)
     return f"${x:.2f}" if abs(x) >= 0.1 else f"${x:.4f}"
 
 
 def budget_request(low: BudgetLow) -> dict[str, Any]:
     """The interrupt value of the budget stop."""
-    args = {k: (None if v is None else round(float(v), 6)) for k, v in dataclasses.asdict(low).items()}
-    day = "" if args["day_left_usd"] is None else f" На сегодня осталось {usd(args['day_left_usd'])}."
-    text = (f"Бюджет задачи заканчивается: потрачено {usd(args['spent_usd'])} из {usd(args['limit_usd'])}, "
-            f"доступно {usd(args['available_usd'])}.{day} Добавить денег или завершить с тем, что есть?")
+    args = {k: (None if v is None else round(float(v), 6)) for k, v in dataclasses.asdict(low).items()
+            if k not in ("binds", "per_day_usd")}
+    if low.binds == DAY:
+        args.update(binds=DAY, per_day_usd=round(float(low.per_day_usd or 0.0), 6))
+        text = (f"Дневной лимит заканчивается: сегодня потрачено {format_usd(args['per_day_usd'] - args['day_left_usd'])} "
+                f"из {format_usd(args['per_day_usd'])}, осталось {format_usd(args['day_left_usd'])}. "
+                "Сообщение без денег не будет отвечено, принятый отчёт останется. "
+                "Поднять дневной лимит на сумму или оставить отчёт как есть?")
+        return {"action_requests": [{"name": BUDGET, "args": args, "description": text}],
+                "review_configs": [{"action_name": BUDGET, "allowed_decisions": ["approve", "edit"]}]}
+    day = "" if args["day_left_usd"] is None else f" На сегодня осталось {format_usd(args['day_left_usd'])}."
+    text = (f"Бюджет задачи заканчивается: потрачено {format_usd(args['spent_usd'])} из {format_usd(args['limit_usd'])}, "
+            f"доступно {format_usd(args['available_usd'])}.{day} Добавить денег или завершить с тем, что есть?")
     return {"action_requests": [{"name": BUDGET, "args": args, "description": text}],
             "review_configs": [{"action_name": BUDGET, "allowed_decisions": ["approve", "edit"]}]}
 
 
-def request_budget_extension(low: BudgetLow) -> float | None:
+def request_budget_extension(low: BudgetLow) -> tuple[str, float] | None:
     """``BudgetMiddleware.request_budget_extension`` of a run with the budget stop: a
-    LangGraph interrupt. Returns the new absolute limit, or ``None`` (finish).
+    LangGraph interrupt. Returns ``(kind, new absolute limit)`` with ``kind`` ``"day"`` or
+    ``"task"``, or ``None`` (finish).
+
+    The kind is the one the decision carries, not ``low.binds``: when a node asks twice
+    (one answer for the day, then a question about the task, or the other way round) the
+    re-run node gets the stored answer of the EARLIER question back from ``interrupt``.
+    Applying that raise again is harmless (limits only grow). At most one question per kind
+    is asked in one node execution.
 
     A resumed node runs again from its start. The resume has raised the limit in
     ``run.json`` by then, so the condition is false and this is not reached; the
     same process's dialog applies it to the ledger just the same. If the new limit is
-    still too low, ``interrupt`` returns this same answer and the call goes on to
-    wrap-up: no second question in one node execution."""
+    still too low, ``interrupt`` returns this same answer; the call then goes on to wrap-up,
+    or, in a follow-up of an accepted report (``skip_call_when_low``), is skipped with
+    ``UNANSWERED_REPLY``."""
     from langgraph.types import interrupt
 
     decision = first_decision(interrupt(budget_request(low)))
     if decision.get("type") != "edit":
         return None
-    return float(get_field(decision.get("edited_action"), "args")["new_limit_usd"])
+    args = get_field(decision.get("edited_action"), "args")
+    if args.get("new_day_limit_usd") is not None:
+        return DAY, float(args["new_day_limit_usd"])
+    return "task", float(args["new_limit_usd"])
 
 
 def budget_stop_on(run: Mapping[str, Any]) -> bool:
@@ -90,10 +120,11 @@ def budget_stop_enabled(run: Mapping[str, Any]) -> bool:
 
 def declining_skips_the_call(run: Mapping[str, Any]) -> bool:
     """Whether a main-agent call the money does not cover ends this segment with no
-    model call, instead of wrap-up: a follow-up of a run with a budget stop that holds
-    an accepted report. A run with no budget stop never asked anyone, so it keeps wrap-up."""
+    model call, instead of wrap-up: a follow-up of a run that holds an accepted report,
+    whether or not the run has a budget stop (user decision 2026-11-10, also for
+    ``--auto-approve``): the accepted report is never replaced by a truncated one."""
     record = run.get("followup_in_progress")
-    return bool(record) and budget_stop_on(run) and record.get("previous_status") == "submitted"
+    return bool(record) and record.get("previous_status") == "submitted"
 
 
 def review_switch_refusal(point: str | None, switch: str = "approve_rest") -> str | None:
@@ -104,7 +135,7 @@ def review_switch_refusal(point: str | None, switch: str = "approve_rest") -> st
     return None
 
 
-def budget_add(args: Mapping[str, Any] | None) -> float:
+def parse_add_usd(args: Mapping[str, Any] | None) -> float:
     """The dollars of an ``edit`` decision; :class:`DecisionError` when they do not fit."""
     fields = dict(args or {})
     unknown = sorted(set(fields) - {"add_usd"})
@@ -122,7 +153,7 @@ def budget_add(args: Mapping[str, Any] | None) -> float:
     return add
 
 
-def budget_resume(action: Any, decision: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+def budget_decision_response(action: Any, decision: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """``(HITLResponse, review record)`` of a decision at the budget stop."""
     args = dict(get_field(action, "args") or {})
     limit = float(args.get("limit_usd") or 0.0)
@@ -132,9 +163,16 @@ def budget_resume(action: Any, decision: Any) -> tuple[dict[str, Any], dict[str,
         raise DecisionError("'reject' is not allowed at the budget stop: add money (edit with add_usd) "
                             "or finish with what is left (approve)")
     if decision.type == "approve":
-        return {"decisions": [{"type": "approve"}]}, {**review, "decision": DECLINED, "add_usd": 0.0,
+        binds = {"binds": DAY} if args.get("binds") == DAY else {}  # the card that was declined
+        return {"decisions": [{"type": "approve"}]}, {**review, **binds, "decision": DECLINED, "add_usd": 0.0,
                                                       "new_limit_usd": limit}
-    add = budget_add(decision.args)
+    add = parse_add_usd(decision.args)
+    if args.get("binds") == DAY:  # the day limit is what is raised: the remainder is no cap
+        new_day = round(float(args.get("per_day_usd") or 0.0) + add, 6)
+        edited = {"name": BUDGET, "args": {**args, "add_usd": add, "new_day_limit_usd": new_day}}
+        return {"decisions": [{"type": "edit", "edited_action": edited}]}, {
+            **review, "decision": EXTENDED, "binds": DAY, "edited_fields": ["add_usd"], "add_usd": add,
+            "new_day_limit_usd": new_day}
     day = args.get("day_left_usd")
     if day is not None and add > float(day) + 1e-9:
         raise DecisionError(f"budget stop: ${add:.2f} does not fit in the day's remainder "
@@ -148,7 +186,15 @@ def budget_resume(action: Any, decision: Any) -> tuple[dict[str, Any], dict[str,
 def apply_budget_review(run: dict[str, Any], review: Mapping[str, Any], budget: Any = None) -> None:
     """Store a decision of the budget stop in ``run.json``; ``budget``: the ledger of
     the running segment (a new process builds it from the run)."""
-    if review.get("decision") == EXTENDED:
+    if review.get("decision") == EXTENDED and review.get("binds") == DAY:
+        new_day = float(review["new_day_limit_usd"])
+        run["budget_day_limit_usd"] = max(day_limit_raise(run), new_day)
+        run["budget_day_limit_day"] = _today()  # the raise is for the day it was given
+        run.setdefault("budget_extensions", []).append(
+            {k: review.get(k) for k in ("binds", "add_usd", "new_day_limit_usd", "at", "source", "reviewer")})
+        if budget is not None:
+            budget.raise_day_limit(new_day)
+    elif review.get("decision") == EXTENDED:
         new_limit = float(review["new_limit_usd"])
         run["budget_limit_usd"] = max(float(run.get("budget_limit_usd") or 0.0), new_limit)
         run.setdefault("budget_extensions", []).append(
@@ -159,10 +205,29 @@ def apply_budget_review(run: dict[str, Any], review: Mapping[str, Any], budget: 
         run["budget_declined"] = True
 
 
+def _today() -> str:
+    from .middleware.budget import DailySpendLog
+
+    return DailySpendLog().today()
+
+
+def day_limit_raise(run: Mapping[str, Any], today: str | None = None) -> float:
+    """The day limit a human gave this run at the stop (``budget_day_limit_usd``), but
+    only on the day it was given (``budget_day_limit_day``): the raise answers one day's
+    shortage and is not carried to later days. 0.0 when none applies."""
+    value = float(run.get("budget_day_limit_usd") or 0.0)
+    if value <= 0.0 or run.get("budget_day_limit_day") != (today or _today()):
+        return 0.0
+    return value
+
+
 def per_day_usd(run: Mapping[str, Any]) -> float | None:
-    """The run's own ``budget.per_day_usd``; ``None`` means no check against the day."""
+    """The run's own ``budget.per_day_usd`` (raised by a day extension, ``budget_day_limit_usd``);
+    ``None`` means no check against the day."""
     value = ((run.get("settings") or {}).get("budget") or {}).get("per_day_usd")
-    return None if value is None else float(value)
+    if value is None:
+        return None
+    return max(float(value), day_limit_raise(run))
 
 
 def with_todays_day_left(run: Mapping[str, Any], request: Mapping[str, Any], *,
@@ -183,15 +248,19 @@ def with_todays_day_left(run: Mapping[str, Any], request: Mapping[str, Any], *,
 
 def budget_summary(args: Mapping[str, Any]) -> list[str]:
     """The lines of the stop's short card."""
-    out = [f"Потрачено {usd(args.get('spent_usd'))} из {usd(args.get('limit_usd'))} · "
-           f"доступно {usd(args.get('available_usd'))}"]
+    if args.get("binds") == DAY:
+        spent = float(args.get("per_day_usd") or 0.0) - float(args.get("day_left_usd") or 0.0)
+        return [f"Сегодня потрачено {format_usd(spent)} из {format_usd(args.get('per_day_usd'))}",
+                f"Осталось на сегодня {format_usd(args.get('day_left_usd'))}"]
+    out = [f"Потрачено {format_usd(args.get('spent_usd'))} из {format_usd(args.get('limit_usd'))} · "
+           f"доступно {format_usd(args.get('available_usd'))}"]
     if args.get("day_left_usd") is not None:
-        out.append(f"На сегодня осталось {usd(args['day_left_usd'])}")
+        out.append(f"На сегодня осталось {format_usd(args['day_left_usd'])}")
     return out
 
 
 __all__ = [
-    "BUDGET", "DECLINED", "EXTENDED", "apply_budget_review", "budget_add", "budget_request", "budget_resume",
-    "budget_stop_enabled", "budget_stop_on", "budget_summary", "declining_skips_the_call", "per_day_usd", "request_budget_extension", "review_switch_refusal", "usd",
+    "BUDGET", "DAY", "DECLINED", "EXTENDED", "apply_budget_review", "day_limit_raise", "parse_add_usd", "budget_request", "budget_decision_response",
+    "budget_stop_enabled", "budget_stop_on", "budget_summary", "declining_skips_the_call", "per_day_usd", "request_budget_extension", "review_switch_refusal", "format_usd",
     "with_todays_day_left",
 ]

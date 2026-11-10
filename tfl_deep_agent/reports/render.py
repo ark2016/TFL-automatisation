@@ -85,6 +85,7 @@ __all__ = [
     "normalize_review",
     "render_report",
     "safe_block",
+    "safe_task_text",
     "safe_text",
     "template_placeholders",
     "trust_label",
@@ -139,7 +140,7 @@ PLACEHOLDERS: frozenset[str] = frozenset({
     "lemmas_section", "claims_section", "steps", "key_steps", "construction_section", "conclusion",
     "summary", "lean_section", "lean_status", "lean_statement", "lean_proof_body", "lean_note",
     "partial_banner", "established", "refuted", "subagents_section", "todos_section",
-    "last_message_section",
+    "last_message_section", "clarification_section",
 })
 
 #: The heading of the code-generated appendix (evidence, gate notes, models, costs).
@@ -296,6 +297,34 @@ def safe_text(text: Any, *, max_chars: int | None = None) -> str:
     if max_chars is not None and len(s) > max_chars:
         s = s[: max_chars - 1].rstrip() + "…"
     return "\n".join(_BLOCK_START_RE.sub(r"\1\\\2", line) for line in s.split("\n"))
+
+
+_MATH_SPAN_RE = re.compile(
+    r"\$\$.+?\$\$|\$[^$\n]{1,200}\$"      # $$...$$ / $...$
+    r"|\\\(.+?\\\)|\\\[.+?\\\]"           # \(...\) / \[...\]
+    r"|``.+?``|`[^`\n]+`",                # code spans
+    re.S,
+)
+_STAR_RE = re.compile(r"(?<!\\)\*")
+
+
+def escape_stars_outside_math(text: str) -> str:
+    r"""``*`` -> ``\*`` outside ``$...$`` / ``$$...$$`` spans, so a regex like ``(ab)* ... {a,b}*``
+    keeps its stars in the rendered report (the renderer reads ``*`` as emphasis). KaTeX math
+    is left untouched; an already escaped ``\*`` stays as it is."""
+    out: list[str] = []
+    pos = 0
+    for m in _MATH_SPAN_RE.finditer(text):
+        out.append(_STAR_RE.sub(r"\\*", text[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(_STAR_RE.sub(r"\\*", text[pos:]))
+    return "".join(out)
+
+
+def safe_task_text(text: Any, *, max_chars: int | None = None) -> str:
+    """:func:`safe_text` for the task: its stars outside math are escaped too."""
+    return escape_stars_outside_math(safe_text(text, max_chars=max_chars))
 
 
 _FENCE_LANG_RE = re.compile(r"[^A-Za-z0-9_+-]")
@@ -823,6 +852,17 @@ def _review_short(ctx: _Ctx) -> str:
 _INTAKE_RE = re.compile(r"^\s*\\?##\s*Tasks\s*$(?P<tasks>.*?)^\s*\\?##\s*Uncertain readings\s*$(?P<unsure>.*)\Z",
                         re.M | re.S)
 _INTAKE_NOTE_RE = re.compile(r"^\(.*\bin the file\b.*\)$", re.M)
+
+
+def _clarification_section(clarifications: Any) -> str:
+    """The «Уточнение» block: the human's follow-up message(s) that led to a new IR review, in
+    order, apart from the original task. Empty when there are none."""
+    items = [safe_task_text(c) for c in (clarifications or []) if str(c or "").strip()]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return "## Уточнение\n\n" + items[0]
+    return "## Уточнение\n\n" + "\n\n".join(f"**{i}.** {t}" for i, t in enumerate(items, 1))
 
 
 def _task_statement(task: str) -> str:
@@ -1475,8 +1515,10 @@ def _evidence_block(ctx: _Ctx, claims_out: Sequence[Mapping[str, Any]],
     extensions = (b or {}).get("extensions") or []
     if extensions:
         out += ["", "**Бюджет добавлен:** " + "; ".join(
-            f"+{_money(e.get('add_usd') or 0.0)}, лимит {_money(e.get('new_limit_usd') or 0.0)} "
-            f"({e.get('reviewer') or 'человек'}, {e.get('at') or '?'})" for e in extensions) + "."]
+            f"+{_money(e.get('add_usd') or 0.0)}, "
+            + (f"дневной лимит {_money(e.get('new_day_limit_usd') or 0.0)} " if e.get("binds") == "day"
+               else f"лимит {_money(e.get('new_limit_usd') or 0.0)} ")
+            + f"({e.get('reviewer') or 'человек'}, {e.get('at') or '?'})" for e in extensions) + "."]
 
     out += ["", "<details><summary>Журнал вызовов, модели и расходы</summary>", ""]
     if ctx.evidence:
@@ -1855,7 +1897,8 @@ def render_report(
     lemmas_out: list[dict[str, Any]] = []
     lean_out: dict[str, Any] = {}
     values: dict[str, str] = dict.fromkeys(PLACEHOLDERS, "")
-    values.update(title=page_title.replace("\n", " "), task=safe_text(_task_statement(str(task))) or "—")
+    values.update(title=page_title.replace("\n", " "), task=safe_task_text(_task_statement(str(task))) or "—",
+                  clarification_section=_clarification_section(result.get("clarifications")))
     if report is None:
         vt = {"trust": "not_verified", "confidence_cap": _CAPS["not_verified"], "basis": [],
               "verdict_token": None, "verdict_gate": [], "source": "partial"}
@@ -1897,6 +1940,7 @@ def render_report(
             "template": tpl,
             "title": page_title,
             "task": str(task),
+            "clarifications": [str(c) for c in result.get("clarifications") or []],
             "human_review": review,
             "verdict": {"text": (report or {}).get("verdict", "не установлен"), **_jsonable(vt)},
             "claims": _jsonable(claims_out),

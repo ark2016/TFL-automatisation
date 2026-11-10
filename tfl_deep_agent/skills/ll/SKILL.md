@@ -255,7 +255,7 @@ How to run it:
 4. Route (B): no tool here checks inherent ambiguity, and the ambiguity of one **grammar** says
    nothing about the language (§1.5). A hand proof is a supporting step. The gate gives the language
    verdict no destructive basis, so the published verdict is `uncertain`.
-5. Route (A): when the not-DCFL step has a Lean statement (the `lean` skill, direction `non_dcfl`),
+5. Route (A): when the not-DCFL step has a Lean statement (the `lean-formalizer` subagent, direction `non_dcfl`),
    the `lean_check` result is `verified` for the step 'L is not DCFL', but the gate does not count it
    for an `ll` report. The published verdict stays `uncertain`. The step from not-DCFL to not-LL is
    §3.3 (A) itself.
