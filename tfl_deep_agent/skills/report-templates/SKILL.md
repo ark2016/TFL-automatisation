@@ -26,7 +26,7 @@ was obtained, not only "доказано, вот ссылка". The layout follo
 (`cfl_system/examples/live_outputs/task_w1bw2w3_ticket50_result.md`,
 `docs/examples/reg_grammar_SaSb_lean_proved/result.md`):
 
-1. title and «Условие» (the task as the human gave it);
+1. title and «Условие» (the task as the human gave it), then «Уточнение» when a follow-up message led to a new IR review (code; the follow-up texts in order, never in place of the task);
 2. «Ответ»: the verdict in words, the class, «Уверенность: N%» and the review line (code);
    a warning callout when the machine check is not complete (code);
 3. «Решение»: the idea (`hypothesis`) and the method, the lemmas used, the construction, the key

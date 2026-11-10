@@ -90,10 +90,11 @@ def budget_stop_enabled(run: Mapping[str, Any]) -> bool:
 
 def declining_skips_the_call(run: Mapping[str, Any]) -> bool:
     """Whether a main-agent call the money does not cover ends this segment with no
-    model call, instead of wrap-up: a follow-up of a run with a budget stop that holds
-    an accepted report. A run with no budget stop never asked anyone, so it keeps wrap-up."""
+    model call, instead of wrap-up: a follow-up of a run that holds an accepted report,
+    whether or not the run has a budget stop (user decision 2026-11-10, also for
+    ``--auto-approve``): the accepted report is never replaced by a truncated one."""
     record = run.get("followup_in_progress")
-    return bool(record) and budget_stop_on(run) and record.get("previous_status") == "submitted"
+    return bool(record) and record.get("previous_status") == "submitted"
 
 
 def review_switch_refusal(point: str | None, switch: str = "approve_rest") -> str | None:

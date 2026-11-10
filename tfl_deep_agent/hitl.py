@@ -102,6 +102,7 @@ from .run_store import (
     CHECKPOINT_FILE,
     DECISIONS,
     EXIT_AWAITING,
+    EXIT_FOLLOWUP_FAILED,
     EXIT_NO_REPORT,
     EXIT_SUBMITTED,
     FINAL_STATUSES,
@@ -287,16 +288,21 @@ def _is_task_message(msg: Any) -> bool:
         str(k).startswith("tfl_") for k in (getattr(msg, "additional_kwargs", None) or {}))
 
 
-def _first_human_text(messages: Sequence[Any], before: int | None = None) -> str:
-    """The task the human last stated (a follow-up may state a new one) before message
-    index ``before`` (default: all); else the first human message."""
+def _first_human_text(messages: Sequence[Any]) -> str:
+    """The task as the run started with it: the first human message that states a task. A
+    follow-up chat message never replaces it (:func:`_followup_text` keeps it apart)."""
+    return next((_text_of(m) for m in messages if _is_task_message(m)), "")
+
+
+def _followup_text(messages: Sequence[Any], before: int | None = None) -> str | None:
+    """The follow-up chat message that led to the review of the message at index ``before``:
+    the last task message before it, unless that is the run's first one. ``None`` otherwise."""
     msgs = list(messages)
-    head = msgs if before is None else msgs[:before]
-    for pool in (head, msgs):
-        tasks = [m for m in pool if _is_task_message(m)]
-        if tasks:
-            return _text_of(tasks[-1])
-    return ""
+    tasks = [m for m in (msgs if before is None else msgs[:before]) if _is_task_message(m)]
+    first = next((m for m in msgs if _is_task_message(m)), None)
+    if not tasks or tasks[-1] is first:
+        return None
+    return _text_of(tasks[-1])[:20000] or None
 
 
 def _subagent_answers(messages: Sequence[Any], calls: Mapping[str, Mapping[str, Any]],
@@ -464,9 +470,10 @@ def formalization_request(state: Mapping[str, Any], target: Any, *, evidence: An
         found = find_ir(answer, task_args=calls.get(target.tool_call_id), evidence=evidence,
                         call_id=target.tool_call_id)
     checks = ir_checks(found["class"], found["ir"])
+    at = next((i for i, m in enumerate(messages) if m is target), None)
     args = {
-        "task_text": _first_human_text(
-            messages, next((i for i, m in enumerate(messages) if m is target), None))[:20000],
+        "task_text": _first_human_text(messages)[:20000],
+        "followup_text": _followup_text(messages, at),
         "source": dict(source) if source else {"kind": "text"},
         "transcription": _text_of(intake[-1])[:20000] if intake else None,
         "trigger": trigger,
@@ -516,6 +523,8 @@ def formalization_card(args: Mapping[str, Any]) -> str:
         lines += ["### Transcription (intake)", "", md_escape(args["transcription"]), ""]
     else:
         lines += ["### Task text", "", md_escape(args.get("task_text") or "—"), ""]
+    if args.get("followup_text"):
+        lines += ["### Clarification (follow-up message)", "", md_escape(args["followup_text"]), ""]
     head = f"### IR (class {args.get('class') or '?'}"
     head += f", {args['ir_fingerprint']}" if args.get("ir_fingerprint") else ""
     head += ", valid)" if args.get("valid") else ", NOT valid)"
@@ -1078,7 +1087,9 @@ def resume_value(request: Mapping[str, Any], decision: Decision, *,
         if edited_args.get("transcription"):
             review["transcription"] = edited_args["transcription"]
         elif args0.get("task_text"):
-            review["task_text"] = args0["task_text"]  # the task this IR was built for (a follow-up may state a new one)
+            review["task_text"] = args0["task_text"]  # the original task this IR was built for
+        if args0.get("followup_text"):
+            review["followup_text"] = args0["followup_text"]  # the follow-up message that led to this review
         if edited_args.get("ir") is not None:
             from .tools.ir import ir_fingerprint
 
@@ -1766,7 +1777,7 @@ def _finish_segment(d: Path, run: dict[str, Any], segment: dict[str, Any], *, st
         segment["status"] = "error"
         save_run(d, run)
         followup_mod.emit_abandoned(progress, str(run["status"]), error)
-        return RunOutcome(d, run["run_id"], str(run["status"]), EXIT_NO_REPORT, read_result(d),
+        return RunOutcome(d, run["run_id"], str(run["status"]), EXIT_FOLLOWUP_FAILED, read_result(d),
                           paths={"run": d / RUN_FILE}, followup_error=error)
     result = final_result(d, run, state, budget, evidence, error=error)
     _note_accepted_report(run, state, evidence)
@@ -1829,17 +1840,23 @@ def _ask(dialog: Dialog | None, info: PendingInfo, *, evidence: Any = None) -> D
         return decision
 
 
+_ACCEPTING = ("approved", "edited", "auto_approved")
+
+
 def review_summary(run: Mapping[str, Any], report: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
     """``(human_review label, review mapping for the renderer)`` from the run's HITL 2
     history. ``report``: the accepted report; the last review holding its digest speaks for
-    it, so a draft rejected later does not. Reviews with no digest (a run written before
+    it, so a draft rejected later does not; a rejection of a byte-identical report is ignored
+    when an approving review of the same digest exists. Reviews with no digest (a run written before
     the key) count when no review holds it; reviews of other reports only: it was not
     reviewed. With no accepted report, the last review says what became of the last draft."""
     reports = [r for r in run.get("reviews") or [] if r.get("point") == REPORT]
     digest = followup_mod.report_digest(report)
     if digest and reports:
-        reports = ([r for r in reports if r.get("report_digest") == digest]
-                   or [r for r in reports if not r.get("report_digest")])
+        same = [r for r in reports if r.get("report_digest") == digest]
+        if any(r.get("decision") in _ACCEPTING for r in same):  # API-025: a later rejection of a byte-identical
+            same = [r for r in same if r.get("decision") != "rejected"]  # draft does not unlabel the report
+        reports = same or [r for r in reports if not r.get("report_digest")]
         if not reports:
             return "not reviewed", {"decision": "not_reviewed"}
     if not reports:
@@ -1927,12 +1944,27 @@ def _task_text(run: Mapping[str, Any], state: Mapping[str, Any], later_calls: Co
     return f"(file {src.get('name')}: {src.get('kind')}; no transcription)"
 
 
+def _clarifications(run: Mapping[str, Any], later_calls: Collection[str] = ()) -> list[str]:
+    """The follow-up messages that led to a HITL 1 review of this report, in order, each once."""
+    out: list[str] = []
+    for r in run.get("reviews") or []:
+        text = r.get("followup_text")
+        if (r.get("point") == FORMALIZATION and text and r.get("reviewed_call_id") not in later_calls
+                and text not in out):
+            out.append(str(text))
+    return out
+
+
 def _result_common(d: Path, run: Mapping[str, Any], result: dict[str, Any], budget: Any,
-                   state: Mapping[str, Any], *, task: str | None = None) -> dict[str, Any]:
+                   state: Mapping[str, Any], *, task: str | None = None,
+                   later_calls: Collection[str] = ()) -> dict[str, Any]:
     result["run_id"] = run["run_id"]
     result["mode"] = "mock" if run.get("mode") == "mock" else run.get("mode")
     result["template"] = run.get("template")
     result["task"] = _task_text(run, state) if task is None else task
+    clarifications = _clarifications(run, later_calls)
+    if clarifications:
+        result["clarifications"] = clarifications
     if run.get("input"):
         result["input"] = run["input"]
     result["budget_refusal"] = result.pop("budget", None)
@@ -2016,7 +2048,8 @@ def final_result(d: Path, run: Mapping[str, Any], state: Mapping[str, Any], budg
                                       formalization=run_binding(reviewed_then, accepted),
                                       rating_evidence=_rating_evidence(run, state, evidence))
     result["human_review"], _ = review_summary(run, result.get("report"))
-    result = _result_common(d, run, result, budget, state, task=_task_text(run, accepted, later))
+    result = _result_common(d, run, result, budget, state, task=_task_text(run, accepted, later),
+                           later_calls=later)
     if error:
         result["status"] = "error"
         result["reason"] = error
@@ -2191,7 +2224,7 @@ def copy_input(path: str | Path, run_dir: str | Path) -> Path:  # pragma: no cov
 
 
 __all__ = [
-    "AUTO_APPROVED_LABEL", "BUDGET", "CARD_FILE", "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_NO_REPORT",
+    "AUTO_APPROVED_LABEL", "BUDGET", "CARD_FILE", "CHECKPOINT_FILE", "DECISIONS", "EXIT_AWAITING", "EXIT_FOLLOWUP_FAILED", "EXIT_NO_REPORT",
     "EXIT_SUBMITTED", "FINAL_STATUSES", "FORMALIZATION", "POINTS", "REPORT", "REPORT_HISTORY_DIR",
     "REVIEW_ALL", "REVIEW_AUTO", "REVIEW_FORMALIZATION",
     "REVIEW_MODES", "RUN_FILE", "STATUS_AWAITING", "allowed_decisions", "auto_approves",
