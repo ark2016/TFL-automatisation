@@ -101,7 +101,7 @@ def test_marker_analyzer_schema_carries_the_r3_parse_table_entry_list():
     import re
     from pathlib import Path
 
-    from ll_system.lib.parse_table_check import normalize_parse_table
+    from ll_system.lib.parse_table_check import check_parse_table
 
     proof = schema_for("marker_analyzer")["properties"]["proof_sketch"]
     assert "parse_table" in proof["required"]
@@ -116,13 +116,38 @@ def test_marker_analyzer_schema_carries_the_r3_parse_table_entry_list():
     prompt = (
         Path(__file__).resolve().parent.parent / "prompts" / "ll_marker_analyzer.md"
     ).read_text(encoding="utf-8")
-    examples = [
-        json.loads(b) for b in re.findall(r"```json\s*\n(.*?)\n```", prompt, re.S)
-        if '"verdict": "ll"' in b
-    ]
-    assert examples
-    for ex in examples:
-        table = normalize_parse_table(
-            ex["proof_sketch"]["parse_table"], k=1, grammar=None, terminals=["a", "b", "c"],
-        )
-        assert not table.conflicts()
+
+    def wbcwr(word: str) -> bool:      # {w b c w^R | w in {a,b}*}
+        i = word.find("c")
+        if i < 1 or word.count("c") != 1 or word[i - 1] != "b":
+            return False
+        w = word[:i - 1]
+        return word[i + 1:] == w[::-1]
+
+    def a_b_c_plus(word: str) -> bool:  # {a^n b^m c^l | n, m, l >= 1}
+        return re.fullmatch(r"a+b+c+", word) is not None
+
+    oracles = {
+        "{w b c w^R | w ∈ {a,b}*}": wbcwr,
+        "{aⁿbᵐcˡ | n ≥ 1, m ≥ 1, l ≥ 1}": a_b_c_plus,
+    }
+    checked = 0
+    for section in re.split(r"\n### Example \d+:", prompt)[1:]:
+        language = re.search(r"\*\*Input language:\*\* `([^`]*)`", section).group(1)
+        for block in re.findall(r"```json\s*\n(.*?)\n```", section, re.S):
+            ex = json.loads(block)
+            if "proof_sketch" not in ex:
+                continue
+            if ex["verdict"] != "ll":
+                assert ex["proof_sketch"]["parse_table"] is None
+                continue
+            # the example's table, run against its stated language over the
+            # full enumeration (docs/VERDICT_POLICY.md R3′ (1))
+            res = check_parse_table(
+                ex["proof_sketch"]["parse_table"], k=ex["proof_sketch"]["suggested_k"],
+                grammar=ex["artifacts"]["ll_grammar"], terminals=["a", "b", "c"],
+                oracle_factory=lambda lang=language: oracles[lang],
+            )
+            assert res["trust"] == "bounded_pass", (language, res)
+            checked += 1
+    assert checked == len(oracles)

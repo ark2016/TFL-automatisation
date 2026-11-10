@@ -141,8 +141,10 @@ table-driven predictive parser on **every** word over the task alphabet up to a 
 compares each answer with the task's membership oracle:
 
 - agreement on all those words gives `trust: "bounded_pass"` (confidence ≤ 0.85);
-- two entries with the same (nonterminal, lookahead) and different `rhs` (a conflict), or a single
-  word the parser accepts or rejects wrongly, makes the claim `refuted`;
+- two entries with the same (nonterminal, lookahead) and different `rhs` (a conflict), a single
+  word the parser accepts or rejects wrongly, or a single word on which the parser never halts (a
+  left-recursive cell such as `S → S a`: the nonterminal comes back on top with the same lookahead
+  before its own expansion finished), makes the claim `refuted`;
 - with `parse_table: null` an `"ll"` claim can never rise above `well_formed` (confidence ≤ 0.55).
 
 Cells: `rhs` is the list of symbols of the rule (`[]` is the ε-rule). A lookahead is a string of at

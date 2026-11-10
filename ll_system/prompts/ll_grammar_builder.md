@@ -166,7 +166,8 @@ Format: `{nonterminal: {lookahead: rhs}}`, one cell per (nonterminal, lookahead)
 - List every cell the parser needs. A missing cell means "error": the parser rejects the word.
 - The table is one global (nonterminal, lookahead) → rule map, i.e. a strong LL(k) table
   (`ll_grammar` must be strong LL(k) for this k; every LL(k) language has a strong LL(k) grammar,
-  docs/THEORY.md §3.1).
+  docs/THEORY.md §3.1). If `ll_grammar` is LL(k) but not strong LL(k), no global table from its
+  rules parses exactly its language: the table is not run and the claim stays at most `well_formed`.
 
 ---
 

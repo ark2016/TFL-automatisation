@@ -338,6 +338,7 @@ def _parse_table_artifact(proof_sketch: dict) -> Any:
 
 def _apply_constructive_checks(
     grammar: dict | None, k: Any, proof_sketch: dict, ir: dict,
+    ll_k_result: dict | None = None,
 ) -> tuple[str, list[str], dict]:
     """Step 2 (docs/VERDICT_POLICY.md §4) on the claimed grammar, then the
     R3′ (1) parse-table check, combined into one trust level.
@@ -345,6 +346,11 @@ def _apply_constructive_checks(
     - either check refutes                  -> ``refuted``;
     - no parse table                        -> at most ``well_formed`` (R3′:
       a missing executable artifact caps trust, like a missing DPDA);
+    - the grammar is LL(k) but not strong LL(k) (``ll_k_result`` from
+      ``check_ll_k``)                       -> at most ``well_formed``, the
+      table is not run: no global table built from such a grammar's own
+      rules parses exactly L(G), so the artifact can neither certify nor
+      refute the claim (docs/THEORY.md §3.1);
     - otherwise the parse-table run decides (``bounded_pass`` when it agreed
       with the task oracle on every word up to the full-enumeration length,
       else ``well_formed``): it is the full enumeration, step 2 is a sample.
@@ -353,7 +359,8 @@ def _apply_constructive_checks(
     then checked on its own (its productions are not run through
     ``check_ll_k`` -- a table may omit cells the grammar's FIRST/FOLLOW sets
     would fill, so a conflict in the full table of that grammar would not
-    contradict the parser the claim actually exhibits).
+    contradict the parser the claim actually exhibits). A left-recursive
+    table is still refuted: the parser run detects the loop.
     """
     issues: list[str] = []
     details: dict = {}
@@ -365,6 +372,17 @@ def _apply_constructive_checks(
             return "refuted", issues, details
 
     claimed_k = k if isinstance(k, int) and not isinstance(k, bool) and k >= 1 else None
+    if (
+        grammar is not None and claimed_k is not None and isinstance(ll_k_result, dict)
+        and ll_k_result.get("is_ll_k") is True and ll_k_result.get("is_strong_ll_k") is False
+    ):
+        issues.append(
+            f"grammar is LL({claimed_k}) but not strong LL({claimed_k}): no global parse table from its "
+            "rules is conflict-free and correct, so the parse_table artifact is not run; trust capped at "
+            "well_formed (docs/VERDICT_POLICY.md R3′ (1))"
+        )
+        details["parse_table_check"] = {"trust": "not_applicable", "status": "not_strong", "k": claimed_k}
+        return "well_formed", issues, details
     table = check_parse_table(
         _parse_table_artifact(proof_sketch), k=claimed_k, grammar=grammar,
         terminals=_task_alphabet_list(ir), oracle_factory=lambda: _try_word_oracle(ir),
@@ -376,6 +394,54 @@ def _apply_constructive_checks(
     if table["trust"] == "missing":
         return "well_formed", issues, details
     return table["trust"], issues, details
+
+
+def _finish_constructive_claim(
+    agent: str, grammar: dict | None, k: Any, proof_sketch: dict, ir: dict, *,
+    grammar_label: str, checks_passed: int, checks_total: int, issues: list[str], details: dict,
+) -> dict:
+    """The checks every constructive LL(k) claim ends with, once its fields
+    passed the structural checks: ``check_ll_k`` on the claimed grammar (it
+    must at least satisfy its own claim; not LL(k) -> ``refuted``), then step 2
+    and the R3′ parse-table check (``_apply_constructive_checks``).
+
+    ``grammar`` None (a marker claim without a grammar) skips ``check_ll_k``.
+    ``grammar_label`` starts the "... is NOT LL(k)" issue.
+    """
+    ll_k_result = None
+    if grammar is not None and _HAS_TABLE_BUILDER and isinstance(k, int) and k >= 1:
+        checks_total += 1
+        try:
+            ll_k_result = check_ll_k(grammar, k)
+        except Exception as exc:
+            issues.append(f"check_ll_k raised an error: {exc}")
+        else:
+            details["check_ll_k_result"] = ll_k_result
+            if ll_k_result.get("is_ll_k"):
+                checks_passed += 1
+            else:
+                issues.append(
+                    f"{grammar_label} is NOT LL({k}): "
+                    f"{len(ll_k_result.get('conflicts', []))} conflict(s)"
+                )
+                details["conflicts"] = ll_k_result.get("conflicts", [])
+                return _make_result(
+                    agent=agent, trust="refuted", checks_passed=checks_passed,
+                    checks_total=checks_total, issues=issues, details=details,
+                )
+
+    trust, extra_issues, extra_details = _apply_constructive_checks(
+        grammar, k, proof_sketch, ir, ll_k_result=ll_k_result,
+    )
+    issues.extend(extra_issues)
+    details.update(extra_details)
+    checks_total += 1
+    if trust != "refuted" and details["parse_table_check"]["trust"] not in ("missing", "not_applicable"):
+        checks_passed += 1
+    return _make_result(
+        agent=agent, trust=trust, checks_passed=checks_passed,
+        checks_total=checks_total, issues=issues, details=details,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -872,39 +938,9 @@ def verify_ll_grammar_claim(proof_sketch: dict, ir: dict) -> dict:
             checks_total=checks_total, issues=issues, details=details,
         )
 
-    # Check 4: run check_ll_k if available — the candidate grammar must at
-    # least satisfy its own claim before anything else is checked.
-    if _HAS_TABLE_BUILDER:
-        checks_total += 1
-        try:
-            result = check_ll_k(grammar, k)
-            details["check_ll_k_result"] = result
-            if result.get("is_ll_k"):
-                checks_passed += 1
-            else:
-                issues.append(
-                    f"check_ll_k reports grammar is NOT LL({k}): "
-                    f"{len(result.get('conflicts', []))} conflict(s)"
-                )
-                details["conflicts"] = result.get("conflicts", [])
-                return _make_result(
-                    agent=agent, trust="refuted", checks_passed=checks_passed,
-                    checks_total=checks_total, issues=issues, details=details,
-                )
-        except Exception as exc:
-            issues.append(f"check_ll_k raised an error: {exc}")
-
-    # Step 2 (docs/VERDICT_POLICY.md §4) + R3′ parse-table check
-    trust, extra_issues, extra_details = _apply_constructive_checks(grammar, k, proof_sketch, ir)
-    issues.extend(extra_issues)
-    details.update(extra_details)
-    checks_total += 1
-    if trust != "refuted" and details["parse_table_check"]["trust"] != "missing":
-        checks_passed += 1
-
-    return _make_result(
-        agent=agent, trust=trust, checks_passed=checks_passed,
-        checks_total=checks_total, issues=issues, details=details,
+    return _finish_constructive_claim(
+        agent, grammar, k, proof_sketch, ir, grammar_label="check_ll_k reports grammar",
+        checks_passed=checks_passed, checks_total=checks_total, issues=issues, details=details,
     )
 
 
@@ -1160,45 +1196,11 @@ def verify_grammar_transformation_claim(proof_sketch: dict, ir: dict) -> dict:
             checks_total=checks_total, issues=issues, details=details,
         )
 
-    # Check 5: run check_ll_k on transformed grammar if available — the
-    # transformed grammar must at least satisfy its own claim first.
-    k = proof_sketch.get("k")
-    if _HAS_TABLE_BUILDER and isinstance(k, int) and k >= 1:
-        checks_total += 1
-        try:
-            result = check_ll_k(transformed_grammar, k)
-            details["check_ll_k_result"] = result
-            if result.get("is_ll_k"):
-                checks_passed += 1
-            else:
-                issues.append(
-                    f"Transformed grammar is NOT LL({k}): "
-                    f"{len(result.get('conflicts', []))} conflict(s)"
-                )
-                return _make_result(
-                    agent=agent, trust="refuted", checks_passed=checks_passed,
-                    checks_total=checks_total, issues=issues, details=details,
-                )
-        except Exception as exc:
-            issues.append(f"check_ll_k raised an error: {exc}")
-
-    # Step 2 (docs/VERDICT_POLICY.md §4) + R3′ parse-table check
-    trust, extra_issues, extra_details = _apply_constructive_checks(
-        transformed_grammar, k, proof_sketch, ir,
-    )
-    issues.extend(extra_issues)
-    details.update(extra_details)
-    checks_total += 1
-    if trust != "refuted" and details["parse_table_check"]["trust"] != "missing":
-        checks_passed += 1
-
-    return _make_result(
-        agent=agent,
-        trust=trust,
-        checks_passed=checks_passed,
-        checks_total=checks_total,
-        issues=issues,
-        details=details,
+    # Check 5 (check_ll_k on the transformed grammar), step 2 and R3′.
+    return _finish_constructive_claim(
+        agent, transformed_grammar, proof_sketch.get("k"), proof_sketch, ir,
+        grammar_label="Transformed grammar",
+        checks_passed=checks_passed, checks_total=checks_total, issues=issues, details=details,
     )
 
 
@@ -1265,66 +1267,23 @@ def verify_marker_claim(proof_sketch: dict, ir: dict) -> dict:
     )
     # Prompt uses "suggested_k"; accept both names.
     k = proof_sketch.get("k") or proof_sketch.get("suggested_k")
-    if grammar is None:
-        # No grammar: the parse table (R3′) is the only executable artifact;
-        # without it the claim stays a structural pass (well_formed).
-        trust, extra_issues, extra_details = _apply_constructive_checks(None, k, proof_sketch, ir)
-        issues.extend(extra_issues)
-        details.update(extra_details)
+    if grammar is not None:
         checks_total += 1
-        if trust != "refuted" and details["parse_table_check"]["trust"] != "missing":
-            checks_passed += 1
-        return _make_result(
-            agent=agent, trust=trust, checks_passed=checks_passed,
-            checks_total=checks_total, issues=issues, details=details,
-        )
-
-    checks_total += 1
-    struct_issues = _validate_grammar_structure(grammar)
-    if struct_issues:
-        issues.extend(struct_issues)
-        return _make_result(
-            agent=agent, trust="not_verified", checks_passed=checks_passed,
-            checks_total=checks_total, issues=issues, details=details,
-        )
-    checks_passed += 1
-
-    # Check 4: run check_ll_k if available — the grammar must at least
-    # satisfy its own claim before anything else is checked.
-    if _HAS_TABLE_BUILDER and isinstance(k, int) and k >= 1:
-        checks_total += 1
-        try:
-            result = check_ll_k(grammar, k)
-            details["check_ll_k_result"] = result
-            if result.get("is_ll_k"):
-                checks_passed += 1
-            else:
-                issues.append(
-                    f"Grammar with marker is NOT LL({k}): "
-                    f"{len(result.get('conflicts', []))} conflict(s)"
-                )
-                return _make_result(
-                    agent=agent, trust="refuted", checks_passed=checks_passed,
-                    checks_total=checks_total, issues=issues, details=details,
-                )
-        except Exception as exc:
-            issues.append(f"check_ll_k raised an error: {exc}")
-
-    # Step 2 (docs/VERDICT_POLICY.md §4) + R3′ parse-table check
-    trust, extra_issues, extra_details = _apply_constructive_checks(grammar, k, proof_sketch, ir)
-    issues.extend(extra_issues)
-    details.update(extra_details)
-    checks_total += 1
-    if trust != "refuted" and details["parse_table_check"]["trust"] != "missing":
+        struct_issues = _validate_grammar_structure(grammar)
+        if struct_issues:
+            issues.extend(struct_issues)
+            return _make_result(
+                agent=agent, trust="not_verified", checks_passed=checks_passed,
+                checks_total=checks_total, issues=issues, details=details,
+            )
         checks_passed += 1
 
-    return _make_result(
-        agent=agent,
-        trust=trust,
-        checks_passed=checks_passed,
-        checks_total=checks_total,
-        issues=issues,
-        details=details,
+    # Check 4 (check_ll_k on the grammar), step 2 and R3′. No grammar: the
+    # parse table is the only executable artifact; without it the claim
+    # stays a structural pass (well_formed).
+    return _finish_constructive_claim(
+        agent, grammar, k, proof_sketch, ir, grammar_label="Grammar with marker",
+        checks_passed=checks_passed, checks_total=checks_total, issues=issues, details=details,
     )
 
 

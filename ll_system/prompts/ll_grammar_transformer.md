@@ -99,7 +99,8 @@ right-hand side that is not a rule of `transformed_grammar`, or one wrongly acce
 word makes the claim `refuted`; with no table the claim stays at most `well_formed`
 (confidence ≤ 0.55). List every cell the parser needs: a missing cell means "error". The table is
 one global (nonterminal, lookahead) → rule map, a strong LL(k) table, so `transformed_grammar` must
-be strong LL(k) for this k (every LL(k) language has one, docs/THEORY.md §3.1).
+be strong LL(k) for this k (every LL(k) language has one, docs/THEORY.md §3.1); for a grammar that
+is LL(k) but not strong LL(k) the table is not run and the claim stays at most `well_formed`.
 
 ---
 

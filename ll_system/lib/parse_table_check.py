@@ -9,15 +9,21 @@ the DPDA of dcfl ``stack_strategy`` is checked (R2′):
 
 - no table (absent, or with no cells)                  -> ``missing``
   (the caller caps the claim at ``well_formed``, like a missing DPDA);
-- malformed table, a conflict cell (two different right-hand sides in one
-  (nonterminal, lookahead) cell), a cell whose production is not a rule of
-  the claimed grammar, a table for a larger k than claimed, or a word on
-  which parser and oracle disagree                     -> ``refuted``;
-- at least ``PARSE_TABLE_MIN_WORDS`` words decided by the oracle and all
-  agree                                                -> ``bounded_pass``
+- malformed table, a table inconsistent with the claimed grammar (a row
+  that is not one of its nonterminals, another start symbol, a production
+  that is not one of its rules), a symbol used both as terminal and
+  nonterminal (or "$" used as a symbol), a conflict cell (two different
+  right-hand sides in one (nonterminal, lookahead) cell), a table for a
+  larger k than claimed, a word on which the table-driven parser never
+  halts (``LLParser.parse`` detects the loop exactly; a correct LL(k)
+  parser halts on every input), or a word on which parser and oracle
+  disagree                                             -> ``refuted``;
+- every word decided by the oracle was decided by the parser, at least
+  ``PARSE_TABLE_MIN_WORDS`` of them, and all agree     -> ``bounded_pass``
   (confidence cap 0.85, as for the DPDA);
-- otherwise (no oracle, no alphabet, unknown k, too few decided words)
-                                                       -> ``well_formed``.
+- otherwise (no oracle, no alphabet, unknown k, too few decided words, or a
+  word on which the parser was still running after
+  ``PARSE_TABLE_MAX_STEPS`` steps without a loop)      -> ``well_formed``.
 
 Table formats accepted (both appear in prompts):
 
@@ -48,9 +54,10 @@ from ll_system.lib.ll_parser import LLParser
 
 # Same coverage threshold as the dcfl DPDA simulation (_DPDA_MIN_WORDS).
 PARSE_TABLE_MIN_WORDS = 30
-# Steps per word: a halting table run on a word of length <= 10 needs far
-# fewer; a cell that expands without consuming input never halts and the
-# word is left undecided.
+# Steps per word. A loop is detected exactly (refuted) long before this; a
+# run that halts on a word of length <= 10 needs far fewer steps with any
+# realistic table. A run still going at the limit leaves its word unchecked
+# and the table cannot reach bounded_pass.
 PARSE_TABLE_MAX_STEPS = 2000
 _MAX_REPORTED = 5
 
@@ -240,16 +247,6 @@ def normalize_parse_table(
     return NormalizedTable(k=table_k, start=start, nonterminals=nonterminals, cells=cells)
 
 
-def table_grammar(table: NormalizedTable, terminals: list[str]) -> dict:
-    """The grammar whose rules are exactly the table's productions."""
-    return {
-        "nonterminals": sorted(table.nonterminals),
-        "terminals": list(terminals),
-        "start": table.start,
-        "rules": [{"lhs": nt, "rhs": list(rhs)} for nt, rhs in table.productions()],
-    }
-
-
 def _grammar_rules(grammar: dict) -> set[tuple[str, tuple[str, ...]]]:
     rules = set()
     for rule in grammar.get("rules", []) or []:
@@ -321,22 +318,32 @@ def check_parse_table(
             }
 
     oracle = oracle_factory()
-    if oracle is None:
-        return {
-            "trust": "well_formed",
-            "issues": ["parse table not run: no membership oracle for the task language"],
-            "details": {**details, "status": "no_oracle"},
-        }
-
     parser = LLParser.from_table(
         {"nonterminals": sorted(table.nonterminals), "terminals": list(terminals), "start": table.start},
         table.parser_table(), table.k,
     )
     max_len = full_enumeration_max_len(len(terminals))
     details["max_len"] = max_len
-    checked = undecided = 0
+    checked = undecided = unfinished = 0
     mismatches: list[dict] = []
     for word in words_up_to(sorted(terminals), max_len):
+        # The parser runs on every word, with or without an oracle answer:
+        # a loop refutes the table whatever the word's membership.
+        run = parser.parse(word, record_steps=False, max_steps=PARSE_TABLE_MAX_STEPS)
+        if run.get("non_halting"):
+            loop = run["loop"]
+            return {
+                "trust": "refuted",
+                "issues": [
+                    f"parse table never halts on {word or 'ε'!r}: {loop['nonterminal']} comes back on top "
+                    f"with lookahead {loop['lookahead']!r} before its own expansion finished "
+                    "(left recursion), so it is not an LL(k) parser"
+                ],
+                "details": {**details, "status": "non_halting", "loop": {"word": word, **loop},
+                            "counterexamples": [word]},
+            }
+        if oracle is None:
+            continue
         try:
             expected = oracle(word)
         except Exception:
@@ -344,9 +351,8 @@ def check_parse_table(
         if expected is None:
             undecided += 1
             continue
-        run = parser.parse(word, record_steps=False, max_steps=PARSE_TABLE_MAX_STEPS)
         if run.get("step_limit_exceeded"):
-            undecided += 1
+            unfinished += 1
             continue
         checked += 1
         accepted = bool(run.get("accepted"))
@@ -354,7 +360,14 @@ def check_parse_table(
             mismatches.append({"word": word, "in_language": bool(expected), "parser_accepts": accepted})
             if len(mismatches) >= _MAX_REPORTED:
                 break
-    details.update({"words_checked": checked, "words_undecided": undecided})
+
+    if oracle is None:
+        return {
+            "trust": "well_formed",
+            "issues": ["parse table not checked against the language: no membership oracle for the task language"],
+            "details": {**details, "status": "no_oracle"},
+        }
+    details.update({"words_checked": checked, "words_undecided": undecided, "words_unfinished": unfinished})
 
     if mismatches:
         shown = "; ".join(
@@ -366,6 +379,15 @@ def check_parse_table(
             "issues": [f"parse table disagrees with the task's membership oracle: {shown}"],
             "details": {**details, "status": "mismatch", "mismatches": mismatches,
                         "counterexamples": [m["word"] for m in mismatches]},
+        }
+    if unfinished:
+        return {
+            "trust": "well_formed",
+            "issues": [
+                f"parse table still running after {PARSE_TABLE_MAX_STEPS} steps on {unfinished} word(s) "
+                "the oracle decides; coverage incomplete"
+            ],
+            "details": {**details, "status": "step_limit"},
         }
     if checked < PARSE_TABLE_MIN_WORDS:
         return {

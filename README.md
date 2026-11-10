@@ -351,9 +351,12 @@ flowchart LR
   marker's structured-output schema uses). `ll_system/lib/parse_table_check.py` runs it with
   `LLParser.from_table` on every word over the task alphabet up to the DPDA full-enumeration length
   (Σ_{i≤k}|Σ|ⁱ ≤ 3000, k ≤ 10; `agent_system/lib/word_enumeration.py`) and compares it with the task oracle:
-  agreement on ≥ 30 decided words → `bounded_pass` (cap 0.85); a conflict cell, a rule not in the claimed grammar,
-  or a disagreement → `refuted` (counterexamples go to the retry hint); no table → at most `well_formed`, even when
-  the grammar passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
+  agreement on ≥ 30 decided words → `bounded_pass` (cap 0.85); a conflict cell, a table inconsistent with the
+  claimed grammar (a row, start or rule not in it), a word on which the parser never halts (`LLParser.parse`
+  detects the left-recursion loop exactly: a nonterminal back on top before its own expansion finished), or a
+  disagreement → `refuted` (counterexamples go to the retry hint); no table, or a claimed grammar that is LL(k)
+  but not strong LL(k) (no global table from its rules parses exactly its language; the table is not run) →
+  at most `well_formed`, even when the grammar passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
   (Format 3, and the Format 2 grammar) stays `verified` and needs no table. The matching rule for dcfl
   `closure_reduction` (a DFA for R in L ∩ R, or a transducer / homomorphism, simulated on short words) is in
   the policy but not implemented yet.
