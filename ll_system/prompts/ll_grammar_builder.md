@@ -153,9 +153,15 @@ An `"ll"` claim must carry the LL(k) parse table of `proof_sketch.ll_grammar`. T
 this table as a table-driven predictive parser on **every** word over the task alphabet up to a
 bounded length and compares each answer with the task's membership oracle:
 
-- a table that agrees with the oracle on all those words gives `trust: "bounded_pass"` (confidence ≤ 0.85);
+- a table that agrees with the oracle on all those words gives `trust: "bounded_pass"` (confidence
+  ≤ 0.85), provided it is exactly the strong LL(k) director table of `ll_grammar`: rule A → α in
+  cell (A, x) for **every** x ∈ FIRST_k(α) ⊕_k FOLLOW_k(A) and in no other cell;
 - a cell with two different right-hand sides (a conflict), a right-hand side that is not a rule of
-  `ll_grammar`, or a single word the parser accepts or rejects wrongly makes the claim `refuted`;
+  `ll_grammar`, a cell whose lookahead is not in the director set of its rule, or a single word the
+  parser accepts or rejects wrongly makes the claim `refuted`;
+- a table that leaves out a director cell stays at most `well_formed`;
+- if `ll_grammar` is not strong LL(k) for the table's k the table is not run and the claim stays at
+  most `well_formed`;
 - with no `parse_table` the claim can never rise above `well_formed` (confidence ≤ 0.55).
 
 Format: `{nonterminal: {lookahead: rhs}}`, one cell per (nonterminal, lookahead).

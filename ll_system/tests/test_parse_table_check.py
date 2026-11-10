@@ -140,13 +140,17 @@ def test_table_disagreeing_with_the_oracle_is_refuted_with_counterexamples():
 
 
 def test_table_accepting_a_word_outside_the_language_is_refuted():
+    # T -> cb instead of T -> c: still strong LL(1), and the table is its
+    # director table, but it accepts "bcb" (not of the form w b c w^R).
     g = deepcopy(GRAMMAR)
-    g["rules"].append({"lhs": "T", "rhs": []})
+    g["rules"][2] = {"lhs": "T", "rhs": ["c", "b"]}
     wrong = deepcopy(TABLE)
-    wrong["T"]["$"] = []          # now accepts "b" (w = ε without the c)
+    wrong["T"]["c"] = ["c", "b"]
     res = _check(wrong, grammar=g)
     assert res["trust"] == "refuted"
-    assert "b" in res["details"]["counterexamples"]
+    assert res["details"]["status"] == "mismatch"
+    assert "bcb" in res["details"]["counterexamples"]
+    assert any(m["parser_accepts"] and not m["in_language"] for m in res["details"]["mismatches"])
 
 
 def test_production_outside_the_claimed_grammar_is_refuted():
@@ -295,11 +299,12 @@ def test_loop_detection_matches_a_plain_run_on_random_tables():
 
 
 def test_non_halting_table_is_refuted_with_the_word_as_counterexample():
-    g = {"nonterminals": ["S"], "terminals": ["a"], "start": "S",
-         "rules": [{"lhs": "S", "rhs": ["S", "a"]}, {"lhs": "S", "rhs": ["a"]}]}
+    # No grammar: G_T = {S -> S a} derives no terminal word, its row is
+    # ignored by the director comparison, and the run catches the loop. (With
+    # the grammar S -> S a | a, not strong LL(1), the table is not run at all.)
     for oracle in ((lambda w: len(w) >= 1), None):
-        res = check_parse_table({"S": {"a": ["S", "a"]}}, k=1, grammar=g, terminals=["a"],
-                                oracle_factory=lambda o=oracle: o)
+        res = check_parse_table({"k": 1, "start": "S", "table": {"S": {"a": ["S", "a"]}}}, k=1,
+                                grammar=None, terminals=["a"], oracle_factory=lambda o=oracle: o)
         assert res["trust"] == "refuted", res
         assert res["details"]["status"] == "non_halting"
         assert res["details"]["counterexamples"] == ["a"]
@@ -421,11 +426,169 @@ def test_non_strong_ll_k_grammar_table_is_not_run_and_caps_at_well_formed(cell):
     assert res["details"]["check_ll_k_result"]["is_strong_ll_k"] is False
     assert res["trust"] == "well_formed", res
     assert res["details"]["parse_table_check"] == {"trust": "not_applicable", "status": "not_strong", "k": 2}
-    # run directly, the same table is refuted (conflict or mismatch): it is the
-    # format, not the claim, that fails
-    direct = check_parse_table(table, k=2, grammar=NON_STRONG, terminals=["a", "b"],
+    # the parse-table check itself applies the strong test (no check_ll_k
+    # needed, e.g. when the claim names no k): the table, even one with a
+    # conflict cell, is not run, since it is the format, not the claim, that fails
+    no_k = cell == []      # one case with the k named only by the table
+    direct = check_parse_table({"k": 2, "start": "S", "table": table} if no_k else table,
+                               k=None if no_k else 2, grammar=NON_STRONG, terminals=["a", "b"],
                                oracle_factory=lambda: (lambda w: w in {"aaa", "abaa", "bba", "bbba"}))
-    assert direct["trust"] == "refuted"
+    assert direct["trust"] == "not_applicable", direct
+    assert direct["details"] == {"status": "not_strong", "k": 2}
+
+
+# ---------------------------------------------------------------- director table
+
+# Review counterexample (R3′ (1)): a conflict-free, halting table without a
+# grammar whose parser accepts exactly {a^i b^j | i >= j}, a DCFL that is not
+# LL (docs/THEORY.md §3.4). It omits the cell (B, b) -> ε: its own
+# productions S -> aSB | ε, B -> b | ε are not LL(1), and the parser resolves
+# the (B, b) conflict by priority.
+PRIORITY_TABLE = {"k": 1, "start": "S", "entries": [
+    {"nonterminal": "S", "lookahead": "a", "rhs": ["a", "S", "B"]},
+    {"nonterminal": "S", "lookahead": "b", "rhs": []},
+    {"nonterminal": "S", "lookahead": "$", "rhs": []},
+    {"nonterminal": "B", "lookahead": "b", "rhs": ["b"]},
+    {"nonterminal": "B", "lookahead": "$", "rhs": []},
+]}
+PRIORITY_GRAMMAR = {
+    "nonterminals": ["S", "B"], "terminals": ["a", "b"], "start": "S",
+    "rules": [{"lhs": "S", "rhs": ["a", "S", "B"]}, {"lhs": "S", "rhs": []},
+              {"lhs": "B", "rhs": ["b"]}, {"lhs": "B", "rhs": []}],
+}
+# The task: {a^i b^j | i >= j} given by an unambiguous grammar (CYK oracle).
+AIBJ_IR = {
+    "task_type": "ll_check_grammar_lang", "source_text": "x",
+    "language_spec": {
+        "kind": "grammar", "nonterminals": ["S", "T"], "terminals": ["a", "b"], "start": "S",
+        "rules": [{"lhs": "S", "rhs": ["a", "S"]}, {"lhs": "S", "rhs": ["T"]},
+                  {"lhs": "T", "rhs": ["a", "T", "b"]}, {"lhs": "T", "rhs": []}],
+    },
+}
+
+
+def _aibj(word: str) -> bool:
+    i = len(word) - len(word.lstrip("a"))
+    rest = word[i:]
+    return set(rest) <= {"b"} and len(rest) <= i
+
+
+def test_priority_table_without_grammar_is_not_an_ll_certificate():
+    res = check_parse_table(PRIORITY_TABLE, k=1, grammar=None, terminals=["a", "b"],
+                            oracle_factory=lambda: _aibj)
+    # the parser itself agrees with the oracle on every word (2047 of them) ...
+    assert res["details"]["words_checked"] == len(words_up_to(["a", "b"], 10))
+    # ... but its table is not the director table of an LL(1) grammar
+    assert res["trust"] == "well_formed", res
+    assert res["details"]["status"] == "not_director_table"
+    director = res["details"]["director_table"]
+    assert director["grammar"] == "table_productions" and director["strong"] is False
+    assert [(c["nonterminal"], c["lookahead"], sorted(c["alternatives"]))
+            for c in director["director_conflicts"]] == [("B", "b", [[], ["b"]])]
+    assert director["missing"] == []      # the cell is there, holding one of its two rules
+    assert "priority choice" in res["issues"][0]
+
+
+def test_marker_claim_with_a_priority_table_stays_well_formed():
+    agent = {
+        "agent_name": "marker_analyzer", "verdict": "ll",
+        "proof_sketch": {
+            "method": "marker_detection", "marker_symbol": "b", "suggested_k": 1,
+            "marker_description": "the first b ends the a-block", "parse_table": PRIORITY_TABLE,
+        },
+        "artifacts": {"ll_grammar": None},
+    }
+    res = verify_ll_claim(agent, AIBJ_IR)
+    assert res["trust"] == "well_formed", res
+    assert res["details"]["parse_table_check"]["status"] == "not_director_table"
+
+
+def test_marker_claim_with_grammar_but_no_k_applies_the_strong_test_itself():
+    """Without a claimed k, check_ll_k is skipped; the table names k = 1. The
+    parse-table check must still see that the grammar is not strong LL(1)."""
+    agent = {
+        "agent_name": "marker_analyzer", "verdict": "ll",
+        "proof_sketch": {
+            "method": "marker_detection", "marker_symbol": "b",
+            "marker_description": "the first b ends the a-block",
+            "grammar": PRIORITY_GRAMMAR, "parse_table": PRIORITY_TABLE,
+        },
+        "artifacts": {},
+    }
+    res = verify_ll_claim(agent, AIBJ_IR)
+    assert "check_ll_k_result" not in res["details"]
+    assert res["trust"] == "well_formed", res
+    assert res["details"]["parse_table_check"] == {"trust": "not_applicable", "status": "not_strong", "k": 1}
+
+
+def test_cell_contradicting_the_director_table_is_refuted():
+    # (S, c) -> aSa: c is not in director(S -> aSa) = {a}. The cell is dead
+    # (the parser then fails on the terminal a), but the table is not the
+    # director table of its productions.
+    extra = deepcopy(ENTRIES)
+    extra["entries"].append({"nonterminal": "S", "lookahead": "c", "rhs": ["a", "S", "a"]})
+    res = _check(extra, grammar=None)
+    assert res["trust"] == "refuted", res
+    assert res["details"]["status"] == "director_contradiction"
+    assert res["details"]["contradictions"] == [
+        {"nonterminal": "S", "lookahead": "c", "rhs": ["a", "S", "a"], "director": []}
+    ]
+    # the same with the claimed grammar
+    assert _check(extra)["details"]["status"] == "director_contradiction"
+
+
+def test_rows_of_useless_nonterminals_are_ignored():
+    extra = deepcopy(ENTRIES)
+    extra["entries"].append({"nonterminal": "U", "lookahead": "a", "rhs": ["a", "U"]})
+    res = _check(extra, grammar=None)
+    assert res["trust"] == "bounded_pass", res
+    assert res["details"]["director_table"]["ignored_rows"] == ["U"]
+
+
+def test_omitted_director_cell_beyond_the_enumeration_caps_at_well_formed():
+    """G_T is strong LL(1), but the table omits (X11, b) -> Y, which only a
+    word of length 13 reaches: the run agrees with the oracle up to length 10,
+    and only the director comparison sees the missing cell."""
+    entries = [
+        {"nonterminal": "S", "lookahead": "a", "rhs": ["a", "S"]},
+        {"nonterminal": "S", "lookahead": "b", "rhs": ["b", "X1"]},
+        {"nonterminal": "S", "lookahead": "$", "rhs": []},
+        *({"nonterminal": f"X{i}", "lookahead": "b", "rhs": ["b", f"X{i + 1}"]} for i in range(1, 11)),
+        {"nonterminal": "X11", "lookahead": "a", "rhs": ["Y"]},
+        {"nonterminal": "Y", "lookahead": "a", "rhs": ["a"]},
+        {"nonterminal": "Y", "lookahead": "b", "rhs": ["b"]},
+    ]
+    raw = {"k": 1, "start": "S", "entries": entries}
+
+    def oracle(word: str) -> bool:      # a* ∪ a* b^11 (a | b)
+        rest = word.lstrip("a")
+        return rest == "" or (len(rest) == 12 and rest[:11] == "b" * 11)
+
+    res = check_parse_table(raw, k=1, grammar=None, terminals=["a", "b"], oracle_factory=lambda: oracle)
+    assert res["trust"] == "well_formed", res
+    assert res["details"]["status"] == "not_director_table"
+    assert res["details"]["director_table"]["strong"] is True
+    assert res["details"]["director_table"]["missing"] == [
+        {"nonterminal": "X11", "lookahead": "b", "alternatives": [["Y"]]}
+    ]
+    entries.append({"nonterminal": "X11", "lookahead": "b", "rhs": ["Y"]})
+    full = check_parse_table(raw, k=1, grammar=None, terminals=["a", "b"], oracle_factory=lambda: oracle)
+    assert full["trust"] == "bounded_pass", full
+
+
+def test_director_cells_keep_every_alternative():
+    from ll_system.lib.first_follow import compute_all
+    from ll_system.lib.ll_table_builder import build_parse_table, director_cells
+
+    sets = compute_all(PRIORITY_GRAMMAR, 1)
+    cells = director_cells(PRIORITY_GRAMMAR, 1, *sets)
+    assert cells == {"S": {"a": [["a", "S", "B"]], "b": [[]], "$": [[]]},
+                     "B": {"b": [["b"], []], "$": [[]]}}
+    table, conflicts = build_parse_table(PRIORITY_GRAMMAR, 1, *sets)
+    assert table["B"] == {"b": ["b"], "$": []}
+    assert [(c["nonterminal"], c["lookahead"], c["competing_rules"]) for c in conflicts] == [
+        ("B", "b", [["b"], []])
+    ]
 
 
 def test_transformer_claim_trust_follows_the_table():

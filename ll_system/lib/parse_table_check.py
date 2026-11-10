@@ -7,23 +7,49 @@ word over the task alphabet up to a bounded length and compares each answer
 with the task's exact membership oracle (``word_oracle`` / CYK), the same way
 the DPDA of dcfl ``stack_strategy`` is checked (R2′):
 
+The table must be the strong LL(k) director table of its grammar G: the
+claimed grammar, or, when the claim carries none (a marker claim), G_T, the
+grammar whose rules are the table's own productions. An incomplete table is
+not an LL(k) certificate: omitting a cell encodes a priority choice, and a
+priority parser can recognize a language that is not LL. Example, k = 1:
+S: a -> aSB, b -> ε, $ -> ε; B: b -> b, $ -> ε has no conflict cell, halts,
+and accepts exactly {a^i b^j | i >= j}, a DCFL that is not LL
+(docs/THEORY.md §3.4); its G_T (S -> aSB | ε, B -> b | ε) is not LL(1):
+the director cell (B, b) holds both B -> b and B -> ε, and the table keeps
+only the first. The comparison is made on the reduced grammar
+(``remove_useless_symbols``): rows of the nonterminals it removes are
+ignored; every other cell of the table must be a director-table cell with
+the same right-hand side, and every director-table cell must be in the
+table.
+
 - no table (absent, or with no cells)                  -> ``missing``
   (the caller caps the claim at ``well_formed``, like a missing DPDA);
+- the claimed grammar, reduced, is not strong LL(k) for the table's k
+                                                       -> ``not_applicable``
+  (the table is not run, the caller caps the claim at ``well_formed``: if
+  the grammar is LL(k), a table built from its rules rejects at least one
+  word of L(G), possibly longer than the enumeration bound, so the artifact
+  can neither certify nor refute the claim; a grammar that is not LL(k) is
+  refuted by the caller's ``check_ll_k`` when the claim names k, and is
+  capped here, conservatively, when it does not);
 - malformed table, a table inconsistent with the claimed grammar (a row
   that is not one of its nonterminals, another start symbol, a production
   that is not one of its rules), a symbol used both as terminal and
   nonterminal (or "$" used as a symbol), a conflict cell (two different
   right-hand sides in one (nonterminal, lookahead) cell), a table for a
-  larger k than claimed, a word on which the table-driven parser never
-  halts (``LLParser.parse`` detects the loop exactly; a correct LL(k)
-  parser halts on every input), or a word on which parser and oracle
-  disagree                                             -> ``refuted``;
+  larger k than claimed, a cell that contradicts the director table (its
+  right-hand side is not the director-table entry of that cell), a word on
+  which the table-driven parser never halts (``LLParser.parse`` detects the
+  loop exactly; a correct LL(k) parser halts on every input), or a word on
+  which parser and oracle disagree                     -> ``refuted``;
 - every word decided by the oracle was decided by the parser, at least
-  ``PARSE_TABLE_MIN_WORDS`` of them, and all agree     -> ``bounded_pass``
+  ``PARSE_TABLE_MIN_WORDS`` of them, all agree, and the table is the
+  director table of its grammar, which is strong LL(k) -> ``bounded_pass``
   (confidence cap 0.85, as for the DPDA);
-- otherwise (no oracle, no alphabet, unknown k, too few decided words, or a
+- otherwise (no oracle, no alphabet, unknown k, too few decided words, a
   word on which the parser was still running after
-  ``PARSE_TABLE_MAX_STEPS`` steps without a loop)      -> ``well_formed``.
+  ``PARSE_TABLE_MAX_STEPS`` steps without a loop, a director-table cell the
+  table omits, or G_T not strong LL(k))                -> ``well_formed``.
 
 Table formats accepted (both appear in prompts):
 
@@ -50,7 +76,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agent_system.lib.word_enumeration import full_enumeration_max_len, words_up_to
+from ll_system.lib.first_follow import compute_all
+from ll_system.lib.grammar_transforms import remove_useless_symbols
 from ll_system.lib.ll_parser import LLParser
+from ll_system.lib.ll_table_builder import director_cells
 
 # Same coverage threshold as the dcfl DPDA simulation (_DPDA_MIN_WORDS).
 PARSE_TABLE_MIN_WORDS = 30
@@ -257,12 +286,88 @@ def _grammar_rules(grammar: dict) -> set[tuple[str, tuple[str, ...]]]:
     return rules
 
 
+def _table_grammar(table: NormalizedTable, grammar: dict | None, terminals: list[str]) -> dict:
+    """The grammar the table must be the director table of: the claimed
+    grammar's rules, or (no grammar) G_T, the table's own productions; over
+    the task alphabet, ε as ``[]``."""
+    if isinstance(grammar, dict):
+        rules = sorted(
+            (lhs, list(rhs)) for lhs, rhs in _grammar_rules(grammar)
+            if isinstance(lhs, str) and lhs in table.nonterminals
+            and all(isinstance(s, str) for s in rhs)
+        )
+    else:
+        rules = table.productions()
+    return {
+        "nonterminals": sorted(table.nonterminals),
+        "terminals": list(terminals),
+        "start": table.start,
+        "rules": [{"lhs": lhs, "rhs": rhs} for lhs, rhs in rules],
+    }
+
+
+def _director_comparison(table: NormalizedTable, grammar: dict) -> dict:
+    """Compare a conflict-free table with the strong LL(k) director table of
+    ``grammar`` reduced (``remove_useless_symbols``; rows of the nonterminals
+    it removes are ignored).
+
+    Returns ``strong`` (the reduced grammar is strong LL(k): no director cell
+    holds two rules), ``director_conflicts`` (those cells), ``contradictions``
+    (table cells whose right-hand side is not in the director cell, including
+    cells the director table leaves empty), ``missing`` (director cells the
+    table omits) and ``ignored_rows``.
+    """
+    reduced = remove_useless_symbols(grammar)
+    nullable, first_k, follow_k = compute_all(reduced, table.k)
+    director = director_cells(reduced, table.k, nullable, first_k, follow_k)
+    useful = {rule["lhs"] for rule in reduced["rules"]}
+    contradictions = [
+        {"nonterminal": nt, "lookahead": la, "rhs": alts[0],
+         "director": director[nt].get(la, [])}
+        for nt in sorted(table.cells) if nt in useful
+        for la, alts in sorted(table.cells[nt].items())
+        if alts[0] not in director[nt].get(la, [])
+    ]
+    missing = [
+        {"nonterminal": nt, "lookahead": la, "alternatives": alts}
+        for nt in sorted(useful)
+        for la, alts in sorted(director[nt].items())
+        if la not in table.cells.get(nt, {})
+    ]
+    conflicts = [
+        {"nonterminal": nt, "lookahead": la, "alternatives": alts}
+        for nt in sorted(useful)
+        for la, alts in sorted(director[nt].items())
+        if len(alts) > 1
+    ]
+    return {
+        "strong": not conflicts,
+        "director_conflicts": conflicts,
+        "contradictions": contradictions,
+        "missing": missing,
+        "ignored_rows": sorted(nt for nt in table.cells if nt not in useful),
+    }
+
+
+def _show_rhs(rhs: list[str]) -> str:
+    return " ".join(rhs) or "ε"
+
+
+def _show_cells(cells: list[dict]) -> str:
+    """Cells with their ``alternatives``, for an issue text."""
+    return "; ".join(
+        f"({c['nonterminal']}, {c['lookahead']}) -> " + " | ".join(_show_rhs(r) for r in c["alternatives"])
+        for c in cells[:_MAX_REPORTED]
+    )
+
+
 def check_parse_table(
     raw: Any, *, k: int | None, grammar: dict | None, terminals: list[str] | None,
     oracle_factory: Callable[[], Callable[[str], bool | None] | None],
 ) -> dict:
     """Run the R3′ (1) check. Returns ``{"trust", "issues", "details"}`` with
-    trust in {"missing", "refuted", "well_formed", "bounded_pass"}."""
+    trust in {"missing", "not_applicable", "refuted", "well_formed",
+    "bounded_pass"} (see the module docstring)."""
     if is_missing(raw):
         return {
             "trust": "missing",
@@ -294,6 +399,20 @@ def check_parse_table(
         }
     details: dict = {"k": table.k, "start": table.start}
 
+    director = _director_comparison(table, _table_grammar(table, grammar, terminals))
+    if isinstance(grammar, dict) and not director["strong"]:
+        return {
+            "trust": "not_applicable",
+            "issues": [
+                f"the claimed grammar is not strong LL({table.k}) (director-table conflict(s): "
+                f"{_show_cells(director['director_conflicts'])}): if it is LL({table.k}), "
+                "a conflict-free table built from its rules rejects at least one word of L(G), possibly "
+                "longer than the enumeration bound, so the parse_table artifact is not run; trust capped "
+                "at well_formed (docs/VERDICT_POLICY.md R3′ (1))"
+            ],
+            "details": {"status": "not_strong", "k": table.k},
+        }
+
     conflicts = table.conflicts()
     if conflicts:
         shown = "; ".join(
@@ -316,6 +435,44 @@ def check_parse_table(
                 "details": {**details, "status": "foreign_production",
                             "foreign_productions": [{"lhs": nt, "rhs": rhs} for nt, rhs in foreign]},
             }
+
+    grammar_name = "the claimed grammar" if isinstance(grammar, dict) else "the table's own productions"
+    if director["contradictions"]:
+        shown = "; ".join(
+            f"({c['nonterminal']}, {c['lookahead']}) -> {_show_rhs(c['rhs'])}, director table: "
+            + (" | ".join(_show_rhs(r) for r in c["director"]) or "no rule")
+            for c in director["contradictions"][:_MAX_REPORTED]
+        )
+        return {
+            "trust": "refuted",
+            "issues": [
+                f"parse table is not the strong LL({table.k}) director table of {grammar_name}: "
+                f"cell(s) contradicting it: {shown}"
+            ],
+            "details": {**details, "status": "director_contradiction",
+                        "contradictions": director["contradictions"]},
+        }
+    director_cap: str | None = None
+    if not director["strong"]:
+        director_cap = (
+            f"the table's own productions do not form a strong LL({table.k}) grammar (director-table "
+            f"conflict(s): {_show_cells(director['director_conflicts'])}); the table "
+            "keeps at most one rule where the grammar allows several, a priority choice that is not an LL("
+            f"{table.k}) certificate; trust capped at well_formed (docs/VERDICT_POLICY.md R3′ (1))"
+        )
+    elif director["missing"]:
+        director_cap = (
+            f"parse table omits cell(s) of the strong LL({table.k}) director table of {grammar_name}: "
+            f"{_show_cells(director['missing'])}; an incomplete table is not an LL("
+            f"{table.k}) certificate, trust capped at well_formed (docs/VERDICT_POLICY.md R3′ (1))"
+        )
+    details["director_table"] = {
+        "grammar": "claimed" if isinstance(grammar, dict) else "table_productions",
+        "strong": director["strong"],
+        "missing": director["missing"][:_MAX_REPORTED],
+        "director_conflicts": director["director_conflicts"][:_MAX_REPORTED],
+        "ignored_rows": director["ignored_rows"],
+    }
 
     oracle = oracle_factory()
     parser = LLParser.from_table(
@@ -397,5 +554,11 @@ def check_parse_table(
                 f"(< {PARSE_TABLE_MIN_WORDS}); coverage incomplete"
             ],
             "details": {**details, "status": "low_coverage"},
+        }
+    if director_cap is not None:
+        return {
+            "trust": "well_formed",
+            "issues": [director_cap],
+            "details": {**details, "status": "not_director_table"},
         }
     return {"trust": "bounded_pass", "issues": [], "details": {**details, "status": "bounded_pass"}}
