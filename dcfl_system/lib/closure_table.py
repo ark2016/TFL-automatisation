@@ -15,7 +15,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 # `artifact`: the parts of closure_reduction's executable `proof_sketch.artifact`
-# a reduction by this operation must fill (R3' policy, 2026-11-10;
+# a reduction by this operation must fill (R2″ policy, 2026-11-10;
 # dcfl_system/lib/closure_artifact.py simulates them).
 CLOSURE_TABLE: list[dict[str, Any]] = [
     {

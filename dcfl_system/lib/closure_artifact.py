@@ -1,4 +1,4 @@
-"""Executable artifact of a closure_reduction proof (R3' policy, user decision
+"""Executable artifact of a closure_reduction proof (R2″ policy, user decision
 2026-11-10; same trust rules as stack_strategy's ``dpda``, docs/VERDICT_POLICY.md R2').
 
 A closure_reduction proof states an equality of languages. This module turns
@@ -21,6 +21,13 @@ Each side is a membership predicate: the side with L uses the task's own
 oracle (never the proof's claims), the other side uses the artifact. Both
 sides are compared on all words over the domain alphabet up to a bounded
 length (``oracle_verifier._verify_closure_reduction_artifact``).
+
+The equality alone never shows the class of S: S = L with R = Σ* (or h the
+identity) satisfies it for every L, even a non-CFL one. So a constructive
+reduction reaches ``bounded_pass`` only when S is given as ``source.dpda``,
+whose determinism is checked as in R2′ (S is then a DCFL by construction);
+with S as a ``pattern`` or a ``grammar`` the check can still refute the
+equality, but agreement leaves trust at most ``well_formed``.
 
 Artifact format (``proof_sketch.artifact``, prompts/closure_reduction.md)::
 

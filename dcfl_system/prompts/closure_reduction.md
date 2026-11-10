@@ -49,9 +49,9 @@ Output ONLY valid JSON. No markdown fences, no explanations, no commentary.
 ## Executable artifact (ReductionArtifact)
 
 A constructive verdict (`direction: "constructive"`, `verdict: "dcfl"`) needs an executable artifact,
-in the same way stack_strategy needs its `dpda`. The pipeline simulates the artifact and compares the
-two sides of your equality on **all** words up to a bounded length, using the task's own membership
-oracle for L:
+in the same way stack_strategy needs its `dpda`, and its source S must be given as a `dpda`. The pipeline
+simulates the artifact and compares the two sides of your equality on **all** words up to a bounded length,
+using the task's own membership oracle for L:
 
 | operation | constructive claim | destructive claim |
 |---|---|---|
@@ -89,8 +89,9 @@ non-DCFL for a destructive one), and Δ is `source.alphabet`.
     `{a^(2k) b^(2k) | k >= 1}`, `{a^n b^m | n != m}`. Superscript letters (`aⁿ`) are not parsed.
   - `grammar` is a context-free grammar of S. An ε-rule has `"rhs": []`.
   - `dpda` is a deterministic automaton for S, in stack_strategy's `dpda` format. It is checked for determinism
-    like stack_strategy's `dpda`. Use it only in a constructive proof: a deterministic automaton for S would
-    show that S is a DCFL, so a destructive proof gives S as a `pattern` or a `grammar`.
+    like stack_strategy's `dpda`, and it is what shows that S is a DCFL. A constructive proof gives S as a `dpda`:
+    only then can it carry a `dcfl` verdict. Use it only in a constructive proof: a deterministic automaton for S
+    would show that S is a DCFL, so a destructive proof gives S as a `pattern` or a `grammar`.
   - `alphabet` is Δ, the letters of S (often equal to Σ). A word with a letter outside Δ is not in S.
 - `regular` describes R. It is required for `reg_intersection`, `null` otherwise. Give **exactly one** of
   `dfa` or `regex`:
@@ -102,16 +103,21 @@ non-DCFL for a destructive one), and Δ is `source.alphabet`.
 
 How the pipeline treats the artifact:
 
-- The two sides agree on every checked word: constructive trust `bounded_pass` (confidence cap 0.85).
-  For a destructive proof, the agreement confirms the equality but does not raise trust above `well_formed`.
+- The two sides agree on every checked word and S is a `dpda`: constructive trust `bounded_pass`
+  (confidence cap 0.85).
+- The two sides agree, but S is a `pattern` or a `grammar`: the equality is confirmed, but nothing checks that
+  S is a DCFL (S = L with R = Σ* would pass any equality check), so trust stays at most `well_formed`, which is
+  not enough for a `dcfl` verdict. The same holds for a destructive proof: agreement does not raise its trust
+  above `well_formed`.
 - The sides disagree on a word, or the artifact is malformed (unknown state, two transitions for one `(from, read)`,
   a letter without an image, two source descriptions at once, a nondeterministic `dpda`): `refuted`.
   You are retried with the counterexample.
 - `artifact: null`, or the part the operation needs is missing: trust stays at most `well_formed`, which is not
   enough for a `dcfl` verdict.
 
-The artifact checks the equality on short words only. That S is a DCFL (or a non-DCFL) is still your claim:
-name S as a known language and say why it is one in `source_language`.
+The artifact checks the equality on short words only. In a destructive proof, that S is a non-DCFL is still
+your claim: name S as a known language and say why it is one in `source_language`. In a constructive proof,
+also name S and why it is a DCFL; the `dpda` is the part the pipeline checks.
 
 ## DCFL closure facts (runtime operation identifiers are listed separately)
 
@@ -172,7 +178,8 @@ belongs to shallit.
 1. **Check if the language can be expressed** as a complement, inverse homomorphism, or regular intersection of a known DCFL.
 
 2. **For constructive proofs:** Identify the source DCFL, specify the exact operation, and argue why the result equals L.
-   Fill `artifact` (see "Executable artifact"): without it the reduction cannot carry a `dcfl` verdict.
+   Fill `artifact` (see "Executable artifact"), with S as a `dpda`: without it the reduction cannot carry a
+   `dcfl` verdict.
 
 3. **For destructive proofs:** Show that applying a closed operation to L yields a known non-DCFL language. By contrapositive, L is not DCFL.
    Fill `artifact` as well when you can: a wrong equality is then refuted on a concrete word.
@@ -185,7 +192,8 @@ belongs to shallit.
 
 ## Worked example
 
-Task: L = {a²ᵏb²ᵏ | k >= 1} over Σ = {a, b}. S = {aⁿbⁿ | n >= 1} is a known DCFL, R = (aa)*(bb)* is regular,
+Task: L = {a²ᵏb²ᵏ | k >= 1} over Σ = {a, b}. S = {aⁿbⁿ | n >= 1} is a DCFL, given by a DPDA that pushes A on
+every a, pops it on every b and accepts at the bottom marker Z0 after at least one b. R = (aa)*(bb)* is regular,
 and aⁿbⁿ ∈ R if and only if n is even, so S ∩ R = L.
 
 ```json
@@ -197,11 +205,30 @@ and aⁿbⁿ ∈ R if and only if n is even, so S ∩ R = L.
     "kind": "closure_reduction",
     "operation": "reg_intersection",
     "direction": "constructive",
-    "source_language": "S = {aⁿbⁿ | n >= 1} — известный DCFL",
+    "source_language": "S = {aⁿbⁿ | n >= 1} — DCFL (ДМПА: push A на каждую a, pop на каждую b, принятие на дне стека после хотя бы одной b)",
     "transformation": "R = (aa)*(bb)*; L = S ∩ R",
     "result_argument": "aⁿbⁿ ∈ R ⇔ n чётно, поэтому S ∩ R = {a²ᵏb²ᵏ | k >= 1} = L; DCFL замкнут относительно ∩ REG, значит L — DCFL.",
     "artifact": {
-      "source": {"alphabet": ["a", "b"], "pattern": "{a^n b^n | n >= 1}", "grammar": null, "dpda": null},
+      "source": {
+        "alphabet": ["a", "b"],
+        "pattern": null,
+        "grammar": null,
+        "dpda": {
+          "states": ["q0", "q1", "q2"],
+          "start": "q0",
+          "accept_states": ["q2"],
+          "accept_mode": "final_state",
+          "stack_alphabet": ["Z0", "A"],
+          "initial_stack": ["Z0"],
+          "transitions": [
+            {"from": "q0", "read": "a", "top": "Z0", "to": "q0", "push": ["A", "Z0"]},
+            {"from": "q0", "read": "a", "top": "A", "to": "q0", "push": ["A", "A"]},
+            {"from": "q0", "read": "b", "top": "A", "to": "q1", "push": []},
+            {"from": "q1", "read": "b", "top": "A", "to": "q1", "push": []},
+            {"from": "q1", "read": null, "top": "Z0", "to": "q2", "push": ["Z0"]}
+          ]
+        }
+      },
       "regular": {
         "dfa": {
           "states": ["a_even", "a_odd", "b_odd", "b_even"],
@@ -222,7 +249,7 @@ and aⁿbⁿ ∈ R if and only if n is even, so S ∩ R = L.
     }
   },
   "evidence": [
-    "Известный DCFL: S = {aⁿbⁿ | n >= 1}",
+    "DCFL: S = {aⁿbⁿ | n >= 1}, задан ДМПА (artifact.source.dpda)",
     "Регулярный фильтр: R = (aa)*(bb)*",
     "aⁿbⁿ ∈ R ⇔ n чётно ⇒ S ∩ R = L",
     "DCFL замкнут относительно ∩ REG ⇒ L — DCFL"

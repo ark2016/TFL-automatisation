@@ -1,10 +1,12 @@
-"""closure_reduction's executable artifact (R3' policy, user decision 2026-11-10).
+"""closure_reduction's executable artifact (R2″ policy, user decision 2026-11-10).
 
 A constructive closure_reduction carries an artifact -- the known language S,
 a DFA/regex for R, a homomorphism h -- that oracle_verifier simulates against
 the task's own membership oracle on all short words, as it does for
-stack_strategy's dpda: agreement -> bounded_pass (cap 0.85), a counterexample
-or a malformed artifact -> refuted, no artifact -> at most well_formed.
+stack_strategy's dpda: agreement with S given as a dpda -> bounded_pass (cap
+0.85), agreement with S as a pattern or grammar (nothing shows S is a DCFL) ->
+at most well_formed, a counterexample or a malformed artifact -> refuted, no
+artifact -> at most well_formed.
 """
 from __future__ import annotations
 
@@ -38,15 +40,17 @@ def _ir(pattern: str, alphabet: list[str]) -> dict:
     }
 
 
-def _verify(operation: str, artifact, ir: dict, direction: str = "constructive") -> dict:
+def _verify(operation, artifact, ir: dict, direction="constructive", **proof_fields) -> dict:
+    proof = {
+        "kind": "closure_reduction", "operation": operation, "direction": direction,
+        "source_language": "S", "transformation": "T", "result_argument": "A",
+        "artifact": artifact, **proof_fields,
+    }
+    proof = {k: v for k, v in proof.items() if v is not None or k == "artifact"}
     output = {
         "agent_name": "closure_reduction", "status": "success",
         "verdict": "dcfl" if direction == "constructive" else "non_dcfl",
-        "proof_sketch": {
-            "kind": "closure_reduction", "operation": operation, "direction": direction,
-            "source_language": "S", "transformation": "T", "result_argument": "A",
-            "artifact": artifact,
-        },
+        "proof_sketch": proof,
         "evidence": [], "confidence": 0.9, "errors": [],
     }
     return verify_agent_results({"closure_reduction": output}, ir)["closure_reduction"]
@@ -68,6 +72,7 @@ ANBN_DPDA = {
         {"from": "q1", "read": None, "top": "Z", "to": "q2", "push": ["Z"]},
     ],
 }
+ANBN_SOURCE = {"alphabet": ["a", "b"], "pattern": None, "grammar": None, "dpda": ANBN_DPDA}
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +86,8 @@ def test_mock_reduction_reaches_bounded_pass():
     assert entry["trust"] == "bounded_pass", entry
     details = entry["details"]
     assert details["equation"] == "L = S ∩ R"
-    assert details["source_kind"] == "pattern" and details["regular_kind"] == "dfa"
+    assert details["source_kind"] == "dpda" and details["regular_kind"] == "dfa"
+    assert details["source_certificate"] == "dpda"
     assert details["words_checked"] >= 30
     assert "closure_artifact_simulation" in entry["checks_run"]
     assert entry["checks_passed"] == entry["checks_total"]
@@ -99,7 +105,7 @@ def test_mock_with_wrong_dfa_is_refuted_by_the_shortest_counterexample():
 
 
 def test_regex_form_of_r_is_simulated_too():
-    entry = _verify("reg_intersection", {"source": ANBN, "regular": {"dfa": None, "regex": "(aa)*(bb)*"},
+    entry = _verify("reg_intersection", {"source": ANBN_SOURCE, "regular": {"dfa": None, "regex": "(aa)*(bb)*"},
                                          "homomorphism": None}, A2KB2K_IR)
     assert entry["trust"] == "bounded_pass", entry
     assert entry["details"]["regular_kind"] == "regex"
@@ -112,8 +118,7 @@ def test_wrong_regex_is_refuted():
 
 
 def test_source_as_dpda_is_determinism_checked_and_simulated():
-    source = {"alphabet": ["a", "b"], "pattern": None, "grammar": None, "dpda": ANBN_DPDA}
-    entry = _verify("reg_intersection", {"source": source, "regular": {"dfa": EVEN_DFA, "regex": None},
+    entry = _verify("reg_intersection", {"source": ANBN_SOURCE, "regular": {"dfa": EVEN_DFA, "regex": None},
                                          "homomorphism": None}, A2KB2K_IR)
     assert entry["trust"] == "bounded_pass", entry
     assert entry["details"]["source_kind"] == "dpda"
@@ -132,14 +137,59 @@ def test_nondeterministic_source_dpda_is_refuted():
     assert any("not deterministic" in issue for issue in entry["issues"])
 
 
-def test_source_as_grammar():
-    grammar = {"start": "S", "rules": [{"lhs": "S", "rhs": ["a", "S", "b"]},
-                                       {"lhs": "S", "rhs": ["a", "b"]}]}
-    source = {"alphabet": ["a", "b"], "pattern": None, "grammar": grammar, "dpda": None}
+@pytest.mark.parametrize("source", [
+    ANBN,
+    {"alphabet": ["a", "b"], "pattern": None, "dpda": None,
+     "grammar": {"start": "S", "rules": [{"lhs": "S", "rhs": ["a", "S", "b"]},
+                                         {"lhs": "S", "rhs": ["a", "b"]}]}},
+], ids=["pattern", "grammar"])
+def test_source_as_pattern_or_grammar_confirms_the_equality_but_stays_well_formed(source):
+    # The equality L = S ∩ R holds, but nothing machine-checks that S is a DCFL.
     entry = _verify("reg_intersection", {"source": source, "regular": {"dfa": EVEN_DFA, "regex": None},
                                          "homomorphism": None}, A2KB2K_IR)
-    assert entry["trust"] == "bounded_pass", entry
-    assert entry["details"]["source_kind"] == "grammar"
+    assert entry["trust"] == "well_formed", entry
+    assert entry["details"]["artifact"] == "bounded_pass"
+    assert entry["details"]["source_certificate"] == "missing"
+    assert entry["checks_passed"] == entry["checks_total"]
+    assert any("artifact.source.dpda" in issue for issue in entry["issues"])
+
+
+# ---------------------------------------------------------------------------
+# Trivial reductions: the equality alone must not certify a non-DCFL language
+# ---------------------------------------------------------------------------
+
+ANBNCN = _ir("{a^n b^n c^n | n >= 1}", ["a", "b", "c"])
+ANBNCN_SOURCE = {"alphabet": ["a", "b", "c"], "pattern": "{a^n b^n c^n | n >= 1}",
+                 "grammar": None, "dpda": None}
+
+
+def test_s_equal_to_l_with_r_all_words_does_not_reach_bounded_pass():
+    # L is not even a CFL; L = L ∩ Σ* holds on every word.
+    entry = _verify("reg_intersection", {"source": ANBNCN_SOURCE,
+                                         "regular": {"dfa": None, "regex": "(a|b|c)*"},
+                                         "homomorphism": None}, ANBNCN)
+    assert entry["trust"] == "well_formed", entry
+    assert entry["details"]["artifact"] == "bounded_pass"
+    assert entry["details"]["words_checked"] >= 30
+
+
+def test_s_equal_to_l_with_identity_homomorphism_does_not_reach_bounded_pass():
+    identity = [{"letter": c, "image": c} for c in "abc"]
+    entry = _verify("inv_homomorphism", {"source": ANBNCN_SOURCE, "regular": None,
+                                         "homomorphism": identity}, ANBNCN)
+    assert entry["trust"] == "well_formed", entry
+
+
+def test_trivial_reduction_gives_no_dcfl_verdict_at_the_gate():
+    output = _mock("dcfl_a2kb2k_closure_reduction.json")
+    output["proof_sketch"]["artifact"] = {
+        "source": ANBNCN_SOURCE, "regular": {"dfa": None, "regex": "(a|b|c)*"}, "homomorphism": None,
+    }
+    verification = verify_agent_results({"closure_reduction": output}, ANBNCN)
+    assert verification["closure_reduction"]["trust"] == "well_formed"
+    out = _apply_verdict_gate(_mock("dcfl_a2kb2k_reasoning.json"), {"closure_reduction": output},
+                              verification, retry_count=0, max_retries=2)
+    assert out["verdict"] != "dcfl", out["verdict_gate"]
 
 
 @pytest.mark.parametrize("bad_dfa_change,needle", [
@@ -221,9 +271,51 @@ def test_inverse_homomorphism_constructive():
     # h(a) = aa, h(b) = b: h(w) ∈ {a^k b^k | k >= 1} iff w = a^n b^(2n), n >= 1.
     h = [{"letter": "a", "image": "aa"}, {"letter": "b", "image": "b"}]
     for operation in ("inv_homomorphism", "inverse_homomorphism"):
-        entry = _verify(operation, {"source": ANBN, "regular": None, "homomorphism": h}, A_N_B_2N)
+        entry = _verify(operation, {"source": ANBN_SOURCE, "regular": None, "homomorphism": h}, A_N_B_2N)
         assert entry["trust"] == "bounded_pass", entry
         assert entry["details"]["equation"] == "L = h⁻¹(S)"
+    # The same equality with S as a pattern: confirmed, but not certified.
+    entry = _verify("inv_homomorphism", {"source": ANBN, "regular": None, "homomorphism": h}, A_N_B_2N)
+    assert entry["trust"] == "well_formed", entry
+    assert entry["details"]["artifact"] == "bounded_pass"
+
+
+# ---------------------------------------------------------------------------
+# An artifact never raises the status over failed or absent structural checks
+# ---------------------------------------------------------------------------
+
+def _good_artifact() -> dict:
+    return {"source": ANBN_SOURCE, "regular": {"dfa": EVEN_DFA, "regex": None}, "homomorphism": None}
+
+
+@pytest.mark.parametrize("operation", [None, "union"])
+def test_artifact_without_a_checkable_operation_stays_not_verified(operation):
+    entry = _verify(operation, _good_artifact(), A2KB2K_IR, direction=None,
+                    source_language="", transformation="")
+    assert entry["trust"] == "not_verified", entry
+    assert entry["checks_run"] == []
+
+
+def test_inverse_homomorphism_without_direction_is_lifted_to_well_formed_at_most():
+    h = [{"letter": "a", "image": "aa"}, {"letter": "b", "image": "b"}]
+    entry = _verify("inv_homomorphism", {"source": ANBN_SOURCE, "regular": None, "homomorphism": h},
+                    A_N_B_2N, direction=None)
+    # No structural check ran; the artifact's equality holds but there is no
+    # direction for it to vouch for, so it never gives bounded_pass.
+    assert entry["trust"] == "well_formed", entry
+    assert entry["checks_run"] == ["closure_artifact_simulation"]
+
+
+def test_inverse_homomorphism_without_direction_and_without_artifact_is_not_verified():
+    entry = _verify("inv_homomorphism", None, A_N_B_2N, direction=None)
+    assert entry["trust"] == "not_verified", entry
+    assert entry["checks_run"] == []
+
+
+def test_failed_structural_check_is_not_lifted_by_a_passing_artifact():
+    entry = _verify("reg_intersection", _good_artifact(), A2KB2K_IR, transformation="")
+    assert entry["trust"] == "not_verified", entry
+    assert "closure_artifact_simulation" in entry["checks_run"]
 
 
 def test_wrong_homomorphism_is_refuted():
@@ -250,11 +342,47 @@ COMPLEMENT_GRAMMAR = {"start": "S", "rules": [
 A_N_B_M_NEQ = _ir("{a^n b^m | n != m}", ["a", "b"])
 
 
+# A deterministic automaton for the same S: q0 counts a's, q1 matches b's
+# against them, q_over has read more b's than a's (still in a*b*), q_ba has
+# read "ba" and accepts everything after it. Accepting: (q0, Z) = ε and
+# (q1, Z) = a^n b^n, n >= 1 (ε-moves into the sink q_acc), and q_ba.
+COMPLEMENT_DPDA = {
+    "states": ["q0", "q1", "q_over", "q_ba", "q_acc"], "start": "q0",
+    "accept_states": ["q_ba", "q_acc"], "accept_mode": "final_state",
+    "stack_alphabet": ["Z", "A"], "initial_stack": ["Z"],
+    "transitions": [
+        {"from": "q0", "read": "a", "top": "Z", "to": "q0", "push": ["A", "Z"]},
+        {"from": "q0", "read": "a", "top": "A", "to": "q0", "push": ["A", "A"]},
+        {"from": "q0", "read": "b", "top": "A", "to": "q1", "push": []},
+        {"from": "q0", "read": "b", "top": "Z", "to": "q_over", "push": ["Z"]},
+        {"from": "q0", "read": None, "top": "Z", "to": "q_acc", "push": ["Z"]},
+        {"from": "q1", "read": "b", "top": "A", "to": "q1", "push": []},
+        {"from": "q1", "read": "b", "top": "Z", "to": "q_over", "push": ["Z"]},
+        {"from": "q1", "read": "a", "top": "A", "to": "q_ba", "push": ["A"]},
+        {"from": "q1", "read": "a", "top": "Z", "to": "q_ba", "push": ["Z"]},
+        {"from": "q1", "read": None, "top": "Z", "to": "q_acc", "push": ["Z"]},
+        {"from": "q_over", "read": "b", "top": "Z", "to": "q_over", "push": ["Z"]},
+        {"from": "q_over", "read": "a", "top": "Z", "to": "q_ba", "push": ["Z"]},
+    ] + [
+        {"from": "q_ba", "read": c, "top": top, "to": "q_ba", "push": [top]}
+        for c in "ab" for top in "ZA"
+    ],
+}
+
+
 def test_complement_constructive():
-    source = {"alphabet": ["a", "b"], "pattern": None, "grammar": COMPLEMENT_GRAMMAR, "dpda": None}
+    source = {"alphabet": ["a", "b"], "pattern": None, "grammar": None, "dpda": COMPLEMENT_DPDA}
     entry = _verify("complement", {"source": source, "regular": None, "homomorphism": None}, A_N_B_M_NEQ)
     assert entry["trust"] == "bounded_pass", entry
     assert entry["details"]["equation"] == "L = Σ* ∖ S"
+    assert entry["details"]["determinism"] == "verified"
+
+
+def test_complement_constructive_with_a_grammar_source_stays_well_formed():
+    source = {"alphabet": ["a", "b"], "pattern": None, "grammar": COMPLEMENT_GRAMMAR, "dpda": None}
+    entry = _verify("complement", {"source": source, "regular": None, "homomorphism": None}, A_N_B_M_NEQ)
+    assert entry["trust"] == "well_formed", entry
+    assert entry["details"]["artifact"] == "bounded_pass"
 
 
 def test_complement_forgetting_the_unordered_words_is_refuted():
@@ -303,8 +431,7 @@ def test_destructive_inverse_homomorphism_uses_the_source_alphabet():
 
 
 def test_destructive_source_dpda_is_refuted():
-    source = {"alphabet": ["a", "b"], "pattern": None, "grammar": None, "dpda": ANBN_DPDA}
-    entry = _verify("complement", {"source": source, "regular": None, "homomorphism": None},
+    entry = _verify("complement", {"source": ANBN_SOURCE, "regular": None, "homomorphism": None},
                     A2KB2K_IR, direction="destructive")
     assert entry["trust"] == "refuted", entry
     assert any("destructive" in issue for issue in entry["issues"])
@@ -390,21 +517,37 @@ def test_schema_artifact_is_required_and_nullable():
 # Verdict gate and end-to-end pipeline
 # ---------------------------------------------------------------------------
 
-def _gate(trust: str) -> dict:
-    agent_results = {"closure_reduction": _mock("dcfl_a2kb2k_closure_reduction.json")}
-    reasoning = _mock("dcfl_a2kb2k_reasoning.json")
-    return _apply_verdict_gate(reasoning, agent_results, {"closure_reduction": {"trust": trust}},
-                               retry_count=0, max_retries=2)
+def _gate(output: dict) -> tuple[dict, str]:
+    """The gate on the trust ``verify_agent_results`` gives *output* (never an
+    injected trust value)."""
+    agent_results = {"closure_reduction": output}
+    verification = verify_agent_results(agent_results, A2KB2K_IR)
+    out = _apply_verdict_gate(_mock("dcfl_a2kb2k_reasoning.json"), agent_results, verification,
+                              retry_count=0, max_retries=2)
+    return out, verification["closure_reduction"]["trust"]
 
 
-def test_gate_bounded_pass_caps_at_085():
-    out = _gate("bounded_pass")
+def test_gate_dpda_backed_reduction_caps_at_085():
+    out, trust = _gate(_mock("dcfl_a2kb2k_closure_reduction.json"))
+    assert trust == "bounded_pass"
     assert out["verdict"] == "dcfl" and out["confidence"] == 0.85
 
 
-@pytest.mark.parametrize("trust", ["refuted", "well_formed"])
-def test_gate_refuted_or_missing_artifact_blocks_dcfl(trust):
-    out = _gate(trust)
+def _with_artifact_change(**change) -> dict:
+    output = _mock("dcfl_a2kb2k_closure_reduction.json")
+    artifact = output["proof_sketch"]["artifact"]
+    output["proof_sketch"]["artifact"] = None if change.get("drop") else {**artifact, **change}
+    return output
+
+
+@pytest.mark.parametrize("output,expected_trust", [
+    (_mock("dcfl_a2kb2k_wrong_dfa_closure_reduction.json"), "refuted"),
+    (_with_artifact_change(drop=True), "well_formed"),
+    (_with_artifact_change(source=ANBN), "well_formed"),
+], ids=["refuted", "missing", "pattern_source"])
+def test_gate_blocks_dcfl_without_a_certified_artifact(output, expected_trust):
+    out, trust = _gate(output)
+    assert trust == expected_trust
     assert out["verdict"] is None and out["action"] == "retry", out["verdict_gate"]
 
 

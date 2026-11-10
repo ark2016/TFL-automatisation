@@ -109,7 +109,7 @@ def _json_blocks(path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 # Every specialist prompt has a fully concrete worked example (closure_reduction
-# got one with its executable artifact, R3' policy 2026-11-10).
+# got one with its executable artifact, R2″ policy 2026-11-10).
 _HAS_WORKED_EXAMPLE = DCFL_SPECIALIST_NAMES
 
 

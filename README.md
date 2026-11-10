@@ -314,18 +314,21 @@ verdict requires more than prose: `stack_strategy`'s `proof_sketch` must include
 `dpda` field ⇒ `status: "uncertain"`/`"not_applicable"`, never a bare prose "strategy" standing in for a
 verdict.
 
-**Executable closure reduction (R3′, user decision 2026-11-10).** A constructive `closure_reduction` (L = S ∩ R,
+**Executable closure reduction (R2″, user decision 2026-11-10).** A constructive `closure_reduction` (L = S ∩ R,
 L = h⁻¹(S), L = Σ* ∖ S, with S a known DCFL) carries `proof_sketch.artifact`: the source language S (an
 exponent pattern, a grammar or a DPDA), a DFA or regex for R, the homomorphism h as `{letter, image}` pairs.
 `dcfl_system/lib/closure_artifact.py` turns the claimed equality into two membership predicates: the side with L
 uses the task's own oracle, the other side simulates the artifact (`agent_system.lib.dfa_runner` for R, the DPDA
 check of R2′ for a DPDA source). The oracle verifier compares them on the sampler's words and on every word over
-the alphabet up to the R2′ length bound. Agreement on ≥ 30 decided words ⇒ `bounded_pass` (cap 0.85); a
-disagreeing word or a malformed artifact ⇒ `refuted`, retried with the counterexample; no artifact ⇒ at most
-`well_formed`, which cannot carry `dcfl`. A destructive reduction may carry the same artifact: a wrong equality
-is refuted, but agreement does not raise its trust above `well_formed`. Mock set: `dcfl_a2kb2k`
-(`task_a2kb2k.json`, L = {a²ᵏb²ᵏ | k ≥ 1} = {aⁿbⁿ | n ≥ 1} ∩ (aa)*(bb)*), and `dcfl_a2kb2k_wrong_dfa_closure_reduction.json` with a
-wrong DFA that the check refutes on `ab`.
+the alphabet up to the R2′ length bound. Agreement on ≥ 30 decided words with S given as a DPDA (its determinism
+checked as in R2′, so S is a DCFL by construction) ⇒ `bounded_pass` (cap 0.85). With S as a pattern or a grammar,
+agreement leaves trust at most `well_formed`: the equality alone does not show that S is a DCFL (S = L with
+R = Σ*, or h the identity, passes it for any L, even a non-CFL one). A disagreeing word or a malformed artifact ⇒
+`refuted`, retried with the counterexample; no artifact ⇒ at most `well_formed`, which cannot carry `dcfl`. A
+destructive reduction may carry the same artifact: a wrong equality is refuted (as is a DPDA source, which would
+make S a DCFL), but agreement does not raise its trust above `well_formed`. Mock set: `dcfl_a2kb2k`
+(`task_a2kb2k.json`, L = {a²ᵏb²ᵏ | k ≥ 1} = {aⁿbⁿ | n ≥ 1} ∩ (aa)*(bb)*, S given by a three-state DPDA), and
+`dcfl_a2kb2k_wrong_dfa_closure_reduction.json` with a wrong DFA that the check refutes on `ab`.
 - **Inherent ambiguity.** Every DCFL has an unambiguous grammar, so an *inherently* ambiguous language (every CFG for it is ambiguous) is not DCFL. One ambiguous grammar proves nothing.
 - **Closure under complement (DCFL-specific).** DCFLs are closed under complement but CFLs are not — useful discriminator.
 

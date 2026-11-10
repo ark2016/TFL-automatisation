@@ -401,7 +401,7 @@ def _simulation_words(
     task_ir: dict, alphabet: Any, *, with_samples: bool,
 ) -> list[str]:
     """The words an executable artifact is simulated on (docs/VERDICT_POLICY.md
-    R2'/R3'): with ``with_samples``, the task's own ``word_sampler`` picks
+    R2′/R2″): with ``with_samples``, the task's own ``word_sampler`` picks
     (positive and negative, length <= ``_DPDA_MAX_WORD_LEN``; may raise), plus,
     always, every word over ``alphabet`` up to the length
     ``_full_enumeration_max_len`` allows within ``_DPDA_FULL_ENUM_WORD_BUDGET``.
@@ -513,20 +513,24 @@ def _verify_closure_reduction(proof_sketch: dict, task_ir: dict) -> dict[str, An
         )
 
     n_passed = sum(1 for p in passed if p)
-    has_artifact = proof_sketch.get("artifact") is not None
-    if not checks_run and not has_artifact:
-        return _make_result("not_verified", checks_run, 0,
-                            ["no verifiable fields found in proof_sketch"])
-    status = "well_formed" if (not checks_run or n_passed == len(checks_run)) else "not_verified"
+    if not checks_run:
+        status = "not_verified"
+        issues.append("no verifiable fields found in proof_sketch")
+    else:
+        status = "well_formed" if n_passed == len(checks_run) else "not_verified"
+    # Only an artifact check of its own may raise the status, and only when no
+    # structural check failed (an empty structural list fails none).
+    structural_ok = n_passed == len(checks_run)
 
     canonical_op = normalize_operation(operation)
-    if canonical_op is None:
-        # An operation outside the three closed ones the contract names: no
-        # artifact check applies (and no closure argument follows from it).
+    if canonical_op is None or (not checks_run and proof_sketch.get("artifact") is None):
+        # An operation outside the three closed ones the contract names (no
+        # artifact check applies, and no closure argument follows from it),
+        # or nothing at all to check.
         return _make_result(status, checks_run, n_passed, issues if issues else None)
 
-    # R3' (user decision 2026-11-10): the reduction's executable artifact,
-    # simulated against the task's oracle like stack_strategy's dpda.
+    # R2″ (user decision 2026-11-10): the reduction's executable artifact,
+    # simulated against the task's oracle like stack_strategy's dpda (R2′).
     art_status, art_check, art_issue, art_details = _verify_closure_reduction_artifact(
         proof_sketch, task_ir, canonical_op,
     )
@@ -537,12 +541,13 @@ def _verify_closure_reduction(proof_sketch: dict, task_ir: dict) -> dict[str, An
     if art_status == "refuted":
         result = _make_result("refuted", checks_run, n_passed, issues)
     else:
-        if art_status == "bounded_pass":
-            status = "bounded_pass"
+        if art_status in ("bounded_pass", "passed"):
             n_passed += 1
-        elif art_status == "passed":
-            # destructive direction: the equality held, but trust is not raised
-            n_passed += 1
+            if structural_ok:
+                # "passed": the equality held, but nothing machine-checks the
+                # class of S, so the artifact vouches for no more than the
+                # structure does (well_formed).
+                status = art_status if art_status == "bounded_pass" else "well_formed"
         result = _make_result(status, checks_run, n_passed, issues if issues else None)
     result["details"] = art_details
     return result
@@ -551,7 +556,7 @@ def _verify_closure_reduction(proof_sketch: dict, task_ir: dict) -> dict[str, An
 def _verify_closure_reduction_artifact(
     proof_sketch: dict, task_ir: dict, operation: str,
 ) -> tuple[str | None, str, str, dict[str, Any]]:
-    """R3' (user decision 2026-11-10): check a closure_reduction proof's
+    """R2″ (user decision 2026-11-10): check a closure_reduction proof's
     executable ``artifact`` (``dcfl_system.lib.closure_artifact``) the way
     ``_verify_stack_strategy_dpda`` checks a dpda.
 
@@ -570,12 +575,17 @@ def _verify_closure_reduction_artifact(
     - ``refuted`` -- the artifact is malformed (``ArtifactError``: not a DFA,
       h undefined on a letter, a nondeterministic source dpda, ...) or the
       two sides disagree on a word (the counterexamples are in ``details``);
-    - ``bounded_pass`` -- constructive proof, the sides agree on at least
-      ``_DPDA_MIN_WORDS`` decided words (confidence cap 0.85);
-    - ``passed`` -- the same agreement for a destructive proof: the
-      equality is confirmed, trust stays where the structural checks put it
-      (at most ``well_formed``). The policy raises trust only for a
-      constructive reduction; that S is not a DCFL is not machine-checked;
+    - ``bounded_pass`` -- constructive proof whose S is ``source.dpda``
+      (deterministic, checked as in R2′, so S is a DCFL by construction),
+      and the sides agree on at least ``_DPDA_MIN_WORDS`` decided words
+      (confidence cap 0.85);
+    - ``passed`` -- the same agreement, but the class of S is not
+      machine-checked: a constructive proof whose S is a ``pattern`` or a
+      ``grammar`` (nothing shows that S is a DCFL -- with S = L and
+      R = Σ*, or h the identity, the equality holds for any L, even a
+      non-CFL one), or a destructive / undirected proof (nothing shows that
+      S is not a DCFL). Trust stays where the structural checks put it
+      (at most ``well_formed``);
     - ``None`` -- nothing checked: artifact missing (as a missing dpda: at
       most ``well_formed``), no task oracle, a source the oracle layer
       cannot parse, or too few decided words.
@@ -652,9 +662,20 @@ def _verify_closure_reduction_artifact(
             "-- coverage incomplete, trust stays at most well_formed"
         ), {**details, "artifact": "unchecked"}
 
-    if direction == "destructive":
-        return "passed", check_name, "", {**details, "artifact": "bounded_pass"}
-    return "bounded_pass", check_name, "", {**details, "artifact": "bounded_pass"}
+    details["artifact"] = "bounded_pass"   # the equality held on every checked word
+    if direction != "constructive":
+        return "passed", check_name, "", details
+    if equation.details.get("source_kind") != "dpda":
+        # The equality alone does not show that S is a DCFL (S = L itself
+        # passes it), so only a deterministic automaton for S, checked as in
+        # R2′, lets a constructive reduction reach bounded_pass.
+        return "passed", check_name, (
+            f"artifact.source is a {equation.details.get('source_kind')}: the equality "
+            f"{equation.text} holds on all {checked} checked words, but nothing checks that "
+            "S is a DCFL -- give S as artifact.source.dpda for bounded_pass; trust stays at "
+            "most well_formed"
+        ), {**details, "source_certificate": "missing"}
+    return "bounded_pass", check_name, "", {**details, "source_certificate": "dpda"}
 
 
 # ---------------------------------------------------------------------------

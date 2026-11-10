@@ -118,12 +118,13 @@ _PROOF_SKETCH_BY_AGENT: dict[str, dict] = {
         "transformation": schema_string(),
         "result_argument": schema_string(),
         # REQUIRED whenever status == "success" for a constructive proof
-        # (R3' policy, user decision 2026-11-10): the executable artifact
+        # (R2″ policy, user decision 2026-11-10): the executable artifact
         # oracle_verifier simulates to check the claimed equality against
         # the task's oracle on all short words (dcfl_system/lib/
         # closure_artifact.py). Nullable for the same reason as `dpda`.
         # `source`: the known language S -- exactly one of pattern /
-        # grammar / dpda is non-null. `regular`: R for reg_intersection
+        # grammar / dpda is non-null; only a `dpda` source lets a
+        # constructive reduction reach bounded_pass. `regular`: R for reg_intersection
         # (exactly one of dfa / regex). `homomorphism`: h for
         # inv_homomorphism, one {letter, image} per letter. Arrays, not
         # maps keyed by state or letter, so the schema stays closed.

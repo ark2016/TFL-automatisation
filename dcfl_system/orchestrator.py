@@ -553,9 +553,11 @@ _VALID_ACTIONS = {"done", "retry", "fail"}
 # way depending on proof_sketch.direction. Both constructive agents reach
 # bounded_pass (cap 0.85) only through an executable artifact the oracle
 # verifier simulates: stack_strategy's `dpda` (R2'), closure_reduction's
-# `artifact` (R3', user decision 2026-11-10: S / R / h checked against the
-# task oracle on all short words). A missing artifact leaves trust at most
-# well_formed and a refuted one is skipped (R2), the same for both agents.
+# `artifact` (R2″, user decision 2026-11-10: S / R / h checked against the
+# task oracle on all short words; bounded_pass only when S itself is given as
+# a DPDA checked as in R2', since the equality alone holds for S = L). A
+# missing artifact leaves trust at most well_formed and a refuted one is
+# skipped (R2), the same for both agents.
 _CONSTRUCTIVE_DCFL_AGENTS = ("stack_strategy", "closure_reduction")
 _DESTRUCTIVE_NON_DCFL_AGENTS = ("dcfl_pumping", "shallit", "inh_ambiguity", "closure_reduction")
 

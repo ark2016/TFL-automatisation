@@ -12,9 +12,23 @@
     "artifact": {
       "source": {
         "alphabet": ["a", "b"],
-        "pattern": "{a^n b^n | n >= 1}",
+        "pattern": null,
         "grammar": null,
-        "dpda": null
+        "dpda": {
+          "states": ["q0", "q1", "q2"],
+          "start": "q0",
+          "accept_states": ["q2"],
+          "accept_mode": "final_state",
+          "stack_alphabet": ["Z0", "A"],
+          "initial_stack": ["Z0"],
+          "transitions": [
+            {"from": "q0", "read": "a", "top": "Z0", "to": "q0", "push": ["A", "Z0"]},
+            {"from": "q0", "read": "a", "top": "A", "to": "q0", "push": ["A", "A"]},
+            {"from": "q0", "read": "b", "top": "A", "to": "q1", "push": []},
+            {"from": "q1", "read": "b", "top": "A", "to": "q1", "push": []},
+            {"from": "q1", "read": null, "top": "Z0", "to": "q2", "push": ["Z0"]}
+          ]
+        }
       },
       "regular": {
         "dfa": {
@@ -36,7 +50,7 @@
     }
   },
   "evidence": [
-    "Известный DCFL: S = {aⁿbⁿ | n >= 1}",
+    "Известный DCFL: S = {aⁿbⁿ | n >= 1}, задан ДМПА из трёх состояний (q0 — push A на каждую a, q1 — pop на каждую b, ε-переход в q2 на дне стека Z0)",
     "Регулярный фильтр: R = (aa)*(bb)*, ДКА из четырёх состояний (чётность числа a, затем чётность числа b; отсутствующий переход — отвержение)",
     "aⁿbⁿ ∈ R тогда и только тогда, когда n чётно, поэтому S ∩ R = {a²ᵏb²ᵏ | k >= 1} = L",
     "DCFL замкнут относительно ∩ REG (произведение ДМПА × ДКА детерминировано) ⇒ L — DCFL"
