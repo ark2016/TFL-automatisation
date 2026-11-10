@@ -382,11 +382,14 @@ flowchart LR
   symbols), since an incomplete table encodes a priority choice and can accept a non-LL language
   (S: a → aSB, b/$ → ε; B: b → b, $ → ε accepts {aⁱbʲ | i ≥ j}). Agreement on every word the oracle decides,
   at least 30 of them, with such a table → `bounded_pass` (cap 0.85); a conflict cell, a table inconsistent with
-  the claimed grammar (a row, start or rule not in it), a cell outside its rule's director set, a table for a
+  the claimed grammar (a row, start or rule not in it), a cell outside its rule's director set (unreachable in
+  accepting runs: refuted as a malformed certificate, not as a counterexample to the language claim), a table for a
   larger k than claimed, a word on which the parser never halts (`LLParser.parse` detects the left-recursion
   loop exactly: a nonterminal back on top before its own expansion finished), or a disagreement → `refuted`
   (counterexamples go to the retry hint); a table missing a director cell, a table whose own productions are not
-  strong LL(k), no table, or a claimed grammar that is not strong LL(k) (if it is LL(k), any conflict-free table
+  strong LL(k), no table, or a claimed grammar that is not strong LL(k) (checked before the conflict, foreign-rule and director-contradiction
+  refutations, which apply only when the grammar is strong or absent; format errors are always refuted; a claim
+  without k is refuted when `check_ll_k` with the table's k says the grammar is not LL(k); if it is LL(k), any conflict-free table
   from its rules rejects some word of its language, possibly beyond the bound; the table is not run) → at most `well_formed`, even when the grammar
   passed `check_ll_k` and sample equivalence. The pipeline's own LL(k) test of a given grammar
   (Format 3, and the Format 2 grammar) stays `verified` and needs no table. dcfl `closure_reduction` has its own
