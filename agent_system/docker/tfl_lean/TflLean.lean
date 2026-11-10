@@ -4,8 +4,10 @@
   TflLean/Basic.lean (Mathlib.Computability.*) and TflLean/Langlib.lean
   (langlib's Regular/ContextFree/DeterministicContextFree classes), and
   re-exports TflLean/Lemmas.lean (reusable lemmas for R-Lean proof bodies,
-  `TflLean.*`).
+  `TflLean.*`) and TflLean/GrammarASSb.lean (the DPDA proof for the
+  dcfl_exam_04 grammar, `TflLean.ASSb.*`).
 -/
 import TflLean.Basic
 import TflLean.Langlib
 import TflLean.Lemmas
+import TflLean.GrammarASSb

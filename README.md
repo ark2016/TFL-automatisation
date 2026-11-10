@@ -615,11 +615,15 @@ use their `lean_formalizer` agents for this role. This exists because
   `TflLean.not_isContextFree_of_slice`), `EvenPalGrammar_CF`, `AnBnMod4Filter_CF` (grammar ∩ regular filter),
   `AnBnUnionAnB2n_CF` (set-builder `{aⁿbⁿ} ∪ {aⁿb²ⁿ}` as a union of homomorphic images) (CFL); `AnBnCm_DCF`,
   `AnBnCmPos_DCF`, `AnBn_DCF`, `AiBjCkNeq_NotDCF` (DCFL; the non-DCFL direction goes through
-  `TflLean.not_isDCF_of_not_isContextFree`). Shared lemmas: `TflLean/Lemmas.lean`.
+  `TflLean.not_isDCF_of_not_isContextFree`), `GrammarASSb_DCF` (exam_04, `S → aSSb | ba | Ab`, `A → aAb | a` is
+  DCF: the DPDA of docs/THEORY.md §1.10 is built and proved correct in `TflLean/GrammarASSb.lean`,
+  `TflLean.ASSb.isDCF_LangS`; an image built before that module skips the example's compile test until it is
+  rebuilt). Shared lemmas: `TflLean/Lemmas.lean`.
   Known gaps: a set-builder CFL that is not a closure image of a known language still needs a grammar with
-  `g.language = L` proved by hand (no compiled example); the exam_04 grammar case (DCFL by a grammar) has no
-  grammar->DPDA bridge (only REG ⊆ DCFL, `TflLean.isDCF_of_isRegular`), so the mock is an honest refusal;
-  nested exponents (`a^(2^n)`) are translated into Lean statements (`(2 ^ n)`), but the membership oracle still returns `None` for them.
+  `g.language = L` proved by hand (no compiled example); the image has no general grammar->DPDA bridge (only
+  REG ⊆ DCFL, `TflLean.isDCF_of_isRegular`; exam_04 is proved by its own module, see `GrammarASSb_DCF` above, and
+  the exam_04 mock formalizer reply is still a refusal); nested exponents (`a^(2^n)`) are translated into Lean
+  statements (`(2 ^ n)`), but the membership oracle still returns `None` for them.
 - **Versions (this round).** Lean `v4.33.0` (`lean-toolchain`), Mathlib tag `v4.33.0` (resolves to commit
   `db584cd6d46c92f209a44c0f1c829460d327499d`), langlib pinned at commit
   `c5fb8340b42543713f79e1c283a3f6a929cb71ef` — verified against langlib's *own* `lake-manifest.json` at that
