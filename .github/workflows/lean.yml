@@ -30,7 +30,6 @@ jobs:
   lean-compile:
     name: compile Lean (local toolchain)
     runs-on: ubuntu-latest
-    continue-on-error: true   # non-blocking
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +58,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: agent_system/docker/tfl_lean/.lake
-          key: lake-${{ runner.os }}-${{ hashFiles('agent_system/docker/tfl_lean/lean-toolchain', 'agent_system/docker/tfl_lean/lake-manifest.json') }}
+          key: lake-${{ runner.os }}-${{ hashFiles('agent_system/docker/tfl_lean/lean-toolchain', 'agent_system/docker/tfl_lean/lake-manifest.json', 'agent_system/docker/tfl_lean/lakefile.toml', 'agent_system/docker/tfl_lean/TflLean/**') }}
+          restore-keys: |
+            lake-${{ runner.os }}-
 
       - name: Fetch dependencies and the Mathlib cache
         working-directory: agent_system/docker/tfl_lean

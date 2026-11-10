@@ -111,6 +111,34 @@ def test_unavailable_stops_the_formalizer_loop(tmp_path, monkeypatch):
     assert load_result(run_dir)["evidence"]["formalization"]["status"] == "unavailable"
 
 
+def test_in_run_formalization_node_stops_on_unavailable(monkeypatch):
+    """graph.formalize_node: three Docker start failures -> one formalizer
+    call, 3 docker calls, status unavailable."""
+    from unittest.mock import patch
+
+    from agent_system import graph
+    from agent_system.tests.test_graph_edges import (
+        _FAKE_STATEMENT, _base_state, _install_fake_lean_ir)
+
+    fake = install(monkeypatch, cp(125, stderr=START_ERR))
+    calls = []
+
+    def run_agent(state, name, inp):
+        calls.append(name)
+        return {"evidence": {"proof_body": "trivial"}}
+
+    state = _base_state(
+        reasoning_output={"evidence": {"action": "proceed_to_formalizer",
+                                       "consolidated_proof": "p"}},
+        agent_runner="dummy",
+    )
+    with _install_fake_lean_ir(lambda ir, direction=None: dict(_FAKE_STATEMENT)),             patch.object(graph, "FORMALIZATION_ENABLED", True),             patch.object(graph, "run_agent", run_agent):
+        result = graph.formalize_node(state)
+    assert result["formalization"]["status"] == "unavailable"
+    assert calls == ["formalizer"]
+    assert len(fake.calls) == 3
+
+
 # --- local runner -----------------------------------------------------------
 
 def test_local_runner_runs_lake_in_the_project_dir(monkeypatch, tmp_path):
@@ -150,11 +178,7 @@ def test_local_availability_needs_lake_and_built_project(monkeypatch, tmp_path):
 
 # --- shared detector --------------------------------------------------------
 
-def test_deep_agent_uses_the_shared_detector():
-    from tfl_deep_agent.tools import lean
-
-    assert lean._is_daemon_failure is tcmod.is_daemon_failure
-    assert lean._DAEMON_ERROR_RE is tcmod.DAEMON_ERROR_RE
+def test_daemon_failure_detector_behaviour():
     res = {"status": "error", "errors": [{"severity": "error", "data": START_ERR}]}
     assert tcmod.is_daemon_failure(res)
     assert not tcmod.is_daemon_failure({**res, "status": "proved"})

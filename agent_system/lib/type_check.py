@@ -160,9 +160,6 @@ def is_docker_available() -> bool:
         return False
 
 
-is_lean_available = is_docker_available
-
-
 def _unavailable_reason() -> str:
     return ("local Lean project not available (lake / .lake missing)"
             if lean_runner() == "local" else "Docker not available")

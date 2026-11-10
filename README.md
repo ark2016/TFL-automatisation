@@ -648,8 +648,8 @@ Notes:
 - **Local runner (CI without the image).** `TFL_LEAN_RUNNER=local` (default `docker`) makes the checks run
   `lake env lean --json <file>` in the Lean project `TFL_LEAN_PROJECT_DIR` (default `agent_system/docker/tfl_lean`)
   with the same timeout and parsing; `is_docker_available()` then means "`lake` on PATH and the project's `.lake`
-  built", so the Lean tests' skip gates keep working. `.github/workflows/lean.yml` (manual + weekly,
-  non-blocking) uses it: elan with the toolchain from `lean-toolchain`, cached `.lake`, `lake exe cache get`,
+  built", so the Lean tests' skip gates keep working. `.github/workflows/lean.yml` (manual + weekly)
+  uses it: elan with the toolchain from `lean-toolchain`, cached `.lake`, `lake exe cache get`,
   `lake build`, then the Lean pytest files (`test_lean_ir`, `test_phase3` templates, the Examples tests,
   `test_lean_llk_doc`) with a step that fails if any of them was skipped for lack of Lean.
 - Files written for the container must be saved **without a BOM** — Lean's lexer fails with `expected token` on a
