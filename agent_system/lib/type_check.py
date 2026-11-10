@@ -64,8 +64,87 @@ def _docker_is_running() -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Runner seam: the Lean toolchain is reached either through the ``tfl-lean4``
+# Docker image (default) or, for CI without the 16 GB image, through a local
+# ``lake env lean`` in the Lean project (``TFL_LEAN_RUNNER=local``).
+# ---------------------------------------------------------------------------
+
+RUNNER_ENV = "TFL_LEAN_RUNNER"
+PROJECT_DIR_ENV = "TFL_LEAN_PROJECT_DIR"
+DEFAULT_LOCAL_PROJECT_DIR = DOCKER_DIR / "tfl_lean"
+
+# ``docker run`` exits 125 when the daemon fails to create or start the
+# container (seen on WSL2 as "runc did not terminate successfully: exit status
+# 139"); 126/127 when the command in the image cannot run. None of these is a
+# Lean result.
+DOCKER_START_FAILURE_CODES = frozenset({125, 126, 127})
+START_ATTEMPTS = 3
+START_RETRY_SLEEP_S = 2.0
+
+# Docker daemon / runtime messages that mean "the container never ran Lean".
+DAEMON_ERROR_RE = re.compile(
+    r"OCI runtime|Error response from daemon|Cannot connect to the Docker daemon|"
+    r"error during connect|docker daemon|read init-p|failed to create (?:shim|task)",
+    re.IGNORECASE)
+
+
+class LeanStartError(RuntimeError):
+    """The Lean container failed to start on every attempt (a Docker fault,
+    not a Lean result). ``stderr`` is Docker's message."""
+
+    def __init__(self, message: str, returncode: int | None = None, stderr: str = ""):
+        super().__init__(message)
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+def lean_runner() -> str:
+    """``"local"`` when ``TFL_LEAN_RUNNER=local``, else ``"docker"``."""
+    return "local" if os.environ.get(RUNNER_ENV, "").strip().lower() == "local" else "docker"
+
+
+def local_project_dir() -> Path:
+    """Lean project directory for the local runner (``TFL_LEAN_PROJECT_DIR``)."""
+    raw = os.environ.get(PROJECT_DIR_ENV, "").strip()
+    return Path(raw) if raw else DEFAULT_LOCAL_PROJECT_DIR
+
+
+def _local_lean_available() -> bool:
+    """``lake`` is on PATH and the project dir exists with its Mathlib build."""
+    if shutil.which("lake") is None:
+        return False
+    proj = local_project_dir()
+    return (proj / "lakefile.toml").is_file() and (proj / ".lake").is_dir()
+
+
+def is_daemon_failure(res: dict) -> bool:
+    """A check result of a ``docker run`` that failed before Lean started:
+    status ``error`` whose only error has no source position and carries a
+    Docker daemon message."""
+    if res.get("status") != "error":
+        return False
+    errors = res.get("errors") or []
+    if len(errors) != 1 or not isinstance(errors[0], dict) or errors[0].get("pos"):
+        return False
+    return bool(DAEMON_ERROR_RE.search(str(errors[0].get("data") or "")))
+
+
+def is_start_failure(returncode: int, stdout: str, stderr: str) -> bool:
+    """A finished ``docker run`` that never ran Lean: exit 125/126/127, or any
+    non-zero exit with no stdout and a Docker daemon message on stderr."""
+    if returncode in DOCKER_START_FAILURE_CODES:
+        return True
+    return bool(returncode != 0 and not (stdout or "").strip()
+                and DAEMON_ERROR_RE.search(stderr or ""))
+
+
 def is_docker_available() -> bool:
-    """Check if Docker is installed, running, and the tfl-lean4 image exists."""
+    """Whether Lean can be run: Docker installed, running and the tfl-lean4
+    image present (default runner), or a built local Lean project when
+    ``TFL_LEAN_RUNNER=local``. (Name kept for the many skip gates.)"""
+    if lean_runner() == "local":
+        return _local_lean_available()
     if shutil.which("docker") is None:
         return False
     if not _docker_is_running():
@@ -79,6 +158,54 @@ def is_docker_available() -> bool:
         return result.returncode == 0
     except (subprocess.TimeoutExpired, OSError):
         return False
+
+
+def _unavailable_reason() -> str:
+    return ("local Lean project not available (lake / .lake missing)"
+            if lean_runner() == "local" else "Docker not available")
+
+
+def run_lean_process(path: str, timeout: int, json_output: bool = True,
+                     attempts: int = START_ATTEMPTS):
+    """Run Lean on the file at *path* through the configured runner; returns
+    the ``CompletedProcess`` (text, utf-8).
+
+    Docker runner: a container that fails to start (see ``is_start_failure``)
+    is retried up to *attempts* times, then ``LeanStartError`` is raised with
+    Docker's stderr. ``subprocess.TimeoutExpired`` / ``OSError`` propagate.
+    """
+    lean_args = ["lake", "env", "lean"] + (["--json"] if json_output else [])
+    kwargs: dict[str, Any] = dict(capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if lean_runner() == "local":
+        return subprocess.run(
+            lean_args + [path], cwd=str(local_project_dir()), timeout=timeout, **kwargs,
+        )
+
+    mount_src = _windows_docker_path(path) if os.name == "nt" else path
+    env = dict(os.environ)
+    # Only matters when this call itself goes through a POSIX shell (Git Bash)
+    # that would otherwise mangle the container path; a no-op otherwise.
+    env["MSYS_NO_PATHCONV"] = "1"
+    cmd = [
+        "docker", "run", "--rm", "--memory=4g", "--cpus=2",
+        "-v", f"{mount_src}:/home/lean/check.lean:ro",
+        "-w", LEAN_PROJECT_DIR, DOCKER_IMAGE,
+        "timeout", str(timeout), *lean_args, "/home/lean/check.lean",
+    ]
+    n = max(1, attempts)
+    last_rc, last_err = None, ""
+    for attempt in range(n):
+        if attempt:
+            time.sleep(START_RETRY_SLEEP_S)
+        result = subprocess.run(cmd, timeout=timeout + 30, env=env, **kwargs)  # + Docker overhead
+        if not is_start_failure(result.returncode, result.stdout, result.stderr):
+            return result
+        last_rc, last_err = result.returncode, (result.stderr or "").strip()
+    raise LeanStartError(
+        f"Lean container did not start after {n} attempts; "
+        f"docker run exited {last_rc}: {last_err[-500:]}",
+        returncode=last_rc, stderr=last_err,
+    )
 
 
 def check_lean(code: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
@@ -104,7 +231,7 @@ def check_lean(code: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
             "errors": None,
             "warnings": None,
             "time_seconds": 0.0,
-            "message": "Docker not available",
+            "message": _unavailable_reason(),
         }
 
     # Write code to a temp file
@@ -114,30 +241,9 @@ def check_lean(code: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
         f.write(code)
         tmp_path = f.name
 
+    start = time.monotonic()
     try:
-        # On Windows, convert the path for Docker volume mounts.
-        if os.name == "nt":
-            mount_src = _windows_docker_path(tmp_path)
-        else:
-            mount_src = tmp_path
-
-        start = time.monotonic()
-
-        # Run lean (via `lake env`, from the tfl_lean project dir, so Mathlib
-        # is on LEAN_PATH) in the Docker container.
-        result = subprocess.run(
-            [
-                "docker", "run", "--rm",
-                "--memory=4g", "--cpus=2",
-                "-v", f"{mount_src}:/home/lean/check.lean:ro",
-                "-w", LEAN_PROJECT_DIR,
-                DOCKER_IMAGE,
-                "timeout", str(timeout), "lake", "env", "lean", "/home/lean/check.lean",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout + 30,  # extra buffer for Docker overhead
-        )
+        result = run_lean_process(tmp_path, timeout, json_output=False)
 
         elapsed = time.monotonic() - start
 
@@ -180,13 +286,13 @@ def check_lean(code: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
             "time_seconds": round(elapsed, 2),
             "message": f"Process killed after {timeout}s",
         }
-    except OSError as exc:
-        elapsed = time.monotonic() - start
+    except (LeanStartError, OSError) as exc:
+        # Not a Lean result: never "invalid" (callers would retry the code).
         return {
             "status": "skipped",
             "errors": None,
             "warnings": None,
-            "time_seconds": round(elapsed, 2),
+            "time_seconds": round(time.monotonic() - start, 2),
             "message": f"Docker error: {exc}",
         }
     finally:
@@ -606,7 +712,7 @@ def check_lean_file(
             "warnings": [],
             "axioms": [],
             "elapsed": 0.0,
-            "message": "Docker not available",
+            "message": _unavailable_reason(),
         }
 
     with tempfile.NamedTemporaryFile(
@@ -617,29 +723,8 @@ def check_lean_file(
 
     start = time.monotonic()
     try:
-        mount_src = _windows_docker_path(tmp_path) if os.name == "nt" else tmp_path
-        env = dict(os.environ)
-        # Only matters when this call itself goes through a POSIX shell
-        # (Git Bash) that would otherwise mangle the container path; a
-        # harmless no-op for the plain subprocess.run() below.
-        env["MSYS_NO_PATHCONV"] = "1"
-
         try:
-            result = subprocess.run(
-                [
-                    "docker", "run", "--rm",
-                    "--memory=4g", "--cpus=2",
-                    "-v", f"{mount_src}:/home/lean/check.lean:ro",
-                    "-w", LEAN_PROJECT_DIR,
-                    DOCKER_IMAGE,
-                    "timeout", str(timeout), "lake", "env", "lean", "--json",
-                    "/home/lean/check.lean",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout + 30,
-                env=env,
-            )
+            result = run_lean_process(tmp_path, timeout)
         except subprocess.TimeoutExpired:
             elapsed = time.monotonic() - start
             return {
@@ -649,6 +734,18 @@ def check_lean_file(
                 "axioms": [],
                 "elapsed": round(elapsed, 2),
                 "message": f"Process killed after {timeout}s",
+            }
+        except LeanStartError as exc:
+            # Docker never ran Lean (retried START_ATTEMPTS times): terminal,
+            # so callers do not pay for another formalizer attempt, and a
+            # correct proof is not recorded as a Lean error.
+            return {
+                "status": "unavailable",
+                "errors": [],
+                "warnings": [],
+                "axioms": [],
+                "elapsed": round(time.monotonic() - start, 2),
+                "message": f"Docker container did not start: {exc.stderr or exc}",
             }
         except OSError as exc:
             elapsed = time.monotonic() - start

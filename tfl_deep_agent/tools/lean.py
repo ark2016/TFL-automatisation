@@ -359,27 +359,14 @@ def compose(statement: Any, proof_body: str) -> str:
 # Lean runner (tests replace _run_lean)
 # ---------------------------------------------------------------------------
 
-_DAEMON_ERROR_RE = re.compile(
-    r"OCI runtime|Error response from daemon|Cannot connect to the Docker daemon|"
-    r"error during connect|docker daemon|read init-p|failed to create (?:shim|task)",
-    re.IGNORECASE)
+# One detector for Docker start failures, shared with the production check.
+_DAEMON_ERROR_RE = type_check.DAEMON_ERROR_RE
+_is_daemon_failure = type_check.is_daemon_failure
 
 
 def _run_lean(text: str, timeout: int, theorem_name: str) -> dict[str, Any]:
     """One ``type_check.check_lean_file`` run (tfl-lean4 image)."""
     return type_check.check_lean_file(text, timeout=timeout, theorem_name=theorem_name)
-
-
-def _is_daemon_failure(res: dict[str, Any]) -> bool:
-    """A ``docker run`` that failed before Lean started (see DEV_NOTES, P0
-    Docker: flaky ``OCI runtime create failed``): status ``error`` whose only
-    error has no source position and carries a Docker daemon message."""
-    if res.get("status") != "error":
-        return False
-    errors = res.get("errors") or []
-    if len(errors) != 1 or not isinstance(errors[0], dict) or errors[0].get("pos"):
-        return False
-    return bool(_DAEMON_ERROR_RE.search(str(errors[0].get("data") or "")))
 
 
 def _trim_messages(msgs: Any) -> list[dict[str, Any]]:

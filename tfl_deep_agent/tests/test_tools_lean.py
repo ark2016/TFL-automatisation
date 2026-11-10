@@ -504,3 +504,8 @@ def test_golden_reg_proof_verifies_through_the_tools():
     assert res.trust == "verified", res.trust_reason
     assert set(res.data["axioms"]) <= type_check.ALLOWED_AXIOMS
     assert res.data["direction"] == "non_regular"
+
+
+def test_deep_agent_uses_the_shared_daemon_detector():
+    assert lean._is_daemon_failure is type_check.is_daemon_failure
+    assert lean._DAEMON_ERROR_RE is type_check.DAEMON_ERROR_RE
